@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { workspaceVariables } from "../../src/db/schema";
 import { organizations, workspaces, runs, stateVersions } from "../../src/db/schema";
 
 describe("TFE API v2 - Runs", () => {
@@ -10,7 +11,7 @@ describe("TFE API v2 - Runs", () => {
     // Clear and setup
     await db.delete(runs);
     await db.delete(stateVersions);
-    await db.delete(workspaces);
+    await db.delete(workspaceVariables); await db.delete(workspaces);
     await db.delete(organizations);
 
     await db.insert(organizations).values({ id: "org-2", name: "homelab-runs" });

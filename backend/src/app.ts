@@ -2,11 +2,13 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
-import { users, apiTokens } from "./db/schema";
+import { users, apiTokens, organizations } from "./db/schema";
 import { eq } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
+import { authPlugin } from "./auth";
 
 export const app = new Elysia()
+  .use(authPlugin)
   .use(rateLimit({ max: 1000, duration: 60000 }))
   .onParse(async ({ request, contentType }) => {
     if (contentType === 'application/vnd.api+json') {
@@ -100,27 +102,7 @@ export const app = new Elysia()
         }
     };
   })
-  .get("/api/v2/account/details", async ({ headers, set }) => {
-    const authHeader = headers["authorization"];
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        set.status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-
-    const tokenString = authHeader.substring(7);
-    const token = await db.query.apiTokens.findFirst({
-        where: eq(apiTokens.token, tokenString)
-    });
-
-    if (!token || !token.userId) {
-        set.status = 401;
-        return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-
-    const user = await db.query.users.findFirst({
-        where: eq(users.id, token.userId)
-    });
-
+  .get("/api/v2/account/details", async ({ user, set }) => {
     if (!user) {
         set.status = 401;
         return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -135,7 +117,327 @@ export const app = new Elysia()
             }
         }
     };
-  })
+  }, { isAuth: true })
+  .post("/api/v2/tokens", async ({ body, set, user, orgId }) => {
+    // Generate Team/Org Tokens (Simplification for MVP)
+    const payload = body as any;
+
+    const { description } = payload?.data?.attributes || {};
+    const organizationId = payload?.data?.relationships?.organization?.data?.id;
+
+    if (!organizationId) {
+        set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "organization relationship missing" }] };
+    }
+
+    // Need to verify org exists
+    const org = await db.query.organizations.findFirst({
+      where: eq(organizations.id, organizationId)
+    });
+    if (!org) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    // In a real app we would check if the active `user` is an admin of this org here.
+    // For MVP, if they are authenticated, let them create a token for the org.
+    if (!user) {
+       set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
+
+    const tokenString = crypto.randomUUID() + "-" + crypto.randomUUID();
+    const tokenId = crypto.randomUUID();
+
+    await db.insert(apiTokens).values({
+        id: tokenId,
+        token: tokenString,
+        orgId: org.id,
+        description: description || "Org token",
+    });
+
+    set.status = 201;
+    return {
+        data: {
+            id: tokenId,
+            type: "api-tokens",
+            attributes: {
+                token: tokenString,
+            }
+        }
+    };
+  }, { isAuth: true })
+  .post("/api/v2/organizations", async ({ body, set, user }) => {
+    const payload = body as any;
+
+    const { name } = payload?.data?.attributes || {};
+
+    if (!name) {
+        set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
+    }
+
+    try {
+        const id = crypto.randomUUID();
+        await db.insert(organizations).values({ id, name });
+
+        set.status = 201;
+        return {
+            data: {
+                id,
+                type: "organizations",
+                attributes: { name }
+            }
+        };
+    } catch (e: any) {
+        if (e.message?.includes("UNIQUE") || e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.message?.includes("SQLITE_CONSTRAINT")) {
+            set.status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
+        }
+        throw e;
+    }
+  }, { isAuth: true })
+  .get("/api/v2/organizations", async ({ user }) => {
+    const orgs = await db.query.organizations.findMany();
+    return {
+        data: orgs.map(org => ({
+            id: org.id,
+            type: "organizations",
+            attributes: { name: org.name }
+        }))
+    };
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name", async ({ params: { org_name }, set }) => {
+    const org = await db.query.organizations.findFirst({
+        where: eq(organizations.name, org_name)
+    });
+
+    if (!org) {
+        set.status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    return {
+        data: {
+            id: org.id,
+            type: "organizations",
+            attributes: { name: org.name }
+        }
+    };
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name/workspaces", async ({ params: { org_name }, set }) => {
+    const org = await db.query.organizations.findFirst({
+        where: eq(organizations.name, org_name)
+    });
+    if (!org) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const { workspaces } = await import("./db/schema");
+    const orgWorkspaces = await db.query.workspaces.findMany({
+        where: eq(workspaces.orgId, org.id)
+    });
+
+    return {
+        data: orgWorkspaces.map(ws => ({
+            id: ws.id,
+            type: "workspaces",
+            attributes: {
+                name: ws.name,
+                "auto-apply": ws.autoApply,
+                "terraform-version": ws.terraformVersion,
+                locked: ws.locked
+            },
+            relationships: {
+                organization: {
+                    data: { id: org.id, type: "organizations" }
+                }
+            }
+        }))
+    };
+  }, { isAuth: true })
+  .post("/api/v2/organizations/:org_name/workspaces", async ({ params: { org_name }, body, set }) => {
+    const org = await db.query.organizations.findFirst({
+        where: eq(organizations.name, org_name)
+    });
+    if (!org) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const payload = body as any;
+
+    const { name, "auto-apply": autoApply, "terraform-version": terraformVersion } = payload?.data?.attributes || {};
+
+    if (!name) {
+        set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
+    }
+
+    try {
+        const id = crypto.randomUUID();
+        // Dynamic import to avoid circular dependencies/use right schema if not imported
+        const { workspaces } = await import("./db/schema");
+        await db.insert(workspaces).values({
+            id,
+            name,
+            orgId: org.id,
+            autoApply: autoApply ?? false,
+            terraformVersion: terraformVersion ?? "latest"
+        });
+
+        set.status = 201;
+        return {
+            data: {
+                id,
+                type: "workspaces",
+                attributes: {
+                    name,
+                    "auto-apply": autoApply ?? false,
+                    "terraform-version": terraformVersion ?? "latest",
+                    locked: false
+                },
+                relationships: {
+                    organization: {
+                        data: { id: org.id, type: "organizations" }
+                    }
+                }
+            }
+        };
+    } catch (e: any) {
+        if (e.message?.includes("UNIQUE") || e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.message?.includes("SQLITE_CONSTRAINT")) {
+            set.status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
+        }
+        throw e;
+    }
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params: { org_name, workspace_name }, set }) => {
+    const org = await db.query.organizations.findFirst({
+        where: eq(organizations.name, org_name)
+    });
+    if (!org) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const { workspaces } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: (ws, { and, eq }) => and(eq(ws.name, workspace_name), eq(ws.orgId, org.id))
+    });
+
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    return {
+        data: {
+            id: workspace.id,
+            type: "workspaces",
+            attributes: {
+                name: workspace.name,
+                "auto-apply": workspace.autoApply,
+                "terraform-version": workspace.terraformVersion,
+                locked: workspace.locked
+            },
+            relationships: {
+                organization: {
+                    data: { id: org.id, type: "organizations" }
+                }
+            }
+        }
+    };
+  }, { isAuth: true })
+  .get("/api/v2/workspaces/:workspace_id", async ({ params: { workspace_id }, set }) => {
+    const { workspaces } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    return {
+        data: {
+            id: workspace.id,
+            type: "workspaces",
+            attributes: {
+                name: workspace.name,
+                "auto-apply": workspace.autoApply,
+                "terraform-version": workspace.terraformVersion,
+                locked: workspace.locked
+            },
+            relationships: {
+                organization: {
+                    data: { id: workspace.orgId, type: "organizations" }
+                }
+            }
+        }
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/vars", async ({ params: { workspace_id }, body, set }) => {
+    const { workspaces, workspaceVariables } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const payload = body as any;
+
+    const { key, value, category, sensitive, description, hcl } = payload?.data?.attributes || {};
+
+    if (!key || value === undefined) {
+        set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing key or value" }] };
+    }
+
+    const id = crypto.randomUUID();
+    await db.insert(workspaceVariables).values({
+        id,
+        workspaceId: workspace.id,
+        key,
+        value,
+        category: category || "terraform",
+        sensitive: sensitive || false,
+        description
+    });
+
+    set.status = 201;
+    return {
+        data: {
+            id,
+            type: "vars",
+            attributes: {
+                key,
+                value: sensitive ? null : value,
+                category: category || "terraform",
+                sensitive: sensitive || false,
+                hcl: hcl || false,
+                description
+            }
+        }
+    };
+  }, { isAuth: true })
+  .get("/api/v2/workspaces/:workspace_id/vars", async ({ params: { workspace_id }, set }) => {
+    const { workspaces, workspaceVariables } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const vars = await db.query.workspaceVariables.findMany({
+        where: eq(workspaceVariables.workspaceId, workspace.id)
+    });
+
+    return {
+        data: vars.map(v => ({
+            id: v.id,
+            type: "vars",
+            attributes: {
+                key: v.key,
+                value: v.sensitive ? null : v.value,
+                category: v.category,
+                sensitive: v.sensitive,
+                description: v.description,
+                hcl: false
+            }
+        }))
+    };
+  }, { isAuth: true })
   .post("/api/v2/users", async ({ body, set }) => {
     let payload;
     if (typeof body === 'string') {
