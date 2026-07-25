@@ -1,1 +1,1 @@
-console.log("Hello via Bun!");
+console.log("Hello via Bun!"); // test to make sure opencode is working
