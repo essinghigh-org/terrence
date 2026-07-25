@@ -10,10 +10,11 @@ describe("TFE API Authentication - Tokens", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, workspaces, organizationMemberships, workspaceVariables } = await import("../../src/db/schema");
-    await db.delete(stateVersions);
+    const { runs, configurationVersions, stateVersions, workspaceVariables, workspaces: wsModel, organizationMemberships } = await import("../../src/db/schema");
     await db.delete(runs);
-    await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(configurationVersions);
+    await db.delete(stateVersions);
+    await db.delete(workspaceVariables); await db.delete(wsModel);
     await db.delete(organizationMemberships);
 
     await db.delete(apiTokens);

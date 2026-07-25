@@ -7,10 +7,38 @@ import { organizations, workspaces } from "../../src/db/schema";
 describe("TFE API v2 - Configuration Versions", () => {
   let workspaceId = "";
 
+  let userToken: string;
   beforeAll(async () => {
     // Clear and setup
+    const { runs, configurationVersions, stateVersions, apiTokens, users } = await import("../../src/db/schema");
+    await db.delete(runs);
+    await db.delete(configurationVersions);
+    await db.delete(stateVersions);
     await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(apiTokens);
+    await db.delete(users);
     await db.delete(organizations);
+
+    await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username: "cv-owner", password: "securepassword" } },
+        }),
+      })
+    );
+
+    const loginRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username: "cv-owner", password: "securepassword" } },
+        }),
+      })
+    );
+    userToken = (await loginRes.json()).data.attributes.token;
 
     await db.insert(organizations).values({ id: "org-cv", name: "homelab-cv" });
     const ws = await db.insert(workspaces).values({
@@ -25,7 +53,10 @@ describe("TFE API v2 - Configuration Versions", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/configuration-versions`, {
         method: "POST",
-        headers: { "Content-Type": "application/vnd.api+json" },
+        headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`
+        },
         body: JSON.stringify({
           data: {
             type: "configuration-versions",

@@ -37,6 +37,12 @@ export const workspaceVariables = sqliteTable("workspace_variables", {
   description: text("description"),
 });
 
+export const configurationVersions = sqliteTable("configuration_versions", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  status: text("status").notNull().default("pending"),
+});
+
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
