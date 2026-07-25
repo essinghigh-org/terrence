@@ -1,22 +1,29 @@
-import { useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Login } from "./views/Login";
+import { Dashboard } from "./views/Dashboard";
+import { Workspaces } from "./views/Workspaces";
+import { getAuthToken } from "./lib/api";
 
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
-      <h1 className="text-4xl font-bold text-blue-600 mb-8">Terraform Homelab</h1>
-      <div className="bg-white p-8 rounded-lg shadow-md">
-        <p className="text-xl mb-4">Click the button to count:</p>
-        <button
-          onClick={() => setCount((c) => c + 1)}
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-        >
-          Count is {count}
-        </button>
-      </div>
-    </div>
-  )
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  if (!getAuthToken()) {
+    return <Navigate to="/login" replace />;
+  }
+  return <>{children}</>;
 }
 
-export default App
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
+        {/* Placeholder for workspace detail */}
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><div className="p-8">Workspace Detail (TODO)</div></ProtectedRoute>} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+export default App;

@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { workspaceVariables } from "../../src/db/schema";
 import { organizations, workspaces, stateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -10,7 +11,7 @@ describe("TFE API v2 - State Versions & Locking", () => {
   beforeAll(async () => {
     // Clear and setup
     await db.delete(stateVersions);
-    await db.delete(workspaces);
+    await db.delete(workspaceVariables); await db.delete(workspaces);
     await db.delete(organizations);
 
     await db.insert(organizations).values({ id: "org-3", name: "homelab-state" });

@@ -27,6 +27,16 @@ export const workspaces = sqliteTable("workspaces", {
   locked: integer("locked", { mode: "boolean" }).default(false),
 });
 
+export const workspaceVariables = sqliteTable("workspace_variables", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  key: text("key").notNull(),
+  value: text("value").notNull(),
+  sensitive: integer("sensitive", { mode: "boolean" }).default(false),
+  category: text("category").notNull().default("terraform"), // 'terraform' or 'env'
+  description: text("description"),
+});
+
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
