@@ -11,6 +11,13 @@ export const organizations = sqliteTable("organizations", {
   name: text("name").notNull().unique(),
 });
 
+export const organizationMemberships = sqliteTable("organization_memberships", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  orgId: text("org_id").notNull().references(() => organizations.id),
+  role: text("role").notNull().default("member"), // 'owner' or 'member'
+});
+
 export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -25,6 +32,14 @@ export const runs = sqliteTable("runs", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   status: text("status").notNull().default("pending"),
   message: text("message"),
+});
+
+export const apiTokens = sqliteTable("api_tokens", {
+  id: text("id").primaryKey(),
+  token: text("token").notNull().unique(), // The actual token string (e.g. hashed or raw depending on design)
+  userId: text("user_id").references(() => users.id), // If it's a user token
+  orgId: text("org_id").references(() => organizations.id), // If it's a team/org token
+  description: text("description"),
 });
 
 export const stateVersions = sqliteTable("state_versions", {
