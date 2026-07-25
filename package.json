@@ -1,0 +1,14 @@
+{
+  "name": "terraform-homelab",
+  "version": "1.0.0",
+  "description": "Homelab clone of Terraform Enterprise",
+  "scripts": {
+    "dev:backend": "cd backend && bun run --watch index.ts",
+    "dev:frontend": "cd frontend && bun run dev",
+    "test:backend": "cd backend && bun test"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ]
+}
