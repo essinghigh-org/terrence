@@ -1,16 +1,16 @@
-# Terraform Enterprise Homelab Clone - Master TODO List
+# Terrence - Master TODO List
 
 This document serves as a comprehensive tracker for achieving rough feature parity with Terraform Enterprise (TFE). It is broken down into logical epics and modules.
 
 ## Epic 1: Core API & Service Discovery
-- [ ] Implement `/.well-known/terraform.json` service discovery endpoint.
-- [ ] Implement generic error handling and TFE-compliant `application/vnd.api+json` response formatting.
-- [ ] Setup API rate limiting and basic security middleware.
+- [x] Implement `/.well-known/terraform.json` service discovery endpoint.
+- [x] Implement generic error handling and TFE-compliant `application/vnd.api+json` response formatting.
+- [x] Setup API rate limiting and basic security middleware.
 
 ## Epic 2: Authentication & Authorization (Local Auth MVP)
-- [ ] Database schema for Users, Organizations, and Organization Memberships.
-- [ ] User registration and local password authentication.
-- [ ] Generation of User API Tokens (`terraform login`).
+- [x] Database schema for Users, Organizations, and Organization Memberships.
+- [x] User registration and local password authentication.
+- [x] Generation of User API Tokens (`terraform login`).
 - [ ] Generation of Team/Organization API Tokens.
 - [ ] Authentication middleware for parsing Bearer tokens and identifying the active user/agent.
 

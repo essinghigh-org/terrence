@@ -11,8 +11,13 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@elysiajs/static": "^1.4.10",
     "@libsql/client": "^0.17.4",
+    "@types/bcryptjs": "^3.0.0",
+    "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.45.2",
-    "elysia": "^1.4.29"
+    "elysia": "^1.4.29",
+    "elysia-ip": "^2.0.0",
+    "elysia-rate-limit": "3.0.0"
   }
 }

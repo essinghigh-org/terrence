@@ -1,4 +1,4 @@
-# Terraform Enterprise Homelab Clone - Specification
+# Terrence - Specification
 
 ## 1. Overview
 This project aims to be a cleanroom, open-source reimplementation of Terraform Enterprise (TFE) designed specifically for homelabbers. It provides a lightweight, easy-to-deploy, yet feature-complete (for MVP) alternative to Terraform Cloud/Enterprise.
