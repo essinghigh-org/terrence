@@ -438,6 +438,242 @@ export const app = new Elysia()
         }))
     };
   }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params: { workspace_id }, set }) => {
+    const { workspaces } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(workspaces).set({ locked: true }).where(eq(workspaces.id, workspace_id));
+    return { data: { type: "workspaces", id: workspace_id, attributes: { locked: true } } };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params: { workspace_id }, set }) => {
+    const { workspaces } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(workspaces).set({ locked: false }).where(eq(workspaces.id, workspace_id));
+    return { data: { type: "workspaces", id: workspace_id, attributes: { locked: false } } };
+  }, { isAuth: true })
+  .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params: { workspace_id }, set }) => {
+    const { stateVersions } = await import("./db/schema");
+    const state = await db.query.stateVersions.findFirst({
+        where: eq(stateVersions.workspaceId, workspace_id),
+        orderBy: (states, { desc }) => [desc(states.serial)]
+    });
+    if (!state) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+        data: {
+            id: state.id,
+            type: "state-versions",
+            attributes: {
+                serial: state.serial,
+                state: state.statePayload
+            }
+        }
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params: { workspace_id }, body, set }) => {
+    const { workspaces, stateVersions } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const payload = body as any;
+    const { serial, state } = payload?.data?.attributes || {};
+
+    const id = crypto.randomUUID();
+    await db.insert(stateVersions).values({
+        id,
+        workspaceId: workspace_id,
+        serial: serial || 1,
+        statePayload: state
+    });
+
+    set.status = 201;
+    return {
+        data: {
+            id,
+            type: "state-versions",
+            attributes: {
+                serial: serial || 1
+            }
+        }
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params: { workspace_id }, set }) => {
+    const { workspaces, configurationVersions } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspace_id)
+    });
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const id = crypto.randomUUID();
+    await db.insert(configurationVersions).values({
+        id,
+        workspaceId: workspace_id,
+        status: "pending"
+    });
+
+    set.status = 201;
+    return {
+        data: {
+            id,
+            type: "configuration-versions",
+            attributes: {
+                status: "pending",
+                "upload-url": `/api/v2/configuration-versions/${id}/upload`
+            }
+        }
+    };
+  }, { isAuth: true })
+  .get("/api/v2/configuration-versions/:cv_id", async ({ params: { cv_id }, set }) => {
+    const { configurationVersions } = await import("./db/schema");
+    const cv = await db.query.configurationVersions.findFirst({
+        where: eq(configurationVersions.id, cv_id)
+    });
+    if (!cv) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    return {
+        data: {
+            id: cv.id,
+            type: "configuration-versions",
+            attributes: {
+                status: cv.status
+            }
+        }
+    };
+  }, { isAuth: true })
+  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params: { cv_id }, set }) => {
+    // In a real implementation this would stream the tar.gz to S3 or a local temp file.
+    // For MVP, we will update the status to uploaded.
+    const { configurationVersions } = await import("./db/schema");
+    const cv = await db.query.configurationVersions.findFirst({
+        where: eq(configurationVersions.id, cv_id)
+    });
+    if (!cv) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(configurationVersions).set({ status: "uploaded" }).where(eq(configurationVersions.id, cv_id));
+    set.status = 200;
+    return "Upload successful";
+  }, { isAuth: true })
+  .post("/api/v2/runs", async ({ body, set }) => {
+    const payload = body as any;
+    const { message } = payload?.data?.attributes || {};
+    const workspaceId = payload?.data?.relationships?.workspace?.data?.id;
+
+    if (!workspaceId) {
+        set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] };
+    }
+
+    const { workspaces, runs } = await import("./db/schema");
+    const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId)
+    });
+
+    if (!workspace) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const id = crypto.randomUUID();
+    await db.insert(runs).values({
+        id,
+        workspaceId,
+        message: message || "Queued manually",
+        status: "pending"
+    });
+
+    set.status = 201;
+    return {
+        data: {
+            id,
+            type: "runs",
+            attributes: {
+                message: message || "Queued manually",
+                status: "pending"
+            },
+            relationships: {
+                workspace: {
+                    data: { id: workspaceId, type: "workspaces" }
+                }
+            }
+        }
+    };
+  }, { isAuth: true })
+  .get("/api/v2/runs/:run_id", async ({ params: { run_id }, set }) => {
+    const { runs } = await import("./db/schema");
+    const run = await db.query.runs.findFirst({
+        where: eq(runs.id, run_id)
+    });
+    if (!run) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    return {
+        data: {
+            id: run.id,
+            type: "runs",
+            attributes: {
+                message: run.message,
+                status: run.status
+            }
+        }
+    };
+  }, { isAuth: true })
+  .post("/api/v2/runs/:run_id/actions/apply", async ({ params: { run_id }, set }) => {
+    const { runs } = await import("./db/schema");
+    const run = await db.query.runs.findFirst({
+        where: eq(runs.id, run_id)
+    });
+    if (!run) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    await db.update(runs).set({ status: "applying" }).where(eq(runs.id, run_id));
+    set.status = 200;
+    return { data: null }; // Typically empty response or run object
+  }, { isAuth: true })
+  .post("/api/v2/runs/:run_id/actions/discard", async ({ params: { run_id }, set }) => {
+    const { runs } = await import("./db/schema");
+    const run = await db.query.runs.findFirst({
+        where: eq(runs.id, run_id)
+    });
+    if (!run) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    await db.update(runs).set({ status: "discarded" }).where(eq(runs.id, run_id));
+    set.status = 200;
+    return { data: null };
+  }, { isAuth: true })
+  .post("/api/v2/runs/:run_id/actions/cancel", async ({ params: { run_id }, set }) => {
+    const { runs } = await import("./db/schema");
+    const run = await db.query.runs.findFirst({
+        where: eq(runs.id, run_id)
+    });
+    if (!run) {
+        set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, run_id));
+    set.status = 200;
+    return { data: null };
+  }, { isAuth: true })
   .post("/api/v2/users", async ({ body, set }) => {
     let payload;
     if (typeof body === 'string') {

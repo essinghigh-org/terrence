@@ -15,6 +15,19 @@ RUN bun run build
 FROM oven/bun:1-slim
 WORKDIR /app
 
+# Install dependencies needed for OpenTofu
+RUN apt-get update && apt-get install -y \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenTofu
+ENV TOFU_VERSION=1.7.0
+RUN curl -Lo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip" && \
+    unzip tofu.zip -d /usr/local/bin && \
+    rm tofu.zip && \
+    chmod +x /usr/local/bin/tofu
+
 # Copy backend files
 COPY bun.lock ./
 COPY backend/package.json ./backend/

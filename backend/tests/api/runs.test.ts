@@ -7,12 +7,38 @@ import { organizations, workspaces, runs, stateVersions } from "../../src/db/sch
 describe("TFE API v2 - Runs", () => {
   let workspaceId = "";
 
+  let userToken: string;
   beforeAll(async () => {
     // Clear and setup
+    const { configurationVersions, users, apiTokens } = await import("../../src/db/schema");
     await db.delete(runs);
+    await db.delete(configurationVersions);
     await db.delete(stateVersions);
     await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(apiTokens);
+    await db.delete(users);
     await db.delete(organizations);
+
+    await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username: "run-owner", password: "securepassword" } },
+        }),
+      })
+    );
+
+    const loginRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username: "run-owner", password: "securepassword" } },
+        }),
+      })
+    );
+    userToken = (await loginRes.json()).data.attributes.token;
 
     await db.insert(organizations).values({ id: "org-2", name: "homelab-runs" });
     const ws = await db.insert(workspaces).values({
@@ -28,7 +54,10 @@ describe("TFE API v2 - Runs", () => {
     const response = await app.handle(
       new Request("http://localhost/api/v2/runs", {
         method: "POST",
-        headers: { "Content-Type": "application/vnd.api+json" },
+        headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`
+        },
         body: JSON.stringify({
           data: {
             attributes: {
@@ -52,5 +81,43 @@ describe("TFE API v2 - Runs", () => {
     const data = await response.json();
     expect(data.data.attributes.message).toBe("Test Run");
     expect(data.data.attributes.status).toBe("pending");
+
+    const runId = data.data.id;
+
+    // Test get run
+    const getResponse = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}`, {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(getResponse.status).toBe(200);
+
+    // Test apply run
+    const applyResponse = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}/actions/apply`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(applyResponse.status).toBe(200);
+
+    // Test discard run
+    const discardResponse = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}/actions/discard`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(discardResponse.status).toBe(200);
+
+    // Test cancel run
+    const cancelResponse = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}/actions/cancel`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(cancelResponse.status).toBe(200);
   });
 });

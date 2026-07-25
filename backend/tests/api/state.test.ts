@@ -7,12 +7,40 @@ import { eq } from "drizzle-orm";
 
 describe("TFE API v2 - State Versions & Locking", () => {
   let workspaceId = "";
+  let userToken: string;
 
   beforeAll(async () => {
     // Clear and setup
+    const { runs, configurationVersions, users, apiTokens } = await import("../../src/db/schema");
+    await db.delete(runs);
+    await db.delete(configurationVersions);
     await db.delete(stateVersions);
     await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(apiTokens);
+    await db.delete(users);
     await db.delete(organizations);
+
+    // Setup auth
+    await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "users", attributes: { username: "state-owner", password: "securepassword" } },
+        }),
+      })
+    );
+
+    const loginRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username: "state-owner", password: "securepassword" } },
+        }),
+      })
+    );
+    userToken = (await loginRes.json()).data.attributes.token;
 
     await db.insert(organizations).values({ id: "org-3", name: "homelab-state" });
     const ws = await db.insert(workspaces).values({
@@ -28,6 +56,7 @@ describe("TFE API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
         method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` }
       })
     );
 
@@ -42,6 +71,7 @@ describe("TFE API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/unlock`, {
         method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` }
       })
     );
 
@@ -56,6 +86,7 @@ describe("TFE API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, {
         method: "GET",
+        headers: { "Authorization": `Bearer ${userToken}` }
       })
     );
     // Standard TFE returns 404 when there is no state version yet.
@@ -75,7 +106,10 @@ describe("TFE API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
-        headers: { "Content-Type": "application/vnd.api+json" },
+        headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`
+        },
         body: JSON.stringify({
           data: {
             type: "state-versions",
