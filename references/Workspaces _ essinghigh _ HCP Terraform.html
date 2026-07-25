@@ -1,0 +1,47 @@
+<!DOCTYPE html><!--
+ Copyright IBM Corp. 2014, 2026
+--><html lang="en"><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>HCP Terraform</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta name="atlas/config/environment" content="%7B%22modulePrefix%22%3A%22atlas%22%2C%22environment%22%3A%22production%22%2C%22rootURL%22%3A%22%2F%22%2C%22locationType%22%3A%22history%22%2C%22EmberENV%22%3A%7B%22FEATURES%22%3A%7B%7D%2C%22EXTEND_PROTOTYPES%22%3Afalse%2C%22ember-short-number%22%3A%7B%22locales%22%3A%5B%22en%22%5D%2C%22threshold%22%3A0.05%7D%2C%22_APPLICATION_TEMPLATE_WRAPPER%22%3Afalse%2C%22_DEFAULT_ASYNC_OBSERVERS%22%3Atrue%2C%22_JQUERY_INTEGRATION%22%3Afalse%2C%22_NO_IMPLICIT_ROUTE_MODEL%22%3Afalse%2C%22_TEMPLATE_ONLY_GLIMMER_COMPONENTS%22%3Atrue%7D%2C%22algolia%22%3A%7B%22APP_ID%22%3A%22YY0FFNI7MF%22%2C%22API_KEY%22%3A%220f94cddf85f28139b5a64c065a261696%22%2C%22indices%22%3A%7B%22modules%22%3A%22tf-registry%3Aprod%3Amodules%22%2C%22providers%22%3A%22tf-registry%3Aprod%3Aproviders%22%7D%7D%2C%22app-config%22%3A%7B%22enabled%22%3Atrue%7D%2C%22flightIconsSpriteLazyEmbed%22%3Atrue%2C%22isEnterprise%22%3Afalse%2C%22isMirageEnabled%22%3Afalse%2C%22isApiProxyingEnabled%22%3Afalse%2C%22Page%22%3A%7B%22application-version%22%3Anull%2C%22config-version%22%3Anull%2C%22csrf-param%22%3Anull%2C%22csrf-token%22%3Anull%2C%22flash-notices%22%3A%7B%7D%2C%22is-enterprise%22%3Afalse%2C%22keys%22%3A%7B%7D%2C%22settings%22%3A%7B%7D%7D%2C%22launchDarkly%22%3A%7B%22clientSideId%22%3A%22%22%2C%22localFlags%22%3A%7B%7D%2C%22mode%22%3A%22remote%22%7D%2C%22recaptcha%22%3A%7B%22siteKey%22%3A%22%22%7D%2C%22torii%22%3A%7B%22sessionServiceName%22%3A%22toriiSession%22%2C%22providers%22%3A%7B%22github-app%22%3A%7B%22slug%22%3A%22terraform-cloud%22%7D%2C%22github-oauth2%22%3A%7B%22apiKey%22%3A%22%22%2C%22scope%22%3A%22repo%2Cread%3Auser%22%2C%22redirectUri%22%3A%22%22%2C%22baseUrl%22%3A%22%22%7D%7D%7D%2C%22APP%22%3A%7B%22rootElement%22%3A%22%23tfe-app%22%2C%22filterableListReloadInterval%22%3A8000%2C%22pollingServiceDefaultInterval%22%3A8000%2C%22organizationsReloadInterval%22%3A0%2C%22workspaceReloadInterval%22%3A10000%2C%22workspaceRunsReloadInterval%22%3A16000%2C%22workspaceQueriesReloadInterval%22%3A10000%2C%22organizationRunsReloadInterval%22%3A16000%2C%22workspaceVariablesReloadInterval%22%3A2000%2C%22runShowReloadInterval%22%3A5000%2C%22policyEvaluationReloadInterval%22%3A5000%2C%22planExportReloadInterval%22%3A1000%2C%22generatedModuleTestReloadInterval%22%3A3000%2C%22jsonPlanRetryInterval%22%3A1000%2C%22structuredLogPollInterval%22%3A2000%2C%22moduleViewPoll%22%3A2000%2C%22agentReloadInterval%22%3A15000%2C%22actionInvocationReloadInterval%22%3A8000%2C%22fakeResourceReloadInterval%22%3A5000%2C%22appExitTimeout%22%3A5000%2C%22debounceDelay%22%3A300%2C%22copyDelay%22%3A4000%2C%22defaultPageSize%22%3A20%2C%22defaultPageSizeMid%22%3A15%2C%22defaultPageSizeSmall%22%3A10%2C%22defaultPageSizeSmallMin%22%3A5%2C%22defaultPageSizeMax%22%3A50%2C%22pageSizeUpperLimit%22%3A100%2C%22defaultProjectPageSize%22%3A40%2C%22stackConfigurationReloadInterval%22%3A5000%2C%22stackPlanEventsReloadInterval%22%3A5000%2C%22stackStateDescriptionReloadInterval%22%3A5000%2C%22intermediateStateReloadInterval%22%3A16000%2C%22intermediateStatesAlertTimeoutSecs%22%3A900%2C%22ember-basic-dropdown%22%3A%7B%22destination%22%3A%22%23tfe-app%22%7D%7D%2C%22ember-intl%22%3A%7B%22defaultLocale%22%3A%22en%22%7D%2C%22flashMessageDefaults%22%3A%7B%22timeout%22%3A3000%2C%22extendedTimeout%22%3A150%2C%22sticky%22%3Afalse%2C%22preventDuplicates%22%3Afalse%2C%22destroyOnClick%22%3Afalse%2C%22type%22%3A%22neutral%22%2C%22types%22%3A%5B%22success%22%2C%22warning%22%2C%22critical%22%2C%22neutral%22%2C%22highlight%22%5D%7D%7D">
+<script type="text/javascript" nonce="uXVVz9e7QD7tkel9rOZouQ==">if (window.performance?.mark) {
+  window.performance.mark('@sentry/ember:initial-load-start');
+}
+</script>
+
+  <link rel="stylesheet" href="https://cdn.terraform.io/app/assets/vendor-d41d8cd98f00b204e9800998ecf8427e.css" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU= sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==" >
+  
+  <link rel="stylesheet" href="https://cdn.terraform.io/app/assets/atlas-de95e1d86f95e967e887f43f201b13b8.css" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-pAC3ONBS+MyBcDz40O2u4hxZSb3RXVOmSwfxuLJDuUQ= sha512-zg0g4wi5XGlHZewK/8+LU/s+BcH4SCLcDb7WSAHU7YxdDzLXnLw7LTKFOdilCTEWHwD2sZBrvUnqbcbGFNgKCw==" >
+
+  <link rel="dns-prefetch" href="https://app.launchdarkly.com">
+  <link rel="dns-prefetch" href="https://clientstream.launchdarkly.com">
+  <link rel="dns-prefetch" href="https://events.launchdarkly.com">
+  <link rel="dns-prefetch" href="https://www.gravatar.com">
+
+  
+</head>
+
+<body>
+  
+
+  <div id="tfe-app"></div>
+  
+  <script nonce="uXVVz9e7QD7tkel9rOZouQ==">window.$__CSP_NONCE__ = 'uXVVz9e7QD7tkel9rOZouQ==';</script>
+  <script src="https://cdn.terraform.io/app/assets/vendor-c268ad309de9764957fdbb32b36c7b1a.js" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-2d53aLa5mOMFcAO7mgeKYTCWvRujGd8lqSUZtdZEQz0= sha512-UgO/gDSJ9oT7M1/qjDi4ikdQgiuTOfkEgG0T32Ugtwv7jDaI34tuZpxIK5FDK3uvc9Ai3F9kuAVI98VJ09SXHQ==" ></script>
+  <script src="https://cdn.terraform.io/app/assets/chunk.35.a519f426224d6606b36a.js" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-SzuXCLArhv1RHy9MbAL/CxrQHY6w8+ETAwCNlSvV364= sha512-TcupsmIcOaxtsKSV92F6ZhnLgLMzg0XDekqqQRgMICvJDQaiG59XQAuQNHTqekb0I7VYoS/ccbKrIDWV+sb8gw==" ></script>
+<script src="https://cdn.terraform.io/app/assets/chunk.524.0a680ab7cd558b3f3f20.js" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-rcxFx0kX1GG690plKlaEMqB229Pwpjc4G2tlSI9WaKU= sha512-9bw1vXz80EUE6v6Dn+FEueHGt6v1Vl7pS6S2Yc4I79ANuTUeMQjDMdBnloQDNq6jNa2yxxvxbh5qJgKNH7RuXw==" ></script>
+  <script src="https://cdn.terraform.io/app/assets/atlas-0d11a4d51f867ce8133b30287ad87be8.js" crossorigin="anonymous" nonce="uXVVz9e7QD7tkel9rOZouQ==" integrity="sha256-AdgApefvGCui8bZHmG9QN7AuyNNBwykrTdDyrBP6jFk= sha512-wVxnaEQDCZHhST14LmeqFsk/wM6KeP23fRmFc4gftNg9EcTsux51+BU35cNbrlOkIVIT6sE0von617bWWDOpUQ==" ></script>
+
+  <script type="text/javascript" nonce="uXVVz9e7QD7tkel9rOZouQ==">if (window.performance?.mark) {
+  window.performance.mark('@sentry/ember:initial-load-end');
+}
+</script>
+
+
+
+
+</body></html>
