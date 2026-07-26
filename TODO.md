@@ -836,7 +836,7 @@
 - [x] `GET /organizations/:organization_name/agent-pools` — list pools
 - [x] `POST /organizations/:organization_name/agent-pools` — create pool
 - [x] `GET /agent-pools/:pool_id` — show pool
-- [ ] `PATCH /agent-pools/:pool_id` — update pool
+- [x] `PATCH /agent-pools/:pool_id` — update pool
 - [x] `DELETE /agent-pools/:pool_id` — delete pool
 - [x] `name` attribute
 - [x] `organization-scoped` flag
@@ -886,7 +886,7 @@
 ### 17.2 Run Task Execution
 - [x] `GET /workspaces/:workspace_id/run-tasks` — list tasks on workspace
 - [x] `POST /workspaces/:workspace_id/run-tasks` — attach task to workspace
-- [ ] `DELETE /workspaces/:workspace_id/run-tasks/:task_id` — detach
+- [x] `DELETE /workspaces/:workspace_id/run-tasks/:task_id` — detach
 - [x] `GET /runs/:run_id/run-tasks` — list task results for a run
 - [x] `GET /run-tasks/:task_id/task-results` — get task result details
 - [ ] Pre-plan and post-plan stages

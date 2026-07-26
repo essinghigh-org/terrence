@@ -3817,6 +3817,31 @@ export const app = new Elysia()
       },
     };
   }, { isAuth: true })
+  .patch("/api/v2/agent-pools/:pool_id", async ({ params: { pool_id }, body, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof agentPools.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["organization-scoped"] === "boolean") updates.organizationScoped = attributes["organization-scoped"];
+    if (Object.keys(updates).length > 0) {
+      await db.update(agentPools).set(updates).where(eq(agentPools.id, pool_id));
+    }
+    const updated = (await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "agent-pools",
+        attributes: {
+          name: updated.name,
+          "organization-scoped": updated.organizationScoped,
+          "agent-count": 0,
+        },
+      },
+    };
+  }, { isAuth: true })
   .delete("/api/v2/agent-pools/:pool_id", async ({ params: { pool_id }, user, orgId: tokenOrgId, set }) => {
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
     if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
@@ -4230,6 +4255,16 @@ export const app = new Elysia()
         },
       },
     };
+  }, { isAuth: true })
+
+  .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", async ({ params: { workspace_id, task_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspace_id), eq(workspaceRunTasks.runTaskId, task_id)));
+    set.status = 204;
+    return;
   }, { isAuth: true })
 
   // --- AUDIT LOGS & ENTITLEMENTS API ---
