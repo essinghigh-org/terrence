@@ -1,8 +1,9 @@
-import { join } from "path";
+import { join, resolve } from "path";
 import { mkdir, exists, chmod, unlink } from "fs/promises";
 import { spawn } from "bun";
 
-const BINARY_BASE_DIR = join(import.meta.dir, "../storage/binaries");
+const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
+const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
 
 export function validateVersion(version: string): boolean {
   if (!version) return false;
@@ -89,6 +90,7 @@ async function verifySha256(tool: "tofu" | "terraform", version: string, filenam
 export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<{ binaryPath: string; tool: string; version: string } | null> {
   const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu") as "tofu" | "terraform";
   let version = versionInput || "latest";
+  const allowSystemFallback = version === "latest" || process.env.ALLOW_TOOL_FALLBACK === "true";
 
   if (!validateVersion(version)) {
     console.warn(`[terrence] Invalid version format requested: ${versionInput}`);
@@ -162,17 +164,18 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${err.message || err}`);
   }
 
-  // Check system binary for requested tool
-  try {
-    const sysProc = spawn(["which", tool]);
-    if ((await sysProc.exited) === 0) {
-      const sysPath = (await new Response(sysProc.stdout).text()).trim();
-      if (sysPath) {
-        console.log(`[terrence] Falling back to system-installed ${tool} at ${sysPath}`);
-        return { binaryPath: sysPath, tool, version: `${version} (system-fallback)` };
+  if (allowSystemFallback) {
+    try {
+      const sysProc = spawn(["which", tool]);
+      if ((await sysProc.exited) === 0) {
+        const sysPath = (await new Response(sysProc.stdout).text()).trim();
+        if (sysPath) {
+          console.log(`[terrence] Falling back to system-installed ${tool} at ${sysPath}`);
+          return { binaryPath: sysPath, tool, version: `${version} (system-fallback)` };
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag
   if (process.env.ALLOW_TOOL_FALLBACK === "true") {

@@ -10,6 +10,7 @@ describe("TFE API Service Discovery", () => {
     expect(response.status).toBe(200);
     const data = await response.json();
 
+    expect(data["tfe.v2"]).toBe("/api/v2/");
     expect(data["tfe.v2.1"]).toBe("/api/v2/");
     expect(data["tfe.v2.2"]).toBe("/api/v2/");
     expect(data["state.v2"]).toBe("/api/v2/");

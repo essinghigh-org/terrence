@@ -1,11 +1,23 @@
 import { db } from "./db";
-import { runs, configurationVersions, workspaces, workspaceVariables, logs, stateVersions, organizations } from "./db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import {
+  runs,
+  configurationVersions,
+  workspaces,
+  workspaceVariables,
+  logs,
+  stateVersions,
+  organizations,
+  variableSets,
+  variableSetWorkspaces,
+  variableSetVariables,
+} from "./db/schema";
+import { eq, desc, asc, and, inArray } from "drizzle-orm";
 import { spawn } from "bun";
 import { join } from "path";
 import { tmpdir } from "os";
 import { mkdir, rm, writeFile, readFile, exists } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
+import { workspaceExecutionDirectory } from "./workspace";
 
 async function writeLog(runId: string, phase: "plan" | "apply", outputText: string) {
   try {
@@ -17,6 +29,23 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       createdAt: Date.now(),
     });
   } catch {}
+}
+
+async function streamLog(
+  runId: string,
+  phase: "plan" | "apply",
+  stream: ReadableStream<Uint8Array>,
+) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value, { stream: true });
+    if (text) await writeLog(runId, phase, text);
+  }
+  const tail = decoder.decode();
+  if (tail) await writeLog(runId, phase, tail);
 }
 
 function buildSanitizedEnv(workspaceVars: Array<{ key: string; value: string; category: string }>): Record<string, string> {
@@ -35,12 +64,39 @@ function buildSanitizedEnv(workspaceVars: Array<{ key: string; value: string; ca
     }
     if (v.category === "env") {
       env[v.key] = v.value;
-    } else {
-      env[`TF_VAR_${v.key}`] = v.value;
     }
   }
 
   return env;
+}
+
+async function executionVariables(workspaceId: string, orgId: string) {
+  const [workspaceVars, links, orgVariableSets] = await Promise.all([
+    db.query.workspaceVariables.findMany({ where: eq(workspaceVariables.workspaceId, workspaceId) }),
+    db.query.variableSetWorkspaces.findMany({ where: eq(variableSetWorkspaces.workspaceId, workspaceId) }),
+    db.query.variableSets.findMany({
+      where: eq(variableSets.orgId, orgId),
+      orderBy: [asc(variableSets.id)],
+    }),
+  ]);
+  const attached = new Set(links.map(link => link.variableSetId));
+  const activeSetIds = orgVariableSets
+    .filter(variableSet => variableSet.global || attached.has(variableSet.id))
+    .map(variableSet => variableSet.id);
+  const setVars = activeSetIds.length === 0
+    ? []
+    : await db.query.variableSetVariables.findMany({
+        where: inArray(variableSetVariables.variableSetId, activeSetIds),
+        orderBy: [asc(variableSetVariables.id)],
+      });
+  const effective = new Map<string, { key: string; value: string; category: string; hcl: boolean }>();
+  for (const variable of setVars) {
+    effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false });
+  }
+  for (const variable of workspaceVars) {
+    effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: variable.hcl === true });
+  }
+  return [...effective.values()];
 }
 
 async function extractTarArchive(archivePath: string, destDir: string): Promise<boolean> {
@@ -104,6 +160,7 @@ export async function executeRun(runId: string) {
   await db.update(runs).set({ status: "planning" }).where(eq(runs.id, runId));
 
   const workDir = join(tmpdir(), "terrence", "runs", runId);
+  let keepPlan = false;
 
   try {
     await mkdir(workDir, { recursive: true });
@@ -123,34 +180,52 @@ export async function executeRun(runId: string) {
       }
     }
 
-    const vars = await db.query.workspaceVariables.findMany({
-      where: eq(workspaceVariables.workspaceId, workspace.id),
-    });
+    const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
+    const { readdir } = await import("fs/promises");
+    let dirFiles: string[];
+    try {
+      dirFiles = await readdir(executionDir);
+    } catch {
+      throw new Error(`Working directory '${workspace.workingDirectory}' does not exist in the configuration.`);
+    }
+    await writeLog(runId, "plan", `[terrence] Executing from ${executionDir}`);
+    await writeFile(
+      join(executionDir, "terrence_backend_override.tf"),
+      'terraform {\n  backend "local" {}\n}\n',
+    );
 
-    const envVars = buildSanitizedEnv(vars);
-    const tfVarsLines: string[] = [];
-    for (const v of vars) {
-      if (v.category !== "env") {
-        tfVarsLines.push(`${v.key} = ${JSON.stringify(v.value)}`);
-      }
+    const latestState = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.workspaceId, workspace.id),
+      orderBy: [desc(stateVersions.serial)],
+    });
+    if (latestState?.statePayload) {
+      await writeFile(join(executionDir, "terraform.tfstate"), latestState.statePayload);
+      await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
     }
 
+    const vars = await executionVariables(workspace.id, workspace.orgId);
+
+    const envVars = buildSanitizedEnv(vars);
+    if (run.debuggingMode) envVars.TF_LOG = "TRACE";
+    const tfVarsLines = vars
+      .filter(variable => variable.category === "terraform")
+      .map(variable => `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
+
     if (tfVarsLines.length > 0) {
-      await writeFile(join(workDir, "terraform.auto.tfvars"), tfVarsLines.join("\n"));
-      await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} Terraform variables.`);
+      await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"));
+      await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
     }
 
     const requestedTool = workspace.iacBinary || org?.defaultIacBinary || "tofu";
-    const requestedVersion = workspace.terraformVersion || org?.defaultTerraformVersion || "latest";
+    const requestedVersion = run.terraformVersion || workspace.terraformVersion || org?.defaultTerraformVersion || "latest";
 
-    await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
-    const resolved = await ensureBinary(requestedTool, requestedVersion);
-
-    const { readdir } = await import("fs/promises");
-    const dirFiles = await readdir(workDir);
     const hasTfFiles = dirFiles.some(f => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
     const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || process.env.NODE_ENV === "test";
+    if (!isSimulatedAllowed) {
+      await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
+    }
+    const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     if (resolved && hasTfFiles) {
       const binary = resolved.binaryPath;
@@ -158,44 +233,48 @@ export async function executeRun(runId: string) {
 
       // 1. Run init
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
-      const initProc = spawn([binary, "init", "-no-color", "-input=false"], {
-        cwd: workDir,
+      const initProc = spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
+        cwd: executionDir,
         env: envVars,
+        stdout: "pipe",
+        stderr: "pipe",
       });
 
-      const [initStdout, initStderr] = await Promise.all([
-        new Response(initProc.stdout).text(),
-        new Response(initProc.stderr).text(),
+      const [initExit] = await Promise.all([
+        initProc.exited,
+        streamLog(runId, "plan", initProc.stdout),
+        streamLog(runId, "plan", initProc.stderr),
       ]);
 
-      if (initStdout) await writeLog(runId, "plan", initStdout);
-      if (initStderr) await writeLog(runId, "plan", initStderr);
-
-      const initExit = await initProc.exited;
       if (initExit !== 0) {
         throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
       }
 
       // 2. Run plan
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} plan ---`);
-      const planArgs = run.isDestroy
-        ? [binary, "plan", "-no-color", "-input=false", "-destroy", "-out=tfplan"]
-        : [binary, "plan", "-no-color", "-input=false", "-out=tfplan"];
+      const planArgs = [binary, "plan", "-no-color", "-input=false"];
+      if (!run.refresh) planArgs.push("-refresh=false");
+      if (run.refreshOnly) planArgs.push("-refresh-only");
+      if (run.isDestroy) planArgs.push("-destroy");
+      for (const target of run.targetAddrs || []) planArgs.push(`-target=${target}`);
+      for (const replacement of run.replaceAddrs || []) planArgs.push(`-replace=${replacement}`);
+      if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
+      for (const variable of run.variables || []) planArgs.push(`-var=${variable.key}=${variable.value}`);
+      planArgs.push("-out=tfplan");
 
       const planProc = spawn(planArgs, {
-        cwd: workDir,
+        cwd: executionDir,
         env: envVars,
+        stdout: "pipe",
+        stderr: "pipe",
       });
 
-      const [planStdout, planStderr] = await Promise.all([
-        new Response(planProc.stdout).text(),
-        new Response(planProc.stderr).text(),
+      const [planExit] = await Promise.all([
+        planProc.exited,
+        streamLog(runId, "plan", planProc.stdout),
+        streamLog(runId, "plan", planProc.stderr),
       ]);
 
-      if (planStdout) await writeLog(runId, "plan", planStdout);
-      if (planStderr) await writeLog(runId, "plan", planStderr);
-
-      const planExit = await planProc.exited;
       if (planExit !== 0) {
         throw new Error(`${resolved.tool} plan failed with exit code ${planExit}`);
       }
@@ -206,20 +285,27 @@ export async function executeRun(runId: string) {
       throw new Error(`Unable to resolve CLI binary '${requestedTool}' or no Terraform configuration (.tf) files were found in workspace.`);
     }
 
-    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
-    await writeLog(runId, "plan", `[terrence] Run status updated to 'planned'.`);
+    const plannedStatus = run.planOnly ? "planned_and_finished" : "planned";
+    await db.update(runs).set({ status: plannedStatus }).where(eq(runs.id, runId));
+    await writeLog(runId, "plan", `[terrence] Run status updated to '${plannedStatus}'.`);
 
-    if (workspace.autoApply) {
+    if (run.planOnly) {
+      keepPlan = false;
+    } else if (workspace.autoApply || run.autoApply) {
       await executeApply(runId);
+    } else {
+      keepPlan = true;
     }
   } catch (error: any) {
     console.error(`Run ${runId} planning failed`, error);
     await writeLog(runId, "plan", `[terrence ERROR] ${error.message || String(error)}`);
     await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
   } finally {
-    try {
-      await rm(workDir, { recursive: true, force: true });
-    } catch {}
+    if (!keepPlan) {
+      try {
+        await rm(workDir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 
@@ -249,49 +335,48 @@ export async function executeApply(runId: string) {
   let applySuccess = false;
 
   try {
+    const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
     const requestedTool = workspace.iacBinary || org?.defaultIacBinary || "tofu";
-    const requestedVersion = workspace.terraformVersion || org?.defaultTerraformVersion || "latest";
+    const requestedVersion = run.terraformVersion || workspace.terraformVersion || org?.defaultTerraformVersion || "latest";
 
-    const resolved = await ensureBinary(requestedTool, requestedVersion);
     const { readdir } = await import("fs/promises");
-    const dirFiles = (await exists(workDir)) ? await readdir(workDir) : [];
+    const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     const hasTfFiles = dirFiles.some(f => f.endsWith(".tf") || f.endsWith(".tf.json"));
     const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || process.env.NODE_ENV === "test";
+    const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
-    if (resolved && (await exists(workDir)) && hasTfFiles) {
+    if (resolved && (await exists(executionDir)) && hasTfFiles) {
       const binary = resolved.binaryPath;
-      const vars = await db.query.workspaceVariables.findMany({
-        where: eq(workspaceVariables.workspaceId, workspace.id),
-      });
+      const vars = await executionVariables(workspace.id, workspace.orgId);
       const envVars = buildSanitizedEnv(vars);
+      if (run.debuggingMode) envVars.TF_LOG = "TRACE";
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
-      const hasPlanFile = await exists(join(workDir, "tfplan"));
+      const hasPlanFile = await exists(join(executionDir, "tfplan"));
       const applyArgs = hasPlanFile
         ? [binary, "apply", "-no-color", "-input=false", "tfplan"]
         : [binary, "apply", "-no-color", "-input=false", "-auto-approve"];
 
       const applyProc = spawn(applyArgs, {
-        cwd: workDir,
+        cwd: executionDir,
         env: envVars,
+        stdout: "pipe",
+        stderr: "pipe",
       });
 
-      const [applyStdout, applyStderr] = await Promise.all([
-        new Response(applyProc.stdout).text(),
-        new Response(applyProc.stderr).text(),
+      const [applyExit] = await Promise.all([
+        applyProc.exited,
+        streamLog(runId, "apply", applyProc.stdout),
+        streamLog(runId, "apply", applyProc.stderr),
       ]);
 
-      if (applyStdout) await writeLog(runId, "apply", applyStdout);
-      if (applyStderr) await writeLog(runId, "apply", applyStderr);
-
-      const applyExit = await applyProc.exited;
       if (applyExit !== 0) {
         throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
 
-      const stateFilePath = join(workDir, "terraform.tfstate");
+      const stateFilePath = join(executionDir, "terraform.tfstate");
       if (await exists(stateFilePath)) {
         const statePayload = await readFile(stateFilePath, "utf-8");
 
@@ -336,27 +421,54 @@ export async function executeApply(runId: string) {
 
 let isWorkerLoopRunning = false;
 
+export async function pollWorkerQueue(): Promise<string[]> {
+  // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
+  const pendingRuns = await db.query.runs.findMany({
+    where: eq(runs.status, "pending"),
+    orderBy: [asc(runs.createdAt)],
+  });
+  const claimedRunIds: string[] = [];
+  const claimedWorkspaceIds = new Set<string>();
+
+  for (const run of pendingRuns) {
+    if (claimedRunIds.length === 5) break;
+    if (claimedWorkspaceIds.has(run.workspaceId)) continue;
+
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, run.workspaceId),
+    });
+    if (!workspace || workspace.locked) continue;
+
+    const activeRun = await db.query.runs.findFirst({
+      where: and(
+        eq(runs.workspaceId, run.workspaceId),
+        inArray(runs.status, ["planning", "planned", "applying"]),
+      ),
+    });
+    if (activeRun) continue;
+
+    const claimed = await db.update(runs)
+      .set({ status: "planning" })
+      .where(and(eq(runs.id, run.id), eq(runs.status, "pending")))
+      .returning({ id: runs.id });
+
+    if (claimed.length > 0) {
+      claimedRunIds.push(run.id);
+      claimedWorkspaceIds.add(run.workspaceId);
+      executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
+    }
+  }
+
+  return claimedRunIds;
+}
+
 export async function startWorkerQueue() {
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
 
   const poll = async () => {
     try {
-      const pendingRuns = await db.query.runs.findMany({
-        where: eq(runs.status, "pending"),
-        limit: 5,
-      });
-
-      for (const run of pendingRuns) {
-        const claimed = await db.update(runs)
-          .set({ status: "planning" })
-          .where(and(eq(runs.id, run.id), eq(runs.status, "pending")))
-          .returning({ id: runs.id });
-
-        if (claimed.length > 0) {
-          executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
-        }
-      }
+      await pollWorkerQueue();
     } catch (err) {
       console.error("[terrence worker] Queue error", err);
     } finally {

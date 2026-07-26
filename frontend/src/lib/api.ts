@@ -8,6 +8,13 @@ export function setAuthToken(token: string) {
   localStorage.setItem("tfe_token", token);
 }
 
+export function readResponseBody(response: Response) {
+  if (response.status === 204) return null;
+  return response.headers.get("Content-Type")?.includes("json")
+    ? response.json()
+    : response.text();
+}
+
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
   const token = getAuthToken();
   const headers = new Headers(options.headers);
@@ -30,5 +37,5 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
     throw new Error(errorBody?.errors?.[0]?.detail || errorBody?.errors?.[0]?.title || "API Error");
   }
 
-  return response.json();
+  return readResponseBody(response);
 }

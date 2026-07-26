@@ -89,7 +89,7 @@ describe("TFE API Authentication - Tokens", () => {
     );
     expect(res.status).toBe(201);
     const data = await res.json();
-    expect(data.data.type).toBe("tokens");
+    expect(data.data.type).toBe("authentication-tokens");
     expect(data.data.attributes.token).toBeDefined();
 
     const tokenInDb = await db.query.apiTokens.findFirst({

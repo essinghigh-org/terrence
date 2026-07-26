@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `auto_apply` integer DEFAULT false NOT NULL;

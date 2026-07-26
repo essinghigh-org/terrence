@@ -81,6 +81,7 @@ describe("TFE API v2 - Runs", () => {
           data: {
             attributes: {
               message: "Custom run message",
+              "auto-apply": true,
             },
             relationships: {
               workspace: {
@@ -100,11 +101,13 @@ describe("TFE API v2 - Runs", () => {
     expect(data.data.type).toBe("runs");
     expect(data.data.attributes.status).toBe("pending");
     expect(data.data.attributes.message).toBe("Custom run message");
+    expect(data.data.attributes["auto-apply"]).toBe(true);
 
     const runInDb = await db.query.runs.findFirst({
       where: eq(runs.id, data.data.id),
     });
     expect(runInDb).toBeDefined();
     expect(runInDb?.status).toBe("pending");
+    expect(runInDb?.autoApply).toBe(true);
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
+import { buttonVariants, Button } from "@/components/ui/button";
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 
 export function Workspaces() {
@@ -23,9 +23,17 @@ export function Workspaces() {
 
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-3xl font-bold">{orgName} / Workspaces</h1>
-        <Button onClick={() => setCreateOpen(true)}>New Workspace</Button>
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/app/${orgName}/variable-sets`}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            Variable sets
+          </Link>
+          <Button onClick={() => setCreateOpen(true)}>New Workspace</Button>
+        </div>
       </div>
 
       <div className="border rounded-md">

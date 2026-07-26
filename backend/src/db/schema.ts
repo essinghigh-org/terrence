@@ -3,6 +3,7 @@ import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqli
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
+  email: text("email"),
   passwordHash: text("password_hash").notNull(),
 });
 
@@ -23,9 +24,13 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
 export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  description: text("description"),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   iacBinary: text("iac_binary"), // null inherits from org
   terraformVersion: text("terraform_version").default("latest"),
+  workingDirectory: text("working_directory"),
+  sourceName: text("source_name"),
+  sourceUrl: text("source_url"),
   autoApply: integer("auto_apply", { mode: "boolean" }).default(false),
   locked: integer("locked", { mode: "boolean" }).default(false),
 });
@@ -36,6 +41,7 @@ export const workspaceVariables = sqliteTable("workspace_variables", {
   key: text("key").notNull(),
   value: text("value").notNull(),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
+  hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"), // 'terraform' or 'env'
   description: text("description"),
 });
@@ -45,6 +51,8 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("pending"),
   archivePath: text("archive_path"),
+  speculative: integer("speculative", { mode: "boolean" }).notNull().default(false),
+  provisional: integer("provisional", { mode: "boolean" }).notNull().default(false),
 });
 
 export const runs = sqliteTable("runs", {
@@ -54,6 +62,17 @@ export const runs = sqliteTable("runs", {
   status: text("status").notNull().default("pending"),
   message: text("message"),
   isDestroy: integer("is_destroy", { mode: "boolean" }).default(false),
+  autoApply: integer("auto_apply", { mode: "boolean" }).notNull().default(false),
+  planOnly: integer("plan_only", { mode: "boolean" }).notNull().default(false),
+  refresh: integer("refresh", { mode: "boolean" }).notNull().default(true),
+  refreshOnly: integer("refresh_only", { mode: "boolean" }).notNull().default(false),
+  targetAddrs: text("target_addrs", { mode: "json" }).$type<string[]>(),
+  replaceAddrs: text("replace_addrs", { mode: "json" }).$type<string[]>(),
+  variables: text("variables", { mode: "json" }).$type<Array<{ key: string; value: string }>>(),
+  logToken: text("log_token"),
+  terraformVersion: text("terraform_version"),
+  debuggingMode: integer("debugging_mode", { mode: "boolean" }).notNull().default(false),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: integer("created_at").notNull(),
 });
 
@@ -73,6 +92,9 @@ export const apiTokens = sqliteTable("api_tokens", {
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
   orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
   description: text("description"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  lastUsedAt: integer("last_used_at"),
+  expiresAt: integer("expires_at"),
 });
 
 export const stateVersions = sqliteTable("state_versions", {

@@ -19,15 +19,25 @@ export const authPlugin = new Elysia({ name: 'auth' })
       return { user: null, token: null, orgId: null };
     }
 
+    const now = Date.now();
+    if (token.expiresAt !== null && token.expiresAt <= now) {
+      return { user: null, token: null, orgId: null };
+    }
+
+    await db.update(apiTokens)
+      .set({ lastUsedAt: now })
+      .where(eq(apiTokens.id, token.id));
+    const usedToken = { ...token, lastUsedAt: now };
+
     if (token.userId) {
       const user = await db.query.users.findFirst({
           where: eq(users.id, token.userId)
       });
-      return { user, token, orgId: null };
+      return { user, token: usedToken, orgId: null };
     }
 
     if (token.orgId) {
-      return { user: null, token, orgId: token.orgId };
+      return { user: null, token: usedToken, orgId: token.orgId };
     }
 
     return { user: null, token: null, orgId: null };

@@ -15,6 +15,10 @@ RUN bun run build
 FROM oven/bun:1-slim
 ARG TARGETARCH=amd64
 WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=3000 \
+    STORAGE_DIR=/app/backend/storage \
+    DATABASE_URL=file:/app/backend/storage/terrence.db
 
 # Install system dependencies needed for OpenTofu & Terraform
 RUN apt-get update && apt-get install -y \
@@ -73,5 +77,7 @@ USER appuser
 # Expose server port
 EXPOSE 3000
 
-# Start script: Migrate schema then run backend
-CMD ["sh", "-c", "bunx drizzle-kit migrate && bun run index.ts"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/readyz" > /dev/null || exit 1
+
+CMD ["bun", "run", "index.ts"]
