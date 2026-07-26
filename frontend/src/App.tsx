@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Dashboard } from "./views/Dashboard";
 import { Workspaces } from "./views/Workspaces";
+import { WorkspaceDetail } from "./views/WorkspaceDetail";
 import { getAuthToken } from "./lib/api";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -20,7 +21,7 @@ function App() {
         <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
         {/* Placeholder for workspace detail */}
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><div className="p-8">Workspace Detail (TODO)</div></ProtectedRoute>} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><WorkspaceDetail /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

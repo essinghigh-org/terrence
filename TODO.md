@@ -11,46 +11,46 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 - [x] Database schema for Users, Organizations, and Organization Memberships.
 - [x] User registration and local password authentication.
 - [x] Generation of User API Tokens (`terraform login`).
-- [ ] Generation of Team/Organization API Tokens.
-- [ ] Authentication middleware for parsing Bearer tokens and identifying the active user/agent.
+- [x] Generation of Team/Organization API Tokens.
+- [x] Authentication middleware for parsing Bearer tokens and identifying the active user/agent.
 
 ## Epic 3: Organization & Workspace Management
-- [ ] CRUD API for Organizations (`/api/v2/organizations`).
-- [ ] CRUD API for Workspaces (`/api/v2/organizations/:org/workspaces`).
+- [x] CRUD API for Organizations (`/api/v2/organizations`).
+- [x] CRUD API for Workspaces (`/api/v2/organizations/:org/workspaces`).
 - [ ] Workspace settings management (Execution Mode, Auto-Apply, Terraform Version).
-- [ ] Lock/Unlock Workspace APIs.
+- [x] Lock/Unlock Workspace APIs.
 - [ ] Support for Workspace Tags.
 
 ## Epic 4: Variable Management
-- [ ] Database schema for Variables (Workspace, Variable Set).
-- [ ] CRUD API for Workspace Variables (`/api/v2/workspaces/:workspace_id/vars`).
-- [ ] Support for Terraform variables vs. Environment variables.
-- [ ] Secure storage mechanism for Sensitive variables (HCL vs Env).
+- [x] Database schema for Variables (Workspace, Variable Set).
+- [x] CRUD API for Workspace Variables (`/api/v2/workspaces/:workspace_id/vars`).
+- [x] Support for Terraform variables vs. Environment variables.
+- [x] Secure storage mechanism for Sensitive variables (HCL vs Env).
 - [ ] CRUD API for Variable Sets (Global/Org level) and attachment to workspaces.
 
 ## Epic 5: State Management
-- [ ] Database schema for State Versions and State Outputs.
-- [ ] Implement `GET /api/v2/workspaces/:workspace_id/current-state-version`.
-- [ ] Implement `POST /api/v2/workspaces/:workspace_id/state-versions` (State Upload).
+- [x] Database schema for State Versions and State Outputs.
+- [x] Implement `GET /api/v2/workspaces/:workspace_id/current-state-version`.
+- [x] Implement `POST /api/v2/workspaces/:workspace_id/state-versions` (State Upload).
 - [ ] Storage backend abstraction (Local SQLite Blobs/Filesystem first, S3 later).
 - [ ] Fetching specific state versions and state diffing APIs.
 
 ## Epic 6: Configuration Versions (Code Uploads)
-- [ ] Database schema for Configuration Versions.
-- [ ] API to create a Configuration Version and generate a pre-signed upload URL.
-- [ ] Ingestion endpoint to receive `tar.gz` configuration payloads.
+- [x] Database schema for Configuration Versions.
+- [x] API to create a Configuration Version and generate a pre-signed upload URL.
+- [x] Ingestion endpoint to receive `tar.gz` configuration payloads.
 - [ ] Worker task to extract, validate, and archive the uploaded configuration.
 - [ ] Storage backend abstraction for archived configuration versions.
 
 ## Epic 7: The Run Pipeline & Execution Engine
-- [ ] Database schema for Runs, Plans, Applies, and Logs.
-- [ ] API to trigger a new Run (`POST /api/v2/runs`).
-- [ ] API to fetch Run status and details (`GET /api/v2/runs/:run_id`).
-- [ ] API to cancel or discard a Run.
-- [ ] API to manually approve a Plan and queue an Apply.
-- [ ] Background Queue System for task orchestration.
-- [ ] **Worker**: Subprocess execution of `terraform init` and `terraform plan`.
-- [ ] **Worker**: Subprocess execution of `terraform apply`.
+- [x] Database schema for Runs, Plans, Applies, and Logs.
+- [x] API to trigger a new Run (`POST /api/v2/runs`).
+- [x] API to fetch Run status and details (`GET /api/v2/runs/:run_id`).
+- [x] API to cancel or discard a Run.
+- [x] API to manually approve a Plan and queue an Apply.
+- [x] Background Queue System for task orchestration.
+- [x] **Worker**: Subprocess execution of `terraform init` and `terraform plan`.
+- [x] **Worker**: Subprocess execution of `terraform apply`.
 - [ ] Injection of Workspace Variables, Variable Sets, and backend configurations into the worker environment.
 - [ ] Log streaming: Capture stdout/stderr from subprocesses and stream to database/filesystem.
 - [ ] API to fetch/stream Run Logs for the UI (`/api/v2/runs/:run_id/plan/log`).
@@ -76,10 +76,10 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 
 ## Epic 11: Frontend & User Interface
 - [ ] Authentication Views (Login, Setup).
-- [ ] Organization & Dashboard Views.
-- [ ] Workspace List and Creation View.
-- [ ] Workspace Detail View (Overview, Settings).
-- [ ] Variables Management View (Table, Add/Edit Modal).
+- [x] Organization & Dashboard Views.
+- [x] Workspace List and Creation View.
+- [x] Workspace Detail View (Overview, Settings).
+- [x] Variables Management View (Table, Add/Edit Modal).
 - [ ] Run History List View.
 - [ ] Single Run View (Status tracker, Real-time log viewer, Approve/Discard buttons).
 - [ ] State History View.

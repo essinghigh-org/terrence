@@ -22,7 +22,7 @@ export const app = new Elysia()
   })
   .use(staticPlugin({
     assets: "../frontend/dist",
-    prefix: "/"
+    prefix: ""
   }))
   .onError(({ code, error, set }) => {
     set.headers["Content-Type"] = "application/vnd.api+json";
@@ -527,6 +527,9 @@ export const app = new Elysia()
         status: "pending"
     });
 
+    // Fire off worker task in background
+    import("./worker").then(m => m.executeRun(id)).catch(console.error);
+
     set.status = 201;
     return {
         data: {
@@ -741,8 +744,16 @@ export const app = new Elysia()
             }]
         };
     }
+
+    // Serve static assets natively because Elysia static plugin seems finicky
+    const frontendDir = import.meta.dir + "/../../frontend/dist";
+    const file = Bun.file(frontendDir + url.pathname);
+    if (url.pathname !== "/" && file.size > 0) {
+       return file;
+    }
+
     // Fallback for SPA routing
-    return Bun.file("../frontend/dist/index.html");
+    return Bun.file(frontendDir + "/index.html");
   });
 
 // Endpoints are not implemented yet to fulfill the TDD requirement.
