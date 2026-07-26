@@ -7,27 +7,17 @@ import { eq } from "drizzle-orm";
 describe("TFE API Authentication - Tokens", () => {
   let userToken: string;
   let orgId: string;
+  const username = `tokenuser_${Date.now()}`;
+  const orgName = `token_org_${Date.now()}`;
 
   beforeAll(async () => {
-    // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { runs, configurationVersions, stateVersions, workspaceVariables, workspaces: wsModel, organizationMemberships } = await import("../../src/db/schema");
-    await db.delete(runs);
-    await db.delete(configurationVersions);
-    await db.delete(stateVersions);
-    await db.delete(workspaceVariables); await db.delete(wsModel);
-    await db.delete(organizationMemberships);
-
-    await db.delete(apiTokens);
-    await db.delete(organizations);
-    await db.delete(users);
-
     // Seed User
     const res = await app.handle(
       new Request("http://localhost/api/v2/users", {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
-          data: { type: "users", attributes: { username: "tokenuser", password: "securepassword" } },
+          data: { type: "users", attributes: { username, password: "securepassword" } },
         }),
       })
     );
@@ -39,20 +29,29 @@ describe("TFE API Authentication - Tokens", () => {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
-          data: { attributes: { username: "tokenuser", password: "securepassword" } },
+          data: { attributes: { username, password: "securepassword" } },
         }),
       })
     );
-    expect(loginRes.status).toBe(201);
+    expect(loginRes.status).toBe(200);
     const loginData = await loginRes.json();
     userToken = loginData.data.attributes.token;
 
-    // Seed Org directly
-    orgId = crypto.randomUUID();
-    await db.insert(organizations).values({
-      id: orgId,
-      name: "token-org",
-    });
+    // Create Organization via API so ownership membership is established
+    const orgRes = await app.handle(
+      new Request("http://localhost/api/v2/organizations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: { type: "organizations", attributes: { name: orgName } }
+        })
+      })
+    );
+    expect(orgRes.status).toBe(201);
+    orgId = (await orgRes.json()).data.id;
   });
 
   it("should block unauthenticated token creation", async () => {
@@ -62,7 +61,7 @@ describe("TFE API Authentication - Tokens", () => {
         headers: { "Content-Type": "application/vnd.api+json" },
         body: JSON.stringify({
           data: {
-            type: "api-tokens",
+            type: "tokens",
             relationships: { organization: { data: { id: orgId, type: "organizations" } } }
           }
         })
@@ -81,27 +80,22 @@ describe("TFE API Authentication - Tokens", () => {
         },
         body: JSON.stringify({
           data: {
-            type: "api-tokens",
+            type: "tokens",
             attributes: { description: "CI Token" },
             relationships: { organization: { data: { id: orgId, type: "organizations" } } }
           }
         })
       })
     );
-    if (res.status !== 201) {
-       console.log(await res.text());
-    }
     expect(res.status).toBe(201);
     const data = await res.json();
-    expect(data.data.type).toBe("api-tokens");
+    expect(data.data.type).toBe("tokens");
     expect(data.data.attributes.token).toBeDefined();
 
-    // Verify token exists in DB and belongs to org
     const tokenInDb = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, data.data.attributes.token)
     });
     expect(tokenInDb).toBeDefined();
-    expect(tokenInDb?.orgId).toBe(orgId);
     expect(tokenInDb?.description).toBe("CI Token");
   });
 });

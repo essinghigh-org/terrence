@@ -3,21 +3,25 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { workspaceVariables } from "../../src/db/schema";
 import { organizations, workspaces } from "../../src/db/schema";
+import { eq } from "drizzle-orm";
 
 describe("TFE API v2 - Configuration Versions", () => {
   let workspaceId = "";
-
   let userToken: string;
+
   beforeAll(async () => {
     // Clear and setup
-    const { runs, configurationVersions, stateVersions, apiTokens, users } = await import("../../src/db/schema");
+    const { runs, configurationVersions, stateVersions, apiTokens, users, logs, workspaceTags, organizationMemberships } = await import("../../src/db/schema");
+    await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
     await db.delete(stateVersions);
-    await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(workspaceVariables);
+    await db.delete(workspaceTags);
+    await db.delete(workspaces);
+    await db.delete(organizationMemberships);
     await db.delete(apiTokens);
-    await db.delete(users);
-    await db.delete(organizations);
+    await db.delete(users).where(eq(users.username, "cv-owner"));
 
     await app.handle(
       new Request("http://localhost/api/v2/users", {
@@ -40,11 +44,26 @@ describe("TFE API v2 - Configuration Versions", () => {
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
-    await db.insert(organizations).values({ id: "org-cv", name: "homelab-cv" });
+    // Create organization via API to establish ownership membership
+    const orgRes = await app.handle(
+      new Request("http://localhost/api/v2/organizations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: { type: "organizations", attributes: { name: `homelab-cv-${Date.now()}` } }
+        })
+      })
+    );
+    expect(orgRes.status).toBe(201);
+    const orgId = (await orgRes.json()).data.id;
+
     const ws = await db.insert(workspaces).values({
       id: "ws-cv-test",
       name: "cv-workspace",
-      orgId: "org-cv",
+      orgId: orgId,
     }).returning();
     workspaceId = ws[0].id;
   });
@@ -54,25 +73,15 @@ describe("TFE API v2 - Configuration Versions", () => {
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/configuration-versions`, {
         method: "POST",
         headers: {
-            "Content-Type": "application/vnd.api+json",
-            "Authorization": `Bearer ${userToken}`
+          "Authorization": `Bearer ${userToken}`,
         },
-        body: JSON.stringify({
-          data: {
-            type: "configuration-versions",
-            attributes: {
-              "auto-queue": false
-            }
-          }
-        }),
       })
     );
 
     expect(response.status).toBe(201);
     const data = await response.json();
-
     expect(data.data.type).toBe("configuration-versions");
-    expect(data.data.attributes["upload-url"]).toBeDefined();
     expect(data.data.attributes.status).toBe("pending");
+    expect(data.data.attributes["upload-url"]).toBeDefined();
   });
 });

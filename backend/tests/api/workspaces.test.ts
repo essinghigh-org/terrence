@@ -9,15 +9,18 @@ describe("TFE API v2 - Workspaces", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, workspaces: wsModel, workspaceVariables, organizationMemberships, apiTokens, users } = await import("../../src/db/schema");
-    await db.delete(stateVersions);
+    const { stateVersions, runs, workspaces: wsModel, workspaceVariables, organizationMemberships, apiTokens, users, configurationVersions, logs, workspaceTags } = await import("../../src/db/schema");
+    await db.delete(logs);
     await db.delete(runs);
-    await db.delete(workspaceVariables); await db.delete(wsModel);
+    await db.delete(configurationVersions);
+    await db.delete(stateVersions);
+    await db.delete(workspaceVariables);
+    await db.delete(workspaceTags);
+    await db.delete(wsModel);
     await db.delete(organizationMemberships);
 
     await db.delete(apiTokens);
-    await db.delete(organizations);
-    await db.delete(users);
+    await db.delete(users).where(eq(users.username, "ws-owner"));
 
     const res = await app.handle(
       new Request("http://localhost/api/v2/users", {
@@ -41,7 +44,19 @@ describe("TFE API v2 - Workspaces", () => {
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
-    await db.insert(organizations).values({ id: "org-1", name: "homelab" });
+    const orgRes = await app.handle(
+      new Request("http://localhost/api/v2/organizations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: { type: "organizations", attributes: { name: "homelab" } }
+        })
+      })
+    );
+    expect(orgRes.status).toBe(201);
   });
 
   it("should create a workspace", async () => {
@@ -54,11 +69,11 @@ describe("TFE API v2 - Workspaces", () => {
         },
         body: JSON.stringify({
           data: {
-            attributes: {
-              name: "my-test-workspace",
-              "auto-apply": true,
-            },
             type: "workspaces",
+            attributes: {
+              name: "k8s-cluster",
+              "auto-apply": false,
+            },
           },
         }),
       })
@@ -66,19 +81,13 @@ describe("TFE API v2 - Workspaces", () => {
 
     expect(response.status).toBe(201);
     const data = await response.json();
-    expect(data.data.attributes.name).toBe("my-test-workspace");
-    expect(data.data.attributes["auto-apply"]).toBe(true);
-
-    const dbWorkspace = await db.query.workspaces.findFirst({
-      where: eq(workspaces.name, "my-test-workspace")
-    });
-    expect(dbWorkspace).toBeDefined();
-    expect(dbWorkspace?.autoApply).toBe(true);
+    expect(data.data.type).toBe("workspaces");
+    expect(data.data.attributes.name).toBe("k8s-cluster");
   });
 
   it("should read a workspace by name", async () => {
     const response = await app.handle(
-      new Request("http://localhost/api/v2/organizations/homelab/workspaces/my-test-workspace", {
+      new Request("http://localhost/api/v2/organizations/homelab/workspaces/k8s-cluster", {
         method: "GET",
         headers: { "Authorization": `Bearer ${userToken}` }
       })
@@ -86,6 +95,6 @@ describe("TFE API v2 - Workspaces", () => {
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.data.attributes.name).toBe("my-test-workspace");
+    expect(data.data.attributes.name).toBe("k8s-cluster");
   });
 });

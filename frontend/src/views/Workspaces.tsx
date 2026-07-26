@@ -3,22 +3,29 @@ import { useParams, Link } from "react-router-dom";
 import { fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 
 export function Workspaces() {
   const { orgName } = useParams();
   const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  const loadWorkspaces = () => {
+    if (!orgName) return;
+    fetchApi(`/organizations/${orgName}/workspaces`)
+      .then(data => setWorkspaces(data.data || []))
+      .catch(console.error);
+  };
 
   useEffect(() => {
-    fetchApi(`/organizations/${orgName}/workspaces`)
-      .then(data => setWorkspaces(data.data))
-      .catch(console.error);
+    loadWorkspaces();
   }, [orgName]);
 
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold">{orgName} / Workspaces</h1>
-        <Button>New Workspace</Button>
+        <Button onClick={() => setCreateOpen(true)}>New Workspace</Button>
       </div>
 
       <div className="border rounded-md">
@@ -26,7 +33,7 @@ export function Workspaces() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Terraform Version</TableHead>
+              <TableHead>Terraform / OpenTofu Version</TableHead>
               <TableHead>Auto Apply</TableHead>
               <TableHead>Locked</TableHead>
             </TableRow>
@@ -54,6 +61,15 @@ export function Workspaces() {
           </TableBody>
         </Table>
       </div>
+
+      {orgName && (
+        <CreateWorkspaceModal
+          orgName={orgName}
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={() => loadWorkspaces()}
+        />
+      )}
     </div>
   );
 }
