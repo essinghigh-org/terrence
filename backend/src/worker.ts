@@ -722,7 +722,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
     // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
     const blockerStatuses = run.planOnly
       ? []  // speculative runs don't block anything
-      : ["planning", "applying"];
+      : ["planning", "planned", "planned_and_saved", "applying", "policy_soft_failed"];
 
     const claimed = await db.update(runs)
       .set({ status: "planning" })

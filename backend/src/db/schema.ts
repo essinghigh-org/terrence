@@ -318,6 +318,10 @@ export const policySets = sqliteTable("policy_sets", {
   kind: text("kind").notNull().default("sentinel"), // 'sentinel' or 'opa'
   global: integer("global", { mode: "boolean" }).default(false),
   overridable: integer("overridable", { mode: "boolean" }).default(true),
+  agentEnabled: integer("agent_enabled", { mode: "boolean" }).default(false),
+  policyToolVersion: text("policy_tool_version"),
+  policiesPath: text("policies_path"),
+  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -517,6 +521,32 @@ export const runTriggers = sqliteTable("run_triggers", {
   uniqueIndex("run_triggers_ws_src_idx").on(table.workspaceId, table.sourceWorkspaceId),
 ]);
 
+export const adminTerraformVersions = sqliteTable("admin_terraform_versions", {
+  id: text("id").primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  isDefault: integer("is_default", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
 
+export const adminSentinelVersions = sqliteTable("admin_sentinel_versions", {
+  id: text("id").primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  isDefault: integer("is_default", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
 
-
+export const adminOpaVersions = sqliteTable("admin_opa_versions", {
+  id: text("id").primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  isDefault: integer("is_default", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});

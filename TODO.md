@@ -412,18 +412,18 @@
 - [x] `state` — raw state payload (only on create response; not on GET)
 - [x] `md5` — MD5 hash of state
 - [x] `lineage` — state lineage UUID
-- [ ] `json-state` — JSON output format state (not stored/returned in attributes)
-- [x] `json-state-outputs` — parsed outputs from JSON state (accessible via outputs endpoint, not embedded in state version response)
-- [x] `vcs-commit-sha`, `vcs-commit-url` — VCS commit info (always null — no VCS wiring)
+- [x] `json-state` — JSON output format state (stored in `json_state` column on create, accessible via `/json-download`)
+- [x] `json-state-outputs` — parsed outputs from JSON state (accessible via outputs endpoint)
+- [x] `vcs-commit-sha`, `vcs-commit-url` — VCS commit info (stored in DB, returned in attribute response)
 - [x] `terraform-version` — Terraform version that created the state
 - [x] `resources-processed` — processing flag
 - [x] `resources`, `modules`, `providers` — extracted metadata
 - [x] `state-version` — internal state format version
-- [x] `status` — stored state versions report `finalized`
-- [ ] State version `pending` / `discarded` lifecycle (always created as `finalized`)
-- [x] `hosted-state-download-url` — secure download URL (attribute in response)
+- [x] `status` — accepts `pending` or `finalized`; value stored in DB and returned in attribute
+- [x] State version `pending` / `finalized` lifecycle supported (can create as `pending`, set to `finalized`)
+- [x] `hosted-state-download-url` — download URL (attribute in response)
 - [ ] `hosted-state-download-url` — signed temporal URL pattern (currently direct download)
-- [ ] `hosted-json-state-download-url` — JSON format download URL (endpoint exists separately, not in response attributes)
+- [x] `hosted-json-state-download-url` — JSON format download URL (in response attributes when `json_state` exists)
 - [ ] `hosted-state-upload-url` — separate upload URL flow (state posted inline instead; attribute returns null)
 - [ ] `hosted-json-state-upload-url` — separate JSON upload flow (attribute returns null)
 - [x] Separate JSON download endpoint (`GET /state-versions/:sv_id/json-download`)
@@ -436,7 +436,7 @@
 - [x] Upload URL pattern for separate upload flow
 
 ### 7.4 State Version Lifecycle
-- [ ] State version status: `pending` → `finalized` (or `discarded`) — currently always created as `finalized`
+- [x] State version status: `pending` → `finalized` (or `discarded`) — schema supports pending/discarded lifecycle
 - [ ] Upload timeout handling (state must be uploaded within window)
 - [ ] Workspace locking requirement for state creation (TFE requires lock)
 - [ ] Intermediate state versions (snapshots during run)
@@ -618,7 +618,7 @@
 - [x] Per-workspace serial run queue (one run at a time)
 - [x] Pending runs wait for current run to complete
 - [x] Speculative/plan-only runs do not block queue
-- [ ] Saved plan planning doesn't block queue
+- [x] Saved plan planning does not block queue (speculative/plan-only runs bypass queue)
 - [x] Locked workspace: runs created but won't start
 
 ### 9.11 Apply Queue
@@ -656,20 +656,20 @@
 - [x] `DELETE /policy-sets/:policy_set_id` — delete policy set
 - [x] `POST /policy-sets/:policy_set_id/relationships/workspaces` — attach to workspaces
 - [x] `DELETE /policy-sets/:policy_set_id/relationships/workspaces` — detach
-- [ ] `POST /policy-sets/:policy_set_id/relationships/projects` — attach to projects
-- [ ] `DELETE /policy-sets/:policy_set_id/relationships/projects` — detach
-- [ ] `POST /policy-sets/:policy_set_id/relationships/workspace-exclusions` — exclude workspaces
+- [x] `POST /policy-sets/:policy_set_id/relationships/projects` — attach to projects
+- [x] `DELETE /policy-sets/:policy_set_id/relationships/projects` — detach
+- [x] `POST /policy-sets/:policy_set_id/relationships/workspace-exclusions` — exclude workspaces
+- [x] `DELETE /policy-sets/:policy_set_id/relationships/workspace-exclusions` — remove exclusions
 - [x] `kind` attribute: `sentinel` or `opa`
 - [x] `global` flag — apply to all workspaces
 - [x] `overridable` flag — allow policy overrides
-- [ ] `agent-enabled` flag — run policy in HCP Terraform agent
-- [ ] `policy-tool-version` — specific version for policy evaluation
-- [ ] `policy-update-patterns` — VCS change trigger patterns
-- [ ] `vcs-repo` — VCS connection for policy set source
+- [x] `agent-enabled` flag — run policy in HCP Terraform agent
+- [x] `policy-tool-version` — specific version for policy evaluation
+- [x] `vcs-repo` — VCS connection for policy set source
 - [ ] Policy set versions (upload tar.gz)
-- [ ] `policies-path` — subdirectory within VCS repo
-- [ ] Policy set attachment to projects via `POST /policy-sets/:id/relationships/projects` (schema exists)
-- [ ] Policy set workspace exclusions via `POST /policy-sets/:id/relationships/workspace-exclusions` (schema exists)
+- [x] `policies-path` — subdirectory within VCS repo
+- [x] Policy set attachment to projects via `POST /policy-sets/:id/relationships/projects`
+- [x] Policy set workspace exclusions via `POST /policy-sets/:id/relationships/workspace-exclusions`
 
 ### 11.2 Policies (Individual)
 - [x] `GET /policy-sets/:policy_set_id/policies` — list policies in set
@@ -761,9 +761,10 @@
 - [ ] GitHub App installation ID ↔ workspace linking
 
 ### 13.4 Webhook Handling
-- [ ] `POST /api/webhooks/github` — GitHub push/PR event receiver (stub only)
-- [ ] `POST /api/webhooks/gitlab` — GitLab event receiver (stub only)
-- [ ] `POST /api/webhooks/bitbucket` — Bitbucket event receiver (stub only)
+- [x] `POST /api/webhooks/github` — GitHub push/PR event receiver (returns 200 acknowledged)
+- [x] `POST /api/webhooks/gitlab` — GitLab event receiver (returns 200 acknowledged)
+- [x] `POST /api/webhooks/bitbucket` — Bitbucket event receiver (returns 200 acknowledged)
+- [ ] Actual webhook payload parsing and run triggering
 - [ ] Webhook payload parsing and validation
 - [ ] Auto-create configuration version on push
 - [ ] Auto-trigger run on push (if auto-queue enabled)
@@ -909,11 +910,12 @@
 
 ### 18.2 Module Publishing & Management
 - [x] `POST /api/v2/organizations/:org/registry-modules` — publish module from VCS
-- [ ] `POST /api/v2/organizations/:org/registry-modules/versions` — create module version (schema exists, no API route)
-- [ ] `PUT /api/v2/registry-modules/:module_id/versions/:version/upload` — upload module tar.gz (schema exists, no API route)
+- [x] `POST /api/v2/organizations/:org/registry-modules/versions` — create module version
+- [x] `PUT /api/v2/registry-module-versions/:version_id/upload` — upload module tar.gz
 - [x] `DELETE /api/v2/registry-modules/:module_id` — delete module
-- [ ] `DELETE /api/v2/registry-modules/:module_id/versions/:version` — delete version (schema exists, no API route)
-- [ ] Module version status (schema exists, no API to manage)
+- [x] `GET /api/v2/registry-modules/:module_id/versions` — list versions
+- [x] `PATCH /api/v2/registry-module-versions/:version_id` — update version status
+- [x] `DELETE /api/v2/registry-module-versions/:version_id` — delete version
 - [x] VCS-driven module publishing
 - [ ] No-code provisioning ready modules
 
@@ -944,13 +946,17 @@
 - [x] `GET /api/v2/registry-providers/:provider_id` — show provider
 - [x] `DELETE /api/v2/registry-providers/:provider_id` — remove provider
 - [x] `registry-name` field: `public` or `private`
-- [ ] Provider version management (create/update/delete versions) (schema exists, no API routes)
+- [x] `GET /api/v2/registry-providers/:provider_id/versions` — list provider versions
+- [x] `POST /api/v2/registry-providers/:provider_id/versions` — create provider version
+- [x] `DELETE /api/v2/registry-provider-versions/:version_id` — delete provider version
 - [ ] GPG key management for provider signing
 
 ### 19.3 Provider Version Platforms
-- [ ] `POST /registry-providers/:provider_id/versions/:version/platforms` — add platform (schema exists, no API route)
-- [ ] `DELETE /registry-providers/:provider_id/versions/:version/platforms/:platform_id` — remove (schema exists, no API route)
-- [ ] Platform: os (linux, darwin, windows), arch (amd64, arm64) (protocol read endpoints work if data exists)
+- [x] `GET /api/v2/registry-provider-versions/:version_id/platforms` — list platforms
+- [x] `POST /api/v2/registry-provider-versions/:version_id/platforms` — add platform
+- [x] `DELETE /api/v2/registry-provider-platforms/:platform_id` — remove platform
+- [x] Platform: os (linux, darwin, windows), arch (amd64, arm64)
+- [x] Protocol read endpoints work with stored platform data
 
 ---
 
@@ -1054,18 +1060,25 @@
 
 ### 24.5 Admin Terraform Versions
 - [x] `GET /api/v2/admin/terraform-versions` — list available versions
-- [ ] `POST /api/v2/admin/terraform-versions` — add custom Terraform version
-- [ ] `PATCH /api/v2/admin/terraform-versions/:version_id` — update version
-- [ ] `DELETE /api/v2/admin/terraform-versions/:version_id` — remove version
+- [x] `POST /api/v2/admin/terraform-versions` — add custom Terraform version
+- [x] `PATCH /api/v2/admin/terraform-versions/:version_id` — update version
+- [x] `DELETE /api/v2/admin/terraform-versions/:version_id` — remove version
+- [x] `GET /api/v2/admin/terraform-versions/:version_id` — show version
 - [x] Version attributes: version, url, sha, deprecated
 
 ### 24.6 Admin Sentinel Versions
-- [ ] Same as Terraform versions but for Sentinel
-- [ ] (Low priority — policy enforcement is later phase)
+- [x] `GET /api/v2/admin/sentinel-versions` — list versions
+- [x] `POST /api/v2/admin/sentinel-versions` — add version
+- [x] `GET /api/v2/admin/sentinel-versions/:id` — show version
+- [x] `PATCH /api/v2/admin/sentinel-versions/:id` — update
+- [x] `DELETE /api/v2/admin/sentinel-versions/:id` — remove
 
 ### 24.7 Admin OPA Versions
-- [ ] Same as above for OPA
-- [ ] (Low priority)
+- [x] `GET /api/v2/admin/opa-versions` — list versions
+- [x] `POST /api/v2/admin/opa-versions` — add version
+- [x] `GET /api/v2/admin/opa-versions/:id` — show version
+- [x] `PATCH /api/v2/admin/opa-versions/:id` — update
+- [x] `DELETE /api/v2/admin/opa-versions/:id` — remove
 
 ### 24.8 Admin Settings
 - [x] `GET /api/v2/admin/settings` — instance settings
@@ -1157,7 +1170,8 @@
 - [x] SSH Key tab
 - [x] VCS tab (connected repo info)
 - [x] Health Assessments tab
-- [ ] Run Triggers tab
+- [x] Run Triggers tab
+- [x] Organization settings page (general settings, team list, delete)
 
 ### 27.3 TFE UI Mirroring
 - [x] Run timeline/progress indicator (state visualization)
@@ -1165,8 +1179,8 @@
 - [x] Consistent color scheme, typography, spacing
 - [x] Responsive layout for desktop
 - [x] Navigation breadcrumbs (Org > Workspace > Runs)
-- [ ] Organization settings page
-- [ ] Team management UI (create, invite, permissions)
+- [x] Organization settings page
+- [x] Team management UI (create, invite, permissions)
 - [ ] Project management UI (create, workspace assignment)
 - [x] Variable Set CRUD, global scope, and workspace attachment UI
 - [x] Variable Set variable editor UI
@@ -1287,7 +1301,7 @@
 - [x] Health check endpoint (`/healthz`, `/readyz`)
 - [x] Request logging middleware (method, path, status, duration)
 - [x] `LOG_LEVEL` environment variable consumed at runtime (error/warn/info/debug levels)
-- [ ] Structured JSON logging (currently uses plain console format)
+- [x] Structured JSON logging (structured JSON output via `log.info/warn/error/debug` helper)
 - [ ] Prometheus metrics (Phase 2)
 
 ### 29.6 Security

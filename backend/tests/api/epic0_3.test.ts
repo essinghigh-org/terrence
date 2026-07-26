@@ -64,13 +64,20 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
   });
 
   it("lists all users and supports username filtering", async () => {
-    // Add second user
+    // Add second user within same organization
     const u2Id = `usr-${crypto.randomUUID()}`;
     await db.insert(users).values({
       id: u2Id,
       username: "alice_developer",
       email: "alice@epic.local",
       passwordHash: "hashed",
+    });
+    await db.insert(organizationMemberships).values({
+      id: `orgmem-alice-${crypto.randomUUID()}`,
+      orgId,
+      userId: u2Id,
+      role: "member",
+      status: "active",
     });
 
     const res = await app.handle(

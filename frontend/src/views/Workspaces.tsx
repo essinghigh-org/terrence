@@ -26,6 +26,7 @@ export function Workspaces() {
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-3xl font-bold">{orgName} / Workspaces</h1>
         <div className="flex items-center gap-2">
+          <Link to={`/app/${orgName}/settings`} className={buttonVariants({ variant: "outline", size: "sm" })}>Settings</Link>
           <Link
             to={`/app/${orgName}/variable-sets`}
             className={buttonVariants({ variant: "outline" })}

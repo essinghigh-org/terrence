@@ -17,7 +17,7 @@ import {
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 
-type Tab = "overview" | "variables" | "runs" | "states" | "settings" | "team-access" | "notifications" | "ssh-key" | "policy-sets" | "vcs" | "health";
+type Tab = "overview" | "variables" | "runs" | "states" | "settings" | "team-access" | "notifications" | "ssh-key" | "policy-sets" | "vcs" | "health" | "run-triggers";
 
 function getEngine(attrs: any): string {
   return attrs?.["iac-binary"] || attrs?.["execution-mode"] || "tofu";
@@ -50,6 +50,7 @@ export function WorkspaceDetail() {
   const [selectedSshKeyId, setSelectedSshKeyId] = useState("");
   const [attachedSshKey, setAttachedSshKey] = useState<any>(null);
   const [policySets, setPolicySets] = useState<any[]>([]);
+  const [runTriggers, setRunTriggers] = useState<any[]>([]);
   const [assessmentsEnabled, setAssessmentsEnabled] = useState(false);
 
   const loadWorkspaceData = async () => {
@@ -203,6 +204,12 @@ export function WorkspaceDetail() {
         })
         .catch(() => setPolicySets([]));
     }
+
+    if (activeTab === "run-triggers") {
+      fetchApi(`/workspaces/${wsId}/run-triggers`)
+        .then((res: any) => setRunTriggers(res.data || []))
+        .catch(() => setRunTriggers([]));
+    }
   }, [activeTab, workspace?.id]);
 
   const assignSshKey = async () => {
@@ -240,15 +247,18 @@ export function WorkspaceDetail() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant={workspace.attributes.locked ? "destructive" : "outline"} onClick={toggleLock}>
-            {workspace.attributes.locked ? "Unlock Workspace" : "Lock Workspace"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link to={`/app/${orgName}/settings`} className="text-sm text-blue-600 hover:underline">Org Settings</Link>
+            <Button variant={workspace.attributes.locked ? "destructive" : "outline"} onClick={toggleLock}>
+              {workspace.attributes.locked ? "Unlock Workspace" : "Lock Workspace"}
+            </Button>
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2 border-b">
-        {(["overview", "runs", "variables", "states", "settings"] as const).map((tab) => (
+        {(["overview", "runs", "variables", "states", "settings", "run-triggers", "team-access", "notifications", "ssh-key", "policy-sets", "vcs", "health"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -554,6 +564,41 @@ export function WorkspaceDetail() {
                   <TableRow>
                     <TableCell colSpan={3} className="text-center text-gray-500 py-8">
                       No policy sets attached.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* Run Triggers Tab */}
+      {activeTab === "run-triggers" && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold">Run Triggers</h2>
+          <p className="text-sm text-gray-500 mb-2">
+            Run triggers allow this workspace to be automatically queued when a source workspace completes a run.
+          </p>
+          <div className="border rounded-md">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source Workspace</TableHead>
+                  <TableHead>Created At</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {runTriggers.map((rt: any) => (
+                  <TableRow key={rt.id}>
+                    <TableCell className="font-medium">{rt.relationships?.["sourceable-workspace"]?.data?.id || rt.id}</TableCell>
+                    <TableCell className="text-xs">{rt.attributes?.["created-at"] ? new Date(rt.attributes["created-at"]).toLocaleString() : "-"}</TableCell>
+                  </TableRow>
+                ))}
+                {runTriggers.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={2} className="text-center text-gray-500 py-8">
+                      No run triggers configured. Triggers can be set up via the API.
                     </TableCell>
                   </TableRow>
                 )}

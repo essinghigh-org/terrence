@@ -75,10 +75,62 @@ describe("Admin Operations API contract", () => {
     const getWsBody = await getWsRes.json();
     expect(getWsBody.data.some((w: any) => w.id === workspaceId)).toBeTrue();
 
-    // 5. Admin Terraform versions
+    // 5. Admin Terraform versions - create, list, show, update, delete
+    const createTfRes = await request("/api/v2/admin/terraform-versions", "POST", {
+      data: { attributes: { version: "1.10.5", url: "https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip", deprecated: false } },
+    });
+    expect(createTfRes.status).toBe(201);
+    const tfVersionId = (await createTfRes.json()).data.id;
+
     const getTfVerRes = await request("/api/v2/admin/terraform-versions");
     expect(getTfVerRes.status).toBe(200);
     const getTfVerBody = await getTfVerRes.json();
     expect(getTfVerBody.data.length).toBeGreaterThan(0);
+
+    // Show specific version
+    const showTfRes = await request(`/api/v2/admin/terraform-versions/${tfVersionId}`);
+    expect(showTfRes.status).toBe(200);
+    const showTfBody = await showTfRes.json();
+    expect(showTfBody.data.attributes.version).toBe("1.10.5");
+
+    // Update version
+    const patchTfRes = await request(`/api/v2/admin/terraform-versions/${tfVersionId}`, "PATCH", {
+      data: { attributes: { deprecated: true } },
+    });
+    expect(patchTfRes.status).toBe(200);
+    expect((await patchTfRes.json()).data.attributes.deprecated).toBeTrue();
+
+    // Delete version
+    const delTfRes = await request(`/api/v2/admin/terraform-versions/${tfVersionId}`, "DELETE");
+    expect(delTfRes.status).toBe(204);
+
+    // 6. Admin Sentinel versions CRUD
+    const createSRes = await request("/api/v2/admin/sentinel-versions", "POST", {
+      data: { attributes: { version: "0.24.0" } },
+    });
+    expect(createSRes.status).toBe(201);
+    const sId = (await createSRes.json()).data.id;
+
+    const getSRes = await request("/api/v2/admin/sentinel-versions");
+    expect(getSRes.status).toBe(200);
+    expect((await getSRes.json()).data.length).toBeGreaterThan(0);
+
+    const delSRes = await request(`/api/v2/admin/sentinel-versions/${sId}`, "DELETE");
+    expect(delSRes.status).toBe(204);
+
+    // 7. Admin OPA versions CRUD
+    const opaVer = `0.68.0-${suffix}`;
+    const createORes = await request("/api/v2/admin/opa-versions", "POST", {
+      data: { attributes: { version: opaVer } },
+    });
+    expect(createORes.status).toBe(201);
+    const opaId = (await createORes.json()).data.id;
+
+    const getORes = await request("/api/v2/admin/opa-versions");
+    expect(getORes.status).toBe(200);
+    expect((await getORes.json()).data.length).toBeGreaterThan(0);
+
+    // Clean up
+    await request(`/api/v2/admin/opa-versions/${opaId}`, "DELETE");
   });
 });

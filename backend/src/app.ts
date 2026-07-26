@@ -2,8 +2,8 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
-import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments } from "./db/schema";
-import { and, eq, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
+import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments, adminTerraformVersions, adminSentinelVersions, adminOpaVersions } from "./db/schema";
+import { and, eq, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql, SQL } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { authPlugin } from "./auth";
 import { oauthPlugin } from "./oauth";
@@ -21,11 +21,30 @@ type LogLevel = typeof LOG_LEVELS[number];
 function isLogLevelEnabled(level: LogLevel): boolean {
   return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
 }
+
+function structuredLog(level: LogLevel, message: string, meta?: Record<string, any>) {
+  if (!isLogLevelEnabled(level)) return;
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...(meta ? { ...meta } : {}),
+  };
+  const output = JSON.stringify(entry);
+  if (level === "error") {
+    console.error(output);
+  } else if (level === "warn") {
+    console.warn(output);
+  } else {
+    console.log(output);
+  }
+}
+
 const log = {
-  error: (...args: any[]) => isLogLevelEnabled("error") && console.error(...args),
-  warn: (...args: any[]) => isLogLevelEnabled("warn") && console.warn(...args),
-  info: (...args: any[]) => isLogLevelEnabled("info") && console.log(...args),
-  debug: (...args: any[]) => isLogLevelEnabled("debug") && console.log("[DEBUG]", ...args),
+  error: (msg: string, meta?: Record<string, any>) => structuredLog("error", msg, meta),
+  warn: (msg: string, meta?: Record<string, any>) => structuredLog("warn", msg, meta),
+  info: (msg: string, meta?: Record<string, any>) => structuredLog("info", msg, meta),
+  debug: (msg: string, meta?: Record<string, any>) => structuredLog("debug", msg, meta),
 };
 
 // Initialize persistent worker queue loop
@@ -871,13 +890,14 @@ function stateVersionResource(
       modules,
       providers,
       "state-version": Number.isInteger(parsed?.version) ? parsed.version : null,
-      status: "finalized",
+      status: state.status ?? "finalized",
       intermediate: false,
       size: Buffer.byteLength(payload),
-      "vcs-commit-sha": null,
-      "vcs-commit-url": null,
+      "vcs-commit-sha": state.vcsCommitSha,
+      "vcs-commit-url": state.vcsCommitUrl,
       "hosted-state-download-url": apiURL(request, `/api/v2/state-versions/${state.id}/download`),
       "hosted-state-upload-url": null,
+      "hosted-json-state-download-url": state.jsonState ? apiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
       "hosted-json-state-upload-url": null,
     },
     relationships: {
@@ -3312,17 +3332,25 @@ export const app = new Elysia()
         return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: state" }] };
     }
     const statePayload = decodeStatePayload(state);
+    const status = payload?.data?.attributes?.status || "pending";
+    const jsonState = payload?.data?.attributes?.["json-state"] || null;
     const id = crypto.randomUUID();
     await db.insert(stateVersions).values({
         id,
         workspaceId: workspace_id,
         serial,
-        statePayload
+        statePayload,
+        jsonState,
+        status,
     });
 
     set.status = 201;
     return {
-      data: stateVersionResource({ id, workspaceId: workspace_id, serial, statePayload }, request, true),
+      data: stateVersionResource(
+        { id, workspaceId: workspace_id, serial, statePayload, jsonState, status },
+        request,
+        true,
+      ),
     };
   }, { isAuth: true })
   .get("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params: { workspace_id }, user, orgId, request, set }) => {
@@ -4062,6 +4090,50 @@ export const app = new Elysia()
         },
       },
     };
+  }, { isAuth: true })
+
+  .patch("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params: { policy_set_id, param_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, param_id), eq(policySetParameters.policySetId, policy_set_id)) });
+    if (!param) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof policySetParameters.$inferInsert> = {};
+    if (attrs.key !== undefined) updates.key = attrs.key;
+    if (attrs.value !== undefined) updates.value = attrs.value;
+    if (attrs.sensitive !== undefined) updates.sensitive = attrs.sensitive;
+    if (attrs.hcl !== undefined) updates.hcl = attrs.hcl;
+    if (Object.keys(updates).length > 0) await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, param_id));
+    const updated = (await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, param_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "vars",
+        attributes: {
+          key: updated.key,
+          value: updated.sensitive ? null : updated.value,
+          sensitive: updated.sensitive,
+          hcl: updated.hcl,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params: { policy_set_id, param_id }, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, param_id), eq(policySetParameters.policySetId, policy_set_id)) });
+    if (!param) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(policySetParameters).where(eq(policySetParameters.id, param_id));
+    set.status = 204;
   }, { isAuth: true })
 
   // --- WEBHOOK RECEIVERS (GITHUB, GITLAB, BITBUCKET) ---
@@ -5658,16 +5730,30 @@ export const app = new Elysia()
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
-    const data = psList.map(ps => ({
-      id: ps.id,
-      type: "policy-sets",
-      attributes: {
-        name: ps.name,
-        description: ps.description,
-        kind: ps.kind,
-        global: ps.global,
-        overridable: ps.overridable,
-      },
+    const data = await Promise.all(psList.map(async ps => {
+      const [projLinks, exclLinks] = await Promise.all([
+        db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, ps.id) }),
+        db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, ps.id) }),
+      ]);
+      return {
+        id: ps.id,
+        type: "policy-sets",
+        attributes: {
+          name: ps.name,
+          description: ps.description,
+          kind: ps.kind,
+          global: ps.global,
+          overridable: ps.overridable,
+          "agent-enabled": Boolean(ps.agentEnabled),
+          "policy-tool-version": ps.policyToolVersion ?? null,
+          "policies-path": ps.policiesPath ?? null,
+          "vcs-repo": ps.vcsRepo ?? null,
+        },
+        relationships: {
+          projects: { data: projLinks.map(l => ({ id: l.projectId, type: "projects" })) },
+          "workspace-exclusions": { data: exclLinks.map(l => ({ id: l.workspaceId, type: "workspaces" })) },
+        },
+      };
     }));
     return { data };
   }, { isAuth: true })
@@ -5690,6 +5776,10 @@ export const app = new Elysia()
       kind: attributes.kind ?? "sentinel",
       global: attributes.global ?? false,
       overridable: attributes.overridable ?? true,
+      agentEnabled: attributes["agent-enabled"] ?? false,
+      policyToolVersion: attributes["policy-tool-version"] ?? null,
+      policiesPath: attributes["policies-path"] ?? null,
+      vcsRepo: attributes["vcs-repo"] ?? null,
       createdAt: Date.now(),
     };
     await db.insert(policySets).values(newPs);
@@ -5704,6 +5794,10 @@ export const app = new Elysia()
           kind: newPs.kind,
           global: newPs.global,
           overridable: newPs.overridable,
+          "agent-enabled": Boolean(newPs.agentEnabled),
+          "policy-tool-version": newPs.policyToolVersion ?? null,
+          "policies-path": newPs.policiesPath ?? null,
+          "vcs-repo": newPs.vcsRepo ?? null,
         },
       },
     };
@@ -5714,6 +5808,10 @@ export const app = new Elysia()
     if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const [projLinks, exclLinks] = await Promise.all([
+      db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, policy_set_id) }),
+      db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, policy_set_id) }),
+    ]);
     return {
       data: {
         id: ps.id,
@@ -5724,6 +5822,14 @@ export const app = new Elysia()
           kind: ps.kind,
           global: ps.global,
           overridable: ps.overridable,
+          "agent-enabled": Boolean(ps.agentEnabled),
+          "policy-tool-version": ps.policyToolVersion ?? null,
+          "policies-path": ps.policiesPath ?? null,
+          "vcs-repo": ps.vcsRepo ?? null,
+        },
+        relationships: {
+          projects: { data: projLinks.map(l => ({ id: l.projectId, type: "projects" })) },
+          "workspace-exclusions": { data: exclLinks.map(l => ({ id: l.workspaceId, type: "workspaces" })) },
         },
       },
     };
@@ -5741,6 +5847,10 @@ export const app = new Elysia()
     if (typeof attributes.kind === "string") updates.kind = attributes.kind;
     if (typeof attributes.global === "boolean") updates.global = attributes.global;
     if (typeof attributes.overridable === "boolean") updates.overridable = attributes.overridable;
+    if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
+    if (attributes["policy-tool-version"] !== undefined) updates.policyToolVersion = attributes["policy-tool-version"];
+    if (attributes["policies-path"] !== undefined) updates.policiesPath = attributes["policies-path"];
+    if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = attributes["vcs-repo"];
 
     if (Object.keys(updates).length > 0) {
       await db.update(policySets).set(updates).where(eq(policySets.id, policy_set_id));
@@ -5756,6 +5866,10 @@ export const app = new Elysia()
           kind: updated.kind,
           global: updated.global,
           overridable: updated.overridable,
+          "agent-enabled": Boolean(updated.agentEnabled),
+          "policy-tool-version": updated.policyToolVersion ?? null,
+          "policies-path": updated.policiesPath ?? null,
+          "vcs-repo": updated.vcsRepo ?? null,
         },
       },
     };
@@ -5783,6 +5897,74 @@ export const app = new Elysia()
           const id = `psw-${crypto.randomUUID()}`;
           await db.insert(policySetWorkspaces).values({ id, policySetId: policy_set_id, workspaceId: item.id }).onConflictDoNothing();
         }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/projects", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const projItems = (body as any)?.data;
+    if (Array.isArray(projItems)) {
+      for (const item of projItems) {
+        if (item?.id) {
+          const id = `pspj-${crypto.randomUUID()}`;
+          await db.insert(policySetProjects).values({ id, policySetId: policy_set_id, projectId: item.id }).onConflictDoNothing();
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/projects", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const projItems = (body as any)?.data;
+    if (Array.isArray(projItems)) {
+      const projIds = projItems.map(i => i.id).filter(Boolean);
+      if (projIds.length > 0) {
+        await db.delete(policySetProjects).where(and(eq(policySetProjects.policySetId, policy_set_id), inArray(policySetProjects.projectId, projIds)));
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const wsItems = (body as any)?.data;
+    if (Array.isArray(wsItems)) {
+      for (const item of wsItems) {
+        if (item?.id) {
+          const id = `psex-${crypto.randomUUID()}`;
+          await db.insert(policySetExclusions).values({ id, policySetId: policy_set_id, workspaceId: item.id }).onConflictDoNothing();
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const wsItems = (body as any)?.data;
+    if (Array.isArray(wsItems)) {
+      const wsIds = wsItems.map(i => i.id).filter(Boolean);
+      if (wsIds.length > 0) {
+        await db.delete(policySetExclusions).where(and(eq(policySetExclusions.policySetId, policy_set_id), inArray(policySetExclusions.workspaceId, wsIds)));
       }
     }
     set.status = 204;
@@ -6369,6 +6551,281 @@ export const app = new Elysia()
     return;
   }, { isAuth: true })
 
+  // --- PROVIDER VERSIONS API ---
+  .get("/api/v2/registry-providers/:provider_id/versions", async ({ params: { provider_id }, user, orgId: tokenOrgId, set }) => {
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, provider_id) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const versions = await db.query.registryProviderVersions.findMany({
+      where: eq(registryProviderVersions.providerId, provider_id),
+      orderBy: [desc(registryProviderVersions.createdAt)],
+    });
+    return {
+      data: versions.map(v => ({
+        id: v.id,
+        type: "registry-provider-versions",
+        attributes: {
+          version: v.version,
+          protocols: v.protocols,
+          "shasums-url": v.shasumsUrl,
+          "shasums-signature-url": v.shasumsSignatureUrl,
+          "created-at": new Date(v.createdAt).toISOString(),
+        },
+      })),
+    };
+  }, { isAuth: true })
+
+  .post("/api/v2/registry-providers/:provider_id/versions", async ({ params: { provider_id }, body, user, orgId: tokenOrgId, set }) => {
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, provider_id) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.version) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] };
+    }
+    const id = `provver-${crypto.randomUUID()}`;
+    await db.insert(registryProviderVersions).values({
+      id,
+      providerId: provider_id,
+      version: attributes.version,
+      protocols: attributes.protocols ?? ["5.0"],
+      shasumsUrl: attributes["shasums-url"] ?? null,
+      shasumsSignatureUrl: attributes["shasums-signature-url"] ?? null,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "registry-provider-versions",
+        attributes: {
+          version: attributes.version,
+          protocols: attributes.protocols ?? ["5.0"],
+          "shasums-url": attributes["shasums-url"] ?? null,
+          "shasums-signature-url": attributes["shasums-signature-url"] ?? null,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/registry-provider-versions/:version_id", async ({ params: { version_id }, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- PROVIDER VERSION PLATFORMS API ---
+  .get("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params: { version_id }, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const platforms = await db.query.registryProviderPlatforms.findMany({
+      where: eq(registryProviderPlatforms.versionId, version_id),
+    });
+    return {
+      data: platforms.map(p => ({
+        id: p.id,
+        type: "registry-provider-platforms",
+        attributes: {
+          os: p.os,
+          arch: p.arch,
+          filename: p.filename,
+          "download-url": p.downloadUrl,
+          shasum: p.shasum,
+        },
+      })),
+    };
+  }, { isAuth: true })
+
+  .post("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params: { version_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.os || !attributes.arch || !attributes.filename || !attributes["download-url"] || !attributes.shasum) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] };
+    }
+    const id = `provplat-${crypto.randomUUID()}`;
+    await db.insert(registryProviderPlatforms).values({
+      id,
+      versionId: version_id,
+      os: attributes.os,
+      arch: attributes.arch,
+      filename: attributes.filename,
+      downloadUrl: attributes["download-url"],
+      shasum: attributes.shasum,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "registry-provider-platforms",
+        attributes: {
+          os: attributes.os,
+          arch: attributes.arch,
+          filename: attributes.filename,
+          "download-url": attributes["download-url"],
+          shasum: attributes.shasum,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/registry-provider-platforms/:platform_id", async ({ params: { platform_id }, user, orgId: tokenOrgId, set }) => {
+    const platform = await db.query.registryProviderPlatforms.findFirst({ where: eq(registryProviderPlatforms.id, platform_id) });
+    if (!platform) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, platform.versionId) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platform_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- MODULE VERSIONS API ---
+  .get("/api/v2/registry-modules/:module_id/versions", async ({ params: { module_id }, user, orgId: tokenOrgId, set }) => {
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, module_id) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const versions = await db.query.registryModuleVersions.findMany({
+      where: eq(registryModuleVersions.moduleId, module_id),
+      orderBy: [desc(registryModuleVersions.createdAt)],
+    });
+    return {
+      data: versions.map(v => ({
+        id: v.id,
+        type: "registry-module-versions",
+        attributes: {
+          version: v.version,
+          status: v.status,
+          "created-at": new Date(v.createdAt).toISOString(),
+        },
+      })),
+    };
+  }, { isAuth: true })
+
+  .post("/api/v2/registry-modules/:module_id/versions", async ({ params: { module_id }, body, user, orgId: tokenOrgId, set }) => {
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, module_id) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.version) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] };
+    }
+    const id = `modver-${crypto.randomUUID()}`;
+    await db.insert(registryModuleVersions).values({
+      id,
+      moduleId: module_id,
+      version: attributes.version,
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "registry-module-versions",
+        attributes: {
+          version: attributes.version,
+          status: "pending",
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/registry-module-versions/:version_id", async ({ params: { version_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof registryModuleVersions.$inferInsert> = {};
+    if (attributes.status !== undefined) updates.status = attributes.status;
+    if (attributes.version !== undefined) updates.version = attributes.version;
+    if (Object.keys(updates).length > 0) {
+      await db.update(registryModuleVersions).set(updates).where(eq(registryModuleVersions.id, version_id));
+    }
+    const updated = (await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "registry-module-versions",
+        attributes: {
+          version: updated.version,
+          status: updated.status,
+          "created-at": new Date(updated.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/registry-module-versions/:version_id", async ({ params: { version_id }, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- MODULE VERSION UPLOAD ---
+  .put("/api/v2/registry-module-versions/:version_id/upload", async ({ params: { version_id }, request, user, orgId: tokenOrgId, set }) => {
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version_id) });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const archiveName = `registry-module-${version_id}.tar.gz`;
+    const archivePath = join(CV_STORAGE_DIR, archiveName);
+    await mkdir(CV_STORAGE_DIR, { recursive: true });
+    const buffer = await request.arrayBuffer();
+    await writeFile(archivePath, Buffer.from(buffer));
+    await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, version_id));
+    set.status = 200;
+    return { data: { id: version_id, type: "registry-module-versions", attributes: { status: "ok" } } };
+  }, { isAuth: true })
+
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6667,15 +7124,169 @@ export const app = new Elysia()
     return { data: runResource(updated[0], true) };
   }, { isAuth: true })
 
-  .get("/api/v2/admin/terraform-versions", async ({ user, set }) => {
+  .get("/api/v2/admin/terraform-versions", async ({ user, request, set }) => {
     if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return {
-      data: [
-        { id: "1.10.5", type: "terraform-versions", attributes: { version: "1.10.5", default: true, deprecated: false } },
-        { id: "1.9.8", type: "terraform-versions", attributes: { version: "1.9.8", default: false, deprecated: false } },
-        { id: "1.8.5", type: "terraform-versions", attributes: { version: "1.8.5", default: false, deprecated: false } },
-      ],
-    };
+    const { number, size } = pageRequest(request);
+    const [versions, [{ total }]] = await Promise.all([
+      db.query.adminTerraformVersions.findMany({ orderBy: [desc(adminTerraformVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(adminTerraformVersions),
+    ]);
+    const data = versions.map(v => ({
+      id: v.id,
+      type: "terraform-versions",
+      attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated },
+    }));
+    return { data, ...pagination(request, number, size, total) };
+  }, { isAuth: true })
+
+  .post("/api/v2/admin/terraform-versions", async ({ body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.version) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] };
+    }
+    const id = `tfver-${crypto.randomUUID()}`;
+    await db.insert(adminTerraformVersions).values({
+      id, version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null,
+      deprecated: attrs.deprecated ?? false, isDefault: attrs.default ?? false, createdAt: Date.now(),
+    });
+    set.status = 201;
+    return { data: { id, type: "terraform-versions", attributes: { version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null, default: attrs.default ?? false, deprecated: attrs.deprecated ?? false } } };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/terraform-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: v.id, type: "terraform-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/terraform-versions/:version_id", async ({ params: { version_id }, body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof adminTerraformVersions.$inferInsert> = {};
+    if (attrs.version !== undefined) updates.version = attrs.version;
+    if (attrs.url !== undefined) updates.url = attrs.url;
+    if (attrs.sha !== undefined) updates.sha = attrs.sha;
+    if (attrs.deprecated !== undefined) updates.deprecated = attrs.deprecated;
+    if (attrs.default !== undefined) updates.isDefault = attrs.default;
+    if (Object.keys(updates).length > 0) await db.update(adminTerraformVersions).set(updates).where(eq(adminTerraformVersions.id, version_id));
+    const updated = (await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, version_id) }))!;
+    return { data: { id: updated.id, type: "terraform-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/terraform-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(adminTerraformVersions).where(eq(adminTerraformVersions.id, version_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- ADMIN SENTINEL VERSIONS ---
+  .get("/api/v2/admin/sentinel-versions", async ({ user, request, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const { number, size } = pageRequest(request);
+    const [versions, [{ total }]] = await Promise.all([
+      db.query.adminSentinelVersions.findMany({ orderBy: [desc(adminSentinelVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(adminSentinelVersions),
+    ]);
+    return { data: versions.map(v => ({ id: v.id, type: "sentinel-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } })), ...pagination(request, number, size, total) };
+  }, { isAuth: true })
+
+  .post("/api/v2/admin/sentinel-versions", async ({ body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.version) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+    const id = `sver-${crypto.randomUUID()}`;
+    await db.insert(adminSentinelVersions).values({ id, version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null, deprecated: attrs.deprecated ?? false, isDefault: attrs.default ?? false, createdAt: Date.now() });
+    set.status = 201;
+    return { data: { id, type: "sentinel-versions", attributes: { version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null, default: attrs.default ?? false, deprecated: attrs.deprecated ?? false } } };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/sentinel-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: v.id, type: "sentinel-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/sentinel-versions/:version_id", async ({ params: { version_id }, body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof adminSentinelVersions.$inferInsert> = {};
+    if (attrs.version !== undefined) updates.version = attrs.version;
+    if (attrs.url !== undefined) updates.url = attrs.url;
+    if (attrs.sha !== undefined) updates.sha = attrs.sha;
+    if (attrs.deprecated !== undefined) updates.deprecated = attrs.deprecated;
+    if (attrs.default !== undefined) updates.isDefault = attrs.default;
+    if (Object.keys(updates).length > 0) await db.update(adminSentinelVersions).set(updates).where(eq(adminSentinelVersions.id, version_id));
+    const updated = (await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, version_id) }))!;
+    return { data: { id: updated.id, type: "sentinel-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/sentinel-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(adminSentinelVersions).where(eq(adminSentinelVersions.id, version_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- ADMIN OPA VERSIONS ---
+  .get("/api/v2/admin/opa-versions", async ({ user, request, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const { number, size } = pageRequest(request);
+    const [versions, [{ total }]] = await Promise.all([
+      db.query.adminOpaVersions.findMany({ orderBy: [desc(adminOpaVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(adminOpaVersions),
+    ]);
+    return { data: versions.map(v => ({ id: v.id, type: "opa-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } })), ...pagination(request, number, size, total) };
+  }, { isAuth: true })
+
+  .post("/api/v2/admin/opa-versions", async ({ body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.version) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+    const id = `opa-${crypto.randomUUID()}`;
+    await db.insert(adminOpaVersions).values({ id, version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null, deprecated: attrs.deprecated ?? false, isDefault: attrs.default ?? false, createdAt: Date.now() });
+    set.status = 201;
+    return { data: { id, type: "opa-versions", attributes: { version: attrs.version, url: attrs.url ?? null, sha: attrs.sha ?? null, default: attrs.default ?? false, deprecated: attrs.deprecated ?? false } } };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/opa-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: v.id, type: "opa-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/opa-versions/:version_id", async ({ params: { version_id }, body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof adminOpaVersions.$inferInsert> = {};
+    if (attrs.version !== undefined) updates.version = attrs.version;
+    if (attrs.url !== undefined) updates.url = attrs.url;
+    if (attrs.sha !== undefined) updates.sha = attrs.sha;
+    if (attrs.deprecated !== undefined) updates.deprecated = attrs.deprecated;
+    if (attrs.default !== undefined) updates.isDefault = attrs.default;
+    if (Object.keys(updates).length > 0) await db.update(adminOpaVersions).set(updates).where(eq(adminOpaVersions.id, version_id));
+    const updated = (await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, version_id) }))!;
+    return { data: { id: updated.id, type: "opa-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/opa-versions/:version_id", async ({ params: { version_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, version_id) });
+    if (!v) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(adminOpaVersions).where(eq(adminOpaVersions.id, version_id));
+    set.status = 204;
   }, { isAuth: true })
 
   // --- ADMIN SETTINGS API ---

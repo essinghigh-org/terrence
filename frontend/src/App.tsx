@@ -6,6 +6,7 @@ import { Workspaces } from "./views/Workspaces";
 import { WorkspaceDetail } from "./views/WorkspaceDetail";
 import { RunDetail } from "./views/RunDetail";
 import { VariableSets } from "./views/VariableSets";
+import { OrganizationSettings } from "./views/OrganizationSettings";
 import { getAuthToken } from "./lib/api";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -25,6 +26,7 @@ function App() {
         <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
         <Route path="/app/:orgName/variable-sets" element={<ProtectedRoute><VariableSets /></ProtectedRoute>} />
+        <Route path="/app/:orgName/settings" element={<ProtectedRoute><OrganizationSettings /></ProtectedRoute>} />
         <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><WorkspaceDetail /></ProtectedRoute>} />
         <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<ProtectedRoute><RunDetail /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />

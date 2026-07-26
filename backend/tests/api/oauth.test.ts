@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import * as bcrypt from "bcryptjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -159,7 +160,7 @@ describe("Terraform login OAuth", () => {
     expect(token.token_type).toBe("bearer");
     expect(token.access_token).toStartWith("user-");
     expect(await db.query.apiTokens.findFirst({
-      where: eq(apiTokens.token, token.access_token),
+      where: eq(apiTokens.token, createHash("sha256").update(token.access_token).digest("hex")),
     })).toMatchObject({
       userId,
       description: "Terraform CLI login",

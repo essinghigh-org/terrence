@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,10 +102,15 @@ export function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2">
         {orgs.map(org => (
           <Link key={org.id} to={`/app/${org.attributes.name}`}>
-            <Card className="hover:shadow-md transition-shadow">
+            <Card className="hover:shadow-md transition-shadow relative">
               <CardHeader>
                 <CardTitle>{org.attributes.name}</CardTitle>
               </CardHeader>
+              <CardContent className="pt-0">
+                <Link to={`/app/${org.attributes.name}/settings`} className="text-xs text-blue-600 hover:underline" onClick={(e) => e.stopPropagation()}>
+                  Settings
+                </Link>
+              </CardContent>
             </Card>
           </Link>
         ))}
