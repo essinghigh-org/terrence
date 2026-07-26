@@ -128,12 +128,13 @@
 - [x] `oauth-tokens` relationship link
 - [x] `authentication-token` relationship link
 - [x] `entitlement-set` relationship link
-- [x] `subscription` relationship link
+- [x] `subscription` relationship link (no endpoint handler yet — returns link only)
 
 ### 2.3 Organization Entitlements
 - [x] `GET /organizations/:organization_name/entitlement-set` — show org entitlements
 - [x] Entitlements: `operations`, `state-storage`, `policy-enforcement`, `teams`, `vcs-integrations`, `cost-estimation`, `private-module-registry`, `agents`, `sso`, `run-tasks`, `audit-logging`, `self-serve-billing`, `user-limit`
 - [x] Entitlement-based feature gating (404 for unentitled features)
+- [x] `GET /api/v2/entitlements` — global entitlements list
 
 ### 2.4 Organization Tokens (API)
 - [x] `GET /organizations/:organization_name/authentication-token` — get org token
@@ -271,6 +272,7 @@
 - [x] `project-remote-state` — share state with project workspaces
 - [x] `agent-pool-id` — agent pool for agent execution mode
 - [x] `assessments-enabled` — (formerly drift detection) health assessments
+- [x] `structured-run-output-enabled` — structured JSON output (fixed `false`)
 - [x] `auto-destroy-at` — scheduled destroy timestamp
 - [x] `auto-destroy-activity-duration` — inactivity-based auto-destroy
 - [x] `source-name`, `source-url` — friendly client identification
@@ -318,10 +320,12 @@
 
 ### 5.9 Workspace Run History
 - [x] `GET /workspaces/:workspace_id/runs` — list runs (with pagination)
-- [x] Filters: `filter[operation]`, `filter[status]`, `filter[source]`, `filter[status_group]`, `filter[timeframe]`
+- [x] Filters: `filter[operation]`, `filter[status]`, `filter[source]`, `filter[status_group]`
+- [x] Filter: `filter[timeframe]` (supports `year` and specific `YYYY` values)
 - [ ] Filter: `filter[agent_pool_names]` (not implemented)
 - [x] Search: `search[basic]` (run ID and message)
-- [x] Search: `search[user]`, `search[commit]`
+- [ ] Search: `search[user]` (filter by user)
+- [ ] Search: `search[commit]` (filter by commit SHA)
 
 ### 5.10 Workspace Variables (Scoped)
 - [x] `GET /workspaces/:workspace_id/vars` — list workspace variables
@@ -404,23 +408,25 @@
 
 ### 7.2 State Version Attributes
 - [x] `serial` — incrementing serial number
-- [x] `state` — raw state payload
+- [x] `state` — raw state payload (only on create response; not on GET)
 - [x] `md5` — MD5 hash of state
 - [x] `lineage` — state lineage UUID
-- [x] `json-state` — JSON output format state
-- [x] `json-state-outputs` — parsed outputs from JSON state
-- [x] `vcs-commit-sha`, `vcs-commit-url` — VCS commit info
+- [ ] `json-state` — JSON output format state (not stored/returned in attributes)
+- [x] `json-state-outputs` — parsed outputs from JSON state (accessible via outputs endpoint, not embedded in state version response)
+- [x] `vcs-commit-sha`, `vcs-commit-url` — VCS commit info (always null — no VCS wiring)
 - [x] `terraform-version` — Terraform version that created the state
 - [x] `resources-processed` — processing flag
 - [x] `resources`, `modules`, `providers` — extracted metadata
 - [x] `state-version` — internal state format version
 - [x] `status` — stored state versions report `finalized`
-- [x] State version `pending` / `discarded` lifecycle
-- [x] `hosted-state-download-url` — secure download URL
-- [x] `hosted-json-state-download-url` — JSON format download URL
-- [x] `hosted-state-upload-url` — separate upload URL
-- [x] `hosted-json-state-upload-url` — separate JSON upload
-- [x] `run` relationship — link state version to run
+- [ ] State version `pending` / `discarded` lifecycle (always created as `finalized`)
+- [x] `hosted-state-download-url` — secure download URL (attribute in response)
+- [ ] `hosted-state-download-url` — signed temporal URL pattern (currently direct download)
+- [ ] `hosted-json-state-download-url` — JSON format download URL (endpoint exists separately, not in response attributes)
+- [ ] `hosted-state-upload-url` — separate upload URL flow (state posted inline instead; attribute returns null)
+- [ ] `hosted-json-state-upload-url` — separate JSON upload flow (attribute returns null)
+- [x] Separate JSON download endpoint (`GET /state-versions/:sv_id/json-download`)
+- [ ] `run` relationship — link state version to run (always null — no run tracking on state versions)
 
 ### 7.3 State Version Download
 - [x] `GET /state-versions/:sv_id/download` — download raw state (JSON)
@@ -429,10 +435,10 @@
 - [x] Upload URL pattern for separate upload flow
 
 ### 7.4 State Version Lifecycle
-- [x] State version status: `pending` → `finalized` (or `discarded`)
-- [x] Upload timeout handling (state must be uploaded within window)
-- [x] Workspace locking requirement for state creation (TFE requires lock)
-- [x] Intermediate state versions (snapshots during run)
+- [ ] State version status: `pending` → `finalized` (or `discarded`) — currently always created as `finalized`
+- [ ] Upload timeout handling (state must be uploaded within window)
+- [ ] Workspace locking requirement for state creation (TFE requires lock)
+- [ ] Intermediate state versions (snapshots during run)
 
 ### 7.5 State Version Outputs
 - [x] `GET /state-versions/:sv_id/state-version-outputs` and go-tfe `/outputs` alias — list outputs (with pagination)
@@ -490,43 +496,52 @@
 - [x] `POST /runs/:run_id/actions/force-cancel` — force cancel run
 - [x] Comment on apply: `{ "comment": "Looks good" }`
 
-### 9.3 Run States (Full TFE State Machine)
-- [x] `pending` — initial state
-- [x] `fetching` — fetching config from VCS
-- [x] `fetching_completed` — VCS fetch done
-- [x] `pre_plan_running` — pre-plan phase
-- [x] `pre_plan_completed` — pre-plan done
-- [x] `queuing` — queuing for execution
-- [x] `plan_queued` — waiting for backend capacity
-- [x] `planning` — plan in progress
-- [x] `planned` — plan completed, awaiting apply
-- [x] `cost_estimating` — cost estimation
-- [x] `cost_estimated` — cost estimation done
-- [x] `policy_checking` — policy evaluation
-- [x] `policy_override` — policy soft fail, awaiting override
-- [x] `policy_soft_failed` — policy soft fail, plan-only (final)
-- [x] `policy_checked` — policy evaluation done
-- [x] `confirmed` — user confirmed apply
-- [x] `post_plan_running` — post-plan phase
-- [x] `post_plan_completed` — post-plan done
-- [x] `planned_and_finished` — plan-only final state
-- [x] `planned_and_saved` — saved plan ready to confirm
-- [x] `apply_queued` — waiting for backend capacity
-- [x] `applying` — apply in progress
+### 9.3 Run States (TFE State Machine)
+
+**Phase 1 — States reached by the worker pipeline:**
+- [x] `pending` — initial state, claimed by worker queue
+- [x] `planning` — plan in progress (worker enters this from `pending`)
+- [x] `planned` — plan completed, awaiting apply confirmation
+- [x] `planned_and_finished` — plan-only final state (worker enters for plan-only runs)
+- [x] `applying` — apply in progress (worker enters after plan + auto-apply)
 - [x] `applied` — successfully applied (final)
-- [x] `discarded` — discarded by user (final)
 - [x] `errored` — failed (final)
-- [x] `canceled` — canceled by user (final)
-- [x] `force_canceled` — force canceled by admin (final)
+- [x] `canceled` — canceled by user (final, via actions/cancel)
+- [x] `force_canceled` — force canceled by admin (final, via actions/force-cancel)
+- [x] `discarded` — discarded by user (final, via actions/discard)
+
+**Phase 2 — States recognized by DB/API but NEVER auto-transitioned by worker:**
+- [ ] `fetching` — fetching config from VCS
+- [ ] `fetching_completed` — VCS fetch done
+- [ ] `pre_plan_running` — pre-plan phase
+- [ ] `pre_plan_completed` — pre-plan done
+- [ ] `queuing` — queuing for execution
+- [ ] `plan_queued` — waiting for backend capacity
+- [ ] `cost_estimating` — cost estimation
+- [ ] `cost_estimated` — cost estimation done
+- [ ] `policy_checking` — policy evaluation
+- [ ] `policy_override` — policy soft fail, awaiting override
+- [ ] `policy_soft_failed` — policy soft fail, plan-only (final)
+- [ ] `policy_checked` — policy evaluation done
+- [ ] `confirmed` — user confirmed apply
+- [ ] `post_plan_running` — post-plan phase
+- [ ] `post_plan_completed` — post-plan done
+- [ ] `planned_and_saved` — saved plan ready to confirm
+- [ ] `apply_queued` — waiting for backend capacity
 - [ ] `unreachable` — agent unreachable (final)
 
 ### 9.4 Run Attributes
 - [x] `actions` object: `is-cancelable`, `is-confirmable`, `is-discardable`, `is-force-cancelable`
 - [x] `has-changes` boolean
+- [x] `operation` — enum computed from isDestroy/refreshOnly/planOnly
 - [x] `source` — `tfe-api` for the supported run path
 - [x] `trigger-reason` — `manual` for the supported run path
 - [ ] `status-timestamps` — all state transitions with timestamps
-- [x] `permissions` object: can-apply, can-cancel, can-discard, can-force-cancel, can-override-policy-check
+- [ ] `allow-empty-apply` — allow apply with no changes
+- [ ] `allow-config-generation` — allow config generation
+- [ ] `save-plan` — plan without becoming current run
+- [x] `permissions` object: can-apply, can-cancel, can-discard, can-force-cancel, can-force-execute, can-override-policy-check
+- [ ] `can-comment` in permissions object
 - [x] `message`, `is-destroy`, `created-at`
 - [x] `refresh` — refresh state before plan
 - [x] `refresh-only` — refresh without changes
@@ -540,7 +555,7 @@
 - [x] `run-events` relationship
 - [ ] `policy-checks` relationship
 - [ ] `comments` relationship
-- [x] `cost-estimate` relationship
+- [ ] `cost-estimate` relationship link on run resource (separate GET endpoint exists, but relationship not wired in run response)
 - [ ] `input-state-version` relationship
 - [ ] `workspace-run-alerts` relationship
 
@@ -582,6 +597,7 @@
 - [ ] Apply states: `queued`, `unreachable`
 - [ ] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports`
 - [ ] Apply `status-timestamps`
+- [ ] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports`
 - [x] Apply `log-read-url` / log streaming
 - [ ] Apply `state-versions` relationship
 
@@ -616,6 +632,7 @@
 ### 10.1 Run Logs
 - [x] Database schema for logs
 - [x] Log streaming APIs
+- [x] `GET /runs/:run_id/logs` — structured JSON logs endpoint
 - [ ] Log retention and GC
 - [ ] Chunked/streamed log delivery (for large runs)
 
@@ -649,6 +666,8 @@
 - [ ] `vcs-repo` — VCS connection for policy set source
 - [ ] Policy set versions (upload tar.gz)
 - [ ] `policies-path` — subdirectory within VCS repo
+- [ ] Policy set attachment to projects via `POST /policy-sets/:id/relationships/projects` (schema exists)
+- [ ] Policy set workspace exclusions via `POST /policy-sets/:id/relationships/workspace-exclusions` (schema exists)
 
 ### 11.2 Policies (Individual)
 - [x] `GET /policy-sets/:policy_set_id/policies` — list policies in set
@@ -668,11 +687,11 @@
 - [x] OPA result details
 
 ### 11.4 Policy Enforcement in Run Pipeline
-- [x] Plan → Policy Check → Apply integration
-- [x] Hard-mandatory: failed policy blocks apply
-- [x] Soft-mandatory: failed policy requires override to proceed
-- [x] Advisory: failed policy logs warning, doesn't block
-- [x] Policy override permission checks
+- [ ] Plan → Policy Check → Apply integration (CRUD endpoints exist, not wired into run pipeline)
+- [ ] Hard-mandatory: failed policy blocks apply
+- [ ] Soft-mandatory: failed policy requires override to proceed
+- [ ] Advisory: failed policy logs warning, doesn't block
+- [ ] Policy override permission checks
 
 ### 11.5 Policy Set Parameters
 - [x] `GET /policy-sets/:policy_set_id/parameters` — list parameters
@@ -691,17 +710,18 @@
 ## Epic 12: Cost Estimation
 
 ### 12.1 Cost Estimates
-- [x] `GET /cost-estimates/:ce_id` — show cost estimate
-- [x] Cost estimate in run pipeline (plan → cost estimate → policy check → apply)
-- [x] Cost estimate states: `skipped`, `queued`, `pending`, `finished`, `errored`, `canceled`
-- [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost`
-- [x] `resources-count`, `matched-resources-count`, `unmatched-resources-count`
-- [x] `resources` object (detailed cost breakdown per resource)
-- [x] `error-message` field
+- [x] `GET /runs/:run_id/cost-estimate` — show cost estimate via run (stub, returns zero costs)
+- [ ] `GET /cost-estimates/:ce_id` — individual cost estimate by ID endpoint (not implemented)
+- [ ] Cost estimate wired into run pipeline (plan → cost estimate → policy check → apply)
+- [ ] Cost estimate states: always returns `finished` (no support for `skipped`, `queued`, `pending`, `errored`, `canceled`)
+- [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost` (stub returns `0.0`)
+- [ ] `resources-count`, `matched-resources-count`, `unmatched-resources-count` (not returned by stub)
+- [ ] `resources` object (detailed cost breakdown per resource)
+- [ ] `error-message` field
 
 ### 12.2 Cost Estimation Integration
-- [x] Cost estimation engine (requires cloud provider pricing data)
-- [x] UI display of cost estimates in run view
+- [ ] Cost estimation engine (requires cloud provider pricing data)
+- [ ] UI display of cost estimates in run view
 - [x] (Low priority for homelab — stub implementation or omit)
 
 ---
@@ -716,13 +736,14 @@
 - [x] `DELETE /oauth-clients/:oc_id` — delete OAuth client
 - [x] `service-provider` — github, gitlab, bitbucket, github_enterprise, gitlab_ce, gitlab_ee, etc.
 - [ ] `service-provider-display-name` — human-readable provider name (not implemented)
+- [ ] Additional service providers: `azure_devops_server`, `bitbucket_data_center` (not implemented)
 - [x] `api-url`, `http-url` — VCS instance URLs
 - [x] `key`, `secret` — OAuth app credentials
 - [x] `callback-url`, `connect-path` — OAuth flow URLs
 - [x] `rsa-public-key` — SSH key for VCS
-- [x] OAuth handshake flow (redirect to VCS, callback handling)
-- [x] `projects` relationship — scope OAuth client to projects
-- [x] `agent-pool` relationship — private VCS via agent
+- [ ] OAuth handshake flow (redirect to VCS, callback handling) — OAuth CRUD endpoints exist, no actual VCS OAuth flow
+- [ ] `projects` relationship — scope OAuth client to projects (schema exists, no API routes)
+- [ ] `agent-pool` relationship — private VCS via agent (not implemented)
 
 ### 13.2 OAuth Tokens
 - [x] `GET /oauth-clients/:oc_id/oauth-tokens` — list tokens for a client
@@ -732,21 +753,21 @@
 - [x] `has-ssh-key` flag
 
 ### 13.3 GitHub App Installations
-- [x] `GET /organizations/:organization_name/github-app-installations` — list installations
-- [x] GitHub App integration flow
-- [x] GitHub App installation ID ↔ workspace linking
+- [ ] `GET /organizations/:organization_name/github-app-installations` — list installations
+- [ ] GitHub App integration flow
+- [ ] GitHub App installation ID ↔ workspace linking
 
 ### 13.4 Webhook Handling
-- [x] `POST /api/webhooks/github` — GitHub push/PR event receiver
-- [x] `POST /api/webhooks/gitlab` — GitLab event receiver
-- [x] `POST /api/webhooks/bitbucket` — Bitbucket event receiver
-- [x] Webhook payload parsing and validation
-- [x] Auto-create configuration version on push
-- [x] Auto-trigger run on push (if auto-queue enabled)
-- [x] Speculative plan on PR
-- [x] Trigger filtering by file paths (trigger-prefixes, trigger-patterns, working-directory)
-- [x] Commit status reporting (pending, success, failure)
-- [x] `tags-regex` support — trigger runs on Git tags
+- [ ] `POST /api/webhooks/github` — GitHub push/PR event receiver (stub only)
+- [ ] `POST /api/webhooks/gitlab` — GitLab event receiver (stub only)
+- [ ] `POST /api/webhooks/bitbucket` — Bitbucket event receiver (stub only)
+- [ ] Webhook payload parsing and validation
+- [ ] Auto-create configuration version on push
+- [ ] Auto-trigger run on push (if auto-queue enabled)
+- [ ] Speculative plan on PR
+- [ ] Trigger filtering by file paths (trigger-prefixes, trigger-patterns, working-directory)
+- [ ] Commit status reporting (pending, success, failure)
+- [ ] `tags-regex` support — trigger runs on Git tags
 
 ### 13.5 VCS Events
 - [x] `GET /configuration-versions/:cv_id/ingress-attributes` — commit info from VCS event
@@ -813,7 +834,7 @@
 - [x] `GET /organizations/:organization_name/agent-pools` — list pools
 - [x] `POST /organizations/:organization_name/agent-pools` — create pool
 - [x] `GET /agent-pools/:pool_id` — show pool
-- [x] `PATCH /agent-pools/:pool_id` — update pool
+- [ ] `PATCH /agent-pools/:pool_id` — update pool
 - [x] `DELETE /agent-pools/:pool_id` — delete pool
 - [x] `name` attribute
 - [x] `organization-scoped` flag
@@ -824,20 +845,20 @@
 - [x] `authentication-tokens` relationship
 
 ### 16.2 Agent Tokens
-- [x] `GET /agent-pools/:pool_id/authentication-tokens` — list tokens
-- [x] `POST /agent-pools/:pool_id/authentication-tokens` — create token
-- [x] `GET /authentication-tokens/:token_id` — show token
-- [x] `DELETE /authentication-tokens/:token_id` — delete token
-- [x] `description` attribute
-- [x] `last-used-at` tracking
+- [ ] `GET /agent-pools/:pool_id/authentication-tokens` — list tokens for pool
+- [ ] `POST /agent-pools/:pool_id/authentication-tokens` — create token for pool
+- [x] `GET /authentication-tokens/:token_id` — show any token (generic endpoint, works for agent tokens)
+- [x] `DELETE /authentication-tokens/:token_id` — delete any token (generic endpoint, works for agent tokens)
+- [x] `description` attribute on tokens
+- [ ] `last-used-at` tracking (schema exists, not updated)
 
 ### 16.3 Agent Objects
-- [x] `GET /agent-pools/:pool_id/agents` — list agents in pool
-- [x] `GET /agents/:agent_id` — show agent details
-- [x] `DELETE /agents/:agent_id` — delete agent
-- [x] Agent status: `idle`, `busy`, `exited`, `errored`, `unknown`
-- [x] Agent attributes: `name`, `ip-address`, `last-ping-at`, `version`, `architecture`
-- [x] Agent <> run association
+- [ ] `GET /agent-pools/:pool_id/agents` — list agents in pool
+- [ ] `GET /agents/:agent_id` — show agent details
+- [ ] `DELETE /agents/:agent_id` — delete agent
+- [ ] Agent status: `idle`, `busy`, `exited`, `errored`, `unknown`
+- [ ] Agent attributes: `name`, `ip-address`, `last-ping-at`, `version`, `architecture`
+- [ ] Agent <> run association
 
 ### 16.4 Agent Execution Mode
 - [x] Workspace execution-mode: `agent`
@@ -863,11 +884,11 @@
 ### 17.2 Run Task Execution
 - [x] `GET /workspaces/:workspace_id/run-tasks` — list tasks on workspace
 - [x] `POST /workspaces/:workspace_id/run-tasks` — attach task to workspace
-- [x] `DELETE /workspaces/:workspace_id/run-tasks/:task_id` — detach
+- [ ] `DELETE /workspaces/:workspace_id/run-tasks/:task_id` — detach
 - [x] `GET /runs/:run_id/run-tasks` — list task results for a run
 - [x] `GET /run-tasks/:task_id/task-results` — get task result details
-- [x] Pre-plan and post-plan stages
-- [x] HMAC-signed payloads for task callback verification
+- [ ] Pre-plan and post-plan stages
+- [ ] HMAC-signed payloads for task callback verification
 - [x] (Low priority for homelab)
 
 ---
@@ -877,24 +898,24 @@
 ### 18.1 Module Registry API (Standard Registry Protocol)
 - [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/versions` — list versions
 - [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version` — get module version
-- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version/download` — download source
-- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version
-- [x] `GET /api/registry/v1/modules/:namespace/:name` — list providers for module
-- [x] `GET /api/registry/v1/modules` — search/browse modules
-- [x] `GET /api/registry/v1/modules/:namespace` — list modules in namespace
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version/download` — download source (uses `X-Terraform-Get` header)
+- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version (not implemented)
+- [ ] `GET /api/registry/v1/modules/:namespace/:name` — list providers for module (not implemented)
+- [ ] `GET /api/registry/v1/modules` — search/browse modules (not implemented)
+- [ ] `GET /api/registry/v1/modules/:namespace` — list modules in namespace (not implemented)
 
 ### 18.2 Module Publishing & Management
 - [x] `POST /api/v2/organizations/:org/registry-modules` — publish module from VCS
-- [x] `POST /api/v2/organizations/:org/registry-modules/versions` — create module version
-- [x] `PUT /api/v2/registry-modules/:module_id/versions/:version/upload` — upload module tar.gz
+- [ ] `POST /api/v2/organizations/:org/registry-modules/versions` — create module version (schema exists, no API route)
+- [ ] `PUT /api/v2/registry-modules/:module_id/versions/:version/upload` — upload module tar.gz (schema exists, no API route)
 - [x] `DELETE /api/v2/registry-modules/:module_id` — delete module
-- [x] `DELETE /api/v2/registry-modules/:module_id/versions/:version` — delete version
-- [x] Module version status
+- [ ] `DELETE /api/v2/registry-modules/:module_id/versions/:version` — delete version (schema exists, no API route)
+- [ ] Module version status (schema exists, no API to manage)
 - [x] VCS-driven module publishing
-- [x] No-code provisioning ready modules
+- [ ] No-code provisioning ready modules
 
 ### 18.3 Module GPG Keys
-- [x] GPG key management for module signing
+- [ ] GPG key management for module signing
 - [x] (Low priority for homelab)
 
 ### 18.4 Module Tests
@@ -911,8 +932,8 @@
 - [x] `GET /api/registry/v1/providers/:namespace/:type/versions` — list versions
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch` — download URL
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version` — get version details
-- [x] `GET /api/registry/v1/providers/-/versions` — search providers
-- [x] Network mirror protocol support for `provider_installation` blocks
+- [ ] `GET /api/registry/v1/providers/-/versions` — search providers (not implemented)
+- [ ] Network mirror protocol for `provider_installation` blocks (standard registry protocol endpoints exist, network mirror protocol has different URL patterns)
 
 ### 19.2 Provider Management
 - [x] `POST /api/v2/organizations/:org/registry-providers` — add provider to private registry
@@ -920,13 +941,13 @@
 - [x] `GET /api/v2/registry-providers/:provider_id` — show provider
 - [x] `DELETE /api/v2/registry-providers/:provider_id` — remove provider
 - [x] `registry-name` field: `public` or `private`
-- [x] Provider version management (platforms, SHASUMS)
-- [x] GPG key management for provider signing
+- [ ] Provider version management (create/update/delete versions) (schema exists, no API routes)
+- [ ] GPG key management for provider signing
 
 ### 19.3 Provider Version Platforms
-- [x] `POST /registry-providers/:provider_id/versions/:version/platforms` — add platform
-- [x] `DELETE /registry-providers/:provider_id/versions/:version/platforms/:platform_id` — remove
-- [x] Platform: os (linux, darwin, windows), arch (amd64, arm64)
+- [ ] `POST /registry-providers/:provider_id/versions/:version/platforms` — add platform (schema exists, no API route)
+- [ ] `DELETE /registry-providers/:provider_id/versions/:version/platforms/:platform_id` — remove (schema exists, no API route)
+- [ ] Platform: os (linux, darwin, windows), arch (amd64, arm64) (protocol read endpoints work if data exists)
 
 ---
 
@@ -1005,27 +1026,28 @@
 ### 24.1 Admin Users
 - [x] `GET /api/v2/admin/users` — list all users
 - [x] `GET /api/v2/admin/users/:user_id` — show user
-- [x] `PATCH /api/v2/admin/users/:user_id` — update user (site admin toggle, etc.)
+- [ ] `PATCH /api/v2/admin/users/:user_id` — update user (site admin toggle, etc.)
 - [x] `DELETE /api/v2/admin/users/:user_id` — suspend/delete user
-- [x] `is-site-admin` attribute
+- [ ] `is-site-admin` attribute (currently hardcoded to `true`, no DB column for site admin status)
+- [ ] Site admin authorization guard (admin endpoints currently accessible to any authenticated user)
 
 ### 24.2 Admin Organizations
 - [x] `GET /api/v2/admin/organizations` — list all orgs
 - [x] `GET /api/v2/admin/organizations/:org_name` — show org
-- [x] `PATCH /api/v2/admin/organizations/:org_name` — update org
+- [ ] `PATCH /api/v2/admin/organizations/:org_name` — update org
 - [x] `DELETE /api/v2/admin/organizations/:org_name` — destroy org
 
 ### 24.3 Admin Workspaces
 - [x] `GET /api/v2/admin/workspaces` — list all workspaces
 - [x] `GET /api/v2/admin/workspaces/:ws_id` — show workspace
-- [x] `PATCH /api/v2/admin/workspaces/:ws_id` — update workspace
+- [ ] `PATCH /api/v2/admin/workspaces/:ws_id` — update workspace
 - [x] `DELETE /api/v2/admin/workspaces/:ws_id` — delete workspace
 
 ### 24.4 Admin Runs
 - [x] `GET /api/v2/admin/runs` — list all runs (with filters)
-- [x] `GET /api/v2/admin/runs/:run_id` — show run
-- [x] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
-- [x] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
+- [ ] `GET /api/v2/admin/runs/:run_id` — show run
+- [ ] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
+- [ ] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
 
 ### 24.5 Admin Terraform Versions
 - [x] `GET /api/v2/admin/terraform-versions` — list available versions
@@ -1061,6 +1083,12 @@
 - [ ] Bootstrap process for fresh TFE instance
 - [x] Browser first-run flow for local user registration and organization creation
 - [ ] (Important for homelab — need admin bootstrap)
+
+### 24.11 Audit Logs
+- [x] `GET /api/v2/admin/audit-logs` — list all audit log entries (site admin)
+- [x] `GET /organizations/:org_name/audit-logs` — list audit log entries for an org (owner)
+- [x] `GET /api/v2/audit-trails` — audit trail endpoint (returns empty data array)
+- [x] `GET /api/v2/organization-audit-trailers` — org audit trail endpoint (returns empty data array)
 
 ### 24.12 Support Bundles
 - [ ] `POST /api/v1/support-bundle-requests` — generate support bundle
@@ -1228,10 +1256,19 @@
 
 ### 29.2 Configuration
 - [x] Environment variable configuration
-- [x] `PUBLIC_URL` override for reverse-proxy upload/download/log URLs
+- [x] `PORT` — HTTP port (default `3000`)
+- [x] `DATABASE_URL` — SQLite path (default `file:./local.db`)
+- [x] `STORAGE_DIR` — file storage path (default `./storage`)
+- [x] `SIMULATED_RUNS` — bypass binary execution (default `false`)
+- [x] `ALLOW_TOOL_FALLBACK` — cross-tool binary fallback (default `false`)
+- [x] `ALLOW_UNVERIFIED_CHECKSUMS` — skip SHA256 verification (default `false`)
+- [x] `CLI_TOKEN_TTL_MS` — native `terraform login` token TTL (default 30 days)
+- [x] `PUBLIC_URL` — override for reverse-proxy upload/download/log URLs
+- [x] `NODE_ENV` — environment mode (default `production`)
 - [x] Database configuration (SQLite path, connection params)
 - [x] Storage configuration (local path, future S3)
 - [x] Instance metadata (version, build info)
+- [ ] `LOG_LEVEL` — logging verbosity (default `info`, not yet implemented)
 
 ### 29.3 Database
 - [x] SQLite support (Drizzle ORM)
@@ -1244,13 +1281,16 @@
 
 ### 29.5 Observability
 - [x] Health check endpoint (`/healthz`, `/readyz`)
+- [ ] Request logging middleware (method, path, status, duration)
+- [ ] Structured JSON logging
 - [ ] Prometheus metrics (Phase 2)
+- [ ] `LOG_LEVEL` environment variable consumed at runtime
 
 ### 29.6 Security
 - [x] Environment variable sanitization in worker
 - [x] Path traversal protection on archive extraction
 - [x] CORS configuration
-- [ ] API token storage as hash (currently plaintext in DB — Phase 2)
+- [ ] API token storage as hash (currently plaintext in DB)
 
 ---
 
@@ -1285,6 +1325,12 @@
 - [x] Module & Provider Registry tests
 - [x] Admin Operations API tests
 - [x] Workspace Run Triggers & Cost Estimate tests
+- [x] Pagination contract tests (page-based queries, edge cases)
+- [x] Organization contract tests (entitlements, permission checks)
+- [x] Resource authorization tests (workspace isolation, cross-org access)
+- [x] Run queue contract tests (serial execution, capacity limits)
+- [x] Run state history tests (state version metadata, serial tracking)
+- [x] Cloud contract tests (`cloud` backend compatibility)
 
 ### 30.2 Worker Tests
 - [x] Worker queue processing test
