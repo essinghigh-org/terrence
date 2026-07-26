@@ -777,22 +777,28 @@ export const app = new Elysia()
     set.status = 204;
     return;
   }, { isAuth: true })
-  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params: { workspace_id }, set }) => {
+  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params: { workspace_id }, user, set }) => {
     const workspace = await db.query.workspaces.findFirst({
         where: eq(workspaces.id, workspace_id)
     });
     if (!workspace) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
+    }
     await db.update(workspaces).set({ locked: true }).where(eq(workspaces.id, workspace_id));
     return { data: { type: "workspaces", id: workspace_id, attributes: { locked: true } } };
   }, { isAuth: true })
-  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params: { workspace_id }, set }) => {
+  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params: { workspace_id }, user, set }) => {
     const workspace = await db.query.workspaces.findFirst({
         where: eq(workspaces.id, workspace_id)
     });
     if (!workspace) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
     }
     await db.update(workspaces).set({ locked: false }).where(eq(workspaces.id, workspace_id));
     return { data: { type: "workspaces", id: workspace_id, attributes: { locked: false } } };
@@ -878,7 +884,15 @@ export const app = new Elysia()
     set.headers["Content-Type"] = "application/json";
     return state.statePayload || "{}";
   }, { isAuth: true })
-  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params: { workspace_id }, body, set }) => {
+  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params: { workspace_id }, body, user, set }) => {
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!workspace) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
+    }
+
     const payload = body as any;
     const { serial, state } = payload?.data?.attributes || {};
     if (serial === undefined || !state) {
@@ -904,7 +918,15 @@ export const app = new Elysia()
         }
     };
   }, { isAuth: true })
-  .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params: { workspace_id }, set }) => {
+  .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params: { workspace_id }, user, set }) => {
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!workspace) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
+    }
+
     const id = crypto.randomUUID();
     await db.insert(configurationVersions).values({
         id,
@@ -969,10 +991,13 @@ export const app = new Elysia()
     }
     return Bun.file(cv.archivePath);
   }, { isAuth: true })
-  .get("/api/v2/workspaces/:workspace_id/runs", async ({ params: { workspace_id }, query, set }) => {
+  .get("/api/v2/workspaces/:workspace_id/runs", async ({ params: { workspace_id }, query, user, set }) => {
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
     if (!workspace) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
     }
 
     const pageQuery = query as any;
@@ -996,7 +1021,7 @@ export const app = new Elysia()
         }))
     };
   }, { isAuth: true })
-  .post("/api/v2/runs", async ({ body, set }) => {
+  .post("/api/v2/runs", async ({ body, user, set }) => {
     const payload = body as any;
     const { message, "is-destroy": isDestroy } = payload?.data?.attributes || {};
     const workspaceId = payload?.data?.relationships?.workspace?.data?.id;
@@ -1012,6 +1037,10 @@ export const app = new Elysia()
 
     if (!workspace) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    if (user?.id && !(await checkOrgPermission(user.id, workspace.orgId, "member"))) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
     }
 
     const id = crypto.randomUUID();

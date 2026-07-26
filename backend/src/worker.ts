@@ -20,7 +20,7 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
 }
 
 function buildSanitizedEnv(workspaceVars: Array<{ key: string; value: string; category: string }>): Record<string, string> {
-  const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL", "SYSTEMROOT"];
+  const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL"];
   const protectedKeys = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV", "TF_CLI_CONFIG_FILE", "DYLD_INSERT_LIBRARIES"];
 
   const env: Record<string, string> = {};
@@ -348,12 +348,14 @@ export async function startWorkerQueue() {
       });
 
       for (const run of pendingRuns) {
-        const claimResult = await db.update(runs)
+        const claimed = await db.update(runs)
           .set({ status: "planning" })
-          .where(and(eq(runs.id, run.id), eq(runs.status, "pending")));
+          .where(and(eq(runs.id, run.id), eq(runs.status, "pending")))
+          .returning({ id: runs.id });
 
-        // Only execute if claiming succeeded
-        executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
+        if (claimed.length > 0) {
+          executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
+        }
       }
     } catch (err) {
       console.error("[terrence worker] Queue error", err);
