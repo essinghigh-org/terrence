@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
-import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetVariables } from "./db/schema";
+import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers } from "./db/schema";
 import { and, eq, desc, asc, count, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { authPlugin } from "./auth";
@@ -975,6 +975,8 @@ export const app = new Elysia()
     "tfe.v2.1": "/api/v2/",
     "tfe.v2.2": "/api/v2/",
     "state.v2": "/api/v2/",
+    "modules.v1": "/api/registry/v1/modules/",
+    "providers.v1": "/api/registry/v1/providers/",
   }))
   .get("/api", () => "Terrence API")
   .get("/api/v2/ping", ({ set }) => {
@@ -3158,6 +3160,1459 @@ export const app = new Elysia()
     }
     return { data: { id: run_id, type: "runs", attributes: { status: "discarded" } } };
   }, { isAuth: true })
+  // --- TEAMS API ---
+  .get("/api/v2/organizations/:org_name/teams", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const teamList = await db.query.teams.findMany({ where: eq(teams.orgId, org.id) });
+    const data = await Promise.all(teamList.map(async (t) => {
+      const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, t.id)))[0]?.val ?? 0;
+      return {
+        id: t.id,
+        type: "teams",
+        attributes: {
+          name: t.name,
+          description: t.description,
+          visibility: t.visibility,
+          "sso-team-id": t.ssoTeamId,
+          "users-count": userCount,
+          permissions: { "can-update": true, "can-destroy": true },
+        },
+        relationships: {
+          users: { links: { related: `/api/v2/teams/${t.id}/relationships/users` } },
+        },
+      };
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/teams", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || typeof attributes.name !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
+    const id = `team-${crypto.randomUUID()}`;
+    const newTeam = {
+      id,
+      orgId: org.id,
+      name: attributes.name,
+      description: attributes.description ?? null,
+      visibility: attributes.visibility ?? "organization",
+      ssoTeamId: attributes["sso-team-id"] ?? null,
+      createdAt: Date.now(),
+    };
+    await db.insert(teams).values(newTeam);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "teams",
+        attributes: {
+          name: newTeam.name,
+          description: newTeam.description,
+          visibility: newTeam.visibility,
+          "sso-team-id": newTeam.ssoTeamId,
+          "users-count": 0,
+          permissions: { "can-update": true, "can-destroy": true },
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/teams/:team_id", async ({ params: { team_id }, user, orgId: tokenOrgId, query, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
+    const includeUsers = (query as any)?.include?.split(",").includes("users");
+    let included: any[] = [];
+    if (includeUsers) {
+      const members = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, team.id) });
+      const userIds = members.map(m => m.userId);
+      if (userIds.length > 0) {
+        const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) });
+        included = uList.map(u => ({
+          id: u.id,
+          type: "users",
+          attributes: { username: u.username, email: u.email },
+        }));
+      }
+    }
+    return {
+      data: {
+        id: team.id,
+        type: "teams",
+        attributes: {
+          name: team.name,
+          description: team.description,
+          visibility: team.visibility,
+          "sso-team-id": team.ssoTeamId,
+          "users-count": userCount,
+          permissions: { "can-update": true, "can-destroy": true },
+        },
+      },
+      ...(included.length > 0 ? { included } : {}),
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/teams/:team_id", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof teams.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (attributes.description !== undefined) updates.description = attributes.description;
+    if (typeof attributes.visibility === "string") updates.visibility = attributes.visibility;
+    if (attributes["sso-team-id"] !== undefined) updates.ssoTeamId = attributes["sso-team-id"];
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(teams).set(updates).where(eq(teams.id, team_id));
+    }
+    const updated = (await db.query.teams.findFirst({ where: eq(teams.id, team_id) }))!;
+    const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team_id)))[0]?.val ?? 0;
+    return {
+      data: {
+        id: updated.id,
+        type: "teams",
+        attributes: {
+          name: updated.name,
+          description: updated.description,
+          visibility: updated.visibility,
+          "sso-team-id": updated.ssoTeamId,
+          "users-count": userCount,
+          permissions: { "can-update": true, "can-destroy": true },
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/teams/:team_id", async ({ params: { team_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(apiTokens).where(eq(apiTokens.teamId, team_id));
+    await db.delete(teamMemberships).where(eq(teamMemberships.teamId, team_id));
+    await db.delete(teamWorkspaces).where(eq(teamWorkspaces.teamId, team_id));
+    await db.delete(teams).where(eq(teams.id, team_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/teams/:team_id/relationships/users", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const userItems = (body as any)?.data;
+    if (Array.isArray(userItems)) {
+      for (const item of userItems) {
+        if (item?.id) {
+          const id = `tm-${crypto.randomUUID()}`;
+          await db.insert(teamMemberships).values({ id, teamId: team_id, userId: item.id, createdAt: Date.now() }).onConflictDoNothing();
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .delete("/api/v2/teams/:team_id/relationships/users", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const userItems = (body as any)?.data;
+    if (Array.isArray(userItems)) {
+      const uIds = userItems.map(i => i.id).filter(Boolean);
+      if (uIds.length > 0) {
+        await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, team_id), inArray(teamMemberships.userId, uIds)));
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/teams/:team_id/authentication-tokens", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const secret = `team-${crypto.randomUUID().replace(/-/g, "")}`;
+    const tokenId = `tok-${crypto.randomUUID()}`;
+    const description = (body as any)?.data?.attributes?.description ?? `Team token for ${team.name}`;
+    await db.insert(apiTokens).values({
+      id: tokenId,
+      token: secret,
+      orgId: team.orgId,
+      teamId: team.id,
+      description,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id: tokenId,
+        type: "authentication-tokens",
+        attributes: {
+          token: secret,
+          description,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/teams/:team_id/authentication-tokens", async ({ params: { team_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tokenList = await db.query.apiTokens.findMany({ where: eq(apiTokens.teamId, team_id) });
+    const data = tokenList.map(t => ({
+      id: t.id,
+      type: "authentication-tokens",
+      attributes: {
+        description: t.description,
+        "created-at": new Date(t.createdAt).toISOString(),
+        "last-used-at": t.lastUsedAt ? new Date(t.lastUsedAt).toISOString() : null,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .delete("/api/v2/teams/:team_id/authentication-tokens/:token_id", async ({ params: { team_id, token_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(apiTokens).where(and(eq(apiTokens.id, token_id), eq(apiTokens.teamId, team_id)));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- TEAM WORKSPACES API ---
+  .get("/api/v2/team-workspaces", async ({ query, user, orgId: tokenOrgId, set }) => {
+    const workspaceId = (query as any)?.["filter[workspace][id]"];
+    if (!workspaceId) return { data: [] };
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const twList = await db.query.teamWorkspaces.findMany({ where: eq(teamWorkspaces.workspaceId, workspaceId) });
+    const data = twList.map(tw => ({
+      id: tw.id,
+      type: "team-workspaces",
+      attributes: {
+        access: tw.access,
+        permissions: tw.permissions ?? { runs: "write", variables: "write", "state-versions": "write" },
+      },
+      relationships: {
+        team: { data: { id: tw.teamId, type: "teams" } },
+        workspace: { data: { id: tw.workspaceId, type: "workspaces" } },
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/team-workspaces", async ({ body, user, orgId: tokenOrgId, set }) => {
+    const data = (body as any)?.data;
+    const teamId = data?.relationships?.team?.data?.id;
+    const workspaceId = data?.relationships?.workspace?.data?.id;
+    const access = data?.attributes?.access ?? "write";
+    const permissions = data?.attributes?.permissions ?? null;
+    if (!teamId || !workspaceId) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const id = `tw-${crypto.randomUUID()}`;
+    await db.insert(teamWorkspaces).values({ id, teamId, workspaceId, access, permissions });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "team-workspaces",
+        attributes: { access, permissions: permissions ?? { runs: "write", variables: "write" } },
+        relationships: {
+          team: { data: { id: teamId, type: "teams" } },
+          workspace: { data: { id: workspaceId, type: "workspaces" } },
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/team-workspaces/:id", async ({ params: { id }, body, user, orgId: tokenOrgId, set }) => {
+    const tw = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
+    if (!tw) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof teamWorkspaces.$inferInsert> = {};
+    if (typeof attributes.access === "string") updates.access = attributes.access;
+    if (attributes.permissions !== undefined) updates.permissions = attributes.permissions;
+    if (Object.keys(updates).length > 0) {
+      await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));
+    }
+    const updated = (await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "team-workspaces",
+        attributes: { access: updated.access, permissions: updated.permissions },
+        relationships: {
+          team: { data: { id: updated.teamId, type: "teams" } },
+          workspace: { data: { id: updated.workspaceId, type: "workspaces" } },
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/team-workspaces/:id", async ({ params: { id }, user, orgId: tokenOrgId, set }) => {
+    const tw = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
+    if (!tw) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(teamWorkspaces).where(eq(teamWorkspaces.id, id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- PROJECTS API ---
+  .get("/api/v2/organizations/:org_name/projects", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    let projList = await db.query.projects.findMany({ where: eq(projects.orgId, org.id) });
+    if (projList.length === 0) {
+      const defaultId = `prj-${crypto.randomUUID()}`;
+      await db.insert(projects).values({ id: defaultId, orgId: org.id, name: "Default Project", description: "Default Project for Organization", defaultExecutionMode: "remote", createdAt: Date.now() });
+      projList = await db.query.projects.findMany({ where: eq(projects.orgId, org.id) });
+    }
+    const data = projList.map(p => ({
+      id: p.id,
+      type: "projects",
+      attributes: {
+        name: p.name,
+        description: p.description,
+        "default-execution-mode": p.defaultExecutionMode,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/projects", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || typeof attributes.name !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
+    const id = `prj-${crypto.randomUUID()}`;
+    const newProj = {
+      id,
+      orgId: org.id,
+      name: attributes.name,
+      description: attributes.description ?? null,
+      defaultExecutionMode: attributes["default-execution-mode"] ?? "remote",
+      createdAt: Date.now(),
+    };
+    await db.insert(projects).values(newProj);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "projects",
+        attributes: {
+          name: newProj.name,
+          description: newProj.description,
+          "default-execution-mode": newProj.defaultExecutionMode,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/projects/:project_id", async ({ params: { project_id }, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: project.id,
+        type: "projects",
+        attributes: {
+          name: project.name,
+          description: project.description,
+          "default-execution-mode": project.defaultExecutionMode,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/projects/:project_id", async ({ params: { project_id }, body, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof projects.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (attributes.description !== undefined) updates.description = attributes.description;
+    if (typeof attributes["default-execution-mode"] === "string") updates.defaultExecutionMode = attributes["default-execution-mode"];
+    if (Object.keys(updates).length > 0) {
+      await db.update(projects).set(updates).where(eq(projects.id, project_id));
+    }
+    const updated = (await db.query.projects.findFirst({ where: eq(projects.id, project_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "projects",
+        attributes: {
+          name: updated.name,
+          description: updated.description,
+          "default-execution-mode": updated.defaultExecutionMode,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/projects/:project_id", async ({ params: { project_id }, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(projects).where(eq(projects.id, project_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- SSH KEYS API ---
+  .get("/api/v2/organizations/:org_name/ssh-keys", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const keyList = await db.query.sshKeys.findMany({ where: eq(sshKeys.orgId, org.id) });
+    const data = keyList.map(k => ({
+      id: k.id,
+      type: "ssh-keys",
+      attributes: { name: k.name },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/ssh-keys", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || !attributes.value) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and value are required" }] };
+    }
+    const id = `ssh-${crypto.randomUUID()}`;
+    await db.insert(sshKeys).values({
+      id,
+      orgId: org.id,
+      name: attributes.name,
+      value: attributes.value,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "ssh-keys",
+        attributes: { name: attributes.name },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/ssh-keys/:ssh_key_id", async ({ params: { ssh_key_id }, user, orgId: tokenOrgId, set }) => {
+    const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, ssh_key_id) });
+    if (!key || !(await checkOrgPermission(user?.id, key.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: key.id,
+        type: "ssh-keys",
+        attributes: { name: key.name },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/ssh-keys/:ssh_key_id", async ({ params: { ssh_key_id }, body, user, orgId: tokenOrgId, set }) => {
+    const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, ssh_key_id) });
+    if (!key || !(await checkOrgPermission(user?.id, key.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof sshKeys.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes.value === "string") updates.value = attributes.value;
+    if (Object.keys(updates).length > 0) {
+      await db.update(sshKeys).set(updates).where(eq(sshKeys.id, ssh_key_id));
+    }
+    const updated = (await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, ssh_key_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "ssh-keys",
+        attributes: { name: updated.name },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/ssh-keys/:ssh_key_id", async ({ params: { ssh_key_id }, user, orgId: tokenOrgId, set }) => {
+    const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, ssh_key_id) });
+    if (!key || !(await checkOrgPermission(user?.id, key.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(sshKeys).where(eq(sshKeys.id, ssh_key_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .patch("/api/v2/workspaces/:workspace_id/relationships/ssh-key", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const sshKeyData = (body as any)?.data;
+    const sshKeyId = sshKeyData?.id ?? null;
+    await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspace_id));
+    return {
+      data: {
+        id: workspace_id,
+        type: "workspaces",
+        relationships: {
+          "ssh-key": { data: sshKeyId ? { id: sshKeyId, type: "ssh-keys" } : null },
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  // --- NOTIFICATION CONFIGURATIONS API ---
+  .get("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ncList = await db.query.notificationConfigurations.findMany({ where: eq(notificationConfigurations.workspaceId, workspace_id) });
+    const data = ncList.map(nc => ({
+      id: nc.id,
+      type: "notification-configurations",
+      attributes: {
+        name: nc.name,
+        "destination-type": nc.destinationType,
+        url: nc.url,
+        triggers: nc.triggers,
+        enabled: nc.enabled,
+        token: nc.token,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || !attributes.url || !attributes["destination-type"]) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name, url, destination-type are required" }] };
+    }
+    const id = `nc-${crypto.randomUUID()}`;
+    const newNc = {
+      id,
+      workspaceId: workspace_id,
+      name: attributes.name,
+      destinationType: attributes["destination-type"],
+      url: attributes.url,
+      triggers: Array.isArray(attributes.triggers) ? attributes.triggers : ["run:created", "run:completed"],
+      enabled: attributes.enabled ?? true,
+      token: attributes.token ?? null,
+      createdAt: Date.now(),
+    };
+    await db.insert(notificationConfigurations).values(newNc);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "notification-configurations",
+        attributes: {
+          name: newNc.name,
+          "destination-type": newNc.destinationType,
+          url: newNc.url,
+          triggers: newNc.triggers,
+          enabled: newNc.enabled,
+          token: newNc.token,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/notification-configurations/:nc_id", async ({ params: { nc_id }, user, orgId: tokenOrgId, set }) => {
+    const nc = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, nc_id) });
+    if (!nc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, nc.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: nc.id,
+        type: "notification-configurations",
+        attributes: {
+          name: nc.name,
+          "destination-type": nc.destinationType,
+          url: nc.url,
+          triggers: nc.triggers,
+          enabled: nc.enabled,
+          token: nc.token,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/notification-configurations/:nc_id", async ({ params: { nc_id }, body, user, orgId: tokenOrgId, set }) => {
+    const nc = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, nc_id) });
+    if (!nc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, nc.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof notificationConfigurations.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["destination-type"] === "string") updates.destinationType = attributes["destination-type"];
+    if (typeof attributes.url === "string") updates.url = attributes.url;
+    if (Array.isArray(attributes.triggers)) updates.triggers = attributes.triggers;
+    if (typeof attributes.enabled === "boolean") updates.enabled = attributes.enabled;
+    if (attributes.token !== undefined) updates.token = attributes.token;
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(notificationConfigurations).set(updates).where(eq(notificationConfigurations.id, nc_id));
+    }
+    const updated = (await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, nc_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "notification-configurations",
+        attributes: {
+          name: updated.name,
+          "destination-type": updated.destinationType,
+          url: updated.url,
+          triggers: updated.triggers,
+          enabled: updated.enabled,
+          token: updated.token,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/notification-configurations/:nc_id", async ({ params: { nc_id }, user, orgId: tokenOrgId, set }) => {
+    const nc = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, nc_id) });
+    if (!nc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, nc.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, nc_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params: { nc_id }, user, orgId: tokenOrgId, set }) => {
+    const nc = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, nc_id) });
+    if (!nc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, nc.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { status: "verification_sent" };
+  }, { isAuth: true })
+
+  // --- OAUTH CLIENTS & TOKENS API ---
+  .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
+    const data = clientList.map(oc => ({
+      id: oc.id,
+      type: "oauth-clients",
+      attributes: {
+        name: oc.name,
+        "service-provider": oc.serviceProvider,
+        "api-url": oc.apiUrl,
+        "http-url": oc.httpUrl,
+        "rsa-public-key": oc.rsaPublicKey,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || typeof attributes.name !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
+    const id = `oc-${crypto.randomUUID()}`;
+    const newOc = {
+      id,
+      orgId: org.id,
+      name: attributes.name,
+      serviceProvider: attributes["service-provider"] ?? "github",
+      apiUrl: attributes["api-url"] ?? null,
+      httpUrl: attributes["http-url"] ?? null,
+      key: attributes.key ?? null,
+      secret: attributes.secret ?? null,
+      rsaPublicKey: attributes["rsa-public-key"] ?? null,
+      createdAt: Date.now(),
+    };
+    await db.insert(oauthClients).values(newOc);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "oauth-clients",
+        attributes: {
+          name: newOc.name,
+          "service-provider": newOc.serviceProvider,
+          "api-url": newOc.apiUrl,
+          "http-url": newOc.httpUrl,
+          "rsa-public-key": newOc.rsaPublicKey,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/oauth-clients/:oc_id", async ({ params: { oc_id }, user, orgId: tokenOrgId, set }) => {
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, oc_id) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: oc.id,
+        type: "oauth-clients",
+        attributes: {
+          name: oc.name,
+          "service-provider": oc.serviceProvider,
+          "api-url": oc.apiUrl,
+          "http-url": oc.httpUrl,
+          "rsa-public-key": oc.rsaPublicKey,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/oauth-clients/:oc_id", async ({ params: { oc_id }, body, user, orgId: tokenOrgId, set }) => {
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, oc_id) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof oauthClients.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["service-provider"] === "string") updates.serviceProvider = attributes["service-provider"];
+    if (attributes["api-url"] !== undefined) updates.apiUrl = attributes["api-url"];
+    if (attributes["http-url"] !== undefined) updates.httpUrl = attributes["http-url"];
+    if (attributes.key !== undefined) updates.key = attributes.key;
+    if (attributes.secret !== undefined) updates.secret = attributes.secret;
+    if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = attributes["rsa-public-key"];
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(oauthClients).set(updates).where(eq(oauthClients.id, oc_id));
+    }
+    const updated = (await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, oc_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "oauth-clients",
+        attributes: {
+          name: updated.name,
+          "service-provider": updated.serviceProvider,
+          "api-url": updated.apiUrl,
+          "http-url": updated.httpUrl,
+          "rsa-public-key": updated.rsaPublicKey,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/oauth-clients/:oc_id", async ({ params: { oc_id }, user, orgId: tokenOrgId, set }) => {
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, oc_id) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(oauthClients).where(eq(oauthClients.id, oc_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params: { oc_id }, user, orgId: tokenOrgId, set }) => {
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, oc_id) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tokenList = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, oc_id) });
+    const data = tokenList.map(ot => ({
+      id: ot.id,
+      type: "oauth-tokens",
+      attributes: {
+        "service-provider-user": ot.serviceProviderUser,
+        "has-ssh-key": ot.hasSshKey,
+        "created-at": new Date(ot.createdAt).toISOString(),
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/oauth-tokens/:ot_id", async ({ params: { ot_id }, user, orgId: tokenOrgId, set }) => {
+    const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, ot_id) });
+    if (!ot) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: ot.id,
+        type: "oauth-tokens",
+        attributes: {
+          "service-provider-user": ot.serviceProviderUser,
+          "has-ssh-key": ot.hasSshKey,
+          "created-at": new Date(ot.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/oauth-tokens/:ot_id", async ({ params: { ot_id }, user, orgId: tokenOrgId, set }) => {
+    const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, ot_id) });
+    if (!ot) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
+    if (!oc || !(await checkOrgPermission(user?.id, oc.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(oauthTokens).where(eq(oauthTokens.id, ot_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- POLICY SETS & POLICIES API (SENTINEL / OPA) ---
+  .get("/api/v2/organizations/:org_name/policy-sets", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
+    const data = psList.map(ps => ({
+      id: ps.id,
+      type: "policy-sets",
+      attributes: {
+        name: ps.name,
+        description: ps.description,
+        kind: ps.kind,
+        global: ps.global,
+        overridable: ps.overridable,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/policy-sets", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || typeof attributes.name !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
+    const id = `polset-${crypto.randomUUID()}`;
+    const newPs = {
+      id,
+      orgId: org.id,
+      name: attributes.name,
+      description: attributes.description ?? null,
+      kind: attributes.kind ?? "sentinel",
+      global: attributes.global ?? false,
+      overridable: attributes.overridable ?? true,
+      createdAt: Date.now(),
+    };
+    await db.insert(policySets).values(newPs);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "policy-sets",
+        attributes: {
+          name: newPs.name,
+          description: newPs.description,
+          kind: newPs.kind,
+          global: newPs.global,
+          overridable: newPs.overridable,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/policy-sets/:policy_set_id", async ({ params: { policy_set_id }, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: ps.id,
+        type: "policy-sets",
+        attributes: {
+          name: ps.name,
+          description: ps.description,
+          kind: ps.kind,
+          global: ps.global,
+          overridable: ps.overridable,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/policy-sets/:policy_set_id", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof policySets.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (attributes.description !== undefined) updates.description = attributes.description;
+    if (typeof attributes.kind === "string") updates.kind = attributes.kind;
+    if (typeof attributes.global === "boolean") updates.global = attributes.global;
+    if (typeof attributes.overridable === "boolean") updates.overridable = attributes.overridable;
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(policySets).set(updates).where(eq(policySets.id, policy_set_id));
+    }
+    const updated = (await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "policy-sets",
+        attributes: {
+          name: updated.name,
+          description: updated.description,
+          kind: updated.kind,
+          global: updated.global,
+          overridable: updated.overridable,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/policy-sets/:policy_set_id", async ({ params: { policy_set_id }, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(policySets).where(eq(policySets.id, policy_set_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/workspaces", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const wsItems = (body as any)?.data;
+    if (Array.isArray(wsItems)) {
+      for (const item of wsItems) {
+        if (item?.id) {
+          const id = `psw-${crypto.randomUUID()}`;
+          await db.insert(policySetWorkspaces).values({ id, policySetId: policy_set_id, workspaceId: item.id }).onConflictDoNothing();
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/workspaces", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const wsItems = (body as any)?.data;
+    if (Array.isArray(wsItems)) {
+      const wsIds = wsItems.map(i => i.id).filter(Boolean);
+      if (wsIds.length > 0) {
+        await db.delete(policySetWorkspaces).where(and(eq(policySetWorkspaces.policySetId, policy_set_id), inArray(policySetWorkspaces.workspaceId, wsIds)));
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/policy-sets/:policy_set_id/policies", async ({ params: { policy_set_id }, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const polList = await db.query.policies.findMany({ where: eq(policies.policySetId, policy_set_id) });
+    const data = polList.map(p => ({
+      id: p.id,
+      type: "policies",
+      attributes: {
+        name: p.name,
+        description: p.description,
+        "enforcement-level": p.enforcementLevel,
+        query: p.query,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/policy-sets/:policy_set_id/policies", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || typeof attributes.name !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
+    const id = `pol-${crypto.randomUUID()}`;
+    const newPol = {
+      id,
+      policySetId: policy_set_id,
+      name: attributes.name,
+      description: attributes.description ?? null,
+      enforcementLevel: attributes["enforcement-level"] ?? "soft-mandatory",
+      query: attributes.query ?? null,
+      createdAt: Date.now(),
+    };
+    await db.insert(policies).values(newPol);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "policies",
+        attributes: {
+          name: newPol.name,
+          description: newPol.description,
+          "enforcement-level": newPol.enforcementLevel,
+          query: newPol.query,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/policies/:policy_id", async ({ params: { policy_id }, user, orgId: tokenOrgId, set }) => {
+    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policy_id) });
+    if (!pol) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: pol.id,
+        type: "policies",
+        attributes: {
+          name: pol.name,
+          description: pol.description,
+          "enforcement-level": pol.enforcementLevel,
+          query: pol.query,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/policies/:policy_id", async ({ params: { policy_id }, body, user, orgId: tokenOrgId, set }) => {
+    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policy_id) });
+    if (!pol) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof policies.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (attributes.description !== undefined) updates.description = attributes.description;
+    if (typeof attributes["enforcement-level"] === "string") updates.enforcementLevel = attributes["enforcement-level"];
+    if (attributes.query !== undefined) updates.query = attributes.query;
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(policies).set(updates).where(eq(policies.id, policy_id));
+    }
+    const updated = (await db.query.policies.findFirst({ where: eq(policies.id, policy_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "policies",
+        attributes: {
+          name: updated.name,
+          description: updated.description,
+          "enforcement-level": updated.enforcementLevel,
+          query: updated.query,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/policies/:policy_id", async ({ params: { policy_id }, user, orgId: tokenOrgId, set }) => {
+    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policy_id) });
+    if (!pol) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(policies).where(eq(policies.id, policy_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/runs/:run_id/policy-checks", async ({ params: { run_id }, user, orgId: tokenOrgId, set }) => {
+    const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, run_id) });
+    const data = pcList.map(pc => ({
+      id: pc.id,
+      type: "policy-checks",
+      attributes: {
+        status: pc.status,
+        result: pc.result,
+        "created-at": new Date(pc.createdAt).toISOString(),
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/policy-checks/:check_id", async ({ params: { check_id }, user, orgId: tokenOrgId, set }) => {
+    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, check_id) });
+    if (!pc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: pc.id,
+        type: "policy-checks",
+        attributes: {
+          status: pc.status,
+          result: pc.result,
+          "created-at": new Date(pc.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params: { check_id }, user, orgId: tokenOrgId, set }) => {
+    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, check_id) });
+    if (!pc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, check_id));
+    return {
+      data: {
+        id: pc.id,
+        type: "policy-checks",
+        attributes: {
+          status: "overridden",
+          result: pc.result,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  // --- MODULE REGISTRY PROTOCOL (Standard Terraform Registry Protocol) ---
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/versions", async ({ params: { namespace, name, provider }, set }) => {
+    const mod = await db.query.registryModules.findFirst({
+      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+    });
+    if (!mod) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
+    return {
+      modules: [
+        {
+          versions: verList.map(v => ({ version: v.version })),
+        },
+      ],
+    };
+  })
+
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params: { namespace, name, provider, version }, set }) => {
+    const mod = await db.query.registryModules.findFirst({
+      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+    });
+    if (!mod) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ver = await db.query.registryModuleVersions.findFirst({
+      where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+    });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      id: `${namespace}/${name}/${provider}/${version}`,
+      owner: namespace,
+      namespace,
+      name,
+      provider,
+      version: ver.version,
+      status: ver.status,
+      download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download`,
+    };
+  })
+
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params: { namespace, name, provider, version }, set }) => {
+    const mod = await db.query.registryModules.findFirst({
+      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+    });
+    if (!mod) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ver = await db.query.registryModuleVersions.findFirst({
+      where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+    });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    set.headers["X-Terraform-Get"] = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    set.status = 204;
+    return;
+  })
+
+  // --- MODULE MANAGEMENT API (TFE v2 API) ---
+  .get("/api/v2/organizations/:org_name/registry-modules", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const modList = await db.query.registryModules.findMany({ where: eq(registryModules.orgId, org.id) });
+    const data = modList.map(m => ({
+      id: m.id,
+      type: "registry-modules",
+      attributes: {
+        name: m.name,
+        provider: m.provider,
+        namespace: m.namespace,
+        "created-at": new Date(m.createdAt).toISOString(),
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/registry-modules", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name || !attributes.provider) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and provider are required" }] };
+    }
+    const id = `mod-${crypto.randomUUID()}`;
+    const namespace = attributes.namespace ?? org.name;
+    const newMod = {
+      id,
+      orgId: org.id,
+      namespace,
+      name: attributes.name,
+      provider: attributes.provider,
+      createdAt: Date.now(),
+    };
+    await db.insert(registryModules).values(newMod);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "registry-modules",
+        attributes: {
+          name: newMod.name,
+          provider: newMod.provider,
+          namespace: newMod.namespace,
+          "created-at": new Date(newMod.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/registry-modules/:module_id", async ({ params: { module_id }, user, orgId: tokenOrgId, set }) => {
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, module_id) });
+    if (!mod || !(await checkOrgPermission(user?.id, mod.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(registryModules).where(eq(registryModules.id, module_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- PROVIDER REGISTRY PROTOCOL (Standard Terraform Registry Protocol) ---
+  .get("/api/registry/v1/providers/:namespace/:type/versions", async ({ params: { namespace, type }, set }) => {
+    const prov = await db.query.registryProviders.findFirst({
+      where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)),
+    });
+    if (!prov) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const verList = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) });
+    const versions = await Promise.all(verList.map(async (v) => {
+      const platList = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, v.id) });
+      return {
+        version: v.version,
+        protocols: v.protocols ?? ["5.0"],
+        platforms: platList.map(p => ({ os: p.os, arch: p.arch })),
+      };
+    }));
+    return { versions };
+  })
+
+  .get("/api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch", async ({ params: { namespace, type, version, os, arch }, set }) => {
+    const prov = await db.query.registryProviders.findFirst({
+      where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)),
+    });
+    if (!prov) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ver = await db.query.registryProviderVersions.findFirst({
+      where: and(eq(registryProviderVersions.providerId, prov.id), eq(registryProviderVersions.version, version)),
+    });
+    if (!ver) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const plat = await db.query.registryProviderPlatforms.findFirst({
+      where: and(eq(registryProviderPlatforms.versionId, ver.id), eq(registryProviderPlatforms.os, os), eq(registryProviderPlatforms.arch, arch)),
+    });
+    if (!plat) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      protocols: ver.protocols ?? ["5.0"],
+      os: plat.os,
+      arch: plat.arch,
+      filename: plat.filename,
+      download_url: plat.downloadUrl,
+      shasum: plat.shasum,
+    };
+  })
+
+  // --- PROVIDER MANAGEMENT API (TFE v2 API) ---
+  .get("/api/v2/organizations/:org_name/registry-providers", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
+    const data = provList.map(p => ({
+      id: p.id,
+      type: "registry-providers",
+      attributes: {
+        namespace: p.namespace,
+        name: p.type,
+        "registry-name": p.registryName,
+        "created-at": new Date(p.createdAt).toISOString(),
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/organizations/:org_name/registry-providers", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.name) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] };
+    }
+    const id = `prov-${crypto.randomUUID()}`;
+    const namespace = attributes.namespace ?? org.name;
+    const newProv = {
+      id,
+      orgId: org.id,
+      namespace,
+      type: attributes.name,
+      registryName: attributes["registry-name"] ?? "private",
+      createdAt: Date.now(),
+    };
+    await db.insert(registryProviders).values(newProv);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "registry-providers",
+        attributes: {
+          namespace: newProv.namespace,
+          name: newProv.type,
+          "registry-name": newProv.registryName,
+          "created-at": new Date(newProv.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/registry-providers/:provider_id", async ({ params: { provider_id }, user, orgId: tokenOrgId, set }) => {
+    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, provider_id) });
+    if (!prov || !(await checkOrgPermission(user?.id, prov.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(registryProviders).where(eq(registryProviders.id, provider_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -3183,4 +4638,277 @@ export const app = new Elysia()
       set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] };
     }
     return { data: { id: run_id, type: "runs", attributes: { status: "force_canceled" } } };
+  }, { isAuth: true })
+
+  // --- ADMIN OPERATIONS API (TFE-Specific Site Admin) ---
+  .get("/api/v2/admin/users", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const allUsers = await db.query.users.findMany();
+    const data = allUsers.map(u => ({
+      id: u.id,
+      type: "users",
+      attributes: {
+        username: u.username,
+        email: u.email,
+        "is-site-admin": true,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/users/:user_id", async ({ params: { user_id }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: targetUser.id,
+        type: "users",
+        attributes: {
+          username: targetUser.username,
+          email: targetUser.email,
+          "is-site-admin": true,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/users/:user_id", async ({ params: { user_id }, body, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof users.$inferInsert> = {};
+    if (typeof attributes.username === "string") updates.username = attributes.username;
+    if (attributes.email !== undefined) updates.email = attributes.email;
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(users).set(updates).where(eq(users.id, user_id));
+    }
+    const updated = (await db.query.users.findFirst({ where: eq(users.id, user_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "users",
+        attributes: {
+          username: updated.username,
+          email: updated.email,
+          "is-site-admin": true,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/users/:user_id", async ({ params: { user_id }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(users).where(eq(users.id, user_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/organizations", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const allOrgs = await db.query.organizations.findMany();
+    const data = allOrgs.map(o => ({
+      id: o.id,
+      type: "organizations",
+      attributes: {
+        name: o.name,
+        email: o.email,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: org.id,
+        type: "organizations",
+        attributes: {
+          name: org.name,
+          email: org.email,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(organizations).where(eq(organizations.id, org.id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/workspaces", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const allWs = await db.query.workspaces.findMany();
+    const data = allWs.map(w => ({
+      id: w.id,
+      type: "workspaces",
+      attributes: {
+        name: w.name,
+        "terraform-version": w.terraformVersion,
+        locked: w.locked,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/workspaces/:ws_id", async ({ params: { ws_id }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) });
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: ws.id,
+        type: "workspaces",
+        attributes: {
+          name: ws.name,
+          "terraform-version": ws.terraformVersion,
+          locked: ws.locked,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .delete("/api/v2/admin/workspaces/:ws_id", async ({ params: { ws_id }, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) });
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(workspaces).where(eq(workspaces.id, ws_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/runs", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const allRuns = await db.query.runs.findMany();
+    const data = allRuns.map(r => ({
+      id: r.id,
+      type: "runs",
+      attributes: {
+        status: r.status,
+        "created-at": new Date(r.createdAt).toISOString(),
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .get("/api/v2/admin/terraform-versions", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    return {
+      data: [
+        { id: "1.10.5", type: "terraform-versions", attributes: { version: "1.10.5", default: true, deprecated: false } },
+        { id: "1.9.8", type: "terraform-versions", attributes: { version: "1.9.8", default: false, deprecated: false } },
+        { id: "1.8.5", type: "terraform-versions", attributes: { version: "1.8.5", default: false, deprecated: false } },
+      ],
+    };
+  }, { isAuth: true })
+
+  // --- WORKSPACE RUN TRIGGERS API ---
+  .get("/api/v2/workspaces/:workspace_id/run-triggers", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "read", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const triggers = await db.query.runTriggers.findMany({ where: eq(runTriggers.workspaceId, workspace_id) });
+    const data = triggers.map(t => ({
+      id: t.id,
+      type: "run-triggers",
+      attributes: {
+        "created-at": new Date(t.createdAt).toISOString(),
+      },
+      relationships: {
+        "sourceable-workspace": {
+          data: { id: t.sourceWorkspaceId, type: "workspaces" },
+        },
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "read", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const srcId = item?.id ?? item?.attributes?.["source-workspace-id"];
+        if (srcId) {
+          const id = `rt-${crypto.randomUUID()}`;
+          await db.insert(runTriggers).values({ id, workspaceId: workspace_id, sourceWorkspaceId: srcId }).onConflictDoNothing();
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  .delete("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "read", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    if (Array.isArray(items)) {
+      const srcIds = items.map(i => i.id).filter(Boolean);
+      if (srcIds.length > 0) {
+        await db.delete(runTriggers).where(and(eq(runTriggers.workspaceId, workspace_id), inArray(runTriggers.sourceWorkspaceId, srcIds)));
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- AUDIT TRAILS API ---
+  .get("/api/v2/organization-audit-trailers", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    return { data: [] };
+  }, { isAuth: true })
+
+  .get("/api/v2/audit-trails", async ({ user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    return { data: [] };
+  }, { isAuth: true })
+
+  // --- COST ESTIMATION API ---
+  .get("/api/v2/runs/:run_id/cost-estimate", async ({ params: { run_id }, user, orgId, set }) => {
+    const run = await findAuthorizedRun(run_id, user?.id, orgId);
+    if (!run) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return {
+      data: {
+        id: `ce-${run_id}`,
+        type: "cost-estimates",
+        attributes: {
+          status: "finished",
+          "delta-monthly-cost": "0.0",
+          "prior-monthly-cost": "0.0",
+          "proposed-monthly-cost": "0.0",
+        },
+      },
+    };
   }, { isAuth: true });

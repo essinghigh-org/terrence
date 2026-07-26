@@ -23,7 +23,8 @@
 - [x] `GET /.well-known/terraform.json` — returns `{ "tfe.v2.1": "/api/v2/", "state.v2": "/api/v2/" }`
 - [x] `GET /.well-known/terraform.json` includes the `tfe.v2` key used by the `cloud` integration
 - [x] `GET /.well-known/terraform.json` includes the `tfe.v2.2` key
-- [ ] `GET /.well-known/terraform.json` includes the `modules.v1` key
+- [x] `GET /.well-known/terraform.json` includes the `modules.v1` key
+- [x] `GET /.well-known/terraform.json` includes the `providers.v1` key
 - [x] `GET /api/v2/ping` — TFE API version handshake for the `cloud` backend
 
 ### 0.3 Rate Limiting
@@ -74,11 +75,11 @@
 - [x] Org tokens have restricted permissions (no plan/apply)
 
 ### 1.5 Team Tokens
-- [ ] `POST /teams/:team_id/authentication-tokens` — create team token (returns secret)
-- [ ] `GET /teams/:team_id/authentication-tokens` — list team tokens
-- [ ] `DELETE /teams/:team_id/authentication-tokens/:id` — delete team token
+- [x] `POST /teams/:team_id/authentication-tokens` — create team token (returns secret)
+- [x] `GET /teams/:team_id/authentication-tokens` — list team tokens
+- [x] `DELETE /teams/:team_id/authentication-tokens/:id` — delete team token
 - [ ] Team token expiry support
-- [ ] Team tokens can plan/apply (unlike org tokens)
+- [x] Team tokens can plan/apply (unlike org tokens)
 
 ### 1.6 Account Endpoint (terraform login support)
 - [x] `GET /api/v2/account/details` — returns current user/agent identity
@@ -164,30 +165,30 @@
 - [x] Auto-membership for creator (owner role)
 
 ### 3.3 Teams
-- [ ] `GET /organizations/:organization_name/teams` — list teams (with search, pagination)
-- [ ] `POST /organizations/:organization_name/teams` — create team
-- [ ] `GET /teams/:team_id` — show team details
-- [ ] `PATCH /teams/:team_id` — update team (name, visibility, org-access)
-- [ ] `DELETE /teams/:team_id` — destroy team
-- [ ] `visibility` attribute: `secret` or `organization`
-- [ ] `organization-access` object with fine-grained permissions
-- [ ] `sso-team-id` attribute
-- [ ] `users-count` attribute
-- [ ] `permissions` object on team
+- [x] `GET /organizations/:organization_name/teams` — list teams (with search, pagination)
+- [x] `POST /organizations/:organization_name/teams` — create team
+- [x] `GET /teams/:team_id` — show team details
+- [x] `PATCH /teams/:team_id` — update team (name, visibility, org-access)
+- [x] `DELETE /teams/:team_id` — destroy team
+- [x] `visibility` attribute: `secret` or `organization`
+- [x] `organization-access` object with fine-grained permissions
+- [x] `sso-team-id` attribute
+- [x] `users-count` attribute
+- [x] `permissions` object on team
 
 ### 3.4 Team Membership
-- [ ] `POST /teams/:team_id/relationships/users` — add users to team (by user ID)
+- [x] `POST /teams/:team_id/relationships/users` — add users to team (by user ID)
 - [ ] `POST /teams/:team_id/relationships/organization-memberships` — add users (by org membership ID)
-- [ ] `DELETE /teams/:team_id/relationships/users` — remove users from team
-- [ ] `GET /teams/:team_id` with `?include=users` — list team members
+- [x] `DELETE /teams/:team_id/relationships/users` — remove users from team
+- [x] `GET /teams/:team_id` with `?include=users` — list team members
 
 ### 3.5 Team Access to Workspaces
-- [ ] `GET /team-workspaces?filter[workspace][id]=:id` — list team access for a workspace
-- [ ] `POST /team-workspaces` — create team access to workspace
-- [ ] `PATCH /team-workspaces/:id` — update team access level
-- [ ] `DELETE /team-workspaces/:id` — remove team access
-- [ ] Access levels: `read`, `plan`, `write`, `admin`, `custom`
-- [ ] Custom access sub-permissions: `runs`, `variables`, `state-versions`, `sentinel-mocks`, `workspace-locking`, `run-tasks`, `policy-overrides`
+- [x] `GET /team-workspaces?filter[workspace][id]=:id` — list team access for a workspace
+- [x] `POST /team-workspaces` — create team access to workspace
+- [x] `PATCH /team-workspaces/:id` — update team access level
+- [x] `DELETE /team-workspaces/:id` — remove team access
+- [x] Access levels: `read`, `plan`, `write`, `admin`, `custom`
+- [x] Custom access sub-permissions: `runs`, `variables`, `state-versions`, `sentinel-mocks`, `workspace-locking`, `run-tasks`, `policy-overrides`
 
 ### 3.6 SSO / SAML
 - [ ] SAML configuration API (admin)
@@ -207,20 +208,20 @@
 ## Epic 4: Projects
 
 ### 4.1 Project CRUD
-- [ ] `GET /organizations/:organization_name/projects` — list projects
-- [ ] `POST /organizations/:organization_name/projects` — create project
-- [ ] `GET /projects/:project_id` — show project details
-- [ ] `PATCH /projects/:project_id` — update project
-- [ ] `DELETE /projects/:project_id` — delete project (must be empty)
+- [x] `GET /organizations/:organization_name/projects` — list projects
+- [x] `POST /organizations/:organization_name/projects` — create project
+- [x] `GET /projects/:project_id` — show project details
+- [x] `PATCH /projects/:project_id` — update project
+- [x] `DELETE /projects/:project_id` — delete project (must be empty)
 
 ### 4.2 Project Attributes
-- [ ] `name`, `description` fields
-- [ ] `default-execution-mode` (remote, local, agent)
+- [x] `name`, `description` fields
+- [x] `default-execution-mode` (remote, local, agent)
 - [ ] `default-agent-pool` relationship
 - [ ] `setting-overwrites` object (execution-mode, etc.)
 - [ ] `auto-destroy-activity-duration`
 - [ ] Tag bindings on projects (key-value tags)
-- [ ] Workspace default project (auto-assign to "Default Project")
+- [x] Workspace default project (auto-assign to "Default Project")
 
 ### 4.3 Project Tag Bindings
 - [ ] `GET /projects/:project_id/tag-bindings` — list project tags
@@ -305,8 +306,8 @@
 - [ ] `global-remote-state` and `project-remote-state` flags
 
 ### 5.7 SSH Key Assignment
-- [ ] `PATCH /workspaces/:workspace_id/relationships/ssh-key` — assign SSH key to workspace
-- [ ] `PATCH /workspaces/:workspace_id/relationships/ssh-key` with `null` — unassign SSH key
+- [x] `PATCH /workspaces/:workspace_id/relationships/ssh-key` — assign SSH key to workspace
+- [x] `PATCH /workspaces/:workspace_id/relationships/ssh-key` with `null` — unassign SSH key
 
 ### 5.8 Data Retention Policy
 - [ ] `GET /workspaces/:workspace_id/relationships/data-retention-policy` — show policy
@@ -535,9 +536,9 @@
 - [x] `workspace` relationship
 - [x] `created-by` relationship
 - [x] `run-events` relationship
-- [ ] `policy-checks` relationship
+- [x] `policy-checks` relationship
 - [ ] `comments` relationship
-- [ ] `cost-estimate` relationship
+- [x] `cost-estimate` relationship
 - [ ] `input-state-version` relationship
 - [ ] `workspace-run-alerts` relationship
 
@@ -627,19 +628,19 @@
 ## Epic 11: Policy as Code (Sentinel & OPA)
 
 ### 11.1 Policy Sets
-- [ ] `POST /organizations/:organization_name/policy-sets` — create policy set
-- [ ] `GET /organizations/:organization_name/policy-sets` — list policy sets
-- [ ] `GET /policy-sets/:policy_set_id` — show policy set
-- [ ] `PATCH /policy-sets/:policy_set_id` — update policy set
-- [ ] `DELETE /policy-sets/:policy_set_id` — delete policy set
-- [ ] `POST /policy-sets/:policy_set_id/relationships/workspaces` — attach to workspaces
-- [ ] `DELETE /policy-sets/:policy_set_id/relationships/workspaces` — detach
+- [x] `POST /organizations/:organization_name/policy-sets` — create policy set
+- [x] `GET /organizations/:organization_name/policy-sets` — list policy sets
+- [x] `GET /policy-sets/:policy_set_id` — show policy set
+- [x] `PATCH /policy-sets/:policy_set_id` — update policy set
+- [x] `DELETE /policy-sets/:policy_set_id` — delete policy set
+- [x] `POST /policy-sets/:policy_set_id/relationships/workspaces` — attach to workspaces
+- [x] `DELETE /policy-sets/:policy_set_id/relationships/workspaces` — detach
 - [ ] `POST /policy-sets/:policy_set_id/relationships/projects` — attach to projects
 - [ ] `DELETE /policy-sets/:policy_set_id/relationships/projects` — detach
 - [ ] `POST /policy-sets/:policy_set_id/relationships/workspace-exclusions` — exclude workspaces
-- [ ] `kind` attribute: `sentinel` or `opa`
-- [ ] `global` flag — apply to all workspaces
-- [ ] `overridable` flag — allow policy overrides
+- [x] `kind` attribute: `sentinel` or `opa`
+- [x] `global` flag — apply to all workspaces
+- [x] `overridable` flag — allow policy overrides
 - [ ] `agent-enabled` flag — run policy in HCP Terraform agent
 - [ ] `policy-tool-version` — specific version for policy evaluation
 - [ ] `policy-update-patterns` — VCS change trigger patterns
@@ -648,19 +649,19 @@
 - [ ] `policies-path` — subdirectory within VCS repo
 
 ### 11.2 Policies (Individual)
-- [ ] `GET /policy-sets/:policy_set_id/policies` — list policies in set
-- [ ] `GET /policies/:policy_id` — show policy
-- [ ] `POST /policy-sets/:policy_set_id/policies` — create policy (upload)
-- [ ] `PATCH /policies/:policy_id` — update policy
-- [ ] `DELETE /policies/:policy_id` — delete policy
-- [ ] Policy enforcement level: `hard-mandatory`, `soft-mandatory`, `advisory`
+- [x] `GET /policy-sets/:policy_set_id/policies` — list policies in set
+- [x] `GET /policies/:policy_id` — show policy
+- [x] `POST /policy-sets/:policy_set_id/policies` — create policy (upload)
+- [x] `PATCH /policies/:policy_id` — update policy
+- [x] `DELETE /policies/:policy_id` — delete policy
+- [x] Policy enforcement level: `hard-mandatory`, `soft-mandatory`, `advisory`
 
 ### 11.3 Policy Checks
-- [ ] `GET /runs/:run_id/policy-checks` — list policy checks for a run
-- [ ] `GET /policy-checks/:check_id` — show policy check result
-- [ ] `POST /policy-checks/:check_id/actions/override` — override a soft-failed policy
-- [ ] Policy check states: `pending`, `running`, `passed`, `failed`, `overridden`, `soft_failed`, `canceled`, `errored`
-- [ ] Policy check result (pass/fail counts, individual policy results)
+- [x] `GET /runs/:run_id/policy-checks` — list policy checks for a run
+- [x] `GET /policy-checks/:check_id` — show policy check result
+- [x] `POST /policy-checks/:check_id/actions/override` — override a soft-failed policy
+- [x] Policy check states: `pending`, `running`, `passed`, `failed`, `overridden`, `soft_failed`, `canceled`, `errored`
+- [x] Policy check result (pass/fail counts, individual policy results)
 - [ ] Sentinel result details (`result.sentinel` hash)
 - [ ] OPA result details
 
@@ -706,26 +707,26 @@
 ## Epic 13: VCS Integrations
 
 ### 13.1 OAuth Clients
-- [ ] `GET /organizations/:organization_name/oauth-clients` — list OAuth clients
-- [ ] `POST /organizations/:organization_name/oauth-clients` — create OAuth client
-- [ ] `GET /oauth-clients/:oc_id` — show OAuth client
-- [ ] `PATCH /oauth-clients/:oc_id` — update OAuth client
-- [ ] `DELETE /oauth-clients/:oc_id` — delete OAuth client
-- [ ] `service-provider` — github, gitlab, bitbucket, github_enterprise, gitlab_ce, gitlab_ee, etc.
-- [ ] `api-url`, `http-url` — VCS instance URLs
-- [ ] `key`, `secret` — OAuth app credentials
+- [x] `GET /organizations/:organization_name/oauth-clients` — list OAuth clients
+- [x] `POST /organizations/:organization_name/oauth-clients` — create OAuth client
+- [x] `GET /oauth-clients/:oc_id` — show OAuth client
+- [x] `PATCH /oauth-clients/:oc_id` — update OAuth client
+- [x] `DELETE /oauth-clients/:oc_id` — delete OAuth client
+- [x] `service-provider` — github, gitlab, bitbucket, github_enterprise, gitlab_ce, gitlab_ee, etc.
+- [x] `api-url`, `http-url` — VCS instance URLs
+- [x] `key`, `secret` — OAuth app credentials
 - [ ] `callback-url`, `connect-path` — OAuth flow URLs
-- [ ] `rsa-public-key` — SSH key for VCS
+- [x] `rsa-public-key` — SSH key for VCS
 - [ ] OAuth handshake flow (redirect to VCS, callback handling)
 - [ ] `projects` relationship — scope OAuth client to projects
 - [ ] `agent-pool` relationship — private VCS via agent
 
 ### 13.2 OAuth Tokens
-- [ ] `GET /oauth-clients/:oc_id/oauth-tokens` — list tokens for a client
-- [ ] `GET /oauth-tokens/:ot_id` — show OAuth token
-- [ ] `DELETE /oauth-tokens/:ot_id` — delete OAuth token
-- [ ] `service-provider-user` — VCS username
-- [ ] `has-ssh-key` flag
+- [x] `GET /oauth-clients/:oc_id/oauth-tokens` — list tokens for a client
+- [x] `GET /oauth-tokens/:ot_id` — show OAuth token
+- [x] `DELETE /oauth-tokens/:ot_id` — delete OAuth token
+- [x] `service-provider-user` — VCS username
+- [x] `has-ssh-key` flag
 
 ### 13.3 GitHub App Installations
 - [ ] `GET /organizations/:organization_name/github-app-installations` — list installations
@@ -757,33 +758,33 @@
 ## Epic 14: SSH Keys
 
 ### 14.1 SSH Key CRUD
-- [ ] `GET /organizations/:organization_name/ssh-keys` — list SSH keys
-- [ ] `POST /organizations/:organization_name/ssh-keys` — create SSH key
-- [ ] `GET /ssh-keys/:ssh_key_id` — show SSH key metadata
-- [ ] `PATCH /ssh-keys/:ssh_key_id` — update SSH key
-- [ ] `DELETE /ssh-keys/:ssh_key_id` — delete SSH key
-- [ ] `name` attribute
-- [ ] Private key is write-only (never returned in responses)
+- [x] `GET /organizations/:organization_name/ssh-keys` — list SSH keys
+- [x] `POST /organizations/:organization_name/ssh-keys` — create SSH key
+- [x] `GET /ssh-keys/:ssh_key_id` — show SSH key metadata
+- [x] `PATCH /ssh-keys/:ssh_key_id` — update SSH key
+- [x] `DELETE /ssh-keys/:ssh_key_id` — delete SSH key
+- [x] `name` attribute
+- [x] Private key is write-only (never returned in responses)
 
 ### 14.2 SSH Key Assignment
 - [ ] Assign to VCS OAuth token (for repo access)
-- [ ] Assign to workspace (for Git module sources)
+- [x] Assign to workspace (for Git module sources)
 
 ---
 
 ## Epic 15: Notifications
 
 ### 15.1 Workspace Notification Configurations
-- [ ] `GET /workspaces/:workspace_id/notification-configurations` — list configs
-- [ ] `POST /workspaces/:workspace_id/notification-configurations` — create config
-- [ ] `GET /notification-configurations/:nc_id` — show config
-- [ ] `PATCH /notification-configurations/:nc_id` — update config
-- [ ] `DELETE /notification-configurations/:nc_id` — delete config
-- [ ] `POST /notification-configurations/:nc_id/actions/verify` — test notification
-- [ ] `destination-type`: generic, slack, microsoft-teams
-- [ ] `url` — webhook URL
-- [ ] `triggers` array: `run:created`, `run:planning`, `run:needs_attention`, `run:applying`, `run:completed`, `run:errored`, `assessment:drifted`, `assessment:check_failure`, `assessment:failed`, `workspace:auto_destroy_reminder`, `workspace:auto_destroy_run_results`
-- [ ] `enabled` flag
+- [x] `GET /workspaces/:workspace_id/notification-configurations` — list configs
+- [x] `POST /workspaces/:workspace_id/notification-configurations` — create config
+- [x] `GET /notification-configurations/:nc_id` — show config
+- [x] `PATCH /notification-configurations/:nc_id` — update config
+- [x] `DELETE /notification-configurations/:nc_id` — delete config
+- [x] `POST /notification-configurations/:nc_id/actions/verify` — test notification
+- [x] `destination-type`: generic, slack, microsoft-teams
+- [x] `url` — webhook URL
+- [x] `triggers` array: `run:created`, `run:planning`, `run:needs_attention`, `run:applying`, `run:completed`, `run:errored`, `assessment:drifted`, `assessment:check_failure`, `assessment:failed`, `workspace:auto_destroy_reminder`, `workspace:auto_destroy_run_results`
+- [x] `enabled` flag
 
 ### 15.2 Team Notification Configurations
 - [ ] `POST /teams/:team_id/notification-configurations` — create team notification
@@ -870,21 +871,21 @@
 ## Epic 18: Private Registry — Modules
 
 ### 18.1 Module Registry API (Standard Registry Protocol)
-- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider/versions` — list versions
-- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version` — get module version
-- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version/download` — download source
-- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/versions` — list versions
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version` — get module version
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version/download` — download source
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version
 - [ ] `GET /api/registry/v1/modules/:namespace/:name` — list providers for module
 - [ ] `GET /api/registry/v1/modules` — search/browse modules
 - [ ] `GET /api/registry/v1/modules/:namespace` — list modules in namespace
 
 ### 18.2 Module Publishing & Management
-- [ ] `POST /api/v2/organizations/:org/registry-modules` — publish module from VCS
+- [x] `POST /api/v2/organizations/:org/registry-modules` — publish module from VCS
 - [ ] `POST /api/v2/organizations/:org/registry-modules/versions` — create module version
 - [ ] `PUT /api/v2/registry-modules/:module_id/versions/:version/upload` — upload module tar.gz
-- [ ] `DELETE /api/v2/registry-modules/:module_id` — delete module
+- [x] `DELETE /api/v2/registry-modules/:module_id` — delete module
 - [ ] `DELETE /api/v2/registry-modules/:module_id/versions/:version` — delete version
-- [ ] Module version status
+- [x] Module version status
 - [ ] VCS-driven module publishing
 - [ ] No-code provisioning ready modules
 
@@ -903,25 +904,25 @@
 ## Epic 19: Private Registry — Providers
 
 ### 19.1 Provider Registry API (Standard Registry)
-- [ ] `GET /api/registry/v1/providers/:namespace/:type/versions` — list versions
-- [ ] `GET /api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch` — download URL
-- [ ] `GET /api/registry/v1/providers/:namespace/:type/:version` — get version details
+- [x] `GET /api/registry/v1/providers/:namespace/:type/versions` — list versions
+- [x] `GET /api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch` — download URL
+- [x] `GET /api/registry/v1/providers/:namespace/:type/:version` — get version details
 - [ ] `GET /api/registry/v1/providers/-/versions` — search providers
 - [ ] Network mirror protocol support for `provider_installation` blocks
 
 ### 19.2 Provider Management
-- [ ] `POST /api/v2/organizations/:org/registry-providers` — add provider to private registry
-- [ ] `GET /api/v2/organizations/:org/registry-providers` — list providers
-- [ ] `GET /api/v2/registry-providers/:provider_id` — show provider
-- [ ] `DELETE /api/v2/registry-providers/:provider_id` — remove provider
-- [ ] `registry-name` field: `public` or `private`
-- [ ] Provider version management (platforms, SHASUMS)
+- [x] `POST /api/v2/organizations/:org/registry-providers` — add provider to private registry
+- [x] `GET /api/v2/organizations/:org/registry-providers` — list providers
+- [x] `GET /api/v2/registry-providers/:provider_id` — show provider
+- [x] `DELETE /api/v2/registry-providers/:provider_id` — remove provider
+- [x] `registry-name` field: `public` or `private`
+- [x] Provider version management (platforms, SHASUMS)
 - [ ] GPG key management for provider signing
 
 ### 19.3 Provider Version Platforms
-- [ ] `POST /registry-providers/:provider_id/versions/:version/platforms` — add platform
-- [ ] `DELETE /registry-providers/:provider_id/versions/:version/platforms/:platform_id` — remove
-- [ ] Platform: os (linux, darwin, windows), arch (amd64, arm64)
+- [x] `POST /registry-providers/:provider_id/versions/:version/platforms` — add platform
+- [x] `DELETE /registry-providers/:provider_id/versions/:version/platforms/:platform_id` — remove
+- [x] Platform: os (linux, darwin, windows), arch (amd64, arm64)
 
 ---
 
@@ -996,36 +997,36 @@
 ## Epic 24: Admin Operations (TFE-Specific)
 
 ### 24.1 Admin Users
-- [ ] `GET /api/v2/admin/users` — list all users
-- [ ] `GET /api/v2/admin/users/:user_id` — show user
-- [ ] `PATCH /api/v2/admin/users/:user_id` — update user (site admin toggle, etc.)
-- [ ] `DELETE /api/v2/admin/users/:user_id` — suspend/delete user
-- [ ] `is-site-admin` attribute
+- [x] `GET /api/v2/admin/users` — list all users
+- [x] `GET /api/v2/admin/users/:user_id` — show user
+- [x] `PATCH /api/v2/admin/users/:user_id` — update user (site admin toggle, etc.)
+- [x] `DELETE /api/v2/admin/users/:user_id` — suspend/delete user
+- [x] `is-site-admin` attribute
 
 ### 24.2 Admin Organizations
-- [ ] `GET /api/v2/admin/organizations` — list all orgs
-- [ ] `GET /api/v2/admin/organizations/:org_name` — show org
+- [x] `GET /api/v2/admin/organizations` — list all orgs
+- [x] `GET /api/v2/admin/organizations/:org_name` — show org
 - [ ] `PATCH /api/v2/admin/organizations/:org_name` — update org
-- [ ] `DELETE /api/v2/admin/organizations/:org_name` — destroy org
+- [x] `DELETE /api/v2/admin/organizations/:org_name` — destroy org
 
 ### 24.3 Admin Workspaces
-- [ ] `GET /api/v2/admin/workspaces` — list all workspaces
-- [ ] `GET /api/v2/admin/workspaces/:ws_id` — show workspace
+- [x] `GET /api/v2/admin/workspaces` — list all workspaces
+- [x] `GET /api/v2/admin/workspaces/:ws_id` — show workspace
 - [ ] `PATCH /api/v2/admin/workspaces/:ws_id` — update workspace
-- [ ] `DELETE /api/v2/admin/workspaces/:ws_id` — delete workspace
+- [x] `DELETE /api/v2/admin/workspaces/:ws_id` — delete workspace
 
 ### 24.4 Admin Runs
-- [ ] `GET /api/v2/admin/runs` — list all runs (with filters)
+- [x] `GET /api/v2/admin/runs` — list all runs (with filters)
 - [ ] `GET /api/v2/admin/runs/:run_id` — show run
-- [ ] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
-- [ ] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
+- [x] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
+- [x] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
 
 ### 24.5 Admin Terraform Versions
-- [ ] `GET /api/v2/admin/terraform-versions` — list available versions
+- [x] `GET /api/v2/admin/terraform-versions` — list available versions
 - [ ] `POST /api/v2/admin/terraform-versions` — add custom Terraform version
 - [ ] `PATCH /api/v2/admin/terraform-versions/:version_id` — update version
 - [ ] `DELETE /api/v2/admin/terraform-versions/:version_id` — remove version
-- [ ] Version attributes: version, url, sha, deprecated
+- [x] Version attributes: version, url, sha, deprecated
 
 ### 24.6 Admin Sentinel Versions
 - [ ] Same as Terraform versions but for Sentinel
@@ -1287,14 +1288,17 @@
 - [x] Workspace lock/unlock test
 - [x] Extended lifecycle tests (multi-step workflows)
 - [x] Variable set CRUD tests
-- [ ] Team CRUD tests
-- [ ] Team membership tests
-- [ ] Team access to workspace tests
-- [ ] Project CRUD tests
-- [ ] OAuth client/token tests
-- [ ] Policy set tests
-- [ ] Notification configuration tests
-- [ ] SSH key CRUD tests
+- [x] Team CRUD tests
+- [x] Team membership tests
+- [x] Team access to workspace tests
+- [x] Project CRUD tests
+- [x] OAuth client/token tests
+- [x] Policy set tests
+- [x] Notification configuration tests
+- [x] SSH key CRUD tests
+- [x] Module & Provider Registry tests
+- [x] Admin Operations API tests
+- [x] Workspace Run Triggers & Cost Estimate tests
 
 ### 30.2 Worker Tests
 - [x] Worker queue processing test

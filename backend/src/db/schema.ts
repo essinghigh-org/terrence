@@ -21,11 +21,55 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   role: text("role").notNull().default("member"), // 'owner' or 'member'
 });
 
+export const teams = sqliteTable("teams", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  visibility: text("visibility").notNull().default("organization"), // 'organization' or 'secret'
+  ssoTeamId: text("sso_team_id"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("teams_org_name_idx").on(table.orgId, table.name),
+]);
+
+export const teamMemberships = sqliteTable("team_memberships", {
+  id: text("id").primaryKey(),
+  teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
+]);
+
+export const projects = sqliteTable("projects", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  defaultExecutionMode: text("default_execution_mode").default("remote"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),
+]);
+
+export const sshKeys = sqliteTable("ssh_keys", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  value: text("value").notNull(), // PEM-encoded private key
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("ssh_keys_org_name_idx").on(table.orgId, table.name),
+]);
+
 export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description"),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+  sshKeyId: text("ssh_key_id").references(() => sshKeys.id, { onDelete: "set null" }),
   iacBinary: text("iac_binary"), // null inherits from org
   terraformVersion: text("terraform_version").default("latest"),
   workingDirectory: text("working_directory"),
@@ -33,6 +77,28 @@ export const workspaces = sqliteTable("workspaces", {
   sourceUrl: text("source_url"),
   autoApply: integer("auto_apply", { mode: "boolean" }).default(false),
   locked: integer("locked", { mode: "boolean" }).default(false),
+});
+
+export const teamWorkspaces = sqliteTable("team_workspaces", {
+  id: text("id").primaryKey(),
+  teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  access: text("access").notNull().default("write"), // 'read', 'plan', 'write', 'admin', 'custom'
+  permissions: text("permissions", { mode: "json" }).$type<Record<string, boolean>>(),
+}, (table) => [
+  uniqueIndex("team_workspaces_team_workspace_idx").on(table.teamId, table.workspaceId),
+]);
+
+export const notificationConfigurations = sqliteTable("notification_configurations", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams'
+  url: text("url").notNull(),
+  triggers: text("triggers", { mode: "json" }).$type<string[]>().notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
+  token: text("token"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
 export const workspaceVariables = sqliteTable("workspace_variables", {
@@ -91,6 +157,7 @@ export const apiTokens = sqliteTable("api_tokens", {
   token: text("token").notNull().unique(),
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
   orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
   description: text("description"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   lastUsedAt: integer("last_used_at"),
@@ -142,3 +209,133 @@ export const variableSetVariables = sqliteTable("variable_set_variables", {
 }, (table) => [
   uniqueIndex("variable_set_variables_idx").on(table.variableSetId, table.key),
 ]);
+
+export const oauthClients = sqliteTable("oauth_clients", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  serviceProvider: text("service_provider").notNull().default("github"), // 'github', 'gitlab', 'bitbucket', etc.
+  apiUrl: text("api_url"),
+  httpUrl: text("http_url"),
+  key: text("key"),
+  secret: text("secret"),
+  rsaPublicKey: text("rsa_public_key"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const oauthTokens = sqliteTable("oauth_tokens", {
+  id: text("id").primaryKey(),
+  oauthClientId: text("oauth_client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),
+  serviceProviderUser: text("service_provider_user"),
+  token: text("token").notNull(),
+  hasSshKey: integer("has_ssh_key", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const policySets = sqliteTable("policy_sets", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  kind: text("kind").notNull().default("sentinel"), // 'sentinel' or 'opa'
+  global: integer("global", { mode: "boolean" }).default(false),
+  overridable: integer("overridable", { mode: "boolean" }).default(true),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const policySetWorkspaces = sqliteTable("policy_set_workspaces", {
+  id: text("id").primaryKey(),
+  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("policy_set_workspaces_idx").on(table.policySetId, table.workspaceId),
+]);
+
+export const policies = sqliteTable("policies", {
+  id: text("id").primaryKey(),
+  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"), // 'hard-mandatory', 'soft-mandatory', 'advisory'
+  query: text("query"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const policyChecks = sqliteTable("policy_checks", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"), // 'pending', 'passed', 'soft_failed', 'failed', 'overridden'
+  result: text("result", { mode: "json" }).$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const registryModules = sqliteTable("registry_modules", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  namespace: text("namespace").notNull(),
+  name: text("name").notNull(),
+  provider: text("provider").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_modules_ns_name_provider_idx").on(table.namespace, table.name, table.provider),
+]);
+
+export const registryModuleVersions = sqliteTable("registry_module_versions", {
+  id: text("id").primaryKey(),
+  moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+  version: text("version").notNull(),
+  status: text("status").notNull().default("pending"), // 'pending', 'ok', 'errored'
+  archivePath: text("archive_path"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version),
+]);
+
+export const registryProviders = sqliteTable("registry_providers", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  namespace: text("namespace").notNull(),
+  type: text("type").notNull(),
+  registryName: text("registry_name").notNull().default("private"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_providers_ns_type_idx").on(table.namespace, table.type),
+]);
+
+export const registryProviderVersions = sqliteTable("registry_provider_versions", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull().references(() => registryProviders.id, { onDelete: "cascade" }),
+  version: text("version").notNull(),
+  protocols: text("protocols", { mode: "json" }).$type<string[]>().default(["5.0"]),
+  shasumsUrl: text("shasums_url"),
+  shasumsSignatureUrl: text("shasums_signature_url"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_provider_versions_prov_ver_idx").on(table.providerId, table.version),
+]);
+
+export const registryProviderPlatforms = sqliteTable("registry_provider_platforms", {
+  id: text("id").primaryKey(),
+  versionId: text("version_id").notNull().references(() => registryProviderVersions.id, { onDelete: "cascade" }),
+  os: text("os").notNull(),
+  arch: text("arch").notNull(),
+  filename: text("filename").notNull(),
+  downloadUrl: text("download_url").notNull(),
+  shasum: text("shasum").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_provider_platforms_ver_os_arch_idx").on(table.versionId, table.os, table.arch),
+]);
+
+export const runTriggers = sqliteTable("run_triggers", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  sourceWorkspaceId: text("source_workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("run_triggers_ws_src_idx").on(table.workspaceId, table.sourceWorkspaceId),
+]);
+
+
+
+
