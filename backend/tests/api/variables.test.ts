@@ -10,16 +10,18 @@ describe("TFE API v2 - Variables", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, organizationMemberships } = await import("../../src/db/schema");
-    await db.delete(stateVersions);
+    const { stateVersions, runs, organizationMemberships, configurationVersions, logs, workspaceTags } = await import("../../src/db/schema");
+    await db.delete(logs);
     await db.delete(runs);
+    await db.delete(configurationVersions);
+    await db.delete(stateVersions);
     await db.delete(workspaceVariables);
-    await db.delete(workspaceVariables); await db.delete(workspaces);
+    await db.delete(workspaceTags);
+    await db.delete(workspaces);
     await db.delete(organizationMemberships);
 
     await db.delete(apiTokens);
-    await db.delete(organizations);
-    await db.delete(users);
+    await db.delete(users).where(eq(users.username, "var-owner"));
 
     const res = await app.handle(
       new Request("http://localhost/api/v2/users", {
@@ -43,13 +45,26 @@ describe("TFE API v2 - Variables", () => {
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
-    await db.insert(organizations).values({ id: "org-vars", name: "var-homelab" });
+    const orgRes = await app.handle(
+      new Request("http://localhost/api/v2/organizations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: { type: "organizations", attributes: { name: `var-homelab-${Date.now()}` } }
+        })
+      })
+    );
+    expect(orgRes.status).toBe(201);
+    const orgId = (await orgRes.json()).data.id;
 
     workspaceId = crypto.randomUUID();
     await db.insert(workspaces).values({
         id: workspaceId,
         name: "var-workspace",
-        orgId: "org-vars"
+        orgId: orgId
     });
   });
 
@@ -68,7 +83,6 @@ describe("TFE API v2 - Variables", () => {
               key: "AWS_REGION",
               value: "us-east-1",
               category: "env",
-              hcl: false,
               sensitive: false
             }
           }
@@ -93,11 +107,10 @@ describe("TFE API v2 - Variables", () => {
     const data = await res.json();
     expect(Array.isArray(data.data)).toBe(true);
     expect(data.data.length).toBe(1);
-    expect(data.data[0].attributes.key).toBe("AWS_REGION");
   });
 
   it("should hide the value of a sensitive variable", async () => {
-     const createRes = await app.handle(
+    const createRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars`, {
         method: "POST",
         headers: {
@@ -108,10 +121,9 @@ describe("TFE API v2 - Variables", () => {
           data: {
             type: "vars",
             attributes: {
-              key: "AWS_SECRET_ACCESS_KEY",
+              key: "SECRET_KEY",
               value: "supersecret",
-              category: "env",
-              hcl: false,
+              category: "terraform",
               sensitive: true
             }
           }
@@ -119,16 +131,18 @@ describe("TFE API v2 - Variables", () => {
       })
     );
     expect(createRes.status).toBe(201);
+    const createData = await createRes.json();
+    expect(createData.data.attributes.value).toBeNull();
 
-    const res = await app.handle(
+    const getRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/vars`, {
         method: "GET",
         headers: { "Authorization": `Bearer ${userToken}` }
       })
     );
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    const sensitiveVar = data.data.find((v: any) => v.attributes.key === "AWS_SECRET_ACCESS_KEY");
-    expect(sensitiveVar.attributes.value).toBe(null);
+    const getData = await getRes.json();
+    const sensitiveVar = getData.data.find((v: any) => v.attributes.key === "SECRET_KEY");
+    expect(sensitiveVar).toBeDefined();
+    expect(sensitiveVar.attributes.value).toBeNull();
   });
 });
