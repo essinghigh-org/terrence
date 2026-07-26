@@ -537,12 +537,12 @@
 - [x] `operation` — enum computed from isDestroy/refreshOnly/planOnly
 - [x] `source` — `tfe-api` for the supported run path
 - [x] `trigger-reason` — `manual` for the supported run path
-- [ ] `status-timestamps` — all state transitions with timestamps
-- [ ] `allow-empty-apply` — allow apply with no changes
-- [ ] `allow-config-generation` — allow config generation
-- [ ] `save-plan` — plan without becoming current run
+- [x] `status-timestamps` — all state transitions with timestamps
+- [x] `allow-empty-apply` — allow apply with no changes
+- [x] `allow-config-generation` — allow config generation
+- [x] `save-plan` — plan without becoming current run
 - [x] `permissions` object: can-apply, can-cancel, can-discard, can-force-cancel, can-force-execute, can-override-policy-check
-- [ ] `can-comment` in permissions object
+- [x] `can-comment` in permissions object
 - [x] `message`, `is-destroy`, `created-at`
 - [x] `refresh` — refresh state before plan
 - [x] `refresh-only` — refresh without changes
@@ -557,6 +557,7 @@
 - [ ] `policy-checks` relationship
 - [ ] `comments` relationship
 - [x] `cost-estimate` relationship link on run resource
+- [x] `resource-additions`, `resource-changes`, `resource-destructions` in responses
 - [ ] `input-state-version` relationship
 - [ ] `workspace-run-alerts` relationship
 
@@ -572,10 +573,11 @@
 - [x] Plan-only / speculative plan
 - [x] Destroy run
 - [x] Refresh-only run
-- [ ] Empty apply (state upgrade) — requires `allow-empty-apply` flag
-- [ ] Saved plan run — requires `save-plan` flag
-- [ ] Run with `allow-empty-apply`
-- [ ] Run with `allow-config-generation`
+- [x] Empty apply (state upgrade) — requires `allow-empty-apply` flag (schema, route, and worker support added)
+- [x] Saved plan run — requires `save-plan` flag (schema, route, and planned_and_saved status added)
+- [x] `allow-empty-apply` accepted in run creation API
+- [x] `allow-config-generation` accepted in run creation API
+- [x] `save-plan` accepted in run creation API
 - [x] Debugging mode (`TF_LOG=TRACE`)
 
 ### 9.7 Plans
@@ -585,9 +587,9 @@
 - [x] Plan states: `pending`, `running`, `finished`, `errored`, `canceled`
 - [ ] Plan states: `queued`, `unreachable`
 - [x] Plan attribute: `has-changes`
-- [ ] Plan attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports`
+- [x] Plan attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports` (parsed from plan log output)
 - [x] Plan attributes: `generated-configuration`, `execution-details` (`remote` mode)
-- [ ] Plan `status-timestamps`
+- [x] Plan `status-timestamps`
 - [x] Plan `log-read-url` / log streaming
 - [ ] Plan `state-versions` relationship
 
@@ -596,9 +598,8 @@
 - [x] `POST /runs/:run_id/actions/apply` — trigger apply
 - [x] Apply states: `pending`, `running`, `finished`, `errored`, `canceled`
 - [ ] Apply states: `queued`, `unreachable`
-- [ ] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports`
-- [ ] Apply `status-timestamps`
-- [ ] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports`
+- [x] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports` (parsed from apply log output)
+- [x] Apply `status-timestamps`
 - [x] Apply `log-read-url` / log streaming
 - [ ] Apply `state-versions` relationship
 
@@ -616,7 +617,7 @@
 - [x] `GET /organizations/:org_name/capacity` — pending/running capacity counts
 - [x] Per-workspace serial run queue (one run at a time)
 - [x] Pending runs wait for current run to complete
-- [ ] Speculative/plan-only runs do not block queue
+- [x] Speculative/plan-only runs do not block queue
 - [ ] Saved plan planning doesn't block queue
 - [x] Locked workspace: runs created but won't start
 
@@ -1150,13 +1151,13 @@
 - [x] Variables tab
 - [x] State Versions tab
 - [x] Settings tab (auto-apply, engine, version)
-- [ ] Team Access tab
-- [ ] Notification Configurations tab
-- [ ] Policy Sets tab
+- [x] Team Access tab
+- [x] Notification Configurations tab
+- [x] Policy Sets tab
+- [x] SSH Key tab
+- [x] VCS tab (connected repo info)
+- [x] Health Assessments tab
 - [ ] Run Triggers tab
-- [ ] SSH Key tab
-- [ ] VCS tab (connected repo info)
-- [ ] Health Assessments tab
 
 ### 27.3 TFE UI Mirroring
 - [x] Run timeline/progress indicator (state visualization)
@@ -1271,7 +1272,7 @@
 - [x] Database configuration (SQLite path, connection params)
 - [x] Storage configuration (local path, future S3)
 - [x] Instance metadata (version, build info)
-- [ ] `LOG_LEVEL` — logging verbosity (default `info`, not yet implemented)
+- [x] `LOG_LEVEL` — logging verbosity (default `info`, supported levels: error/warn/info/debug)
 
 ### 29.3 Database
 - [x] SQLite support (Drizzle ORM)

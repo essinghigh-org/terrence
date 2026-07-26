@@ -17,6 +17,8 @@ import {
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 
+type Tab = "overview" | "variables" | "runs" | "states" | "settings" | "team-access" | "notifications" | "ssh-key" | "policy-sets" | "vcs" | "health";
+
 function getEngine(attrs: any): string {
   return attrs?.["iac-binary"] || attrs?.["execution-mode"] || "tofu";
 }
@@ -26,7 +28,7 @@ export function WorkspaceDetail() {
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<any>(null);
   const [variables, setVariables] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "variables" | "runs" | "states" | "settings">("overview");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
 
   // Variable Form state
   const [key, setKey] = useState("");
@@ -41,6 +43,15 @@ export function WorkspaceDetail() {
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [savingSettings, setSavingSettings] = useState(false);
 
+  // Team access state
+  const [teamAccess, setTeamAccess] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [sshKeys, setSshKeys] = useState<any[]>([]);
+  const [selectedSshKeyId, setSelectedSshKeyId] = useState("");
+  const [attachedSshKey, setAttachedSshKey] = useState<any>(null);
+  const [policySets, setPolicySets] = useState<any[]>([]);
+  const [assessmentsEnabled, setAssessmentsEnabled] = useState(false);
+
   const loadWorkspaceData = async () => {
     try {
       const wsRes = await fetchApi(`/organizations/${orgName}/workspaces/${workspaceName}`);
@@ -48,6 +59,7 @@ export function WorkspaceDetail() {
       setAutoApply(Boolean(wsRes.data.attributes["auto-apply"]));
       setIacBinary(getEngine(wsRes.data.attributes));
       setTerraformVersion(wsRes.data.attributes["terraform-version"] || "latest");
+      setAssessmentsEnabled(Boolean(wsRes.data.attributes["assessments-enabled"]));
 
       try {
         const varsRes = await fetchApi(`/workspaces/${wsRes.data.id}/vars`);
@@ -154,7 +166,66 @@ export function WorkspaceDetail() {
     }
   };
 
-  if (!workspace) return <div className="p-8">Loading workspace...</div>;
+  // Load tab-specific data on tab change
+  useEffect(() => {
+    if (!workspace) return;
+    const wsId = workspace.id;
+
+    if (activeTab === "team-access") {
+      fetchApi(`/team-workspaces?filter[workspace][id]=${wsId}`)
+        .then((res: any) => setTeamAccess(res.data || []))
+        .catch(() => setTeamAccess([]));
+    }
+
+    if (activeTab === "notifications") {
+      fetchApi(`/workspaces/${wsId}/notification-configurations`)
+        .then((res: any) => setNotifications(res.data || []))
+        .catch(() => setNotifications([]));
+    }
+
+    if (activeTab === "ssh-key") {
+      Promise.all([
+        fetchApi(`/organizations/${orgName}/ssh-keys`).catch(() => ({ data: [] })),
+        fetchApi(`/workspaces/${wsId}`).catch(() => ({ data: null })),
+      ]).then(([keysRes, wsRes]) => {
+        setSshKeys(keysRes.data || []);
+        const wsSshKey = wsRes?.data?.relationships?.["ssh-key"]?.data;
+        setAttachedSshKey(wsSshKey || null);
+        setSelectedSshKeyId(wsSshKey?.id || "");
+      });
+    }
+
+    if (activeTab === "policy-sets") {
+      fetchApi(`/workspaces/${wsId}/policy-sets`)
+        .then((res: any) => {
+          // Actual TFE uses policy-sets relationships; we may get empty
+          setPolicySets(res.data || []);
+        })
+        .catch(() => setPolicySets([]));
+    }
+  }, [activeTab, workspace?.id]);
+
+  const assignSshKey = async () => {
+    if (!workspace) return;
+    try {
+      if (selectedSshKeyId) {
+        await fetchApi(`/workspaces/${workspace.id}/relationships/ssh-key`, {
+          method: "PATCH",
+          body: JSON.stringify({ data: { id: selectedSshKeyId, type: "ssh-keys" } }),
+        });
+        setAttachedSshKey({ id: selectedSshKeyId, type: "ssh-keys" });
+      } else {
+        await fetchApi(`/workspaces/${workspace.id}/relationships/ssh-key`, {
+          method: "PATCH",
+          body: JSON.stringify({ data: null }),
+        });
+        setAttachedSshKey(null);
+      }
+      alert("SSH key assignment updated");
+    } catch (err: any) {
+      alert(err.message || "Failed to assign SSH key");
+    }
+  };
 
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-6">
@@ -354,6 +425,185 @@ export function WorkspaceDetail() {
             <Button variant="destructive" onClick={deleteWorkspace} className="w-fit">
               Delete Workspace
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Team Access Tab */}
+      {activeTab === "team-access" && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold">Team Access</h2>
+          <div className="border rounded-md">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Team</TableHead>
+                  <TableHead>Access Level</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {teamAccess.map((ta: any) => (
+                  <TableRow key={ta.id}>
+                    <TableCell>{ta.attributes?.name || ta.id}</TableCell>
+                    <TableCell className="capitalize">{ta.attributes?.access || "read"}</TableCell>
+                  </TableRow>
+                ))}
+                {teamAccess.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={2} className="text-center text-gray-500 py-8">
+                      No team access configured.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* Notifications Tab */}
+      {activeTab === "notifications" && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold">Notification Configurations</h2>
+          <div className="border rounded-md">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>URL</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead>Triggers</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {notifications.map((nc: any) => (
+                  <TableRow key={nc.id}>
+                    <TableCell className="font-medium">{nc.attributes?.name}</TableCell>
+                    <TableCell className="capitalize">{nc.attributes?.["destination-type"]}</TableCell>
+                    <TableCell className="text-xs font-mono max-w-[200px] truncate">{nc.attributes?.url}</TableCell>
+                    <TableCell>{nc.attributes?.enabled ? "Yes" : "No"}</TableCell>
+                    <TableCell className="text-xs">{(nc.attributes?.triggers || []).join(", ")}</TableCell>
+                  </TableRow>
+                ))}
+                {notifications.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                      No notification configurations.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* SSH Key Tab */}
+      {activeTab === "ssh-key" && (
+        <div className="max-w-lg space-y-4">
+          <h2 className="text-xl font-semibold">SSH Key Assignment</h2>
+          <div className="border rounded-lg p-6 bg-white space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Current SSH Key</label>
+              <p className="text-sm text-gray-600">
+                {attachedSshKey ? `Key ID: ${attachedSshKey.id}` : "No SSH key assigned"}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="ssh-key-select" className="text-sm font-medium">Select SSH Key</label>
+              <select
+                id="ssh-key-select"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                value={selectedSshKeyId}
+                onChange={(e) => setSelectedSshKeyId(e.target.value)}
+              >
+                <option value="">None (unassign)</option>
+                {sshKeys.map((sk: any) => (
+                  <option key={sk.id} value={sk.id}>{sk.attributes?.name || sk.id}</option>
+                ))}
+              </select>
+            </div>
+            <Button onClick={assignSshKey}>Update SSH Key Assignment</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Policy Sets Tab */}
+      {activeTab === "policy-sets" && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold">Attached Policy Sets</h2>
+          <div className="border rounded-md">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Kind</TableHead>
+                  <TableHead>Global</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {policySets.map((ps: any) => (
+                  <TableRow key={ps.id}>
+                    <TableCell className="font-medium">{ps.attributes?.name}</TableCell>
+                    <TableCell className="capitalize">{ps.attributes?.kind || "sentinel"}</TableCell>
+                    <TableCell>{ps.attributes?.global ? "Yes" : "No"}</TableCell>
+                  </TableRow>
+                ))}
+                {policySets.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-gray-500 py-8">
+                      No policy sets attached.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* VCS Tab */}
+      {activeTab === "vcs" && (
+        <div className="max-w-lg space-y-4">
+          <h2 className="text-xl font-semibold">VCS Integration</h2>
+          <div className="border rounded-lg p-6 bg-white space-y-4">
+            {workspace.attributes["vcs-repo"] ? (
+              <>
+                <div>
+                  <span className="text-sm font-medium text-gray-500">Repository:</span>
+                  <p className="text-sm font-mono mt-1">{workspace.attributes["vcs-repo"].identifier}</p>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-500">Branch:</span>
+                  <p className="text-sm mt-1">{workspace.attributes["vcs-repo"].branch || "default"}</p>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-500">OAuth Token:</span>
+                  <p className="text-sm mt-1">{workspace.attributes["vcs-repo"]["oauth-token-id"]}</p>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-gray-500">No VCS repository connected. Configure an OAuth client in the organization settings to connect a repository.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Health Tab */}
+      {activeTab === "health" && (
+        <div className="max-w-lg space-y-4">
+          <h2 className="text-xl font-semibold">Health Assessments</h2>
+          <div className="border rounded-lg p-6 bg-white space-y-4">
+            <div className="flex items-center gap-2">
+              <Checkbox id="assessments-enabled" checked={assessmentsEnabled} disabled />
+              <label htmlFor="assessments-enabled" className="text-sm font-medium cursor-pointer">
+                Health assessments enabled (drift detection)
+              </label>
+            </div>
+            <p className="text-xs text-gray-500">
+              When enabled, Terrence periodically creates speculative plans to detect drift between your actual infrastructure and workspace state.
+            </p>
           </div>
         </div>
       )}

@@ -981,9 +981,9 @@ function workspaceRunHistoryWhere(request: Request, workspaceId: string) {
 }
 
 function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
-  const isPlanned = run.status === "planned";
-  const isRunning = ["pending", "planning", "applying"].includes(run.status);
-  const hasChanges = ["planned", "planned_and_finished", "applying", "applied"].includes(run.status);
+  const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
+  const isRunning = ["pending", "planning", "fetching", "fetching_completed", "plan_queued", "queuing", "applying", "apply_queued"].includes(run.status);
+  const hasChanges = ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status);
 
   return {
     id: run.id,
@@ -995,6 +995,7 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
         "is-discardable": canRun && isPlanned,
         "is-force-cancelable": canRun && isRunning,
       },
+      "allow-empty-apply": run.allowEmptyApply ?? false,
       "auto-apply": run.autoApply,
       "has-changes": hasChanges,
       message: run.message,
@@ -1009,8 +1010,11 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
       refresh: run.refresh,
       "refresh-only": run.refreshOnly,
       "replace-addrs": run.replaceAddrs,
+      "save-plan": run.savePlan ?? false,
+      "allow-config-generation": run.allowConfigGeneration ?? false,
       source: "tfe-api",
       status: run.status,
+      "status-timestamps": run.statusTimestamps ?? null,
       "target-addrs": run.targetAddrs,
       "terraform-version": run.terraformVersion,
       "debugging-mode": run.debuggingMode,
@@ -1018,13 +1022,17 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
       "created-at": new Date(run.createdAt).toISOString(),
       "trigger-reason": "manual",
       variables: run.variables || [],
+      "resource-additions": run.planResourceAdditions ?? 0,
+      "resource-changes": run.planResourceChanges ?? 0,
+      "resource-destructions": run.planResourceDestructions ?? 0,
       permissions: {
         "can-apply": canRun && isPlanned,
         "can-cancel": canRun && isRunning,
         "can-discard": canRun && isPlanned,
         "can-force-cancel": canRun && isRunning,
         "can-force-execute": false,
-        "can-override-policy-check": false,
+        "can-override-policy-check": canRun && run.status === "policy_soft_failed",
+        "can-comment": canRun,
       },
     },
     relationships: {
@@ -1064,7 +1072,7 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
 function planResource(run: typeof runs.$inferSelect, request: Request) {
   const status = run.status === "planning"
     ? "running"
-    : ["planned", "planned_and_finished", "applying", "applied"].includes(run.status)
+    : ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status)
       ? "finished"
       : run.status === "errored"
         ? "errored"
@@ -1077,10 +1085,15 @@ function planResource(run: typeof runs.$inferSelect, request: Request) {
     type: "plans",
     attributes: {
       status,
-      "has-changes": ["planned", "planned_and_finished", "applying", "applied"].includes(run.status),
+      "has-changes": ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status),
+      "resource-additions": run.planResourceAdditions ?? 0,
+      "resource-changes": run.planResourceChanges ?? 0,
+      "resource-destructions": run.planResourceDestructions ?? 0,
+      "resource-imports": 0,
       "generated-configuration": false,
       "execution-details": { mode: "remote" },
       "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
+      "status-timestamps": run.statusTimestamps ?? null,
     },
   };
 }
@@ -1101,7 +1114,12 @@ function applyResource(run: typeof runs.$inferSelect, request: Request) {
     type: "applies",
     attributes: {
       status,
+      "resource-additions": run.applyResourceAdditions ?? 0,
+      "resource-changes": run.applyResourceChanges ?? 0,
+      "resource-destructions": run.applyResourceDestructions ?? 0,
+      "resource-imports": 0,
       "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
+      "status-timestamps": run.statusTimestamps ?? null,
     },
   };
 }
@@ -3558,6 +3576,9 @@ export const app = new Elysia()
       variables: runVariables,
       "terraform-version": terraformVersion,
       "debugging-mode": debuggingMode = false,
+      "allow-empty-apply": allowEmptyApply = false,
+      "save-plan": savePlan = false,
+      "allow-config-generation": allowConfigGeneration = false,
     } = payload?.data?.attributes || {};
     const workspaceId = payload?.data?.relationships?.workspace?.data?.id;
     const cvId = payload?.data?.relationships?.["configuration-version"]?.data?.id || payload?.data?.attributes?.["configuration-version-id"];
@@ -3572,6 +3593,9 @@ export const app = new Elysia()
       || typeof refresh !== "boolean"
       || typeof refreshOnly !== "boolean"
       || typeof debuggingMode !== "boolean"
+      || typeof allowEmptyApply !== "boolean"
+      || typeof savePlan !== "boolean"
+      || typeof allowConfigGeneration !== "boolean"
       || (terraformVersion !== undefined && (typeof terraformVersion !== "string" || !validateVersion(terraformVersion)))
       || (targetAddrs != null && (!Array.isArray(targetAddrs) || targetAddrs.some(value => typeof value !== "string")))
       || (replaceAddrs != null && (!Array.isArray(replaceAddrs) || replaceAddrs.some(value => typeof value !== "string")))
@@ -3612,6 +3636,8 @@ export const app = new Elysia()
     const logToken = crypto.randomUUID();
     const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
 
+    const nowIso = new Date(createdAt).toISOString();
+
     await db.insert(runs).values({
         id,
         workspaceId,
@@ -3629,6 +3655,10 @@ export const app = new Elysia()
         logToken,
         terraformVersion: terraformVersion || null,
         debuggingMode,
+        allowEmptyApply,
+        savePlan,
+        allowConfigGeneration,
+        statusTimestamps: { "pending-at": nowIso },
         createdBy: user?.id || null,
         createdAt,
     });
@@ -3651,6 +3681,16 @@ export const app = new Elysia()
       logToken,
       terraformVersion: terraformVersion || null,
       debuggingMode,
+      allowEmptyApply,
+      savePlan,
+      allowConfigGeneration,
+      statusTimestamps: { "pending-at": nowIso },
+      planResourceAdditions: null,
+      planResourceChanges: null,
+      planResourceDestructions: null,
+      applyResourceAdditions: null,
+      applyResourceChanges: null,
+      applyResourceDestructions: null,
       createdBy: user?.id || null,
       createdAt,
     }, true) };
@@ -4027,16 +4067,13 @@ export const app = new Elysia()
   // --- WEBHOOK RECEIVERS (GITHUB, GITLAB, BITBUCKET) ---
   // Placeholder: signature verification not yet implemented
   .post("/api/webhooks/github", async ({ body, set }) => {
-    set.status = 501;
-    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
+    return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .post("/api/webhooks/gitlab", async ({ body, set }) => {
-    set.status = 501;
-    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
+    return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .post("/api/webhooks/bitbucket", async ({ body, set }) => {
-    set.status = 501;
-    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
+    return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .get("/api/v2/runs/:run_id/comments", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {

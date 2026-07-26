@@ -30,26 +30,33 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { fetchApi } from "@/lib/api";
 
+function buildNextPageUrl(current: string, nextPage: number): string {
+  const qi = current.indexOf("?");
+  const base = qi >= 0 ? current.substring(0, qi) : current;
+  const search = new URLSearchParams(qi >= 0 ? current.substring(qi + 1) : "");
+  search.set("page[number]", String(nextPage));
+  return base + "?" + search.toString();
+}
+
 async function fetchAllPages(path: string): Promise<any[]> {
-  let results: any[] = [];
+  const results: any[] = [];
   let url: string | null = path;
-  let currentPage = 1;
+  let page = 1;
   while (url) {
     const res = await fetchApi(url);
     if (res?.data && Array.isArray(res.data)) {
-      results = results.concat(res.data);
+      for (const item of res.data) results.push(item);
     }
-    const nextUrl = res?.links?.next || null;
-    const metaNext = res?.meta?.pagination?.["next-page"];
-    const totalPages = res?.meta?.pagination?.["total-pages"];
-    if (nextUrl) {
-      url = nextUrl;
-      currentPage++;
-    } else if (metaNext && typeof metaNext === "number" && metaNext > currentPage && (totalPages == null || metaNext <= totalPages)) {
-      const parsed = new URL(url ?? path, "http://localhost");
-      parsed.searchParams.set("page[number]", String(metaNext));
-      url = `${parsed.pathname}${parsed.search}`;
-      currentPage = metaNext;
+    const nextLink = res?.links?.next || null;
+    const nextPage = res?.meta?.pagination?.["next-page"] as number | undefined;
+    const total = res?.meta?.pagination?.["total-pages"] as number | undefined;
+    if (nextLink) {
+      url = nextLink;
+      page++;
+    } else if (nextPage && typeof nextPage === "number" && nextPage > page && (total == null || nextPage <= total)) {
+      url = buildNextPageUrl(url, nextPage);
+      page = nextPage;
+      page = nextPage;
     } else {
       url = null;
     }

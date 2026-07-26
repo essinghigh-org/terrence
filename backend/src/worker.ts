@@ -15,7 +15,7 @@ import {
   policies,
   policyChecks,
 } from "./db/schema";
-import { eq, desc, asc, and, inArray, notInArray, or } from "drizzle-orm";
+import { eq, desc, asc, and, inArray, notInArray, or, sql } from "drizzle-orm";
 import { spawn } from "bun";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -33,6 +33,34 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       createdAt: Date.now(),
     });
   } catch {}
+}
+
+async function updateRunStatus(runId: string, status: string, extra?: Record<string, any>) {
+  const now = new Date().toISOString();
+  const statusKey = status.replace(/_/g, "-") + "-at";
+  try {
+    const existing = await db.query.runs.findFirst({
+      where: eq(runs.id, runId),
+      columns: { statusTimestamps: true },
+    });
+    const timestamps = { ...(existing?.statusTimestamps || {}), [statusKey]: now };
+    await db.update(runs).set({ status, statusTimestamps: timestamps, ...extra }).where(eq(runs.id, runId));
+  } catch (err) {
+    console.error(`[terrence] Failed to update run ${runId} status to ${status}:`, err);
+    await db.update(runs).set({ status, ...extra }).where(eq(runs.id, runId));
+  }
+}
+
+/** Parse Terraform plan output to extract resource change counts (1 to add, 0 to change, 1 to destroy) */
+function parseResourceCounts(output: string): { additions: number; changes: number; destructions: number } {
+  const additions = output.match(/Plan:\s+(\d+)\s+to add/);
+  const changes = output.match(/(\d+)\s+to change/);
+  const destructions = output.match(/(\d+)\s+to destroy/);
+  return {
+    additions: additions ? parseInt(additions[1], 10) : 0,
+    changes: changes ? parseInt(changes[1], 10) : 0,
+    destructions: destructions ? parseInt(destructions[1], 10) : 0,
+  };
 }
 
 async function streamLog(
@@ -199,7 +227,7 @@ export async function executeRun(runId: string) {
     where: eq(organizations.id, workspace.orgId),
   });
 
-  await db.update(runs).set({ status: "planning" }).where(eq(runs.id, runId));
+  await updateRunStatus(runId, "planning");
 
   const workDir = join(tmpdir(), "terrence", "runs", runId);
   let keepPlan = false;
@@ -327,8 +355,24 @@ export async function executeRun(runId: string) {
       throw new Error(`Unable to resolve CLI binary '${requestedTool}' or no Terraform configuration (.tf) files were found in workspace.`);
     }
 
-    const plannedStatus = run.planOnly || run.refreshOnly ? "planned_and_finished" : "planned";
-    await db.update(runs).set({ status: plannedStatus }).where(eq(runs.id, runId));
+    const plannedStatus = run.planOnly || run.refreshOnly
+      ? "planned_and_finished"
+      : run.savePlan
+        ? "planned_and_saved"
+        : "planned";
+
+    // Parse resource counts from plan log output
+    const planLog = await db.query.logs.findFirst({
+      where: and(eq(logs.runId, runId), eq(logs.phase, "plan")),
+      orderBy: [desc(logs.createdAt)],
+    });
+    const resourceCounts = planLog ? parseResourceCounts(planLog.outputText) : { additions: 0, changes: 0, destructions: 0 };
+
+    await updateRunStatus(runId, plannedStatus, {
+      planResourceAdditions: resourceCounts.additions,
+      planResourceChanges: resourceCounts.changes,
+      planResourceDestructions: resourceCounts.destructions,
+    });
     await writeLog(runId, "plan", `[terrence] Run status updated to '${plannedStatus}'.`);
 
     if (run.planOnly || run.refreshOnly) {
@@ -338,14 +382,14 @@ export async function executeRun(runId: string) {
       const policyResult = await runPolicyChecks(runId, workspace.id, workspace.orgId, executionDir);
       if (!policyResult.proceed) {
         if (policyResult.hardFailed) {
-          await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
+          await updateRunStatus(runId, "errored");
           await writeLog(runId, "plan", `[terrence] Run blocked by hard-mandatory policy failure.`);
         } else if (policyResult.softFailed) {
-          await db.update(runs).set({ status: "policy_soft_failed" }).where(eq(runs.id, runId));
+          await updateRunStatus(runId, "policy_soft_failed");
           await writeLog(runId, "plan", `[terrence] Run requires policy override before apply.`);
         }
         keepPlan = true;
-      } else if (workspace.autoApply || run.autoApply) {
+      } else if (workspace.autoApply || run.autoApply || run.allowEmptyApply) {
         await writeLog(runId, "plan", `[terrence] All policies passed. Proceeding to apply.`);
         await executeApply(runId);
       } else {
@@ -355,7 +399,7 @@ export async function executeRun(runId: string) {
   } catch (error: any) {
     console.error(`Run ${runId} planning failed`, error);
     await writeLog(runId, "plan", `[terrence ERROR] ${error.message || String(error)}`);
-    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
+    await updateRunStatus(runId, "errored");
   } finally {
     if (!keepPlan) {
       try {
@@ -385,7 +429,7 @@ export async function executeApply(runId: string) {
     where: eq(organizations.id, workspace.orgId),
   });
 
-  await db.update(runs).set({ status: "applying" }).where(eq(runs.id, runId));
+  await updateRunStatus(runId, "applying");
   const workDir = join(tmpdir(), "terrence", "runs", runId);
 
   let applySuccess = false;
@@ -458,12 +502,24 @@ export async function executeApply(runId: string) {
     }
 
     applySuccess = true;
-    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, runId));
+
+    // Parse resource counts from apply log output
+    const applyLog = await db.query.logs.findFirst({
+      where: and(eq(logs.runId, runId), eq(logs.phase, "apply")),
+      orderBy: [desc(logs.createdAt)],
+    });
+    const applyResourceCounts = applyLog ? parseResourceCounts(applyLog.outputText) : { additions: 0, changes: 0, destructions: 0 };
+
+    await updateRunStatus(runId, "applied", {
+      applyResourceAdditions: applyResourceCounts.additions,
+      applyResourceChanges: applyResourceCounts.changes,
+      applyResourceDestructions: applyResourceCounts.destructions,
+    });
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
   } catch (error: any) {
     console.error(`Run ${runId} apply failed`, error);
     await writeLog(runId, "apply", `[terrence ERROR] ${error.message || String(error)}`);
-    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
+    await updateRunStatus(runId, "errored");
   } finally {
     if (applySuccess) {
       try {
@@ -662,21 +718,28 @@ export async function pollWorkerQueue(): Promise<string[]> {
     if (!workspace || workspace.locked) continue;
 
     // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
-    // and the run is still pending
+    // and the run is still pending.
+    // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
+    const blockerStatuses = run.planOnly
+      ? []  // speculative runs don't block anything
+      : ["planning", "applying"];
+
     const claimed = await db.update(runs)
       .set({ status: "planning" })
       .where(and(
         eq(runs.id, run.id),
         eq(runs.status, "pending"),
-        notInArray(
-          runs.workspaceId,
-          db.select({ workspaceId: runs.workspaceId }).from(runs).where(
-            and(
-              eq(runs.workspaceId, run.workspaceId),
-              inArray(runs.status, ["planning", "applying"]),
-            ),
-          ),
-        ),
+        blockerStatuses.length > 0
+          ? notInArray(
+              runs.workspaceId,
+              db.select({ workspaceId: runs.workspaceId }).from(runs).where(
+                and(
+                  eq(runs.workspaceId, run.workspaceId),
+                  inArray(runs.status, blockerStatuses),
+                ),
+              ),
+            )
+          : sql`1=1`,
       ))
       .returning({ id: runs.id });
 
