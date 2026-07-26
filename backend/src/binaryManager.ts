@@ -8,7 +8,67 @@ const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
 export function validateVersion(version: string): boolean {
   if (!version) return false;
   if (version === "latest") return true;
-  return /^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version);
+  // Allow exact semver, constraint operators, or comma-separated constraints
+  if (/^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version)) return true;
+  if (/^~> [0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version)) return true;
+  if (/^>= [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^<= [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^> [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^< [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  // Comma-separated: ">= 1.2, < 2.0"
+  if (/^[><=!~>]+ [0-9.]+(, [><=!~>]+ [0-9.]+)*$/.test(version)) return true;
+  return false;
+}
+
+function parseSemver(version: string): number[] {
+  return version.replace(/^v/, "").split(".").map(Number);
+}
+
+function compareSemver(a: string, b: string): number {
+  const aParts = parseSemver(a);
+  const bParts = parseSemver(b);
+  for (let i = 0; i < 3; i++) {
+    const aVal = aParts[i] || 0;
+    const bVal = bParts[i] || 0;
+    if (aVal !== bVal) return aVal - bVal;
+  }
+  return 0;
+}
+
+function matchesConstraint(version: string, constraint: string): boolean {
+  const trimmed = constraint.trim();
+  if (trimmed.startsWith("~> ")) {
+    // Pessimistic: >= X.Y.Z, < X.(Y+1).0
+    const target = trimmed.slice(3).replace(/^v/, "");
+    const parts = target.split(".").map(Number);
+    const [major, minor] = parts;
+    const upper = `${major}.${minor + 1}.0`;
+    return compareSemver(version, target) >= 0 && compareSemver(version, upper) < 0;
+  }
+  if (trimmed.startsWith(">= ")) {
+    const target = trimmed.slice(3).replace(/^v/, "");
+    return compareSemver(version, target) >= 0;
+  }
+  if (trimmed.startsWith("<= ")) {
+    const target = trimmed.slice(3).replace(/^v/, "");
+    return compareSemver(version, target) <= 0;
+  }
+  if (trimmed.startsWith("> ")) {
+    const target = trimmed.slice(2).replace(/^v/, "");
+    return compareSemver(version, target) > 0;
+  }
+  if (trimmed.startsWith("< ")) {
+    const target = trimmed.slice(2).replace(/^v/, "");
+    return compareSemver(version, target) < 0;
+  }
+  // Exact
+  return compareSemver(version, trimmed.replace(/^v/, "")) === 0;
+}
+
+function matchesConstraints(version: string, constraintExpr: string): boolean {
+  if (constraintExpr === "latest") return true;
+  const constraints = constraintExpr.split(",").map(s => s.trim());
+  return constraints.every(c => matchesConstraint(version, c));
 }
 
 export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string> {
@@ -39,6 +99,63 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
     console.warn(`[terrence] Could not resolve latest version for ${tool}, using default:`, err);
     return tool === "tofu" ? "1.7.2" : "1.9.3";
   }
+}
+
+async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
+  try {
+    let versions: string[] = [];
+    if (tool === "tofu") {
+      const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases?per_page=100", {
+        headers: { "User-Agent": "terrence-iac-manager" },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data = await res.json() as any[];
+        versions = data
+          .map(r => r.tag_name?.replace(/^v/, ""))
+          .filter((v): v is string => v && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+      }
+    } else {
+      const res = await fetch("https://releases.hashicorp.com/terraform/index.json", {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data = await res.json() as any;
+        versions = Object.keys(data.versions || {})
+          .filter(v => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+      }
+    }
+    versions.sort(compareSemver);
+    return versions;
+  } catch {
+    return [];
+  }
+}
+
+export async function resolveVersionConstraint(tool: "tofu" | "terraform", constraintExpr: string): Promise<string> {
+  if (constraintExpr === "latest") {
+    return resolveLatestVersion(tool);
+  }
+  // Check if it's already an exact version
+  if (/^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(constraintExpr.replace(/^v/, ""))) {
+    return constraintExpr.replace(/^v/, "");
+  }
+  // Fetch available versions and find best match
+  const available = await fetchAvailableVersions(tool);
+  if (available.length === 0) {
+    // Fall back to latest
+    console.warn(`[terrence] Could not fetch available versions for ${tool}, falling back to latest`);
+    return resolveLatestVersion(tool);
+  }
+  // Find the highest version matching the constraint (iterate descending)
+  for (let i = available.length - 1; i >= 0; i--) {
+    if (matchesConstraints(available[i], constraintExpr)) {
+      return available[i];
+    }
+  }
+  // No match found — fall back to latest
+  console.warn(`[terrence] No version matching "${constraintExpr}" found for ${tool}, falling back to latest`);
+  return resolveLatestVersion(tool);
 }
 
 async function calculateSha256(buffer: ArrayBuffer): Promise<string> {
@@ -97,10 +214,8 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     return null;
   }
 
-  if (version === "latest") {
-    version = await resolveLatestVersion(tool);
-  }
-
+  // Resolve constraints to exact versions
+  version = await resolveVersionConstraint(tool, version);
   version = version.replace(/^v/, "");
 
   const targetDir = join(BINARY_BASE_DIR, tool, version);

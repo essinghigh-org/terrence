@@ -36,6 +36,28 @@ const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const PUBLIC_URL = process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL) : null;
 const serveFrontend = () => Bun.file(FRONTEND_INDEX);
 
+async function auditLog(
+  action: string,
+  resourceType: string,
+  resourceId: string | null,
+  userId: string | null,
+  orgId: string | null,
+  details?: Record<string, any>,
+) {
+  try {
+    await db.insert(auditLogs).values({
+      id: crypto.randomUUID(),
+      orgId,
+      userId,
+      action,
+      resourceType,
+      resourceId,
+      details: details ?? null,
+      createdAt: Date.now(),
+    });
+  } catch {}
+}
+
 async function checkOrgPermission(
   userId: string | undefined,
   orgId: string,
@@ -1327,6 +1349,7 @@ export const app = new Elysia()
 
     try {
       await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin });
+      await auditLog("create", "users", id, null, null, { username });
       set.status = 201;
       return {
         data: {
@@ -2522,6 +2545,7 @@ export const app = new Elysia()
       return created;
     });
 
+    await auditLog("create", "workspaces", workspace.id, user?.id || null, org.id, { name });
     set.status = 201;
     return { data: await workspaceResource(workspace, org.defaultIacBinary, Boolean(user)) };
   }, { isAuth: true })
@@ -3717,6 +3741,8 @@ export const app = new Elysia()
       .set({ status: "applying" })
       .where(eq(runs.id, run_id));
 
+    await auditLog("apply", "runs", run_id, user?.id || null, null, { fromStatus: before.status });
+
     // If this was a policy override, record the override action on all soft-failed policy checks
     if (before.status === "policy_soft_failed") {
       const failedChecks = await db.query.policyChecks.findMany({
@@ -3849,6 +3875,55 @@ export const app = new Elysia()
     }
     await db.delete(agentPools).where(eq(agentPools.id, pool_id));
     set.status = 204;
+  }, { isAuth: true })
+
+  // --- AGENT POOL TOKENS API ---
+  .get("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params: { pool_id }, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tokenList = await db.query.agentPoolTokens.findMany({ where: eq(agentPoolTokens.agentPoolId, pool_id) });
+    const data = tokenList.map(t => ({
+      id: t.id,
+      type: "authentication-tokens",
+      attributes: {
+        description: t.description,
+        "created-at": new Date(t.createdAt).toISOString(),
+        "last-used-at": t.lastUsedAt ? new Date(t.lastUsedAt).toISOString() : null,
+      },
+    }));
+    return { data };
+  }, { isAuth: true })
+
+  .post("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params: { pool_id }, body, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const description = attrs.description ?? `Agent token for ${pool.name}`;
+    const rawToken = `agent-${crypto.randomUUID().replace(/-/g, "")}`;
+    const tokenId = `atok-${crypto.randomUUID()}`;
+    await db.insert(agentPoolTokens).values({
+      id: tokenId,
+      agentPoolId: pool_id,
+      token: createHash("sha256").update(rawToken).digest("hex"),
+      description,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id: tokenId,
+        type: "authentication-tokens",
+        attributes: {
+          token: rawToken,
+          description,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
   }, { isAuth: true })
 
   // --- POLICY SET PARAMETERS & EXCLUSIONS API ---
@@ -5313,6 +5388,45 @@ export const app = new Elysia()
     return { status: "verification_sent" };
   }, { isAuth: true })
 
+  // --- TEAM NOTIFICATION CONFIGURATIONS API ---
+  .post("/api/v2/teams/:team_id/notification-configurations", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes;
+    if (!attributes || !attributes.url || !attributes["destination-type"]) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL and destination-type are required" }] };
+    }
+    const id = `nc-${crypto.randomUUID()}`;
+    const newNc = {
+      id,
+      workspaceId: "", // teams share notification configs, no specific workspace
+      name: attributes.name ?? `Team notification for ${team.name}`,
+      destinationType: attributes["destination-type"],
+      url: attributes.url,
+      triggers: Array.isArray(attributes.triggers) ? attributes.triggers : ["team:change_request"],
+      enabled: attributes.enabled ?? true,
+      token: attributes.token ?? null,
+      createdAt: Date.now(),
+    };
+    await db.insert(notificationConfigurations).values(newNc);
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "notification-configurations",
+        attributes: {
+          name: newNc.name,
+          "destination-type": newNc.destinationType,
+          url: newNc.url,
+          triggers: newNc.triggers,
+          enabled: newNc.enabled,
+        },
+      },
+    };
+  }, { isAuth: true })
+
   // --- OAUTH CLIENTS & TOKENS API ---
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -6324,6 +6438,32 @@ export const app = new Elysia()
     };
   }, { isAuth: true })
 
+  .patch("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof organizations.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (attributes.email !== undefined) updates.email = attributes.email;
+    if (Object.keys(updates).length > 0) {
+      await db.update(organizations).set(updates).where(eq(organizations.id, org.id));
+    }
+    const updated = (await db.query.organizations.findFirst({ where: eq(organizations.id, org.id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "organizations",
+        attributes: {
+          name: updated.name,
+          email: updated.email,
+        },
+      },
+    };
+  }, { isAuth: true })
+
   .delete("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, user, set }) => {
     if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -6364,6 +6504,34 @@ export const app = new Elysia()
           name: ws.name,
           "terraform-version": ws.terraformVersion,
           locked: ws.locked,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/workspaces/:ws_id", async ({ params: { ws_id }, body, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) });
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attributes = (body as any)?.data?.attributes ?? {};
+    const updates: Partial<typeof workspaces.$inferInsert> = {};
+    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["terraform-version"] === "string") updates.terraformVersion = attributes["terraform-version"];
+    if (typeof attributes.locked === "boolean") updates.locked = attributes.locked;
+    if (Object.keys(updates).length > 0) {
+      await db.update(workspaces).set(updates).where(eq(workspaces.id, ws_id));
+    }
+    const updated = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "workspaces",
+        attributes: {
+          name: updated.name,
+          "terraform-version": updated.terraformVersion,
+          locked: updated.locked,
         },
       },
     };
@@ -6446,6 +6614,48 @@ export const app = new Elysia()
     };
   }, { isAuth: true })
 
+  // --- ADMIN SETTINGS API ---
+  .get("/api/v2/admin/settings", async ({ user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return {
+      data: {
+        id: "settings",
+        type: "settings",
+        attributes: {
+          "cost-estimation-enabled": false,
+          "sentinel-enabled": true,
+          "opa-enabled": true,
+          "agent-enabled": false,
+          "module-registry-enabled": true,
+          "provider-registry-enabled": true,
+          "max-run-timeout": 43200,
+          "default-terraform-version": "latest",
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .patch("/api/v2/admin/settings", async ({ user, body, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    // Stub: accept and acknowledge settings update
+    return {
+      data: {
+        id: "settings",
+        type: "settings",
+        attributes: {
+          "cost-estimation-enabled": (body as any)?.data?.attributes?.["cost-estimation-enabled"] ?? false,
+          "sentinel-enabled": true,
+          "opa-enabled": true,
+          "agent-enabled": false,
+          "module-registry-enabled": true,
+          "provider-registry-enabled": true,
+          "max-run-timeout": 43200,
+          "default-terraform-version": "latest",
+        },
+      },
+    };
+  }, { isAuth: true })
+
   // --- WORKSPACE RUN TRIGGERS API ---
   .get("/api/v2/workspaces/:workspace_id/run-triggers", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
@@ -6521,6 +6731,25 @@ export const app = new Elysia()
     return {
       data: {
         id: `ce-${run_id}`,
+        type: "cost-estimates",
+        attributes: {
+          status: "finished",
+          "delta-monthly-cost": "0.0",
+          "prior-monthly-cost": "0.0",
+          "proposed-monthly-cost": "0.0",
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  .get("/api/v2/cost-estimates/:ce_id", async ({ params: { ce_id }, user, orgId, set }) => {
+    const runId = ce_id.replace(/^ce-/, "");
+    if (!runId) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const run = await findAuthorizedRun(runId, user?.id, orgId);
+    if (!run) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return {
+      data: {
+        id: ce_id,
         type: "cost-estimates",
         attributes: {
           status: "finished",

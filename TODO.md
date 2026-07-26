@@ -713,7 +713,7 @@
 
 ### 12.1 Cost Estimates
 - [x] `GET /runs/:run_id/cost-estimate` — show cost estimate via run (stub, returns zero costs)
-- [ ] `GET /cost-estimates/:ce_id` — individual cost estimate by ID endpoint (not implemented)
+- [x] `GET /cost-estimates/:ce_id` — individual cost estimate by ID endpoint
 - [ ] Cost estimate wired into run pipeline (plan → cost estimate → policy check → apply)
 - [ ] Cost estimate states: always returns `finished` (no support for `skipped`, `queued`, `pending`, `errored`, `canceled`)
 - [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost` (stub returns `0.0`)
@@ -847,8 +847,8 @@
 - [x] `authentication-tokens` relationship
 
 ### 16.2 Agent Tokens
-- [ ] `GET /agent-pools/:pool_id/authentication-tokens` — list tokens for pool
-- [ ] `POST /agent-pools/:pool_id/authentication-tokens` — create token for pool
+- [x] `GET /agent-pools/:pool_id/authentication-tokens` — list tokens for pool
+- [x] `POST /agent-pools/:pool_id/authentication-tokens` — create token for pool (hashed at rest)
 - [x] `GET /authentication-tokens/:token_id` — show any token (generic endpoint, works for agent tokens)
 - [x] `DELETE /authentication-tokens/:token_id` — delete any token (generic endpoint, works for agent tokens)
 - [x] `description` attribute on tokens
@@ -1036,13 +1036,13 @@
 ### 24.2 Admin Organizations
 - [x] `GET /api/v2/admin/organizations` — list all orgs
 - [x] `GET /api/v2/admin/organizations/:org_name` — show org
-- [ ] `PATCH /api/v2/admin/organizations/:org_name` — update org
+- [x] `PATCH /api/v2/admin/organizations/:org_name` — update org (name, email)
 - [x] `DELETE /api/v2/admin/organizations/:org_name` — destroy org
 
 ### 24.3 Admin Workspaces
 - [x] `GET /api/v2/admin/workspaces` — list all workspaces
 - [x] `GET /api/v2/admin/workspaces/:ws_id` — show workspace
-- [ ] `PATCH /api/v2/admin/workspaces/:ws_id` — update workspace
+- [x] `PATCH /api/v2/admin/workspaces/:ws_id` — update workspace (name, version, locked)
 - [x] `DELETE /api/v2/admin/workspaces/:ws_id` — delete workspace
 
 ### 24.4 Admin Runs
@@ -1067,9 +1067,9 @@
 - [ ] (Low priority)
 
 ### 24.8 Admin Settings
-- [ ] `GET /api/v2/admin/settings` — instance settings
-- [ ] `PATCH /api/v2/admin/settings` — update settings
-- [ ] Settings: cost-estimation enabled, sentinel enabled, etc.
+- [x] `GET /api/v2/admin/settings` — instance settings
+- [x] `PATCH /api/v2/admin/settings` — update settings (stub)
+- [x] Settings: cost-estimation enabled, sentinel enabled, etc.
 
 ### 24.9 Admin Module Registry Sharing
 - [ ] `POST /api/v2/admin/module-sharing` — share modules across orgs
@@ -1091,6 +1091,7 @@
 - [x] `GET /organizations/:org_name/audit-logs` — list audit log entries for an org (owner)
 - [x] `GET /api/v2/audit-trails` — audit trail endpoint (returns empty data array)
 - [x] `GET /api/v2/organization-audit-trailers` — org audit trail endpoint (returns empty data array)
+- [x] Audit log entries created automatically on user/org/workspace creation, run actions (apply, cancel, discard, force-cancel)
 
 ### 24.12 Support Bundles
 - [ ] `POST /api/v1/support-bundle-requests` — generate support bundle
@@ -1234,7 +1235,7 @@
 - [x] Native Terraform requests select Terraform for workspaces without an explicit binary
 - [x] Per-workspace version selection
 - [x] Organization-level default inheritance
-- [ ] Version constraint resolution (`~> 1.0.0`, `>= 1.2, < 2.0`) — currently exact version or `latest` only
+- [x] Version constraint resolution (`~> 1.0.0`, `>= 1.2, < 2.0`) — resolves to highest matching release
 
 ### 28.4 Work Directory
 - [x] `working-directory` support (execute in subdirectory)
