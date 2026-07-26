@@ -3,7 +3,7 @@ import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
 import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments } from "./db/schema";
-import { and, eq, desc, asc, count, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { authPlugin } from "./auth";
 import { oauthPlugin } from "./oauth";
@@ -972,10 +972,7 @@ function workspaceRunHistoryWhere(request: Request, workspaceId: string) {
       inArray(runs.id,
         db.select({ id: runs.id }).from(runs)
           .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
-          .where(like(
-            sql<string>(`COALESCE(${configurationVersions.ingressAttributes}->>'$.commitSha', '')`),
-            `%${commitSearch}%`
-          ))
+          .where(sql`COALESCE(json_extract(${configurationVersions.ingressAttributes}, '$.commitSha'), '') LIKE ${`%${commitSearch}%`}`)
       )
     );
   }
@@ -1343,12 +1340,14 @@ export const app = new Elysia()
     const id = crypto.randomUUID();
     const normalizedEmail = typeof email === "string" && email.trim() ? email.trim() : null;
 
-    // First registered user becomes site admin
-    const userCount = (await db.select({ val: count() }).from(users))[0]?.val ?? 0;
-    const isSiteAdmin = userCount === 0;
-
     try {
-      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin });
+      const isSiteAdmin = await db.transaction(async (tx) => {
+        // First registered user becomes site admin — checked atomically inside transaction
+        const userCount = (await tx.select({ val: count() }).from(users))[0]?.val ?? 0;
+        const admin = userCount === 0;
+        await tx.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: admin });
+        return admin;
+      });
       await auditLog("create", "users", id, null, null, { username });
       set.status = 201;
       return {
@@ -1452,12 +1451,40 @@ export const app = new Elysia()
     if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const usernameFilter = (query as any)?.["filter[username]"] || (query as any)?.q;
     let allUsers;
-    if (usernameFilter) {
-      allUsers = await db.query.users.findMany({
-        where: (u, { like }) => like(u.username, `%${usernameFilter}%`),
-      });
+    if (user.isSiteAdmin) {
+      // Site admins can access all users globally
+      if (usernameFilter) {
+        allUsers = await db.query.users.findMany({
+          where: (u, { like }) => like(u.username, `%${usernameFilter}%`),
+        });
+      } else {
+        allUsers = await db.query.users.findMany();
+      }
     } else {
-      allUsers = await db.query.users.findMany();
+      // Non-admin users: only see users sharing an organization
+      const userMemberships = await db.query.organizationMemberships.findMany({
+        where: eq(organizationMemberships.userId, user.id),
+      });
+      const userOrgIds = userMemberships.map(m => m.orgId);
+      if (userOrgIds.length === 0) {
+        return { data: [userResource(user)] };
+      }
+      const sharedMemberships = await db.query.organizationMemberships.findMany({
+        where: inArray(organizationMemberships.orgId, userOrgIds),
+      });
+      const sharedUserIds = [...new Set(sharedMemberships.map(m => m.userId))];
+      if (usernameFilter) {
+        allUsers = await db.query.users.findMany({
+          where: (u, { and, like, inArray: inArr }) => and(
+            inArr(u.id, sharedUserIds),
+            like(u.username, `%${usernameFilter}%`),
+          ),
+        });
+      } else {
+        allUsers = await db.query.users.findMany({
+          where: (u, { inArray: inArr }) => inArr(u.id, sharedUserIds),
+        });
+      }
     }
     return { data: allUsers.map(u => userResource(u)) };
   }, { isAuth: true })
@@ -1466,6 +1493,24 @@ export const app = new Elysia()
     if (!targetUser || !user) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    // Site admins can see any user; others must share an organization
+    if (!user.isSiteAdmin) {
+      const userMemberships = await db.query.organizationMemberships.findMany({
+        where: eq(organizationMemberships.userId, user.id),
+      });
+      const userOrgIds = userMemberships.map(m => m.orgId);
+      const targetMemberships = await db.query.organizationMemberships.findMany({
+        where: and(
+          eq(organizationMemberships.userId, targetUser.id),
+        ),
+      });
+      const targetOrgIds = targetMemberships.map(m => m.orgId);
+      const hasSharedOrg = userOrgIds.some(oid => targetOrgIds.includes(oid)) || user.id === targetUser.id;
+      if (!hasSharedOrg) {
+        set.status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
     }
     return { data: userResource(targetUser) };
   }, { isAuth: true })
@@ -2097,13 +2142,13 @@ export const app = new Elysia()
     if (targets.length !== projectIds.length || targets.some(p => p.orgId !== record.orgId)) {
       set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Projects must belong to the variable set organization" }] };
     }
-    for (const pid of projectIds) {
-      await db.insert(variableSetProjects).values({
+    await db.insert(variableSetProjects).values(
+      projectIds.map(pid => ({
         id: `vsp-${crypto.randomUUID()}`,
         variableSetId: record.id,
         projectId: pid,
-      }).onConflictDoNothing();
-    }
+      }))
+    ).onConflictDoNothing();
     set.status = 204;
   }, { isAuth: true })
   .delete("/api/v2/varsets/:varset_id/relationships/projects", async ({ params: { varset_id }, user, orgId, body, set }) => {
@@ -3980,14 +4025,18 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   // --- WEBHOOK RECEIVERS (GITHUB, GITLAB, BITBUCKET) ---
+  // Placeholder: signature verification not yet implemented
   .post("/api/webhooks/github", async ({ body, set }) => {
-    return { status: "received", provider: "github" };
+    set.status = 501;
+    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
   })
   .post("/api/webhooks/gitlab", async ({ body, set }) => {
-    return { status: "received", provider: "gitlab" };
+    set.status = 501;
+    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
   })
   .post("/api/webhooks/bitbucket", async ({ body, set }) => {
-    return { status: "received", provider: "bitbucket" };
+    set.status = 501;
+    return { errors: [{ status: "501", title: "Not Implemented", detail: "Webhook signature verification not yet implemented" }] };
   })
   .get("/api/v2/runs/:run_id/comments", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
@@ -4061,12 +4110,13 @@ export const app = new Elysia()
     if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const token = `team-tok-${crypto.randomUUID()}`;
+    const rawToken = `team-tok-${crypto.randomUUID()}`;
     const id = `tok-${crypto.randomUUID()}`;
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
     await db.delete(apiTokens).where(eq(apiTokens.teamId, team_id));
     await db.insert(apiTokens).values({
       id,
-      token,
+      token: tokenHash,
       teamId: team_id,
       orgId: team.orgId,
       description: `Team token for ${team.name}`,
@@ -4078,7 +4128,7 @@ export const app = new Elysia()
         id,
         type: "authentication-tokens",
         attributes: {
-          token,
+          token: rawToken,
           "created-at": new Date().toISOString(),
         },
       },
@@ -4109,62 +4159,6 @@ export const app = new Elysia()
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(apiTokens).where(eq(apiTokens.teamId, team_id));
-    set.status = 204;
-  }, { isAuth: true })
-
-  // --- ORGANIZATION AUTHENTICATION TOKEN API ---
-  .post("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
-      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const token = `org-tok-${crypto.randomUUID()}`;
-    const id = `tok-${crypto.randomUUID()}`;
-    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)));
-    await db.insert(apiTokens).values({
-      id,
-      token,
-      orgId: org.id,
-      description: `Organization token for ${org.name}`,
-      createdAt: Date.now(),
-    });
-    set.status = 201;
-    return {
-      data: {
-        id,
-        type: "authentication-tokens",
-        attributes: {
-          token,
-          "created-at": new Date().toISOString(),
-        },
-      },
-    };
-  }, { isAuth: true })
-  .get("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
-      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const tok = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)) });
-    if (!tok) {
-      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return {
-      data: {
-        id: tok.id,
-        type: "authentication-tokens",
-        attributes: {
-          "created-at": new Date(tok.createdAt).toISOString(),
-        },
-      },
-    };
-  }, { isAuth: true })
-  .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
-      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)));
     set.status = 204;
   }, { isAuth: true })
 
@@ -4930,24 +4924,38 @@ export const app = new Elysia()
     }
     const items = (body as any)?.data;
     const tagList = Array.isArray(items) ? items : [items];
-    const created: any[] = [];
-    for (const item of tagList) {
-      const key = item?.attributes?.key;
-      const value = item?.attributes?.value ?? null;
-      if (key && typeof key === "string") {
-        const existing = await db.query.projectTags.findFirst({
-          where: and(eq(projectTags.projectId, project_id), eq(projectTags.key, key)),
-        });
-        if (existing) {
-          await db.update(projectTags).set({ value }).where(eq(projectTags.id, existing.id));
-        } else {
-          const id = `ptag-${crypto.randomUUID()}`;
-          await db.insert(projectTags).values({ id, projectId: project_id, key, value });
-        }
-        const pt = (await db.query.projectTags.findFirst({ where: and(eq(projectTags.projectId, project_id), eq(projectTags.key, key)) }))!;
-        created.push(projectTagBindingResource(pt));
+    const entries = tagList
+      .map((item: any) => ({ key: item?.attributes?.key, value: item?.attributes?.value ?? null }))
+      .filter((e: { key: any; value: any }) => e.key && typeof e.key === "string");
+    const keys = entries.map((e: { key: string; value: any }) => e.key);
+    // Single lookup for all existing keys
+    const existingTags = await db.query.projectTags.findMany({
+      where: and(eq(projectTags.projectId, project_id), inArray(projectTags.key, keys)),
+    });
+    const existingKeys = new Set(existingTags.map(t => t.key));
+    // Update existing tags
+    for (const et of existingTags) {
+      const entry = entries.find((e: { key: string; value: any }) => e.key === et.key);
+      if (entry && entry.value !== et.value) {
+        await db.update(projectTags).set({ value: entry.value }).where(eq(projectTags.id, et.id));
       }
     }
+    // Batch insert new tags
+    const newEntries = entries.filter((e: { key: string; value: any }) => !existingKeys.has(e.key));
+    if (newEntries.length > 0) {
+      await db.insert(projectTags).values(
+        newEntries.map((e: { key: string; value: any }) => ({
+          id: `ptag-${crypto.randomUUID()}`,
+          projectId: project_id,
+          key: e.key,
+          value: e.value,
+        }))
+      );
+    }
+    const allTags = await db.query.projectTags.findMany({
+      where: and(eq(projectTags.projectId, project_id), inArray(projectTags.key, keys)),
+    });
+    const created = allTags.map(pt => projectTagBindingResource(pt));
     set.status = 201;
     return { data: created.length === 1 ? created[0] : created };
   }, { isAuth: true })
@@ -5401,7 +5409,8 @@ export const app = new Elysia()
     const id = `nc-${crypto.randomUUID()}`;
     const newNc = {
       id,
-      workspaceId: "", // teams share notification configs, no specific workspace
+      workspaceId: null,
+      teamId: team_id,
       name: attributes.name ?? `Team notification for ${team.name}`,
       destinationType: attributes["destination-type"],
       url: attributes.url,
@@ -5885,6 +5894,12 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/runs/:run_id/policy-checks", async ({ params: { run_id }, user, orgId: tokenOrgId, set }) => {
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, run_id) });
+    if (!run) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (!workspace || !(await checkOrgPermission(user?.id, workspace.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, run_id) });
     const data = pcList.map(pc => ({
       id: pc.id,
@@ -5903,6 +5918,12 @@ export const app = new Elysia()
     if (!pc) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+    if (!run) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (!workspace || !(await checkOrgPermission(user?.id, workspace.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     return {
       data: {
         id: pc.id,
@@ -5919,6 +5940,12 @@ export const app = new Elysia()
   .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params: { check_id }, user, orgId: tokenOrgId, set }) => {
     const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, check_id) });
     if (!pc) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+    if (!run) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (!workspace || !(await checkOrgPermission(user?.id, workspace.orgId, "owner", tokenOrgId))) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, check_id));
@@ -6342,7 +6369,7 @@ export const app = new Elysia()
       attributes: {
         username: u.username,
         email: u.email,
-        "is-site-admin": true,
+        "is-site-admin": u.isSiteAdmin === true,
       },
     }));
     return { data };
@@ -6361,7 +6388,7 @@ export const app = new Elysia()
         attributes: {
           username: targetUser.username,
           email: targetUser.email,
-          "is-site-admin": true,
+          "is-site-admin": targetUser.isSiteAdmin === true,
         },
       },
     };
@@ -6389,7 +6416,7 @@ export const app = new Elysia()
         attributes: {
           username: updated.username,
           email: updated.email,
-          "is-site-admin": true,
+          "is-site-admin": updated.isSiteAdmin === true,
         },
       },
     };

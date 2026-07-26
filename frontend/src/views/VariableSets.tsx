@@ -33,6 +33,7 @@ import { fetchApi } from "@/lib/api";
 async function fetchAllPages(path: string): Promise<any[]> {
   let results: any[] = [];
   let url: string | null = path;
+  let currentPage = 1;
   while (url) {
     const res = await fetchApi(url);
     if (res?.data && Array.isArray(res.data)) {
@@ -40,13 +41,15 @@ async function fetchAllPages(path: string): Promise<any[]> {
     }
     const nextUrl = res?.links?.next || null;
     const metaNext = res?.meta?.pagination?.["next-page"];
+    const totalPages = res?.meta?.pagination?.["total-pages"];
     if (nextUrl) {
       url = nextUrl;
-    } else if (metaNext && url) {
-      const currentUrl: string = url;
-      const parsed: URL = new URL(currentUrl, "http://localhost");
+      currentPage++;
+    } else if (metaNext && typeof metaNext === "number" && metaNext > currentPage && (totalPages == null || metaNext <= totalPages)) {
+      const parsed = new URL(url ?? path, "http://localhost");
       parsed.searchParams.set("page[number]", String(metaNext));
       url = `${parsed.pathname}${parsed.search}`;
+      currentPage = metaNext;
     } else {
       url = null;
     }
@@ -69,7 +72,7 @@ interface VariableSet {
     "workspace-count": number;
   };
   relationships: {
-    workspaces: { data: ResourceIdentifier[] };
+    workspaces?: { data?: ResourceIdentifier[] };
   };
 }
 
@@ -504,7 +507,7 @@ export function VariableSets() {
   const openWorkspaceEditor = (variableSet: VariableSet) => {
     setWorkspaceSet(variableSet);
     setSelectedWorkspaceIds(
-      new Set(variableSet.relationships.workspaces.data.map((workspace) => workspace.id)),
+      new Set((variableSet.relationships.workspaces?.data ?? []).map((workspace) => workspace.id)),
     );
     setWorkspaceError("");
     setWorkspaceOpen(true);
@@ -545,7 +548,7 @@ export function VariableSets() {
     if (!workspaceSet) return;
 
     const currentIds = new Set(
-      workspaceSet.relationships.workspaces.data.map((workspace) => workspace.id),
+      (workspaceSet.relationships.workspaces?.data ?? []).map((workspace) => workspace.id),
     );
     const attached = [...selectedWorkspaceIds].filter((id) => !currentIds.has(id));
     const detached = [...currentIds].filter((id) => !selectedWorkspaceIds.has(id));

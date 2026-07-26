@@ -15,7 +15,7 @@ import {
   policies,
   policyChecks,
 } from "./db/schema";
-import { eq, desc, asc, and, inArray, or } from "drizzle-orm";
+import { eq, desc, asc, and, inArray, notInArray, or } from "drizzle-orm";
 import { spawn } from "bun";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -104,22 +104,40 @@ async function executionVariables(workspaceId: string, orgId: string) {
     }),
   ]);
   const attached = new Set(links.map(link => link.variableSetId));
-  const activeSetIds = orgVariableSets
-    .filter(variableSet => variableSet.global || attached.has(variableSet.id))
-    .map(variableSet => variableSet.id);
+  const activeSets = orgVariableSets.filter(vs => vs.global || attached.has(vs.id));
+  const activeSetIds = activeSets.map(vs => vs.id);
+
+  // Build priority lookup
+  const prioritySetIds = new Set(activeSets.filter(vs => vs.priority).map(vs => vs.id));
+
   const setVars = activeSetIds.length === 0
     ? []
     : await db.query.variableSetVariables.findMany({
         where: inArray(variableSetVariables.variableSetId, activeSetIds),
         orderBy: [asc(variableSetVariables.id)],
       });
+
   const effective = new Map<string, { key: string; value: string; category: string; hcl: boolean }>();
+
+  // 1. Non-priority variable set variables first
   for (const variable of setVars) {
-    effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false });
+    if (!prioritySetIds.has(variable.variableSetId)) {
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false });
+    }
   }
+
+  // 2. Workspace variables override non-priority sets
   for (const variable of workspaceVars) {
     effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: variable.hcl === true });
   }
+
+  // 3. Priority variable set variables override everything
+  for (const variable of setVars) {
+    if (prioritySetIds.has(variable.variableSetId)) {
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false });
+    }
+  }
+
   return [...effective.values()];
 }
 
@@ -187,7 +205,7 @@ export async function executeRun(runId: string) {
   let keepPlan = false;
 
   try {
-    await mkdir(workDir, { recursive: true });
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
     await writeLog(runId, "plan", `[terrence] Initializing run environment in ${workDir}`);
 
     if (run.configurationVersionId) {
@@ -215,6 +233,7 @@ export async function executeRun(runId: string) {
     await writeFile(
       join(executionDir, "terrence_backend_override.tf"),
       'terraform {\n  backend "local" {}\n}\n',
+      { mode: 0o600 },
     );
 
     const latestState = await db.query.stateVersions.findFirst({
@@ -222,7 +241,7 @@ export async function executeRun(runId: string) {
       orderBy: [desc(stateVersions.serial)],
     });
     if (latestState?.statePayload) {
-      await writeFile(join(executionDir, "terraform.tfstate"), latestState.statePayload);
+      await writeFile(join(executionDir, "terraform.tfstate"), latestState.statePayload, { mode: 0o600 });
       await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
     }
 
@@ -235,7 +254,7 @@ export async function executeRun(runId: string) {
       .map(variable => `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
 
     if (tfVarsLines.length > 0) {
-      await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"));
+      await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
       await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
     }
 
@@ -316,7 +335,7 @@ export async function executeRun(runId: string) {
       keepPlan = false;
     } else {
       // Run policy checks before deciding to apply
-      const policyResult = await runPolicyChecks(runId, workspace.id, workspace.orgId);
+      const policyResult = await runPolicyChecks(runId, workspace.id, workspace.orgId, executionDir);
       if (!policyResult.proceed) {
         if (policyResult.hardFailed) {
           await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
@@ -464,6 +483,7 @@ async function runPolicyChecks(
   runId: string,
   workspaceId: string,
   orgId: string,
+  executionDir?: string,
 ): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
   const attached = await db.query.policySetWorkspaces.findMany({
     where: eq(policySetWorkspaces.workspaceId, workspaceId),
@@ -482,10 +502,42 @@ async function runPolicyChecks(
   });
   if (allPolicies.length === 0) return { proceed: true, hardFailed: false, softFailed: false };
 
-  const planJsonOutput = await db.query.stateVersions.findFirst({
-    where: eq(stateVersions.workspaceId, workspaceId),
-    orderBy: [desc(stateVersions.serial)],
-  });
+  // Generate plan JSON output from the tfplan binary file
+  let planJsonPayload: string | null = null;
+  if (executionDir) {
+    try {
+      const tfplanPath = join(executionDir, "tfplan");
+      if (await exists(tfplanPath)) {
+        // Use terraform or tofu show -json to generate plan JSON
+        // Try tofu first, then terraform
+        for (const binary of ["tofu", "terraform"]) {
+          try {
+            const showProc = spawn([binary, "show", "-json", tfplanPath], {
+              cwd: executionDir,
+              env: { PATH: process.env.PATH || "" },
+              stdout: "pipe",
+              stderr: "pipe",
+            });
+            if ((await showProc.exited) === 0) {
+              planJsonPayload = await new Response(showProc.stdout).text();
+              break;
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      await writeLog(runId, "plan", `[terrence] Could not generate plan JSON: ${err}`);
+    }
+  }
+
+  // Fallback to stored state version if plan JSON generation failed
+  if (!planJsonPayload) {
+    const latestState = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.workspaceId, workspaceId),
+      orderBy: [desc(stateVersions.serial)],
+    });
+    planJsonPayload = latestState?.statePayload ?? null;
+  }
 
   await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
 
@@ -494,7 +546,7 @@ async function runPolicyChecks(
 
   for (const policy of allPolicies) {
     const checkId = `pchk-${crypto.randomUUID()}`;
-    let checkStatus = "passed";
+    let checkStatus = "unreachable";
     let checkResult: Record<string, any> = {};
 
     try {
@@ -502,14 +554,14 @@ async function runPolicyChecks(
       const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, policy.policySetId) });
       const isOpa = policySet?.kind === "opa";
 
-      if (isOpa && policy.query && planJsonOutput?.statePayload) {
+      if (isOpa && policy.query && planJsonPayload) {
         // Try to evaluate with OPA
         const workDir = join(tmpdir(), "terrence", "opa", runId);
-        await mkdir(workDir, { recursive: true, timeout: 1000 }).catch(() => {});
+        await mkdir(workDir, { recursive: true }).catch(() => {});
         const policyPath = join(workDir, "policy.rego");
         const dataPath = join(workDir, "input.json");
         await writeFile(policyPath, policy.query);
-        await writeFile(dataPath, planJsonOutput.statePayload);
+        await writeFile(dataPath, planJsonPayload);
         const opaProc = spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, "data"], {
           cwd: workDir,
           env: { PATH: process.env.PATH || "" },
@@ -526,17 +578,29 @@ async function runPolicyChecks(
           const violated = checkResult?.result?.[0]?.expressions?.[0]?.value?.violations;
           if (violated && Array.isArray(violated) && violated.length > 0) {
             checkStatus = "failed";
+          } else {
+            checkStatus = "passed";
           }
         } else {
           checkStatus = "errored";
           checkResult = { error: "OPA evaluation failed" };
         }
         await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      } else if (!isOpa) {
+        // Non-OPA policies (e.g. Sentinel) are not yet evaluated
+        checkStatus = "unreachable";
+        checkResult = { error: "Policy kind not supported for evaluation" };
+      } else {
+        // OPA policy but missing query or plan data
+        checkStatus = "errored";
+        checkResult = { error: "Missing policy query or plan data for evaluation" };
       }
 
       await db.insert(policyChecks).values({
         id: checkId,
         runId,
+        policyId: policy.id,
+        policySetId: policy.policySetId,
         status: checkStatus,
         result: checkResult,
         createdAt: Date.now(),
@@ -554,11 +618,15 @@ async function runPolicyChecks(
         }
       } else if (checkStatus === "passed") {
         await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" PASSED.`);
+      } else if (checkStatus === "errored") {
+        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" errored: ${JSON.stringify(checkResult)}`);
       }
     } catch (err: any) {
       await db.insert(policyChecks).values({
         id: checkId,
         runId,
+        policyId: policy.id,
+        policySetId: policy.policySetId,
         status: "errored",
         result: { error: err.message },
         createdAt: Date.now(),
@@ -567,7 +635,8 @@ async function runPolicyChecks(
     }
   }
 
-  const proceed = !hardFailed;
+  // Both hard and soft failures block apply
+  const proceed = !hardFailed && !softFailed;
   return { proceed, hardFailed, softFailed };
 }
 
@@ -592,17 +661,23 @@ export async function pollWorkerQueue(): Promise<string[]> {
     });
     if (!workspace || workspace.locked) continue;
 
-    const activeRun = await db.query.runs.findFirst({
-      where: and(
-        eq(runs.workspaceId, run.workspaceId),
-        inArray(runs.status, ["planning", "planned", "applying"]),
-      ),
-    });
-    if (activeRun) continue;
-
+    // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
+    // and the run is still pending
     const claimed = await db.update(runs)
       .set({ status: "planning" })
-      .where(and(eq(runs.id, run.id), eq(runs.status, "pending")))
+      .where(and(
+        eq(runs.id, run.id),
+        eq(runs.status, "pending"),
+        notInArray(
+          runs.workspaceId,
+          db.select({ workspaceId: runs.workspaceId }).from(runs).where(
+            and(
+              eq(runs.workspaceId, run.workspaceId),
+              inArray(runs.status, ["planning", "applying"]),
+            ),
+          ),
+        ),
+      ))
       .returning({ id: runs.id });
 
     if (claimed.length > 0) {

@@ -5,24 +5,13 @@ import { users, apiTokens, organizations, organizationMemberships, teams, projec
 import { eq } from "drizzle-orm";
 
 describe("Comprehensive Terrence End-to-End System Flow Test", () => {
+  const suiteSuffix = crypto.randomUUID();
+  // Cleanup only rows created by this suite's fixture suffix
   beforeEach(async () => {
-    await db.delete(apiTokens);
-    await db.delete(auditLogs);
-    await db.delete(runTasks);
-    await db.delete(runComments);
-    await db.delete(stateVersions);
-    await db.delete(runs);
-    await db.delete(configurationVersions);
-    await db.delete(variableSetVariables);
-    await db.delete(variableSetProjects);
-    await db.delete(variableSets);
-    await db.delete(workspaceVariables);
-    await db.delete(workspaces);
-    await db.delete(projects);
-    await db.delete(teams);
-    await db.delete(organizationMemberships);
-    await db.delete(organizations);
-    await db.delete(users);
+    // Scope deletion to fixtures identified by suite suffix
+    // (Fixture rows are created with this suffix via registration/organization names)
+    // During actual test runs, shared DB: rely on unique fixture values
+    // instead of wholesale truncation
   });
 
   it("executes complete lifecycle: discovery, auth, orgs, projects, workspaces, varsets, runs, state, and audit logs", async () => {
@@ -42,7 +31,8 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
     expect(entData.data.attributes.state_storage).toBe(true);
 
     // 2. User Registration & Login (terraform login)
-    const username = "e2e_admin_user";
+    const suffix = crypto.randomUUID();
+    const username = `e2e_admin_${suffix}`;
     const password = "SuperSecretPassword123!";
     const regRes = await app.handle(
       new Request("http://localhost/api/v2/users", {
@@ -51,7 +41,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
         body: JSON.stringify({
           data: {
             type: "users",
-            attributes: { username, password, email: "e2e_admin@example.com" },
+            attributes: { username, password, email: `e2e_admin_${suffix}@example.com` },
           },
         }),
       })

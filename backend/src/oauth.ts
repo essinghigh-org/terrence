@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { db } from "./db";
 import { apiTokens, users } from "./db/schema";
+import { createHash } from "node:crypto";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -241,14 +242,27 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     const accessToken = `user-${crypto.randomUUID()}`;
     const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS ?? 30 * 24 * 60 * 60 * 1000);
-    await db.insert(apiTokens).values({
-      id: crypto.randomUUID(),
-      token: accessToken,
-      userId: user.id,
-      description: "Terraform CLI login",
-      createdAt: Date.now(),
-      expiresAt: Date.now() + cliTokenTtlMs,
-    });
+    if (!Number.isFinite(cliTokenTtlMs) || cliTokenTtlMs <= 0) {
+      // Fall back to 30-day default when parse produces NaN, infinity, zero, or negative
+      const defaultTtl = 30 * 24 * 60 * 60 * 1000;
+      await db.insert(apiTokens).values({
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(accessToken).digest("hex"),
+        userId: user.id,
+        description: "Terraform CLI login",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + defaultTtl,
+      });
+    } else {
+      await db.insert(apiTokens).values({
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(accessToken).digest("hex"),
+        userId: user.id,
+        description: "Terraform CLI login",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + cliTokenTtlMs,
+      });
+    }
 
     set.headers["Cache-Control"] = "no-store";
     set.headers.Pragma = "no-cache";

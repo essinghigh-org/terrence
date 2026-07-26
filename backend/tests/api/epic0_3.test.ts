@@ -44,7 +44,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     });
 
     await db.insert(organizationMemberships).values({
-      id: `orgmem-owner`,
+      id: `orgmem-owner-${crypto.randomUUID()}`,
       orgId,
       userId,
       role: "owner",
@@ -256,16 +256,16 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
 
   it("returns 404 security-through-obscurity for unauthorized resources", async () => {
     // Create another user without org access
-    const strangerId = `usr-stranger`;
-    const strangerToken = `stranger-token`;
+    const strangerId = `usr-stranger-${crypto.randomUUID()}`;
+    const strangerToken = `stranger-tok-${crypto.randomUUID()}`;
     await db.insert(users).values({
       id: strangerId,
-      username: "stranger",
-      email: "stranger@other.local",
+      username: `stranger-${crypto.randomUUID()}`,
+      email: `stranger-${crypto.randomUUID()}@other.local`,
       passwordHash: "hashed",
     });
     await db.insert(apiTokens).values({
-      id: `tok-stranger`,
+      id: `tok-stranger-${crypto.randomUUID()}`,
       token: strangerToken,
       userId: strangerId,
       createdAt: Date.now(),

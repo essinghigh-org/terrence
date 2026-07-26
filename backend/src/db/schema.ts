@@ -52,7 +52,7 @@ export const projects = sqliteTable("projects", {
   defaultExecutionMode: text("default_execution_mode").default("remote"),
   autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
-  defaultAgentPoolId: text("default_agent_pool_id"),
+  defaultAgentPoolId: text("default_agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),
@@ -100,7 +100,7 @@ export const workspaces = sqliteTable("workspaces", {
   allowDestroyPlan: integer("allow_destroy_plan", { mode: "boolean" }).default(true),
   globalRemoteState: integer("global_remote_state", { mode: "boolean" }).default(false),
   projectRemoteState: integer("project_remote_state", { mode: "boolean" }).default(false),
-  agentPoolId: text("agent_pool_id"),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   assessmentsEnabled: integer("assessments_enabled", { mode: "boolean" }).default(false),
   autoDestroyAt: text("auto_destroy_at"),
   autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
@@ -138,7 +138,8 @@ export const teamWorkspaces = sqliteTable("team_workspaces", {
 
 export const notificationConfigurations = sqliteTable("notification_configurations", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams'
   url: text("url").notNull(),
@@ -331,7 +332,9 @@ export const policies = sqliteTable("policies", {
 export const policyChecks = sqliteTable("policy_checks", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-  status: text("status").notNull().default("pending"), // 'pending', 'passed', 'soft_failed', 'failed', 'overridden'
+  policyId: text("policy_id").references(() => policies.id, { onDelete: "set null" }),
+  policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("pending"), // 'pending', 'passed', 'soft_failed', 'failed', 'overridden', 'unreachable', 'errored'
   result: text("result", { mode: "json" }).$type<Record<string, any>>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

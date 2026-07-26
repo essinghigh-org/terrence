@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "./db";
 import { apiTokens, users, teams } from "./db/schema";
-import { eq, or } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
 function hashToken(token: string): string {
@@ -17,10 +17,24 @@ export const authPlugin = new Elysia({ name: 'auth' })
 
     const tokenString = authHeader.substring(7);
     const tokenHash = hashToken(tokenString);
-    // Lookup by both hashed and plaintext for backward compatibility with existing tokens
-    const token = await db.query.apiTokens.findFirst({
-        where: or(eq(apiTokens.token, tokenHash), eq(apiTokens.token, tokenString))
+
+    // Lookup by hash
+    let token = await db.query.apiTokens.findFirst({
+        where: eq(apiTokens.token, tokenHash)
     });
+
+    // Legacy fallback: re-hash plaintext token on successful use
+    if (!token) {
+      const legacyToken = await db.query.apiTokens.findFirst({
+        where: eq(apiTokens.token, tokenString)
+      });
+      if (legacyToken) {
+        await db.update(apiTokens)
+          .set({ token: tokenHash })
+          .where(eq(apiTokens.id, legacyToken.id));
+        token = { ...legacyToken, token: tokenHash };
+      }
+    }
 
     if (!token) {
       return { user: null, token: null, orgId: null, teamId: null };

@@ -31,3 +31,22 @@ class ResizeObserver {
 Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserver });
 globalThis.confirm = () => true;
 if (typeof window !== "undefined") window.confirm = () => true;
+
+// Stubs required by Radix UI Select/Dialog in jsdom
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView = () => {};
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (typeof window !== "undefined") {
+  window.matchMedia = window.matchMedia || (() => ({
+    matches: false,
+    media: "",
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}

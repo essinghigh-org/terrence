@@ -8,30 +8,38 @@ const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
 export function validateVersion(version: string): boolean {
   if (!version) return false;
   if (version === "latest") return true;
-  // Allow exact semver, constraint operators, or comma-separated constraints
+  // Allow exact semver
   if (/^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version)) return true;
-  if (/^~> [0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version)) return true;
-  if (/^>= [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
-  if (/^<= [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
-  if (/^> [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
-  if (/^< [0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
-  // Comma-separated: ">= 1.2, < 2.0"
-  if (/^[><=!~>]+ [0-9.]+(, [><=!~>]+ [0-9.]+)*$/.test(version)) return true;
+  // ~> requires full X.Y.Z (not shorthand ~> 1.5 or ~> 1)
+  if (/^~> v?[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) return true;
+  if (/^>= v?[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^<= v?[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^> v?[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  if (/^< v?[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(version)) return true;
+  // Comma-separated: ">= 1.2, < 2.0" (no != allowed)
+  if (/^[><=~]+ v?[0-9.]+(, [><=~]+ v?[0-9.]+)*$/.test(version) && !version.includes("!=")) return true;
   return false;
 }
 
 function parseSemver(version: string): number[] {
-  return version.replace(/^v/, "").split(".").map(Number);
+  // Strip pre-release suffix before numeric parsing
+  const clean = version.replace(/^v/, "").split("-")[0];
+  return clean.split(".").map(Number);
 }
 
 function compareSemver(a: string, b: string): number {
   const aParts = parseSemver(a);
   const bParts = parseSemver(b);
   for (let i = 0; i < 3; i++) {
-    const aVal = aParts[i] || 0;
-    const bVal = bParts[i] || 0;
+    const aVal = isNaN(aParts[i]) ? 0 : aParts[i];
+    const bVal = isNaN(bParts[i]) ? 0 : bParts[i];
     if (aVal !== bVal) return aVal - bVal;
   }
+  // Pre-release sorts below stable: if one has a suffix and the other doesn't
+  const aHasPre = a.replace(/^v/, "").includes("-");
+  const bHasPre = b.replace(/^v/, "").includes("-");
+  if (aHasPre && !bHasPre) return -1;
+  if (!aHasPre && bHasPre) return 1;
   return 0;
 }
 
@@ -101,19 +109,37 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
   }
 }
 
+// Short-lived cache for available versions
+const versionCache = new Map<string, { versions: string[]; fetchedAt: number }>();
+const VERSION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
+  const cached = versionCache.get(tool);
+  if (cached && Date.now() - cached.fetchedAt < VERSION_CACHE_TTL_MS) {
+    return cached.versions;
+  }
+
   try {
     let versions: string[] = [];
     if (tool === "tofu") {
-      const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases?per_page=100", {
-        headers: { "User-Agent": "terrence-iac-manager" },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) {
+      // Paginate through all GitHub releases
+      let page = 1;
+      while (true) {
+        const res = await fetch(
+          `https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`,
+          {
+            headers: { "User-Agent": "terrence-iac-manager" },
+            signal: AbortSignal.timeout(15000),
+          },
+        );
+        if (!res.ok) break;
         const data = await res.json() as any[];
-        versions = data
+        if (!Array.isArray(data) || data.length === 0) break;
+        versions.push(...data
           .map(r => r.tag_name?.replace(/^v/, ""))
-          .filter((v): v is string => v && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+          .filter((v): v is string => v && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));
+        page++;
+        if (data.length < 100) break;
       }
     } else {
       const res = await fetch("https://releases.hashicorp.com/terraform/index.json", {
@@ -126,9 +152,10 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
       }
     }
     versions.sort(compareSemver);
+    versionCache.set(tool, { versions, fetchedAt: Date.now() });
     return versions;
   } catch {
-    return [];
+    return cached?.versions ?? [];
   }
 }
 
@@ -143,9 +170,8 @@ export async function resolveVersionConstraint(tool: "tofu" | "terraform", const
   // Fetch available versions and find best match
   const available = await fetchAvailableVersions(tool);
   if (available.length === 0) {
-    // Fall back to latest
-    console.warn(`[terrence] Could not fetch available versions for ${tool}, falling back to latest`);
-    return resolveLatestVersion(tool);
+    // No versions available — fail through ensureBinary error path
+    throw new Error(`Could not fetch available versions for ${tool}`);
   }
   // Find the highest version matching the constraint (iterate descending)
   for (let i = available.length - 1; i >= 0; i--) {
@@ -153,9 +179,8 @@ export async function resolveVersionConstraint(tool: "tofu" | "terraform", const
       return available[i];
     }
   }
-  // No match found — fall back to latest
-  console.warn(`[terrence] No version matching "${constraintExpr}" found for ${tool}, falling back to latest`);
-  return resolveLatestVersion(tool);
+  // No match found — throw
+  throw new Error(`No ${tool} version matching "${constraintExpr}" found`);
 }
 
 async function calculateSha256(buffer: ArrayBuffer): Promise<string> {
@@ -285,8 +310,20 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       if ((await sysProc.exited) === 0) {
         const sysPath = (await new Response(sysProc.stdout).text()).trim();
         if (sysPath) {
-          console.log(`[terrence] Falling back to system-installed ${tool} at ${sysPath}`);
-          return { binaryPath: sysPath, tool, version: `${version} (system-fallback)` };
+          // Validate the system binary version before accepting fallback
+          const versionProc = spawn([sysPath, "version"]);
+          if ((await versionProc.exited) === 0) {
+            const versionOutput = (await new Response(versionProc.stdout).text()).trim();
+            const vMatch = versionOutput.match(/(\d+\.\d+\.\d+)/);
+            if (vMatch) {
+              const sysVersion = vMatch[1];
+              if (matchesConstraints(sysVersion, version)) {
+                console.log(`[terrence] System-installed ${tool} v${sysVersion} satisfies constraint "${version}" at ${sysPath}`);
+                return { binaryPath: sysPath, tool, version: sysVersion };
+              }
+            }
+          }
+          console.warn(`[terrence] System-installed ${tool} at ${sysPath} does not satisfy version constraint "${version}", skipping`);
         }
       }
     } catch {}
