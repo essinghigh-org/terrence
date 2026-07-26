@@ -20,20 +20,28 @@ export function Register() {
     setSubmitting(true);
 
     try {
-      await fetchApi("/users", {
-        method: "POST",
-        body: JSON.stringify({
-          data: { type: "users", attributes: { username, password } },
-        }),
-      });
-      const login = await fetchApi("/users/login", {
-        method: "POST",
-        body: JSON.stringify({ data: { attributes: { username, password } } }),
-      });
-      setAuthToken(login.data.attributes.token);
-      navigate("/app");
-    } catch (caught: any) {
-      setError(caught.message || "Failed to create account");
+      try {
+        await fetchApi("/users", {
+          method: "POST",
+          body: JSON.stringify({
+            data: { type: "users", attributes: { username, password } },
+          }),
+        });
+      } catch (signupError: any) {
+        setError(signupError.message || "Failed to create account");
+        return;
+      }
+
+      try {
+        const login = await fetchApi("/users/login", {
+          method: "POST",
+          body: JSON.stringify({ data: { attributes: { username, password } } }),
+        });
+        setAuthToken(login.data.attributes.token);
+        navigate("/app");
+      } catch (loginError: any) {
+        setError("Account created, but failed to log in automatically. Please sign in.");
+      }
     } finally {
       setSubmitting(false);
     }

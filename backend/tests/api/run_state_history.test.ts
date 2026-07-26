@@ -243,6 +243,24 @@ describe("workspace run history and state metadata", () => {
     expect((await request(
       "/api/v2/state-version-outputs/wsout-missing",
     )).status).toBe(404);
+    const outsideUserId = `outside-user-${suffix}`;
+    const outsideToken = `outside-token-${suffix}`;
+    await db.insert(users).values({
+      id: outsideUserId,
+      username: `outside-${suffix}`,
+      passwordHash: "unused",
+    });
+    await db.insert(apiTokens).values({
+      id: `token-outside-${suffix}`,
+      token: outsideToken,
+      userId: outsideUserId,
+    });
+    expect((await app.handle(new Request(
+      `http://terrence.test/api/v2/state-version-outputs/${outputs.data[0].id}`,
+      { headers: { Authorization: `Bearer ${outsideToken}` } },
+    ))).status).toBe(404);
+    await db.delete(apiTokens).where(eq(apiTokens.id, `token-outside-${suffix}`));
+    await db.delete(users).where(eq(users.id, outsideUserId));
     expect((await request(
       `/api/v2/state-version-outputs/${outputs.data[0].id}`,
       false,

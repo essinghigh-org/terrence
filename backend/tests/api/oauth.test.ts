@@ -103,6 +103,23 @@ describe("Terraform login OAuth", () => {
     }
   });
 
+  it("rejects PKCE downgrade attempts (missing code_challenge or method plain)", async () => {
+    const baseParams = await authorizationParameters();
+
+    const missingChallengeParams = { ...baseParams };
+    delete (missingChallengeParams as any).code_challenge;
+    const missingRes = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization?${new URLSearchParams(missingChallengeParams)}`,
+    ));
+    expect(missingRes.status).toBe(400);
+
+    const plainMethodParams = { ...baseParams, code_challenge_method: "plain" };
+    const plainRes = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization?${new URLSearchParams(plainMethodParams)}`,
+    ));
+    expect(plainRes.status).toBe(400);
+  });
+
   it("rejects invalid credentials without redirecting", async () => {
     const response = await authorize({ password: "wrong-password" });
     const html = await response.text();

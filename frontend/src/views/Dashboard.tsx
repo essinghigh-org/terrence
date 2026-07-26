@@ -27,15 +27,28 @@ export function Dashboard() {
     fetchApi("/organizations").then(data => setOrgs(data.data)).catch(console.error);
   }, []);
 
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open) {
+      setError("");
+      setOrganizationName("");
+    }
+  };
+
   const createOrganization = async (event: React.FormEvent) => {
     event.preventDefault();
+    const trimmedName = organizationName.trim();
+    if (!trimmedName) {
+      setError("Organization name cannot be empty");
+      return;
+    }
     setCreating(true);
     setError("");
     try {
       const response = await fetchApi("/organizations", {
         method: "POST",
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: organizationName } },
+          data: { type: "organizations", attributes: { name: trimmedName } },
         }),
       });
       setOrgs(current => [...current, response.data]);
@@ -52,7 +65,7 @@ export function Dashboard() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-3xl font-bold">Organizations</h1>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogTrigger asChild>
             <Button>Create organization</Button>
           </DialogTrigger>

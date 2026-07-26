@@ -80,7 +80,7 @@ describe("Terraform cloud protocol contract", () => {
     }
   });
 
-  it("supports discovery, state fallback, configuration uploads, and run resources", async () => {
+  it("supports discovery and workspace endpoint details", async () => {
     const pingResponse = await request("/api/v2/ping");
     expect(pingResponse.status).toBe(200);
     expect(pingResponse.headers.get("TFP-API-Version")).toBe("2.5");
@@ -98,7 +98,9 @@ describe("Terraform cloud protocol contract", () => {
       "can-queue-run": true,
       "can-update": true,
     });
+  });
 
+  it("supports configuration version creation, upload, and listing", async () => {
     const createConfigurationResponse = await request(
       `/api/v2/workspaces/${workspaceId}/configuration-versions`,
       {
@@ -151,7 +153,9 @@ describe("Terraform cloud protocol contract", () => {
       "total-pages": 1,
       "total-count": 1,
     });
+  });
 
+  it("supports speculative runs and plan log URL shape verification", async () => {
     const speculativeRunResponse = await request("/api/v2/runs", {
       method: "POST",
       headers: { ...authHeaders, "Terraform-Version": "1.10.0" },
@@ -196,13 +200,18 @@ describe("Terraform cloud protocol contract", () => {
       `/api/v2/plans/plan-${speculativeRun.id}`,
       { headers: authHeaders },
     )).json() as any).data;
+    expect(speculativePlan.attributes["log-read-url"]).toMatch(
+      new RegExp(`^http://terrence\\.test/api/v2/runs/${speculativeRun.id}/plan/log/[^/]+$`),
+    );
     expect(speculativePlan.attributes["log-read-url"].endsWith(`/${speculativeRun.id}`)).toBe(false);
     expect((await request(speculativePlan.attributes["log-read-url"])).status).toBe(200);
     expect((await request(
       `/api/v2/runs/${speculativeRun.id}`,
       { method: "DELETE", headers: authHeaders },
     )).status).toBe(204);
+  });
 
+  it("supports state version creation, current version retrieval, and state download", async () => {
     const metadataOnlyStateResponse = await request(
       `/api/v2/workspaces/${workspaceId}/state-versions`,
       {
@@ -253,7 +262,9 @@ describe("Terraform cloud protocol contract", () => {
     const stateDownloadResponse = await request(stateDownloadUrl, { headers: authHeaders });
     expect(stateDownloadResponse.status).toBe(200);
     expect(await stateDownloadResponse.json()).toEqual(state);
+  });
 
+  it("supports run resource management, logs, plan/apply resources, and run actions", async () => {
     await db.insert(runs).values({
       id: runId,
       workspaceId,
@@ -261,6 +272,7 @@ describe("Terraform cloud protocol contract", () => {
       status: "planned",
       message: "Contract run",
       isDestroy: false,
+      logToken: runId,
       createdAt: Date.now(),
     });
     await db.insert(logs).values([
@@ -352,7 +364,9 @@ describe("Terraform cloud protocol contract", () => {
       expect(actionResponse.status).toBe(200);
       expect((await actionResponse.json() as any).data.attributes.status).toBe(status);
     }
+  });
 
+  it("supports run deletion", async () => {
     const deleteResponse = await request(
       `/api/v2/runs/${runId}`,
       { method: "DELETE", headers: authHeaders },

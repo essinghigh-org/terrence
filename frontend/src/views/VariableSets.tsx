@@ -27,7 +27,31 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { fetchApi } from "@/lib/api";
+
+async function fetchAllPages(path: string): Promise<any[]> {
+  let results: any[] = [];
+  let url: string | null = path;
+  while (url) {
+    const res = await fetchApi(url);
+    if (res?.data && Array.isArray(res.data)) {
+      results = results.concat(res.data);
+    }
+    const nextUrl = res?.links?.next || null;
+    const metaNext = res?.meta?.pagination?.["next-page"];
+    if (nextUrl) {
+      url = nextUrl;
+    } else if (metaNext) {
+      const parsed = new URL(url, "http://localhost");
+      parsed.searchParams.set("page[number]", String(metaNext));
+      url = `${parsed.pathname}${parsed.search}`;
+    } else {
+      url = null;
+    }
+  }
+  return results;
+}
 
 interface ResourceIdentifier {
   id: string;
@@ -103,9 +127,9 @@ function VariablesDialog({
     setFormOpen(false);
     setError("");
 
-    fetchApi(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
-      .then((response) => {
-        if (active) setVariables(response.data ?? []);
+    fetchAllPages(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
+      .then((data) => {
+        if (active) setVariables(data ?? []);
       })
       .catch((caught: unknown) => {
         if (active) setError(messageFrom(caught, "Failed to load variables"));
@@ -240,15 +264,15 @@ function VariablesDialog({
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                <select
-                  id="variable-category"
-                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value as VariableCategory)}
-                >
-                  <option value="terraform">Terraform</option>
-                  <option value="env">Environment</option>
-                </select>
+                <Select value={category} onValueChange={(val) => setCategory(val as VariableCategory)}>
+                  <SelectTrigger id="variable-category" className="w-full">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="terraform">Terraform</SelectItem>
+                    <SelectItem value="env">Environment</SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-description">Description</FieldLabel>
@@ -394,13 +418,13 @@ export function VariableSets() {
     setPageError("");
 
     Promise.all([
-      fetchApi(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
-      fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
+      fetchAllPages(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
+      fetchAllPages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
     ])
-      .then(([setsResponse, workspacesResponse]) => {
+      .then(([setsData, workspacesData]) => {
         if (!active) return;
-        setVariableSets(setsResponse.data ?? []);
-        setWorkspaces(workspacesResponse.data ?? []);
+        setVariableSets(setsData ?? []);
+        setWorkspaces(workspacesData ?? []);
       })
       .catch((error: unknown) => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
@@ -530,20 +554,18 @@ export function VariableSets() {
     setSavingWorkspaces(true);
     setWorkspaceError("");
     try {
-      await Promise.all([
-        attached.length
-          ? fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
-              method: "POST",
-              body: relationshipBody(attached),
-            })
-          : Promise.resolve(),
-        detached.length
-          ? fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
-              method: "DELETE",
-              body: relationshipBody(detached),
-            })
-          : Promise.resolve(),
-      ]);
+      if (attached.length) {
+        await fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
+          method: "POST",
+          body: relationshipBody(attached),
+        });
+      }
+      if (detached.length) {
+        await fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
+          method: "DELETE",
+          body: relationshipBody(detached),
+        });
+      }
 
       const updated: VariableSet = {
         ...workspaceSet,
@@ -564,6 +586,16 @@ export function VariableSets() {
       setWorkspaceSet(updated);
       setWorkspaceOpen(false);
     } catch (error: unknown) {
+      try {
+        const fetched = await fetchApi(`/varsets/${workspaceSet.id}`);
+        if (fetched?.data) {
+          const freshSet = fetched.data;
+          setVariableSets((current) =>
+            current.map((item) => (item.id === freshSet.id ? freshSet : item)),
+          );
+          setWorkspaceSet(freshSet);
+        }
+      } catch {}
       setWorkspaceError(messageFrom(error, "Failed to update workspace access"));
     } finally {
       setSavingWorkspaces(false);

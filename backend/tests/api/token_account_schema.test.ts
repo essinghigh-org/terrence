@@ -102,11 +102,15 @@ describe("account, token, and variable schema contracts", () => {
   });
 
   it("rejects expired tokens and tracks successful token use in milliseconds", async () => {
-    const before = Date.now();
+    const before = Date.now() - 100;
     const valid = await request("/api/v2/account/details");
     expect(valid.status).toBe(200);
 
-    const used = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, authTokenId) });
+    let used = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, authTokenId) });
+    for (let i = 0; i < 20 && !used?.lastUsedAt; i++) {
+      await Bun.sleep(10);
+      used = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, authTokenId) });
+    }
     expect(used?.lastUsedAt).toBeGreaterThanOrEqual(before);
     expect(used?.lastUsedAt).toBeLessThanOrEqual(Date.now());
 

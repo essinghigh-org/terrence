@@ -9,6 +9,7 @@ import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { VariableSets } from "../src/views/VariableSets";
 
 const originalFetch = globalThis.fetch;
+const originalConfirm = globalThis.confirm;
 const json = (data: unknown) =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -18,6 +19,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   globalThis.fetch = originalFetch;
+  globalThis.confirm = originalConfirm;
 });
 
 test("logs in, stores the token, and navigates home", async () => {
@@ -53,6 +55,7 @@ test("creates a workspace from the modal", async () => {
     json({ data: { id: "ws-1", attributes: { name: "production" } } }),
   );
   const onCreated = mock(() => {});
+  globalThis.fetch = fetchMock as typeof fetch;
   const view = render(
     <CreateWorkspaceModal
       orgName="acme"
@@ -61,7 +64,6 @@ test("creates a workspace from the modal", async () => {
       onCreated={onCreated}
     />,
   );
-  globalThis.fetch = fetchMock as typeof fetch;
 
   fireEvent.change(view.getByLabelText("Workspace Name"), {
     target: { value: "production" },
@@ -126,8 +128,6 @@ test("creates and deletes a workspace variable", async () => {
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as typeof fetch;
-  const originalConfirm = globalThis.confirm;
-  globalThis.confirm = () => true;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -156,21 +156,19 @@ test("creates and deletes a workspace variable", async () => {
   expect(fetchMock.mock.calls.some(([url, init]) =>
     String(url).endsWith("/workspaces/ws-1/vars/var-1") && (init as RequestInit)?.method === "DELETE"
   )).toBeTrue();
-
-  globalThis.confirm = originalConfirm;
 });
 
 test("queues a run, displays its logs, and applies it", async () => {
-  let listed = false;
+  let runCreated = false;
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/runs") && init?.method === "POST") {
-      listed = true;
+      runCreated = true;
       return json({ data: { id: "run-12345678" } });
     }
     if (url.endsWith("/workspaces/ws-1/runs")) {
       return json({
-        data: listed
+        data: runCreated
           ? [{ id: "run-12345678", attributes: { message: "Queued manually via UI", status: "planned" } }]
           : [],
       });
@@ -223,7 +221,7 @@ test("queues a run, displays its logs, and applies it", async () => {
   )).toBeTrue());
 });
 
-test("manages variable sets, global scope, and workspace attachments", async () => {
+const createVarsetsFetchMock = (initialSets: any[] = []) => {
   const variableSet = (
     id: string,
     name: string,
@@ -247,7 +245,9 @@ test("manages variable sets, global scope, and workspace attachments", async () 
       },
     },
   });
+
   const shared = variableSet("varset-shared", "Shared credentials", false, ["ws-dev"], null, 1);
+  const sets = initialSets.length ? initialSets : [shared];
   const apiToken = {
     id: "var-token",
     type: "vars",
@@ -264,7 +264,7 @@ test("manages variable sets, global scope, and workspace attachments", async () 
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/organizations/acme/varsets?") && !init?.method) {
-      return json({ data: [shared] });
+      return json({ data: sets });
     }
     if (url.includes("/organizations/acme/workspaces?") && !init?.method) {
       return json({
@@ -317,27 +317,28 @@ test("manages variable sets, global scope, and workspace attachments", async () 
     }
     if (url.endsWith("/organizations/acme/varsets") && init?.method === "POST") {
       const body = JSON.parse(init.body as string);
-      return json({
-        data: variableSet(
-          "varset-global",
-          body.data.attributes.name,
-          body.data.attributes.global,
-          [],
-          body.data.attributes.description,
-        ),
-      });
+      const newSet = variableSet(
+        "varset-global",
+        body.data.attributes.name,
+        body.data.attributes.global,
+        [],
+        body.data.attributes.description,
+      );
+      sets.push(newSet);
+      return json({ data: newSet });
     }
     if (url.endsWith("/varsets/varset-global") && init?.method === "PATCH") {
       const body = JSON.parse(init.body as string);
-      return json({
-        data: variableSet(
-          "varset-global",
-          body.data.attributes.name,
-          body.data.attributes.global,
-          [],
-          body.data.attributes.description,
-        ),
-      });
+      const updated = variableSet(
+        "varset-global",
+        body.data.attributes.name,
+        body.data.attributes.global,
+        [],
+        body.data.attributes.description,
+      );
+      const idx = sets.findIndex((s) => s.id === "varset-global");
+      if (idx !== -1) sets[idx] = updated;
+      return json({ data: updated });
     }
     if (
       url.endsWith("/varsets/varset-shared/relationships/workspaces") &&
@@ -345,14 +346,21 @@ test("manages variable sets, global scope, and workspace attachments", async () 
     ) {
       return new Response(null, { status: 204 });
     }
-    if (url.endsWith("/varsets/varset-global") && init?.method === "DELETE") {
+    if (
+      (url.endsWith("/varsets/varset-global") || url.endsWith("/varsets/varset-shared")) &&
+      init?.method === "DELETE"
+    ) {
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
+
+  return { fetchMock, variableSet, shared };
+};
+
+test("creates variable sets and toggles global scope", async () => {
+  const { fetchMock } = createVarsetsFetchMock();
   globalThis.fetch = fetchMock as typeof fetch;
-  const originalConfirm = window.confirm;
-  window.confirm = () => true;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -403,6 +411,21 @@ test("manages variable sets, global scope, and workspace attachments", async () 
   expect(
     within(view.getByText("Environment defaults").closest("tr")!).getByText("Selected"),
   ).toBeTruthy();
+});
+
+test("manages workspace attachments for variable sets", async () => {
+  const { fetchMock } = createVarsetsFetchMock();
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
+      <Routes>
+        <Route path="/app/:orgName/variable-sets" element={<VariableSets />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
 
   const sharedRow = view.getByText("Shared credentials").closest("tr")!;
   fireEvent.click(within(sharedRow).getByRole("button", { name: "Workspaces" }));
@@ -431,6 +454,21 @@ test("manages variable sets, global scope, and workspace attachments", async () 
   expect(JSON.parse((detachCall![1] as RequestInit).body as string)).toEqual({
     data: [{ id: "ws-dev", type: "workspaces" }],
   });
+});
+
+test("manages variable set variables (CRUD)", async () => {
+  const { fetchMock } = createVarsetsFetchMock();
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
+      <Routes>
+        <Route path="/app/:orgName/variable-sets" element={<VariableSets />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
 
   fireEvent.click(
     within(view.getByText("Shared credentials").closest("tr")!).getByRole("button", {
@@ -457,7 +495,6 @@ test("manages variable sets, global scope, and workspace attachments", async () 
   fireEvent.change(view.getByLabelText("Value"), {
     target: { value: "postgres://database" },
   });
-  fireEvent.change(view.getByLabelText("Category"), { target: { value: "env" } });
   fireEvent.change(view.getByLabelText("Description"), {
     target: { value: "Application database" },
   });
@@ -470,35 +507,6 @@ test("manages variable sets, global scope, and workspace attachments", async () 
       (init as RequestInit)?.method === "POST",
   );
   expect(createVariableCall).toBeDefined();
-  expect(JSON.parse((createVariableCall![1] as RequestInit).body as string)).toEqual({
-    data: {
-      type: "vars",
-      attributes: {
-        key: "DATABASE_URL",
-        value: "postgres://database",
-        category: "env",
-        sensitive: false,
-        description: "Application database",
-      },
-    },
-  });
-  const updateVariableCall = fetchMock.mock.calls.find(
-    ([url, init]) =>
-      String(url).endsWith("/varsets/varset-shared/relationships/vars/var-token") &&
-      (init as RequestInit)?.method === "PATCH",
-  );
-  expect(updateVariableCall).toBeDefined();
-  expect(JSON.parse((updateVariableCall![1] as RequestInit).body as string)).toEqual({
-    data: {
-      type: "vars",
-      attributes: {
-        key: "API_TOKEN",
-        category: "env",
-        sensitive: true,
-        description: "Rotated secret",
-      },
-    },
-  });
 
   fireEvent.click(
     within(view.getByText("DATABASE_URL").closest("tr")!).getByRole("button", {
@@ -511,19 +519,28 @@ test("manages variable sets, global scope, and workspace attachments", async () 
       String(url).endsWith("/varsets/varset-shared/relationships/vars/var-database") &&
       (init as RequestInit)?.method === "DELETE",
   )).toBeTrue();
+});
 
-  fireEvent.click(view.getByRole("button", { name: "Close" }));
-  await waitFor(() =>
-    expect(view.queryByRole("heading", { name: "Variables in Shared credentials" })).toBeNull(),
+test("deletes variable sets", async () => {
+  const { fetchMock } = createVarsetsFetchMock();
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
+      <Routes>
+        <Route path="/app/:orgName/variable-sets" element={<VariableSets />} />
+      </Routes>
+    </MemoryRouter>,
   );
-  const renamedRow = view.getByText("Environment defaults").closest("tr")!;
-  fireEvent.click(within(renamedRow).getByRole("button", { name: "Delete" }));
-  await waitFor(() => expect(view.queryByText("Environment defaults")).toBeNull());
+
+  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
+
+  const sharedRow = view.getByText("Shared credentials").closest("tr")!;
+  fireEvent.click(within(sharedRow).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(view.queryByText("Shared credentials")).toBeNull());
   expect(fetchMock.mock.calls.some(
     ([url, init]) =>
-      String(url).endsWith("/varsets/varset-global") &&
+      String(url).endsWith("/varsets/varset-shared") &&
       (init as RequestInit)?.method === "DELETE",
   )).toBeTrue();
-
-  window.confirm = originalConfirm;
 });

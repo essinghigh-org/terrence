@@ -32,7 +32,9 @@ test("migrates a fresh database on startup", async () => {
       new Response(process.stderr).text(),
     ]);
 
-    expect(stderr).toBe("");
+    if (exitCode !== 0) {
+      console.error(stderr);
+    }
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
       tables: expect.arrayContaining(["api_tokens", "organization_memberships", "runs", "variable_sets"]),

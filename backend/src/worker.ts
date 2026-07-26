@@ -15,7 +15,7 @@ import { eq, desc, asc, and, inArray } from "drizzle-orm";
 import { spawn } from "bun";
 import { join } from "path";
 import { tmpdir } from "os";
-import { mkdir, rm, writeFile, readFile, exists } from "fs/promises";
+import { mkdir, rm, writeFile, readFile, exists, readdir } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { workspaceExecutionDirectory } from "./workspace";
 
@@ -38,14 +38,34 @@ async function streamLog(
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
+  let buffer = "";
+  let lastFlush = Date.now();
+  const flushIntervalMs = 50;
+  const bufferThreshold = 1024;
+
+  const flush = async () => {
+    if (buffer.length > 0) {
+      const textToFlush = buffer;
+      buffer = "";
+      lastFlush = Date.now();
+      await writeLog(runId, phase, textToFlush);
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     const text = decoder.decode(value, { stream: true });
-    if (text) await writeLog(runId, phase, text);
+    if (text) {
+      buffer += text;
+      if (buffer.length >= bufferThreshold || Date.now() - lastFlush >= flushIntervalMs) {
+        await flush();
+      }
+    }
   }
   const tail = decoder.decode();
-  if (tail) await writeLog(runId, phase, tail);
+  if (tail) buffer += tail;
+  await flush();
 }
 
 function buildSanitizedEnv(workspaceVars: Array<{ key: string; value: string; category: string }>): Record<string, string> {
@@ -76,7 +96,7 @@ async function executionVariables(workspaceId: string, orgId: string) {
     db.query.variableSetWorkspaces.findMany({ where: eq(variableSetWorkspaces.workspaceId, workspaceId) }),
     db.query.variableSets.findMany({
       where: eq(variableSets.orgId, orgId),
-      orderBy: [asc(variableSets.id)],
+      orderBy: [asc(variableSets.name), asc(variableSets.id)],
     }),
   ]);
   const attached = new Set(links.map(link => link.variableSetId));
@@ -181,7 +201,6 @@ export async function executeRun(runId: string) {
     }
 
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
-    const { readdir } = await import("fs/promises");
     let dirFiles: string[];
     try {
       dirFiles = await readdir(executionDir);
@@ -341,7 +360,6 @@ export async function executeApply(runId: string) {
     const requestedTool = workspace.iacBinary || org?.defaultIacBinary || "tofu";
     const requestedVersion = run.terraformVersion || workspace.terraformVersion || org?.defaultTerraformVersion || "latest";
 
-    const { readdir } = await import("fs/promises");
     const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     const hasTfFiles = dirFiles.some(f => f.endsWith(".tf") || f.endsWith(".tf.json"));
     const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || process.env.NODE_ENV === "test";
@@ -355,9 +373,10 @@ export async function executeApply(runId: string) {
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
       const hasPlanFile = await exists(join(executionDir, "tfplan"));
-      const applyArgs = hasPlanFile
-        ? [binary, "apply", "-no-color", "-input=false", "tfplan"]
-        : [binary, "apply", "-no-color", "-input=false", "-auto-approve"];
+      if (!hasPlanFile) {
+        throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
+      }
+      const applyArgs = [binary, "apply", "-no-color", "-input=false", "tfplan"];
 
       const applyProc = spawn(applyArgs, {
         cwd: executionDir,
@@ -426,6 +445,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
   const pendingRuns = await db.query.runs.findMany({
     where: eq(runs.status, "pending"),
     orderBy: [asc(runs.createdAt)],
+    limit: 50,
   });
   const claimedRunIds: string[] = [];
   const claimedWorkspaceIds = new Set<string>();

@@ -96,7 +96,7 @@ CREATE TABLE `__new_runs` (
 	`is_destroy` integer DEFAULT false,
 	`created_at` integer NOT NULL,
 	FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`configuration_version_id`) REFERENCES `configuration_versions`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`configuration_version_id`) REFERENCES `configuration_versions`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
 INSERT INTO `__new_runs`("id", "workspace_id", "configuration_version_id", "status", "message", "is_destroy", "created_at") SELECT "id", "workspace_id", NULL, "status", "message", false, unixepoch() * 1000 FROM `runs`;--> statement-breakpoint

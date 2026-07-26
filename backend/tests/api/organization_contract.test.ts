@@ -14,7 +14,6 @@ describe("organization API contract", () => {
   const betaName = `${prefix}-beta`;
   const gammaName = `${prefix}-gamma`;
   const privateName = `${prefix}-private`;
-  let betaId = "";
 
   const request = (path: string, auth = token, method = "GET", body?: unknown) =>
     app.handle(new Request(`http://localhost${path}`, {
@@ -99,15 +98,19 @@ describe("organization API contract", () => {
   });
 
   it("scopes, searches, and paginates organization lists for users and organization tokens", async () => {
-    betaId = crypto.randomUUID();
+    await db.delete(organizations).where(like(organizations.name, `${prefix}%`));
+    const createdId = crypto.randomUUID();
+    const betaId = crypto.randomUUID();
     const gammaId = crypto.randomUUID();
     const privateId = crypto.randomUUID();
     await db.insert(organizations).values([
+      { id: createdId, name: createdName },
       { id: betaId, name: betaName },
       { id: gammaId, name: gammaName },
       { id: privateId, name: privateName },
     ]);
     await db.insert(organizationMemberships).values([
+      { id: crypto.randomUUID(), userId, orgId: createdId, role: "owner" },
       { id: crypto.randomUUID(), userId, orgId: betaId, role: "member" },
       { id: crypto.randomUUID(), userId, orgId: gammaId, role: "member" },
       { id: crypto.randomUUID(), userId: otherUserId, orgId: privateId, role: "owner" },

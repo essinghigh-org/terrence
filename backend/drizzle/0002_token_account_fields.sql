@@ -19,4 +19,5 @@ ALTER TABLE `__new_api_tokens` RENAME TO `api_tokens`;--> statement-breakpoint
 CREATE UNIQUE INDEX `api_tokens_token_unique` ON `api_tokens` (`token`);--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
 ALTER TABLE `users` ADD `email` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `users_email_unique` ON `users` (`email`);--> statement-breakpoint
 ALTER TABLE `workspace_variables` ADD `hcl` integer DEFAULT false;

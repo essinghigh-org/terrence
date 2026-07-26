@@ -45,9 +45,15 @@ async function findWorkspaceVar(workspaceId: string, varId: string) {
 }
 
 function validVariableAttributes(attributes: any, partial = false) {
+  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
+  const fields = Object.keys(attributes);
   const { key, value, category, sensitive, hcl, description } = attributes;
-  return (partial || value !== undefined)
+  return fields.every(field => allowedFields.includes(field))
+    && (!partial || fields.length > 0)
+    && (partial || value !== undefined)
     && (partial && key === undefined || typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key))
+    && (value === undefined || typeof value === "string")
     && (category === undefined || category === "terraform" || category === "env")
     && (sensitive === undefined || typeof sensitive === "boolean")
     && (hcl === undefined || typeof hcl === "boolean")
@@ -210,8 +216,8 @@ async function findAuthorizedRun(runId: string, userId: string | undefined, toke
 
 async function findLogCapability(runId: string, token: string) {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  if (!run) return;
-  const expected = Buffer.from(run.logToken || run.id);
+  if (!run || !run.logToken) return;
+  const expected = Buffer.from(run.logToken);
   const actual = Buffer.from(token);
   return expected.length === actual.length && timingSafeEqual(expected, actual) ? run : undefined;
 }
@@ -850,7 +856,7 @@ function planResource(run: typeof runs.$inferSelect, request: Request) {
       "has-changes": ["planned", "planned_and_finished", "applying", "applied"].includes(run.status),
       "generated-configuration": false,
       "execution-details": { mode: "remote" },
-      "log-read-url": apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken || run.id}`),
+      "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
     },
   };
 }
@@ -871,7 +877,7 @@ function applyResource(run: typeof runs.$inferSelect, request: Request) {
     type: "applies",
     attributes: {
       status,
-      "log-read-url": apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken || run.id}`),
+      "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
     },
   };
 }
@@ -894,16 +900,17 @@ export const app = new Elysia()
     generator: async (request, server) => {
       const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "");
       if (bearer) {
-        const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.token, bearer) });
-        if (token?.orgId) return `org:${token.orgId}`;
-        if (token?.userId) return `user:${token.userId}`;
+        return `token:${Bun.hash(bearer)}`;
       }
       return `ip:${server?.requestIP(request)?.address || "unknown"}`;
     },
   }))
   .use(oauthPlugin)
   .onRequest(({ set }) => {
-    set.headers["Access-Control-Allow-Origin"] = process.env.CORS_ORIGIN || "*";
+    const allowOrigin = process.env.CORS_ORIGIN || (process.env.NODE_ENV === "production" ? undefined : "*");
+    if (allowOrigin) {
+      set.headers["Access-Control-Allow-Origin"] = allowOrigin;
+    }
     set.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     set.headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";
     set.headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining";
@@ -1062,7 +1069,7 @@ export const app = new Elysia()
     const payload = body as any;
     const { username, password, email } = payload?.data?.attributes || {};
 
-    if (!username || !password) {
+    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
       set.status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
     }
@@ -1195,12 +1202,11 @@ export const app = new Elysia()
   }, { isAuth: true })
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params: { user_id }, user, request, set }) => {
     const target = await db.query.users.findFirst({ where: eq(users.id, user_id) });
-    if (!target) {
+    if (!target || !user || user.id !== user_id) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    if (!user || user.id !== user_id) return { data: [], ...pagination(request, number, size, 0) };
 
     const where = eq(apiTokens.userId, user_id);
     const [tokens, [{ total }]] = await Promise.all([
@@ -1900,12 +1906,14 @@ export const app = new Elysia()
         ? []
         : db.select({ workspaceId: workspaceTags.workspaceId, key: workspaceTags.key })
             .from(workspaceTags)
-            .where(inArray(workspaceTags.key, included)),
+            .innerJoin(workspaces, eq(workspaceTags.workspaceId, workspaces.id))
+            .where(and(eq(workspaces.orgId, org.id), inArray(workspaceTags.key, included))),
       excluded.length === 0
         ? []
         : db.select({ workspaceId: workspaceTags.workspaceId })
             .from(workspaceTags)
-            .where(inArray(workspaceTags.key, excluded)),
+            .innerJoin(workspaces, eq(workspaceTags.workspaceId, workspaces.id))
+            .where(and(eq(workspaces.orgId, org.id), inArray(workspaceTags.key, excluded))),
       taggedFilters.length === 0
         ? []
         : db.select({
@@ -1914,9 +1922,13 @@ export const app = new Elysia()
             value: workspaceTags.value,
           })
             .from(workspaceTags)
-            .where(or(...taggedFilters.map(filter =>
-              and(eq(workspaceTags.key, filter.key), eq(workspaceTags.value, filter.value))
-            ))!),
+            .innerJoin(workspaces, eq(workspaceTags.workspaceId, workspaces.id))
+            .where(and(
+              eq(workspaces.orgId, org.id),
+              or(...taggedFilters.map(filter =>
+                and(eq(workspaceTags.key, filter.key), eq(workspaceTags.value, filter.value))
+              ))!
+            )),
     ]);
     const conditions = [eq(workspaces.orgId, org.id)];
     const nameSearch = (params.get("search[name]") || params.get("search[wildcard-name]"))?.trim();
@@ -2513,7 +2525,7 @@ export const app = new Elysia()
     const where = eq(stateVersions.workspaceId, workspace_id);
     const [list, [{ total }]] = await Promise.all([
       db.query.stateVersions.findMany({
-        where: eq(stateVersions.workspaceId, workspace_id),
+        where,
         orderBy: [desc(stateVersions.serial)],
         limit: size,
         offset: (number - 1) * size,
@@ -2598,12 +2610,24 @@ export const app = new Elysia()
     };
   }, { isAuth: true })
   .get("/api/v2/state-version-outputs/:state_version_output_id", async ({ params: { state_version_output_id }, user, orgId, set }) => {
-    // ponytail: derived IDs require a state scan; persist outputs if state history makes this measurable.
-    const states = await db.select().from(stateVersions);
-    for (const state of states) {
-      const output = stateOutputResources(state).find(({ id }) => id === state_version_output_id);
-      if (output && await findAuthorizedWorkspace(state.workspaceId, user?.id, orgId)) {
-        return { data: output };
+    const userOrgs = orgId
+      ? [orgId]
+      : user?.id
+      ? (await db.select({ orgId: organizationMemberships.orgId }).from(organizationMemberships).where(eq(organizationMemberships.userId, user.id))).map(m => m.orgId)
+      : [];
+    if (userOrgs.length > 0) {
+      const wsRows = await db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.orgId, userOrgs));
+      const wsIds = wsRows.map(w => w.id);
+      if (wsIds.length > 0) {
+        const states = await db.select({ id: stateVersions.id, workspaceId: stateVersions.workspaceId, statePayload: stateVersions.statePayload })
+          .from(stateVersions)
+          .where(inArray(stateVersions.workspaceId, wsIds));
+        for (const state of states) {
+          const output = stateOutputResources(state as any).find(({ id }) => id === state_version_output_id);
+          if (output) {
+            return { data: output };
+          }
+        }
       }
     }
     set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -3125,20 +3149,38 @@ export const app = new Elysia()
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.update(runs).set({ status: "discarded" }).where(eq(runs.id, run_id));
+    const updated = await db.update(runs)
+      .set({ status: "discarded" })
+      .where(and(eq(runs.id, run_id), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"])))
+      .returning();
+    if (updated.length === 0) {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] };
+    }
     return { data: { id: run_id, type: "runs", attributes: { status: "discarded" } } };
   }, { isAuth: true })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, run_id));
+    const updated = await db.update(runs)
+      .set({ status: "canceled" })
+      .where(and(eq(runs.id, run_id), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"])))
+      .returning();
+    if (updated.length === 0) {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] };
+    }
     return { data: { id: run_id, type: "runs", attributes: { status: "canceled" } } };
   }, { isAuth: true })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.update(runs).set({ status: "force_canceled" }).where(eq(runs.id, run_id));
+    const updated = await db.update(runs)
+      .set({ status: "force_canceled" })
+      .where(and(eq(runs.id, run_id), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"])))
+      .returning();
+    if (updated.length === 0) {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] };
+    }
     return { data: { id: run_id, type: "runs", attributes: { status: "force_canceled" } } };
   }, { isAuth: true });

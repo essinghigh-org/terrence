@@ -17,6 +17,12 @@ type AuthorizationRequest = {
   state: string;
 };
 
+/**
+ * In-memory authorization code store for OAuth PKCE flow.
+ * SINGLE-INSTANCE DEPLOYMENT CONSTRAINT: Authorization codes are held in-memory with a short TTL.
+ * Multi-instance deployments require sticky routing (session affinity) or a shared persistence store
+ * so /oauth/authorization and /oauth/token requests reach the same node instance.
+ */
 const authorizationCodes = new Map<string, {
   codeChallenge: string;
   expiresAt: number;
@@ -234,12 +240,14 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     if (!user) return oauthError(set, "invalid_grant");
 
     const accessToken = `user-${crypto.randomUUID()}`;
+    const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS ?? 30 * 24 * 60 * 60 * 1000);
     await db.insert(apiTokens).values({
       id: crypto.randomUUID(),
       token: accessToken,
       userId: user.id,
       description: "Terraform CLI login",
       createdAt: Date.now(),
+      expiresAt: Date.now() + cliTokenTtlMs,
     });
 
     set.headers["Cache-Control"] = "no-store";

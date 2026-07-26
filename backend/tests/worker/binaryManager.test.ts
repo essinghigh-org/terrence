@@ -104,6 +104,7 @@ test("does not silently substitute the system binary for an exact version", asyn
         ...Bun.env,
         TEST_DIR: testDir,
         STORAGE_DIR: join(testDir, "storage"),
+        ALLOW_TOOL_FALLBACK: "false",
       },
       stdout: "pipe",
       stderr: "pipe",

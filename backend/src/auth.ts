@@ -24,9 +24,12 @@ export const authPlugin = new Elysia({ name: 'auth' })
       return { user: null, token: null, orgId: null };
     }
 
-    await db.update(apiTokens)
-      .set({ lastUsedAt: now })
-      .where(eq(apiTokens.id, token.id));
+    if (!token.lastUsedAt || now - token.lastUsedAt > 60000) {
+      db.update(apiTokens)
+        .set({ lastUsedAt: now })
+        .where(eq(apiTokens.id, token.id))
+        .catch(console.error);
+    }
     const usedToken = { ...token, lastUsedAt: now };
 
     if (token.userId) {

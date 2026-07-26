@@ -3,7 +3,7 @@ import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqli
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
-  email: text("email"),
+  email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
 });
 
@@ -58,7 +58,7 @@ export const configurationVersions = sqliteTable("configuration_versions", {
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "cascade" }),
+  configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "set null" }),
   status: text("status").notNull().default("pending"),
   message: text("message"),
   isDestroy: integer("is_destroy", { mode: "boolean" }).default(false),
@@ -69,7 +69,7 @@ export const runs = sqliteTable("runs", {
   targetAddrs: text("target_addrs", { mode: "json" }).$type<string[]>(),
   replaceAddrs: text("replace_addrs", { mode: "json" }).$type<string[]>(),
   variables: text("variables", { mode: "json" }).$type<Array<{ key: string; value: string }>>(),
-  logToken: text("log_token"),
+  logToken: text("log_token").$defaultFn(() => crypto.randomUUID()),
   terraformVersion: text("terraform_version"),
   debuggingMode: integer("debugging_mode", { mode: "boolean" }).notNull().default(false),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),

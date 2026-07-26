@@ -28,4 +28,6 @@ class ResizeObserver {
   disconnect() {}
 }
 
-Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserver });
+Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserver });
+globalThis.confirm = () => true;
+if (typeof window !== "undefined") window.confirm = () => true;

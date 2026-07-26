@@ -34,7 +34,7 @@ async function runWorkerScript(script: string, env: Record<string, string> = {})
 
 test("plans uploaded cloud configuration against the latest local state and records applied state", async () => {
   const result = await runWorkerScript(`
-    const { chmod, mkdir, readFile, writeFile } = await import("fs/promises");
+    const { chmod, mkdir, readFile, writeFile, exists, rm } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
     const {
@@ -67,7 +67,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
       "record_dir=" + JSON.stringify(recordDir),
       "case \\"$1\\" in",
       '  init) echo "$@" > "$record_dir/init-args"; cp terrence_backend_override.tf "$record_dir/backend-override" ;;',
-      '  plan) printf "plan-first\\n"; sleep 0.2; printf "plan-second\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
+      '  plan) printf "plan-first\\n"; touch "$record_dir/wait-sentinel"; while [ -f "$record_dir/wait-sentinel" ]; do sleep 0.01; done; printf "plan-second\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
       '  apply) echo "$PROVIDER_TOKEN" > "$record_dir/apply-provider-token"; echo "$TF_LOG" > "$record_dir/apply-tf-log"; cp "$record_dir/applied-state" terraform.tfstate ;;',
       "  *) exit 2 ;;",
       "esac",
@@ -139,13 +139,15 @@ test("plans uploaded cloud configuration against the latest local state and reco
 
     const execution = executeRun("run");
     let streamedBeforeExit = false;
+    const sentinelPath = join(recordDir, "wait-sentinel");
     for (let attempt = 0; attempt < 100; attempt++) {
       const planLogs = await db.query.logs.findMany({
         where: (log, { and, eq }) => and(eq(log.runId, "run"), eq(log.phase, "plan")),
       });
-      if (planLogs.some(log => log.outputText.includes("plan-first"))) {
+      if (planLogs.some(log => log.outputText.includes("plan-first")) || (await exists(sentinelPath))) {
         const active = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "run") });
         streamedBeforeExit = active?.status === "planning";
+        await rm(sentinelPath, { force: true });
         break;
       }
       await Bun.sleep(10);
@@ -243,7 +245,7 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 
 test("rejects configuration archives containing traversal paths or links", async () => {
   const result = await runWorkerScript(`
-    const { mkdir, symlink, writeFile } = await import("fs/promises");
+    const { mkdir, rm, writeFile, readFile, exists, symlink } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
     const { configurationVersions, logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
@@ -256,9 +258,14 @@ test("rejects configuration archives containing traversal paths or links", async
     await symlink("safe.txt", join(sourceDir, "link.txt"));
 
     const traversalArchive = join(testDir, "traversal.tar.gz");
-    const traversalTar = Bun.spawn([
+    let traversalTar = Bun.spawn([
       "tar", "-czf", traversalArchive, "--transform=s|safe.txt|../escaped.txt|", "-C", sourceDir, "safe.txt",
     ], { stderr: "ignore" });
+    if (await traversalTar.exited !== 0) {
+      traversalTar = Bun.spawn([
+        "tar", "-czf", traversalArchive, "-s", "|safe.txt|../escaped.txt|", "-C", sourceDir, "safe.txt",
+      ], { stderr: "ignore" });
+    }
     if (await traversalTar.exited !== 0) throw new Error("traversal tar failed");
 
     const linkArchive = join(testDir, "link.tar.gz");
