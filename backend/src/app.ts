@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
-import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers } from "./db/schema";
+import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments } from "./db/schema";
 import { and, eq, desc, asc, count, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { authPlugin } from "./auth";
@@ -77,13 +77,29 @@ function validVariableSetVariableAttributes(attributes: any, partial = false) {
 
 function validVariableSetAttributes(attributes: any, partial = false) {
   if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
-  const { name, description, global } = attributes;
+  const { name, description, global, priority } = attributes;
   const fields = Object.keys(attributes);
   return fields.length > 0
-    && fields.every(field => ["name", "description", "global"].includes(field))
+    && fields.every(field => ["name", "description", "global", "priority"].includes(field))
     && (partial && name === undefined || typeof name === "string" && Boolean(name.trim()))
     && (description === undefined || description === null || typeof description === "string")
-    && (global === undefined || typeof global === "boolean");
+    && (global === undefined || typeof global === "boolean")
+    && (priority === undefined || typeof priority === "boolean");
+}
+
+function workspaceVariableResource(v: typeof workspaceVariables.$inferSelect) {
+  return {
+    id: v.id,
+    type: "vars",
+    attributes: {
+      key: v.key,
+      value: v.sensitive ? null : v.value,
+      category: v.category,
+      sensitive: v.sensitive,
+      description: v.description,
+      hcl: v.hcl,
+    },
+  };
 }
 
 async function findAuthorizedVariableSet(
@@ -131,10 +147,12 @@ function variableSetVariableUpdate(
 }
 
 async function variableSetResource(variableSet: typeof variableSets.$inferSelect) {
-  // ponytail: one pair of relationship queries per set; batch if large organizations make this measurable.
-  const [workspaceLinks, variables] = await Promise.all([
+  const [workspaceLinks, projectLinks, variables] = await Promise.all([
     db.query.variableSetWorkspaces.findMany({
       where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
+    }),
+    db.query.variableSetProjects.findMany({
+      where: eq(variableSetProjects.variableSetId, variableSet.id),
     }),
     db.query.variableSetVariables.findMany({
       where: eq(variableSetVariables.variableSetId, variableSet.id),
@@ -147,14 +165,19 @@ async function variableSetResource(variableSet: typeof variableSets.$inferSelect
       name: variableSet.name,
       description: variableSet.description,
       global: variableSet.global,
+      priority: Boolean(variableSet.priority),
       "var-count": variables.length,
       "workspace-count": workspaceLinks.length,
+      "project-count": projectLinks.length,
     },
     relationships: {
       organization: { data: { id: variableSet.orgId, type: "organizations" } },
       parent: { data: { id: variableSet.orgId, type: "organizations" } },
       workspaces: {
         data: workspaceLinks.map(link => ({ id: link.workspaceId, type: "workspaces" })),
+      },
+      projects: {
+        data: projectLinks.map(link => ({ id: link.projectId, type: "projects" })),
       },
       vars: {
         data: variables.map(variable => ({ id: variable.id, type: "vars" })),
@@ -168,6 +191,13 @@ function workspaceRelationshipIds(body: unknown) {
   const data = (body as any)?.data;
   if (!Array.isArray(data) || data.length === 0) return;
   if (data.some(item => item?.type !== "workspaces" || typeof item?.id !== "string" || !item.id)) return;
+  return [...new Set(data.map(item => item.id as string))];
+}
+
+function projectRelationshipIds(body: unknown) {
+  const data = (body as any)?.data;
+  if (!Array.isArray(data) || data.length === 0) return;
+  if (data.some(item => item?.type !== "projects" || typeof item?.id !== "string" || !item.id)) return;
   return [...new Set(data.map(item => item.id as string))];
 }
 
@@ -227,20 +257,34 @@ async function workspaceResource(
   defaultIacBinary: string | null | undefined,
   canRun: boolean,
 ) {
-  // ponytail: one tag query per serialized workspace; batch if large workspace lists make this measurable.
   const tags = await db.query.workspaceTags.findMany({
     where: eq(workspaceTags.workspaceId, workspace.id),
     orderBy: [asc(workspaceTags.key)],
   });
+
   return {
     id: workspace.id,
     type: "workspaces",
     attributes: {
       actions: { "is-destroyable": canRun },
-      "allow-destroy-plan": true,
+      "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
       name: workspace.name,
       description: workspace.description,
       "auto-apply": workspace.autoApply,
+      "auto-apply-run-trigger": Boolean(workspace.autoApplyRunTrigger),
+      "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
+      "trigger-prefixes": workspace.triggerPrefixes ?? [],
+      "trigger-patterns": workspace.triggerPatterns ?? [],
+      "vcs-repo": workspace.vcsRepo ?? null,
+      "queue-all-runs": workspace.queueAllRuns ?? true,
+      "speculative-enabled": workspace.speculativeEnabled ?? true,
+      "global-remote-state": Boolean(workspace.globalRemoteState),
+      "project-remote-state": Boolean(workspace.projectRemoteState),
+      "agent-pool-id": workspace.agentPoolId ?? null,
+      "assessments-enabled": Boolean(workspace.assessmentsEnabled),
+      "auto-destroy-at": workspace.autoDestroyAt ?? null,
+      "auto-destroy-activity-duration": workspace.autoDestroyActivityDuration ?? null,
+      "setting-overwrites": workspace.settingOverwrites ?? null,
       "terraform-version": workspace.terraformVersion,
       "working-directory": workspace.workingDirectory,
       "source-name": workspace.sourceName,
@@ -249,7 +293,7 @@ async function workspaceResource(
       "iac-binary": workspace.iacBinary || defaultIacBinary || "tofu",
       "execution-mode": "remote",
       locked: workspace.locked,
-      "locked-reason": workspace.locked ? "Locked manually" : null,
+      "locked-reason": workspace.lockedReason ?? (workspace.locked ? "Locked manually" : null),
       operations: true,
       permissions: {
         "can-destroy": canRun,
@@ -274,13 +318,53 @@ async function workspaceResource(
       organization: {
         data: { id: workspace.orgId, type: "organizations" },
       },
+      project: {
+        data: workspace.projectId ? { id: workspace.projectId, type: "projects" } : null,
+      },
+      "ssh-key": {
+        data: workspace.sshKeyId ? { id: workspace.sshKeyId, type: "ssh-keys" } : null,
+      },
       "tag-bindings": {
         links: { related: `/api/v2/workspaces/${workspace.id}/tag-bindings` },
       },
       "effective-tag-bindings": {
         links: { related: `/api/v2/workspaces/${workspace.id}/effective-tag-bindings` },
       },
+      "remote-state-consumers": {
+        links: { related: `/api/v2/workspaces/${workspace.id}/relationships/remote-state-consumers` },
+      },
+      "data-retention-policy": {
+        links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
+      },
     },
+    links: { self: `/api/v2/workspaces/${workspace.id}` },
+  };
+}
+
+function projectResource(project: typeof projects.$inferSelect) {
+  return {
+    id: project.id,
+    type: "projects",
+    attributes: {
+      name: project.name,
+      description: project.description,
+      "default-execution-mode": project.defaultExecutionMode ?? "remote",
+      "auto-destroy-activity-duration": project.autoDestroyActivityDuration ?? null,
+      "setting-overwrites": project.settingOverwrites ?? null,
+      "created-at": new Date(project.createdAt).toISOString(),
+    },
+    relationships: {
+      organization: {
+        data: { id: project.orgId, type: "organizations" },
+      },
+      "tag-bindings": {
+        links: { related: `/api/v2/projects/${project.id}/tag-bindings` },
+      },
+      "effective-tag-bindings": {
+        links: { related: `/api/v2/projects/${project.id}/effective-tag-bindings` },
+      },
+    },
+    links: { self: `/api/v2/projects/${project.id}` },
   };
 }
 
@@ -289,6 +373,23 @@ function tagBindingResource(tag: typeof workspaceTags.$inferSelect, effective = 
     id: tag.id,
     type: effective ? "effective-tag-bindings" : "tag-bindings",
     attributes: { key: tag.key, value: tag.value || "" },
+  };
+}
+
+function projectTagBindingResource(pt: { id: string; projectId: string; key: string; value?: string | null }) {
+  return {
+    id: pt.id,
+    type: "tag-bindings",
+    attributes: {
+      key: pt.key,
+      value: pt.value ?? "",
+    },
+    relationships: {
+      project: {
+        data: { id: pt.projectId, type: "projects" },
+      },
+    },
+    links: { self: `/api/v2/projects/${pt.projectId}/tag-bindings/${pt.id}` },
   };
 }
 
@@ -412,10 +513,32 @@ async function updateWorkspaceResponse(
     }
   }
 
-  const updated = {
+  const projectRel = (body as any)?.data?.relationships?.project?.data;
+  let newProjectId = workspace.projectId;
+  if (projectRel !== undefined) {
+    newProjectId = projectRel ? projectRel.id : null;
+  }
+
+  const updated: Partial<typeof workspaces.$inferInsert> = {
     name: name ?? workspace.name,
     description: description !== undefined ? description : workspace.description,
-    autoApply: autoApply !== undefined ? autoApply : workspace.autoApply,
+    projectId: newProjectId,
+    autoApply: autoApply !== undefined ? Boolean(autoApply) : workspace.autoApply,
+    autoApplyRunTrigger: attributes["auto-apply-run-trigger"] !== undefined ? Boolean(attributes["auto-apply-run-trigger"]) : workspace.autoApplyRunTrigger,
+    fileTriggersEnabled: attributes["file-triggers-enabled"] !== undefined ? Boolean(attributes["file-triggers-enabled"]) : workspace.fileTriggersEnabled,
+    triggerPrefixes: attributes["trigger-prefixes"] !== undefined ? attributes["trigger-prefixes"] : workspace.triggerPrefixes,
+    triggerPatterns: attributes["trigger-patterns"] !== undefined ? attributes["trigger-patterns"] : workspace.triggerPatterns,
+    vcsRepo: attributes["vcs-repo"] !== undefined ? attributes["vcs-repo"] : workspace.vcsRepo,
+    queueAllRuns: attributes["queue-all-runs"] !== undefined ? Boolean(attributes["queue-all-runs"]) : workspace.queueAllRuns,
+    speculativeEnabled: attributes["speculative-enabled"] !== undefined ? Boolean(attributes["speculative-enabled"]) : workspace.speculativeEnabled,
+    allowDestroyPlan: attributes["allow-destroy-plan"] !== undefined ? Boolean(attributes["allow-destroy-plan"]) : workspace.allowDestroyPlan,
+    globalRemoteState: attributes["global-remote-state"] !== undefined ? Boolean(attributes["global-remote-state"]) : workspace.globalRemoteState,
+    projectRemoteState: attributes["project-remote-state"] !== undefined ? Boolean(attributes["project-remote-state"]) : workspace.projectRemoteState,
+    agentPoolId: attributes["agent-pool-id"] !== undefined ? attributes["agent-pool-id"] : workspace.agentPoolId,
+    assessmentsEnabled: attributes["assessments-enabled"] !== undefined ? Boolean(attributes["assessments-enabled"]) : workspace.assessmentsEnabled,
+    autoDestroyAt: attributes["auto-destroy-at"] !== undefined ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
+    autoDestroyActivityDuration: attributes["auto-destroy-activity-duration"] !== undefined ? attributes["auto-destroy-activity-duration"] : workspace.autoDestroyActivityDuration,
+    settingOverwrites: attributes["setting-overwrites"] !== undefined ? attributes["setting-overwrites"] : workspace.settingOverwrites,
     terraformVersion: terraformVersion ?? workspace.terraformVersion,
     workingDirectory: normalizedWorkingDirectory,
     sourceName: sourceName !== undefined ? sourceName : workspace.sourceName,
@@ -440,6 +563,10 @@ async function updateWorkspaceResponse(
 }
 
 function userResource(user: { id: string; username: string; email?: string | null }, authenticatedResource = { id: user.id, type: "users" }) {
+  const avatarUrl = user.email
+    ? `https://www.gravatar.com/avatar/${Bun.hash(user.email)}?d=identicon`
+    : `https://www.gravatar.com/avatar/${user.id}?d=identicon`;
+
   return {
     id: user.id,
     type: "users",
@@ -448,7 +575,7 @@ function userResource(user: { id: string; username: string; email?: string | nul
       email: user.email ?? null,
       "is-service-account": authenticatedResource.type !== "users",
       "auth-method": "local",
-      "avatar-url": null,
+      "avatar-url": avatarUrl,
       "v2-only": false,
       permissions: {
         "can-create-organizations": authenticatedResource.type === "users",
@@ -466,6 +593,35 @@ function userResource(user: { id: string; username: string; email?: string | nul
       },
     },
     links: { self: `/api/v2/users/${user.id}` },
+  };
+}
+
+function orgMembershipResource(
+  mem: { id: string; userId: string; orgId: string; role: string; status?: string | null },
+  userObj?: { id: string; username: string; email?: string | null } | null,
+  teamIds: string[] = []
+) {
+  return {
+    id: mem.id,
+    type: "organization-memberships",
+    attributes: {
+      status: mem.status || "active",
+      email: userObj?.email ?? null,
+      role: mem.role,
+    },
+    relationships: {
+      user: {
+        data: userObj ? { id: userObj.id, type: "users" } : null,
+        links: userObj ? { related: `/api/v2/users/${userObj.id}` } : undefined,
+      },
+      organization: {
+        data: { id: mem.orgId, type: "organizations" },
+      },
+      teams: {
+        data: teamIds.map(id => ({ id, type: "teams" })),
+      },
+    },
+    links: { self: `/api/v2/organization-memberships/${mem.id}` },
   };
 }
 
@@ -1195,12 +1351,163 @@ export const app = new Elysia()
     await db.update(users).set({ passwordHash: await bcrypt.hash(password, 10) }).where(eq(users.id, user.id));
     return { data: userResource(user) };
   }, { isAuth: true })
+
+  // --- USERS API ---
+  .get("/api/v2/users", async ({ query, user, set }) => {
+    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const usernameFilter = (query as any)?.["filter[username]"] || (query as any)?.q;
+    let allUsers;
+    if (usernameFilter) {
+      allUsers = await db.query.users.findMany({
+        where: (u, { like }) => like(u.username, `%${usernameFilter}%`),
+      });
+    } else {
+      allUsers = await db.query.users.findMany();
+    }
+    return { data: allUsers.map(u => userResource(u)) };
+  }, { isAuth: true })
   .get("/api/v2/users/:user_id", async ({ params: { user_id }, user, set }) => {
-    if (!user || user.id !== user_id) {
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser || !user) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: userResource(user) };
+    return { data: userResource(targetUser) };
+  }, { isAuth: true })
+  .patch("/api/v2/users/:user_id", async ({ params: { user_id }, body, user, set }) => {
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser || !user || (user.id !== user_id)) {
+      set.status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof users.$inferInsert> = {};
+    if (typeof attrs.username === "string" && attrs.username.trim()) updates.username = attrs.username.trim();
+    if (typeof attrs.email === "string") updates.email = attrs.email.trim();
+    if (Object.keys(updates).length > 0) {
+      await db.update(users).set(updates).where(eq(users.id, user_id));
+    }
+    const updated = (await db.query.users.findFirst({ where: eq(users.id, user_id) }))!;
+    return { data: userResource(updated) };
+  }, { isAuth: true })
+  .delete("/api/v2/users/:user_id", async ({ params: { user_id }, user, set }) => {
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
+    if (!targetUser || !user || user.id !== user_id) {
+      set.status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(users).where(eq(users.id, user_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- ORGANIZATION MEMBERSHIPS API ---
+  .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const email = attrs.email;
+    const username = attrs.username;
+    let targetUser = null;
+    if (email) targetUser = await db.query.users.findFirst({ where: eq(users.email, email) });
+    if (!targetUser && username) targetUser = await db.query.users.findFirst({ where: eq(users.username, username) });
+
+    if (!targetUser && email) {
+      const uid = `usr-${crypto.randomUUID()}`;
+      const uname = email.split("@")[0] + "_" + crypto.randomUUID().substring(0, 4);
+      await db.insert(users).values({ id: uid, username: uname, email, passwordHash: "invited" });
+      targetUser = (await db.query.users.findFirst({ where: eq(users.id, uid) }))!;
+    }
+
+    if (!targetUser) {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "User email or username required" }] };
+    }
+
+    const existingMem = await db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, targetUser.id)),
+    });
+
+    if (existingMem) {
+      set.status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "User is already a member of this organization" }] };
+    }
+
+    const memId = `orgmem-${crypto.randomUUID()}`;
+    const status = attrs.status || "active";
+    await db.insert(organizationMemberships).values({
+      id: memId,
+      orgId: org.id,
+      userId: targetUser.id,
+      role: "member",
+      status,
+    });
+
+    const teamRelData = (body as any)?.data?.relationships?.teams?.data;
+    const teamIds: string[] = [];
+    if (Array.isArray(teamRelData)) {
+      for (const t of teamRelData) {
+        if (t?.id) {
+          teamIds.push(t.id);
+          await db.insert(teamMemberships).values({
+            id: `tmem-${crypto.randomUUID()}`,
+            teamId: t.id,
+            userId: targetUser.id,
+            createdAt: Date.now(),
+          }).catch(() => {});
+        }
+      }
+    }
+
+    const mem = (await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) }))!;
+    set.status = 201;
+    return { data: orgMembershipResource(mem, targetUser, teamIds) };
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params: { org_name }, query, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const mems = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id) });
+    const userIds = mems.map(m => m.userId);
+    const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
+    const userMap = new Map(userList.map(u => [u.id, u]));
+
+    const includeUsers = (query as any)?.include?.split(",").includes("user");
+
+    const data = mems.map(m => orgMembershipResource(m, userMap.get(m.userId) || null));
+    const result: any = { data };
+
+    if (includeUsers && userList.length > 0) {
+      result.included = userList.map(u => userResource(u));
+    }
+
+    return result;
+  }, { isAuth: true })
+  .get("/api/v2/organization-memberships/:id", async ({ params: { id }, query, user, orgId: tokenOrgId, set }) => {
+    const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, id) });
+    if (!mem || !(await checkOrgPermission(user?.id, mem.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, mem.userId) });
+    const includeUsers = (query as any)?.include?.split(",").includes("user");
+
+    const result: any = { data: orgMembershipResource(mem, targetUser) };
+    if (includeUsers && targetUser) {
+      result.included = [userResource(targetUser)];
+    }
+    return result;
+  }, { isAuth: true })
+  .delete("/api/v2/organization-memberships/:id", async ({ params: { id }, user, orgId: tokenOrgId, set }) => {
+    const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, id) });
+    if (!mem || !(await checkOrgPermission(user?.id, mem.orgId, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, id));
+    set.status = 204;
+    return;
   }, { isAuth: true })
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params: { user_id }, user, request, set }) => {
     const target = await db.query.users.findFirst({ where: eq(users.id, user_id) });
@@ -1584,6 +1891,7 @@ export const app = new Elysia()
       name: attributes.name.trim(),
       description: attributes.description ?? null,
       global: attributes.global ?? false,
+      priority: attributes.priority ?? false,
     };
     await db.insert(variableSets).values(record);
     set.status = 201;
@@ -1615,6 +1923,7 @@ export const app = new Elysia()
       name: attributes.name === undefined ? record.name : attributes.name.trim(),
       description: attributes.description === undefined ? record.description : attributes.description,
       global: attributes.global === undefined ? record.global : attributes.global,
+      priority: attributes.priority === undefined ? record.priority : attributes.priority,
     };
     await db.update(variableSets).set(updated).where(eq(variableSets.id, record.id));
     return { data: await variableSetResource({ ...record, ...updated }) };
@@ -1674,6 +1983,43 @@ export const app = new Elysia()
     await db.delete(variableSetWorkspaces).where(and(
       eq(variableSetWorkspaces.variableSetId, record.id),
       inArray(variableSetWorkspaces.workspaceId, workspaceIds),
+    ));
+    set.status = 204;
+  }, { isAuth: true })
+  .post("/api/v2/varsets/:varset_id/relationships/projects", async ({ params: { varset_id }, user, orgId, body, set }) => {
+    const record = await findAuthorizedVariableSet(varset_id, user?.id, orgId);
+    if (!record) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const projectIds = projectRelationshipIds(body);
+    if (!projectIds) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationships" }] };
+    }
+    const targets = await db.query.projects.findMany({ where: inArray(projects.id, projectIds) });
+    if (targets.length !== projectIds.length || targets.some(p => p.orgId !== record.orgId)) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Projects must belong to the variable set organization" }] };
+    }
+    for (const pid of projectIds) {
+      await db.insert(variableSetProjects).values({
+        id: `vsp-${crypto.randomUUID()}`,
+        variableSetId: record.id,
+        projectId: pid,
+      }).onConflictDoNothing();
+    }
+    set.status = 204;
+  }, { isAuth: true })
+  .delete("/api/v2/varsets/:varset_id/relationships/projects", async ({ params: { varset_id }, user, orgId, body, set }) => {
+    const record = await findAuthorizedVariableSet(varset_id, user?.id, orgId);
+    if (!record) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const projectIds = projectRelationshipIds(body);
+    if (!projectIds) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationships" }] };
+    }
+    await db.delete(variableSetProjects).where(and(
+      eq(variableSetProjects.variableSetId, record.id),
+      inArray(variableSetProjects.projectId, projectIds),
     ));
     set.status = 204;
   }, { isAuth: true })
@@ -2042,13 +2388,49 @@ export const app = new Elysia()
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error.message }] };
     }
 
+    const projectRel = (body as any)?.data?.relationships?.project?.data;
+    let projectId = projectRel?.id || null;
+    if (!projectId) {
+      let defaultProj = await db.query.projects.findFirst({
+        where: and(eq(projects.orgId, org.id), eq(projects.name, "Default Project")),
+      });
+      if (!defaultProj) {
+        const pid = `proj-${crypto.randomUUID()}`;
+        await db.insert(projects).values({
+          id: pid,
+          orgId: org.id,
+          name: "Default Project",
+          description: "Default project for org",
+          createdAt: Date.now(),
+        }).onConflictDoNothing();
+        defaultProj = (await db.query.projects.findFirst({ where: eq(projects.id, pid) }))!;
+      }
+      if (defaultProj) projectId = defaultProj.id;
+    }
+
     const workspace = await db.transaction(async tx => {
       const [created] = await tx.insert(workspaces).values({
         id: crypto.randomUUID(),
         name,
         description: description ?? null,
         orgId: org.id,
+        projectId,
         autoApply: autoApply ?? false,
+        autoApplyRunTrigger: Boolean(attributes["auto-apply-run-trigger"]),
+        fileTriggersEnabled: attributes["file-triggers-enabled"] ?? true,
+        triggerPrefixes: attributes["trigger-prefixes"] ?? null,
+        triggerPatterns: attributes["trigger-patterns"] ?? null,
+        vcsRepo: attributes["vcs-repo"] ?? null,
+        queueAllRuns: attributes["queue-all-runs"] ?? true,
+        speculativeEnabled: attributes["speculative-enabled"] ?? true,
+        allowDestroyPlan: attributes["allow-destroy-plan"] ?? true,
+        globalRemoteState: Boolean(attributes["global-remote-state"]),
+        projectRemoteState: Boolean(attributes["project-remote-state"]),
+        agentPoolId: attributes["agent-pool-id"] ?? null,
+        assessmentsEnabled: Boolean(attributes["assessments-enabled"]),
+        autoDestroyAt: attributes["auto-destroy-at"] ?? null,
+        autoDestroyActivityDuration: attributes["auto-destroy-activity-duration"] ?? null,
+        settingOverwrites: attributes["setting-overwrites"] ?? null,
         terraformVersion: terraformVersion ?? "latest",
         workingDirectory: normalizedWorkingDirectory,
         sourceName: sourceName ?? null,
@@ -2200,17 +2582,36 @@ export const app = new Elysia()
     };
   }, { isAuth: true })
   .get("/api/v2/workspaces/:workspace_id/effective-tag-bindings", async ({ params: { workspace_id }, user, orgId, request, set }) => {
-    if (!(await findAuthorizedWorkspace(workspace_id, user?.id, orgId))) {
+    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
+    if (!ws) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    const tags = await db.query.workspaceTags.findMany({
+    const directTags = await db.query.workspaceTags.findMany({
       where: eq(workspaceTags.workspaceId, workspace_id),
       orderBy: [asc(workspaceTags.key)],
     });
+
+    const tagMap = new Map<string, { id: string; workspaceId: string; key: string; value: string | null }>();
+
+    if (ws.projectId) {
+      const projTags = await db.query.projectTags.findMany({
+        where: eq(projectTags.projectId, ws.projectId),
+      });
+      for (const pt of projTags) {
+        tagMap.set(pt.key, { id: pt.id, workspaceId: workspace_id, key: pt.key, value: pt.value });
+      }
+    }
+
+    for (const dt of directTags) {
+      tagMap.set(dt.key, dt);
+    }
+
+    const combinedTags = Array.from(tagMap.values()).sort((a, b) => a.key.localeCompare(b.key));
+
     return {
-      data: tags.slice((number - 1) * size, number * size).map(tag => tagBindingResource(tag, true)),
-      ...pagination(request, number, size, tags.length),
+      data: combinedTags.slice((number - 1) * size, number * size).map(tag => tagBindingResource(tag, true)),
+      ...pagination(request, number, size, combinedTags.length),
     };
   }, { isAuth: true })
   .patch("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params: { workspace_id }, body, user, orgId, set }) => {
@@ -2634,6 +3035,94 @@ export const app = new Elysia()
     }
     set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
   }, { isAuth: true })
+  .get("/api/v2/state-versions/:state_version_id/json-download", async ({ params: { state_version_id }, user, orgId, set }) => {
+    const state = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.id, state_version_id),
+    });
+    if (!state || !(await findAuthorizedWorkspace(state.workspaceId, user?.id, orgId))) {
+      set.status = 404; return "Not Found";
+    }
+    if (state.jsonState) return state.jsonState;
+    const parsed = parseStatePayload(state.statePayload);
+    return JSON.stringify(parsed || {});
+  }, { isAuth: true })
+  .delete("/api/v2/state-versions/:state_version_id", async ({ params: { state_version_id }, user, orgId, set }) => {
+    const state = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.id, state_version_id),
+    });
+    if (!state || !(await findAuthorizedWorkspace(state.workspaceId, user?.id, orgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(stateVersions).set({ status: "discarded" }).where(eq(stateVersions.id, state_version_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- DEPRECATED GLOBAL VARS API ---
+  .get("/api/v2/vars", async ({ user, orgId: tokenOrgId, set }) => {
+    const userOrgs = tokenOrgId
+      ? [tokenOrgId]
+      : user?.id
+      ? (await db.select({ orgId: organizationMemberships.orgId }).from(organizationMemberships).where(eq(organizationMemberships.userId, user.id))).map(m => m.orgId)
+      : [];
+    if (userOrgs.length === 0) return { data: [] };
+    const wsRows = await db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.orgId, userOrgs));
+    const wsIds = wsRows.map(w => w.id);
+    if (wsIds.length === 0) return { data: [] };
+    const vars = await db.query.workspaceVariables.findMany({ where: inArray(workspaceVariables.workspaceId, wsIds) });
+    return { data: vars.map(v => workspaceVariableResource(v)) };
+  }, { isAuth: true })
+  .post("/api/v2/vars", async ({ body, user, orgId: tokenOrgId, set }) => {
+    const attrs = (body as any)?.data?.attributes || {};
+    const wsId = (body as any)?.data?.relationships?.workspace?.data?.id;
+    if (!wsId || !attrs.key || attrs.value === undefined) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const ws = await findAuthorizedWorkspace(wsId, user?.id, tokenOrgId);
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const id = `var-${crypto.randomUUID()}`;
+    await db.insert(workspaceVariables).values({
+      id,
+      workspaceId: wsId,
+      key: attrs.key,
+      value: attrs.value,
+      category: attrs.category || "terraform",
+      hcl: Boolean(attrs.hcl),
+      sensitive: Boolean(attrs.sensitive),
+      description: attrs.description ?? null,
+    });
+    const created = (await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, id) }))!;
+    set.status = 201;
+    return { data: workspaceVariableResource(created) };
+  }, { isAuth: true })
+  .patch("/api/v2/vars/:var_id", async ({ params: { var_id }, body, user, orgId: tokenOrgId, set }) => {
+    const v = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, var_id) });
+    if (!v || !(await findAuthorizedWorkspace(v.workspaceId, user?.id, tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof workspaceVariables.$inferInsert> = {};
+    if (attrs.key !== undefined) updates.key = attrs.key;
+    if (attrs.value !== undefined) updates.value = attrs.value;
+    if (attrs.category !== undefined) updates.category = attrs.category;
+    if (attrs.hcl !== undefined) updates.hcl = Boolean(attrs.hcl);
+    if (attrs.sensitive !== undefined) updates.sensitive = Boolean(attrs.sensitive);
+    if (attrs.description !== undefined) updates.description = attrs.description;
+    if (Object.keys(updates).length > 0) {
+      await db.update(workspaceVariables).set(updates).where(eq(workspaceVariables.id, var_id));
+    }
+    const updated = (await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, var_id) }))!;
+    return { data: workspaceVariableResource(updated) };
+  }, { isAuth: true })
+  .delete("/api/v2/vars/:var_id", async ({ params: { var_id }, user, orgId: tokenOrgId, set }) => {
+    const v = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, var_id) });
+    if (!v || !(await findAuthorizedWorkspace(v.workspaceId, user?.id, tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(workspaceVariables).where(eq(workspaceVariables.id, var_id));
+    set.status = 204;
+  }, { isAuth: true })
   .get("/api/v2/state-versions/:state_version_id/download", async ({ params: { state_version_id }, user, orgId, set }) => {
     const state = await db.query.stateVersions.findFirst({
         where: eq(stateVersions.id, state_version_id)
@@ -2762,7 +3251,7 @@ export const app = new Elysia()
         }
     };
   }, { isAuth: true })
-  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params: { cv_id }, request, set }) => {
+  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params: { cv_id }, body, request, set }) => {
     const cv = await db.query.configurationVersions.findFirst({
         where: eq(configurationVersions.id, cv_id)
     });
@@ -2776,8 +3265,19 @@ export const app = new Elysia()
     await mkdir(CV_STORAGE_DIR, { recursive: true });
     const archivePath = join(CV_STORAGE_DIR, `${cv_id}.tar.gz`);
 
-    const buffer = await request.arrayBuffer();
-    await writeFile(archivePath, Buffer.from(buffer));
+    let bufferData: Buffer;
+    if (body instanceof Uint8Array || body instanceof ArrayBuffer) {
+      bufferData = Buffer.from(body as any);
+    } else if (Buffer.isBuffer(body)) {
+      bufferData = body;
+    } else if (!request.bodyUsed) {
+      const buffer = await request.arrayBuffer();
+      bufferData = Buffer.from(buffer);
+    } else {
+      bufferData = Buffer.from("");
+    }
+
+    await writeFile(archivePath, bufferData);
 
     await db.update(configurationVersions).set({ status: "uploaded", archivePath }).where(eq(configurationVersions.id, cv_id));
     set.status = 200;
@@ -3121,7 +3621,7 @@ export const app = new Elysia()
     set.headers["Content-Type"] = "text/plain";
     return logChunk(applyLogs.map(l => l.outputText).join("\n"), request);
   }, { isAuth: true })
-  .post("/api/v2/runs/:run_id/actions/apply", async ({ params: { run_id }, user, orgId, set }) => {
+  .post("/api/v2/runs/:run_id/actions/apply", async ({ params: { run_id }, body, user, orgId, set }) => {
     const authorized = await findAuthorizedRun(run_id, user?.id, orgId);
     if (!authorized) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -3137,6 +3637,18 @@ export const app = new Elysia()
       set.status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Run must be planned before apply" }] };
     }
+
+    const commentStr = (body as any)?.comment || (body as any)?.data?.attributes?.comment;
+    if (commentStr && typeof commentStr === "string") {
+      await db.insert(runComments).values({
+        id: `rc-${crypto.randomUUID()}`,
+        runId: run_id,
+        userId: user?.id ?? null,
+        body: commentStr,
+        createdAt: Date.now(),
+      });
+    }
+
     executeApply(authorized.run.id).catch(console.error);
 
     return {
@@ -3147,6 +3659,545 @@ export const app = new Elysia()
         }
     };
   }, { isAuth: true })
+
+  // --- AGENT POOLS API ---
+  .get("/api/v2/organizations/:org_name/agent-pools", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
+    return {
+      data: pools.map(p => ({
+        id: p.id,
+        type: "agent-pools",
+        attributes: {
+          name: p.name,
+          "organization-scoped": p.organizationScoped,
+          "agent-count": 0,
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/organizations/:org_name/agent-pools", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.name) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const id = `apool-${crypto.randomUUID()}`;
+    await db.insert(agentPools).values({
+      id,
+      orgId: org.id,
+      name: attrs.name,
+      organizationScoped: attrs["organization-scoped"] ?? true,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "agent-pools",
+        attributes: {
+          name: attrs.name,
+          "organization-scoped": attrs["organization-scoped"] ?? true,
+          "agent-count": 0,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .get("/api/v2/agent-pools/:pool_id", async ({ params: { pool_id }, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: pool.id,
+        type: "agent-pools",
+        attributes: {
+          name: pool.name,
+          "organization-scoped": pool.organizationScoped,
+          "agent-count": 0,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/agent-pools/:pool_id", async ({ params: { pool_id }, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(agentPools).where(eq(agentPools.id, pool_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- POLICY SET PARAMETERS & EXCLUSIONS API ---
+  .get("/api/v2/policy-sets/:policy_set_id/parameters", async ({ params: { policy_set_id }, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const paramsList = await db.query.policySetParameters.findMany({ where: eq(policySetParameters.policySetId, policy_set_id) });
+    return {
+      data: paramsList.map(p => ({
+        id: p.id,
+        type: "vars",
+        attributes: {
+          key: p.key,
+          value: p.sensitive ? null : p.value,
+          sensitive: p.sensitive,
+          hcl: p.hcl,
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/policy-sets/:policy_set_id/parameters", async ({ params: { policy_set_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
+    if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.key) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const id = `psparam-${crypto.randomUUID()}`;
+    await db.insert(policySetParameters).values({
+      id,
+      policySetId: policy_set_id,
+      key: attrs.key,
+      value: attrs.value ?? "",
+      sensitive: attrs.sensitive ?? false,
+      hcl: attrs.hcl ?? false,
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "vars",
+        attributes: {
+          key: attrs.key,
+          value: attrs.sensitive ? null : (attrs.value ?? ""),
+          sensitive: attrs.sensitive ?? false,
+          hcl: attrs.hcl ?? false,
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  // --- WEBHOOK RECEIVERS (GITHUB, GITLAB, BITBUCKET) ---
+  .post("/api/webhooks/github", async ({ body, set }) => {
+    return { status: "received", provider: "github" };
+  })
+  .post("/api/webhooks/gitlab", async ({ body, set }) => {
+    return { status: "received", provider: "gitlab" };
+  })
+  .post("/api/webhooks/bitbucket", async ({ body, set }) => {
+    return { status: "received", provider: "bitbucket" };
+  })
+  .get("/api/v2/runs/:run_id/comments", async ({ params: { run_id }, user, orgId, set }) => {
+    if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const commentsList = await db.query.runComments.findMany({ where: eq(runComments.runId, run_id) });
+    return {
+      data: commentsList.map(c => ({
+        id: c.id,
+        type: "comments",
+        attributes: {
+          body: c.body,
+          "created-at": new Date(c.createdAt).toISOString(),
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/runs/:run_id/comments", async ({ params: { run_id }, body, user, orgId, set }) => {
+    if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const text = (body as any)?.data?.attributes?.body || (body as any)?.body;
+    if (!text || typeof text !== "string") {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const id = `rc-${crypto.randomUUID()}`;
+    await db.insert(runComments).values({
+      id,
+      runId: run_id,
+      userId: user?.id ?? null,
+      body: text,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "comments",
+        attributes: {
+          body: text,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/comments/:comment_id", async ({ params: { comment_id }, user, orgId, set }) => {
+    const c = await db.query.runComments.findFirst({ where: eq(runComments.id, comment_id) });
+    if (!c || !(await findAuthorizedRun(c.runId, user?.id, orgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(runComments).where(eq(runComments.id, comment_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- PLAN JSON OUTPUT API ---
+  .get("/api/v2/plans/:plan_id/json-output", async ({ params: { plan_id }, user, orgId, set }) => {
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, plan_id) });
+    if (!run || !(await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      format_version: "1.0",
+      terraform_version: run.terraformVersion || "latest",
+      changes: { resource_changes: [] },
+    };
+  }, { isAuth: true })
+
+  // --- TEAM AUTHENTICATION TOKEN API ---
+  .post("/api/v2/teams/:team_id/authentication-token", async ({ params: { team_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const token = `team-tok-${crypto.randomUUID()}`;
+    const id = `tok-${crypto.randomUUID()}`;
+    await db.delete(apiTokens).where(eq(apiTokens.teamId, team_id));
+    await db.insert(apiTokens).values({
+      id,
+      token,
+      teamId: team_id,
+      orgId: team.orgId,
+      description: `Team token for ${team.name}`,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "authentication-tokens",
+        attributes: {
+          token,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+  .get("/api/v2/teams/:team_id/authentication-token", async ({ params: { team_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tok = await db.query.apiTokens.findFirst({ where: eq(apiTokens.teamId, team_id) });
+    if (!tok) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: tok.id,
+        type: "authentication-tokens",
+        attributes: {
+          "created-at": new Date(tok.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/teams/:team_id/authentication-token", async ({ params: { team_id }, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(apiTokens).where(eq(apiTokens.teamId, team_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- ORGANIZATION AUTHENTICATION TOKEN API ---
+  .post("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const token = `org-tok-${crypto.randomUUID()}`;
+    const id = `tok-${crypto.randomUUID()}`;
+    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)));
+    await db.insert(apiTokens).values({
+      id,
+      token,
+      orgId: org.id,
+      description: `Organization token for ${org.name}`,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "authentication-tokens",
+        attributes: {
+          token,
+          "created-at": new Date().toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tok = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)) });
+    if (!tok) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: tok.id,
+        type: "authentication-tokens",
+        attributes: {
+          "created-at": new Date(tok.createdAt).toISOString(),
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.userId, null), eq(apiTokens.teamId, null)));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- RUN TASKS API ---
+  .get("/api/v2/organizations/:org_name/run-tasks", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
+    return {
+      data: tasksList.map(t => ({
+        id: t.id,
+        type: "run-tasks",
+        attributes: {
+          name: t.name,
+          description: t.description,
+          url: t.url,
+          category: t.category,
+          enabled: t.enabled,
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/organizations/:org_name/run-tasks", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.name || !attrs.url) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const id = `task-${crypto.randomUUID()}`;
+    await db.insert(runTasks).values({
+      id,
+      orgId: org.id,
+      name: attrs.name,
+      description: attrs.description ?? null,
+      url: attrs.url,
+      category: attrs.category || "general",
+      enabled: attrs.enabled ?? true,
+      hmacKey: attrs["hmac-key"] ?? null,
+      createdAt: Date.now(),
+    });
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "run-tasks",
+        attributes: {
+          name: attrs.name,
+          description: attrs.description ?? null,
+          url: attrs.url,
+          category: attrs.category || "general",
+          enabled: attrs.enabled ?? true,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .get("/api/v2/run-tasks/:task_id", async ({ params: { task_id }, user, orgId: tokenOrgId, set }) => {
+    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, task_id) });
+    if (!task || !(await checkOrgPermission(user?.id, task.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: task.id,
+        type: "run-tasks",
+        attributes: {
+          name: task.name,
+          description: task.description,
+          url: task.url,
+          category: task.category,
+          enabled: task.enabled,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .patch("/api/v2/run-tasks/:task_id", async ({ params: { task_id }, body, user, orgId: tokenOrgId, set }) => {
+    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, task_id) });
+    if (!task || !(await checkOrgPermission(user?.id, task.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const updates: Partial<typeof runTasks.$inferInsert> = {};
+    if (attrs.name !== undefined) updates.name = attrs.name;
+    if (attrs.description !== undefined) updates.description = attrs.description;
+    if (attrs.url !== undefined) updates.url = attrs.url;
+    if (attrs.enabled !== undefined) updates.enabled = attrs.enabled;
+    if (Object.keys(updates).length > 0) {
+      await db.update(runTasks).set(updates).where(eq(runTasks.id, task_id));
+    }
+    const updated = (await db.query.runTasks.findFirst({ where: eq(runTasks.id, task_id) }))!;
+    return {
+      data: {
+        id: updated.id,
+        type: "run-tasks",
+        attributes: {
+          name: updated.name,
+          description: updated.description,
+          url: updated.url,
+          category: updated.category,
+          enabled: updated.enabled,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/run-tasks/:task_id", async ({ params: { task_id }, user, orgId: tokenOrgId, set }) => {
+    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, task_id) });
+    if (!task || !(await checkOrgPermission(user?.id, task.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(runTasks).where(eq(runTasks.id, task_id));
+    set.status = 204;
+  }, { isAuth: true })
+  .get("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspace_id) });
+    return {
+      data: bindings.map(b => ({
+        id: b.id,
+        type: "workspace-run-tasks",
+        attributes: {
+          stage: b.stage,
+          "enforcement-level": b.enforcementLevel,
+        },
+        relationships: {
+          "run-task": { data: { id: b.runTaskId, type: "run-tasks" } },
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
+    if (!ws) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const taskId = (body as any)?.data?.relationships?.["run-task"]?.data?.id || (body as any)?.data?.attributes?.["run-task-id"];
+    if (!taskId) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const id = `wrt-${crypto.randomUUID()}`;
+    await db.insert(workspaceRunTasks).values({
+      id,
+      workspaceId: workspace_id,
+      runTaskId: taskId,
+      stage: attrs.stage || "post_plan",
+      enforcementLevel: attrs["enforcement-level"] || "advisory",
+    }).onConflictDoNothing();
+    set.status = 201;
+    return {
+      data: {
+        id,
+        type: "workspace-run-tasks",
+        attributes: {
+          stage: attrs.stage || "post_plan",
+          "enforcement-level": attrs["enforcement-level"] || "advisory",
+        },
+      },
+    };
+  }, { isAuth: true })
+
+  // --- AUDIT LOGS & ENTITLEMENTS API ---
+  .get("/api/v2/admin/audit-logs", async ({ user, orgId: tokenOrgId, set }) => {
+    if (!user?.isSiteAdmin) {
+      set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
+    }
+    const logsList = await db.query.auditLogs.findMany({ limit: 100, orderBy: [desc(auditLogs.createdAt)] });
+    return {
+      data: logsList.map(al => ({
+        id: al.id,
+        type: "audit-logs",
+        attributes: {
+          action: al.action,
+          "resource-type": al.resourceType,
+          "resource-id": al.resourceId,
+          details: al.details,
+          "created-at": new Date(al.createdAt).toISOString(),
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .get("/api/v2/organizations/:org_name/audit-logs", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
+    if (!org || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
+    return {
+      data: logsList.map(al => ({
+        id: al.id,
+        type: "audit-logs",
+        attributes: {
+          action: al.action,
+          "resource-type": al.resourceType,
+          "resource-id": al.resourceId,
+          details: al.details,
+          "created-at": new Date(al.createdAt).toISOString(),
+        },
+      })),
+    };
+  }, { isAuth: true })
+  .get("/api/v2/entitlements", async ({ set }) => {
+    return {
+      data: {
+        id: "entitlements",
+        type: "entitlements",
+        attributes: {
+          agents: true,
+          audit_logging: true,
+          sentinel: true,
+          state_storage: true,
+          teams: true,
+          vcs_integrations: true,
+          run_tasks: true,
+        },
+      },
+    };
+  })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -3342,6 +4393,27 @@ export const app = new Elysia()
     return;
   }, { isAuth: true })
 
+  .post("/api/v2/teams/:team_id/relationships/organization-memberships", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
+    if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (item?.id) {
+          const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, item.id) });
+          if (mem && mem.orgId === team.orgId) {
+            const id = `tm-${crypto.randomUUID()}`;
+            await db.insert(teamMemberships).values({ id, teamId: team_id, userId: mem.userId, createdAt: Date.now() }).onConflictDoNothing();
+          }
+        }
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
   .post("/api/v2/teams/:team_id/authentication-tokens", async ({ params: { team_id }, body, user, orgId: tokenOrgId, set }) => {
     const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
     if (!team || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId))) {
@@ -3349,7 +4421,11 @@ export const app = new Elysia()
     }
     const secret = `team-${crypto.randomUUID().replace(/-/g, "")}`;
     const tokenId = `tok-${crypto.randomUUID()}`;
-    const description = (body as any)?.data?.attributes?.description ?? `Team token for ${team.name}`;
+    const attrs = (body as any)?.data?.attributes || {};
+    const description = attrs.description ?? `Team token for ${team.name}`;
+    const expiredAtStr = attrs["expired-at"] || attrs["expires-at"] || attrs.expiredAt || attrs.expiresAt;
+    const expiresAt = expiredAtStr ? new Date(expiredAtStr).getTime() : null;
+
     await db.insert(apiTokens).values({
       id: tokenId,
       token: secret,
@@ -3357,6 +4433,7 @@ export const app = new Elysia()
       teamId: team.id,
       description,
       createdAt: Date.now(),
+      expiresAt,
     });
     set.status = 201;
     return {
@@ -3367,6 +4444,7 @@ export const app = new Elysia()
           token: secret,
           description,
           "created-at": new Date().toISOString(),
+          "expired-at": expiresAt ? new Date(expiresAt).toISOString() : null,
         },
       },
     };
@@ -3607,6 +4685,231 @@ export const app = new Elysia()
     await db.delete(projects).where(eq(projects.id, project_id));
     set.status = 204;
     return;
+  }, { isAuth: true })
+
+  // --- PROJECT TAG BINDINGS API ---
+  .get("/api/v2/projects/:project_id/tag-bindings", async ({ params: { project_id }, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, project_id) });
+    return { data: tags.map(t => projectTagBindingResource(t)) };
+  }, { isAuth: true })
+  .get("/api/v2/projects/:project_id/effective-tag-bindings", async ({ params: { project_id }, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, project_id) });
+    return { data: tags.map(t => projectTagBindingResource(t)) };
+  }, { isAuth: true })
+  .post("/api/v2/projects/:project_id/tag-bindings", async ({ params: { project_id }, body, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    const tagList = Array.isArray(items) ? items : [items];
+    const created: any[] = [];
+    for (const item of tagList) {
+      const key = item?.attributes?.key;
+      const value = item?.attributes?.value ?? null;
+      if (key && typeof key === "string") {
+        const existing = await db.query.projectTags.findFirst({
+          where: and(eq(projectTags.projectId, project_id), eq(projectTags.key, key)),
+        });
+        if (existing) {
+          await db.update(projectTags).set({ value }).where(eq(projectTags.id, existing.id));
+        } else {
+          const id = `ptag-${crypto.randomUUID()}`;
+          await db.insert(projectTags).values({ id, projectId: project_id, key, value });
+        }
+        const pt = (await db.query.projectTags.findFirst({ where: and(eq(projectTags.projectId, project_id), eq(projectTags.key, key)) }))!;
+        created.push(projectTagBindingResource(pt));
+      }
+    }
+    set.status = 201;
+    return { data: created.length === 1 ? created[0] : created };
+  }, { isAuth: true })
+  .delete("/api/v2/projects/:project_id/tag-bindings", async ({ params: { project_id }, body, user, orgId: tokenOrgId, set }) => {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, project_id) });
+    if (!project || !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    const tagList = Array.isArray(items) ? items : [items];
+    const keys = tagList.map((i: any) => i?.attributes?.key || i?.key).filter(Boolean);
+    if (keys.length > 0) {
+      await db.delete(projectTags).where(and(eq(projectTags.projectId, project_id), inArray(projectTags.key, keys)));
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- WORKSPACE REMOTE STATE CONSUMERS API ---
+  .get("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspace_id) });
+    return {
+      data: consumers.map(c => ({
+        id: c.consumerWorkspaceId,
+        type: "workspaces",
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    const list = Array.isArray(items) ? items : [items];
+    for (const item of list) {
+      if (item?.id) {
+        await db.insert(remoteStateConsumers).values({
+          id: `rsc-${crypto.randomUUID()}`,
+          workspaceId: workspace_id,
+          consumerWorkspaceId: item.id,
+        }).onConflictDoNothing();
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspace_id));
+    const items = (body as any)?.data;
+    const list = Array.isArray(items) ? items : [items];
+    for (const item of list) {
+      if (item?.id) {
+        await db.insert(remoteStateConsumers).values({
+          id: `rsc-${crypto.randomUUID()}`,
+          workspaceId: workspace_id,
+          consumerWorkspaceId: item.id,
+        }).onConflictDoNothing();
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const items = (body as any)?.data;
+    if (Array.isArray(items)) {
+      const ids = items.map(i => i?.id).filter(Boolean);
+      if (ids.length > 0) {
+        await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspace_id), inArray(remoteStateConsumers.consumerWorkspaceId, ids)));
+      }
+    }
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- WORKSPACE DATA RETENTION POLICY API ---
+  .get("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const policy = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace_id) });
+    if (!policy) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: policy.id,
+        type: "data-retention-policies",
+        attributes: {
+          "state-versions-count": policy.stateVersionsCount,
+          "auto-destroy-at": policy.autoDestroyAt,
+          "auto-destroy-activity-duration": policy.autoDestroyActivityDuration,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace_id) });
+    const pid = existing ? existing.id : `drp-${crypto.randomUUID()}`;
+    const values = {
+      id: pid,
+      workspaceId: workspace_id,
+      stateVersionsCount: attrs["state-versions-count"] ?? null,
+      autoDestroyAt: attrs["auto-destroy-at"] ?? null,
+      autoDestroyActivityDuration: attrs["auto-destroy-activity-duration"] ?? null,
+      createdAt: Date.now(),
+    };
+    if (existing) {
+      await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, pid));
+    } else {
+      await db.insert(dataRetentionPolicies).values(values);
+    }
+    set.status = 201;
+    return {
+      data: {
+        id: pid,
+        type: "data-retention-policies",
+        attributes: {
+          "state-versions-count": values.stateVersionsCount,
+          "auto-destroy-at": values.autoDestroyAt,
+          "auto-destroy-activity-duration": values.autoDestroyActivityDuration,
+        },
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspace_id));
+    set.status = 204;
+    return;
+  }, { isAuth: true })
+
+  // --- CONFIGURATION VERSION INGRESS ATTRIBUTES API ---
+  .get("/api/v2/configuration-versions/:cv_id/ingress-attributes", async ({ params: { cv_id }, user, orgId: tokenOrgId, set }) => {
+    const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cv_id) });
+    if (!cv) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, cv.workspaceId) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const ingress = cv.ingressAttributes || {};
+    return {
+      data: {
+        id: cv.id,
+        type: "ingress-attributes",
+        attributes: {
+          "commit-sha": ingress.commitSha ?? null,
+          "commit-url": ingress.commitUrl ?? null,
+          "commit-message": ingress.commitMessage ?? null,
+          branch: ingress.branch ?? null,
+          tag: ingress.tag ?? null,
+          "pull-request-number": ingress.pullRequestNumber ?? null,
+          "sender-username": ingress.senderUsername ?? null,
+          "clone-url": ingress.cloneUrl ?? null,
+          "compare-url": ingress.compareUrl ?? null,
+        },
+      },
+    };
   }, { isAuth: true })
 
   // --- SSH KEYS API ---

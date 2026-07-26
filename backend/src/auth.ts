@@ -1,13 +1,13 @@
 import { Elysia } from "elysia";
 import { db } from "./db";
-import { apiTokens, users } from "./db/schema";
+import { apiTokens, users, teams } from "./db/schema";
 import { eq } from "drizzle-orm";
 
 export const authPlugin = new Elysia({ name: 'auth' })
   .derive({ as: 'global' }, async ({ request }) => {
     const authHeader = request.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return { user: null, token: null, orgId: null };
+      return { user: null, token: null, orgId: null, teamId: null };
     }
 
     const tokenString = authHeader.substring(7);
@@ -16,12 +16,12 @@ export const authPlugin = new Elysia({ name: 'auth' })
     });
 
     if (!token) {
-      return { user: null, token: null, orgId: null };
+      return { user: null, token: null, orgId: null, teamId: null };
     }
 
     const now = Date.now();
     if (token.expiresAt !== null && token.expiresAt <= now) {
-      return { user: null, token: null, orgId: null };
+      return { user: null, token: null, orgId: null, teamId: null };
     }
 
     if (!token.lastUsedAt || now - token.lastUsedAt > 60000) {
@@ -36,14 +36,21 @@ export const authPlugin = new Elysia({ name: 'auth' })
       const user = await db.query.users.findFirst({
           where: eq(users.id, token.userId)
       });
-      return { user, token: usedToken, orgId: null };
+      return { user, token: usedToken, orgId: null, teamId: null };
+    }
+
+    if (token.teamId) {
+      const team = await db.query.teams.findFirst({
+        where: eq(teams.id, token.teamId)
+      });
+      return { user: null, token: usedToken, orgId: team?.orgId || token.orgId, teamId: token.teamId };
     }
 
     if (token.orgId) {
-      return { user: null, token: usedToken, orgId: token.orgId };
+      return { user: null, token: usedToken, orgId: token.orgId, teamId: null };
     }
 
-    return { user: null, token: null, orgId: null };
+    return { user: null, token: null, orgId: null, teamId: null };
   })
   .macro({
     isAuth(value: boolean) {

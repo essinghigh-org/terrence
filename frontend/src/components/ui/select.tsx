@@ -38,7 +38,7 @@ function SelectTrigger({ children }: React.ComponentProps<"div">) {
 }
 
 function SelectValue({ placeholder }: { placeholder?: string }) {
-  return null
+  return placeholder ? <span className="text-muted-foreground">{placeholder}</span> : null;
 }
 
 function SelectContent({ children }: { children?: React.ReactNode }) {

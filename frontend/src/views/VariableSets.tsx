@@ -42,8 +42,9 @@ async function fetchAllPages(path: string): Promise<any[]> {
     const metaNext = res?.meta?.pagination?.["next-page"];
     if (nextUrl) {
       url = nextUrl;
-    } else if (metaNext) {
-      const parsed = new URL(url, "http://localhost");
+    } else if (metaNext && url) {
+      const currentUrl: string = url;
+      const parsed: URL = new URL(currentUrl, "http://localhost");
       parsed.searchParams.set("page[number]", String(metaNext));
       url = `${parsed.pathname}${parsed.search}`;
     } else {

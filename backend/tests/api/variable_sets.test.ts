@@ -68,7 +68,7 @@ describe("organization variable set API contract", () => {
 
   it("creates, manages, scopes, and deletes organization variable sets", async () => {
     expect((await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
-      data: { type: "varsets", attributes: { name: "unsupported", priority: true } },
+      data: { type: "varsets", attributes: { name: "unsupported", foobar: true } },
     })).status).toBe(422);
 
     const created = await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
