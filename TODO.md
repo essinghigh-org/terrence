@@ -25,7 +25,7 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 - [x] List workspaces in organization (`GET /api/v2/organizations/:org_name/workspaces`).
 - [x] Get workspace by name (`GET /api/v2/organizations/:org_name/workspaces/:workspace_name`).
 - [x] Get workspace by ID (`GET /api/v2/workspaces/:workspace_id`).
-- [ ] Update workspace settings (`PATCH /api/v2/workspaces/:workspace_id`) — Execution Mode, Auto-Apply, Terraform Version.
+- [ ] Update workspace settings (`PATCH /api/v2/workspaces/:workspace_id`) — Execution Mode, Auto-Apply, Terraform/OpenTofu Version.
 - [ ] Delete workspace (`DELETE /api/v2/workspaces/:workspace_id`).
 - [x] Lock workspace (`POST /api/v2/workspaces/:workspace_id/actions/lock`).
 - [x] Unlock workspace (`POST /api/v2/workspaces/:workspace_id/actions/unlock`).
@@ -43,42 +43,56 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 - [ ] CRUD API for Variable Sets (Global/Org level) with workspace attachment.
 
 ## Epic 5: State Management
-- [x] Database schema for State Versions.
+- [x] Database schema for State Versions (serial, state payload).
 - [x] Fetch current state version (`GET /api/v2/workspaces/:workspace_id/current-state-version`).
 - [x] Create state version (`POST /api/v2/workspaces/:workspace_id/state-versions`).
-- [ ] Storage backend abstraction (Local SQLite blobs/filesystem first, S3 later).
+- [ ] Add FilePath storage option for large state payloads (currently stored inline as text blob).
+- [ ] Storage backend abstraction (Local filesystem first, S3 later).
 - [ ] Fetch specific state version by ID.
 - [ ] State version listing and diffing APIs.
 
 ## Epic 6: Configuration Versions (Code Uploads)
 - [x] Database schema for Configuration Versions.
+- [ ] Add `archive_path` field to schema (file-system path to extracted payload).
 - [x] Create configuration version with upload URL (`POST /api/v2/workspaces/:workspace_id/configuration-versions`).
 - [x] Get configuration version (`GET /api/v2/configuration-versions/:cv_id`).
 - [x] Upload configuration payload (`PUT /api/v2/configuration-versions/:cv_id/upload`).
-- [ ] Worker task to extract, validate, and archive uploaded configuration.
+- [ ] Worker task to extract, validate, and archive uploaded configuration (tar.gz → temp directory).
 - [ ] Storage backend abstraction for archived configuration versions.
 
 ## Epic 7: The Run Pipeline & Execution Engine
 - [x] Database schema for Runs.
+- [ ] Add `configuration_version_id` foreign key to Runs schema.
+- [ ] Add `is_destroy` flag to Runs schema.
 - [x] Trigger a new run (`POST /api/v2/runs`).
 - [x] Fetch run status (`GET /api/v2/runs/:run_id`).
 - [x] Cancel a run (`POST /api/v2/runs/:run_id/actions/cancel`).
 - [x] Discard a run (`POST /api/v2/runs/:run_id/actions/discard`).
 - [x] Approve and queue an apply (`POST /api/v2/runs/:run_id/actions/apply`).
+- [ ] Fetch plan JSON output (`GET /api/v2/runs/:run_id/plan`).
+- [ ] **Logs database schema** (ID, RunID, Phase, OutputText) for streaming stdout/stderr.
 - [ ] Background queue system for task orchestration (currently inline fire-and-forget).
-- [ ] **Worker**: Subprocess execution of `terraform init` and `terraform plan` (currently mocked with `setTimeout`).
-- [ ] **Worker**: Subprocess execution of `terraform apply` (currently mocked with `setTimeout`).
-- [ ] Injection of workspace variables, variable sets, and backend configs into worker environment.
-- [ ] Log streaming: Capture stdout/stderr from subprocesses and stream to database/filesystem.
+- [ ] **Worker**: Create temporary workspace directory per run and clean up on completion.
+- [ ] **Worker**: Extract configuration version (tar.gz) into the temporary directory.
+- [ ] **Worker**: Inject backend override (`override.tf` or env vars) pointing to local API with internal token.
+- [ ] **Worker**: Inject workspace variables as `TF_VAR_` environment variables or `.tfvars` file.
+- [ ] **Worker**: Subprocess execution of `tofu init` / `terraform init` (currently mocked with `setTimeout`).
+- [ ] **Worker**: Subprocess execution of `tofu plan -out=tfplan` / `terraform plan` (currently mocked).
+- [ ] **Worker**: Subprocess execution of `tofu apply tfplan` / `terraform apply` (currently mocked).
+- [ ] **Worker**: Stream stdout/stderr from subprocesses into Logs database table.
+- [ ] **Worker**: Report final status back to Runs table (applied / errored).
 - [ ] API to fetch/stream run logs (`/api/v2/runs/:run_id/plan/log`).
+- [ ] **Dynamic Terraform/OpenTofu version management**: Download, cache, and select specific binary versions per workspace.
+- [ ] Support runtime selection between Terraform (`terraform`) and OpenTofu (`tofu`) per workspace.
 
 ## Epic 8: Version Control System (VCS) Integrations
-- [ ] OAuth Client registration API for GitHub/GitLab.
+- [ ] Register OAuth client (`POST /api/v2/oauth-clients`) for GitHub/GitLab.
 - [ ] OAuth handshake flows to obtain VCS tokens.
-- [ ] Link a Workspace to a VCS repository and branch.
-- [ ] Ingress Webhook endpoint to receive Push and Pull Request events.
-- [ ] Webhook processor to automatically create Configuration Versions and trigger Runs on push.
-- [ ] Report Commit Status API back to the VCS provider (e.g., GitHub Checks API).
+- [ ] List OAuth tokens (`GET /api/v2/oauth-tokens`).
+- [ ] Link a workspace to a VCS repository and branch.
+- [ ] Ingress webhook endpoint (`/api/webhooks/github`) to receive push and PR events.
+- [ ] Webhook processor to auto-create configuration versions and trigger runs on push.
+- [ ] Report commit status back to VCS provider (e.g., GitHub Checks API).
 
 ## Epic 9: Private Registry (Modules & Providers)
 - [ ] Module Registry API discovery.
@@ -92,9 +106,11 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 - [ ] Worker integration to execute Open Policy Agent (OPA) against the JSON plan output.
 
 ## Epic 11: Frontend & User Interface
+
+### Core Views
 - [x] Login view with username/password authentication.
 - [x] Organization dashboard view with org listing.
-- [x] Workspace list view with table.
+- [x] Workspace list view with table (name, version, auto-apply, lock status).
 - [ ] Workspace creation form (dialog or dedicated view — button exists but non-functional).
 - [x] Workspace detail view with variables management.
 - [x] Variables management (table display and add modal with category/sensitive support).
@@ -102,8 +118,29 @@ This document serves as a comprehensive tracker for achieving rough feature pari
 - [ ] Single run view (status tracker, real-time log viewer, approve/discard controls).
 - [ ] State history view.
 
+### TFE UI Mirroring & Polish
+- [ ] Navigation sidebar resembling TFE layout (orgs, workspaces, runs).
+- [ ] Workspace overview tab with key metadata (execution mode, version, status).
+- [ ] Run timeline / progress indicator matching TFE's run state visualization.
+- [ ] Real-time log viewer (ansi-to-html rendering, auto-scroll, collapse).
+- [ ] Consistent TFE color scheme, typography, and spacing.
+- [ ] Responsive layout for desktop use (TFE is primarily desktop-targeted).
+- [ ] Loading states, empty states, and error states matching TFE patterns.
+- [ ] Keyboard shortcuts and navigation breadcrumbs (Org > Workspace > Runs).
+
 ## Epic 12: Deployment & Operations
 - [x] Dockerfile for multi-stage unified build (Bun + Vite frontend into single container).
 - [ ] Database migration execution on container startup.
 - [ ] Configuration via environment variables (Port, DB path, log level).
 - [ ] External PostgreSQL database connection support.
+
+## Epic 13: End-to-End Testing
+- [ ] Integration test: User registration → login → create org → create workspace → full lifecycle.
+- [ ] Integration test: Create variable → trigger run → verify plan output → apply → verify applied state.
+- [ ] Integration test: State version upload → retrieve current state → verify serial increments.
+- [ ] Integration test: Configuration version upload → verify status transitions.
+- [ ] Integration test: Lock workspace → verify locked → unlock → verify unlocked.
+- [ ] Integration test: Cancel and discard run mid-pipeline.
+- [ ] Integration test: Sensitive variable values are hidden in API responses.
+- [ ] **Full-stack test**: Deploy container → run `tofu init` / `terraform init` with `cloud` block pointing at Terrence → `tofu apply` creating a null resource → verify state is persisted and retrievable.
+- [ ] Test runner infrastructure: Standalone script or test suite that brings up the backend, runs the full `tofu plan`/`apply` cycle, and tears down.
