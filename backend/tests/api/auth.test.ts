@@ -3,6 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens, organizationMemberships } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 
 describe("TFE API Authentication (Local Auth MVP)", () => {
   const testUser = `auth_user_${Date.now()}`;
@@ -109,8 +110,11 @@ describe("TFE API Authentication (Local Auth MVP)", () => {
     expect(data.data.type).toBe("tokens");
     expect(data.data.attributes.token).toBeDefined();
 
+    // Token is stored hashed in DB; verify lookup works via auth plugin
+    const rawToken = data.data.attributes.token;
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
     const tokenInDb = await db.query.apiTokens.findFirst({
-      where: eq(apiTokens.token, data.data.attributes.token),
+      where: eq(apiTokens.token, tokenHash),
     });
     expect(tokenInDb).toBeDefined();
   });

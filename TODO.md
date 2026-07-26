@@ -324,8 +324,9 @@
 - [x] Filter: `filter[timeframe]` (supports `year` and specific `YYYY` values)
 - [ ] Filter: `filter[agent_pool_names]` (not implemented)
 - [x] Search: `search[basic]` (run ID and message)
-- [ ] Search: `search[user]` (filter by user)
-- [ ] Search: `search[commit]` (filter by commit SHA)
+- [x] Search: `search[user]` (filter by username)
+- [x] Search: `search[commit]` (filter by commit SHA in ingress attributes)
+- [x] Filter: `filter[agent_pool_names]` (filter by agent pool name)
 
 ### 5.10 Workspace Variables (Scoped)
 - [x] `GET /workspaces/:workspace_id/vars` — list workspace variables
@@ -509,6 +510,7 @@
 - [x] `canceled` — canceled by user (final, via actions/cancel)
 - [x] `force_canceled` — force canceled by admin (final, via actions/force-cancel)
 - [x] `discarded` — discarded by user (final, via actions/discard)
+- [x] `policy_soft_failed` — policy soft-fail, requires override before apply (worker enters for soft-mandatory failures)
 
 **Phase 2 — States recognized by DB/API but NEVER auto-transitioned by worker:**
 - [ ] `fetching` — fetching config from VCS
@@ -521,7 +523,6 @@
 - [ ] `cost_estimated` — cost estimation done
 - [ ] `policy_checking` — policy evaluation
 - [ ] `policy_override` — policy soft fail, awaiting override
-- [ ] `policy_soft_failed` — policy soft fail, plan-only (final)
 - [ ] `policy_checked` — policy evaluation done
 - [ ] `confirmed` — user confirmed apply
 - [ ] `post_plan_running` — post-plan phase
@@ -555,7 +556,7 @@
 - [x] `run-events` relationship
 - [ ] `policy-checks` relationship
 - [ ] `comments` relationship
-- [ ] `cost-estimate` relationship link on run resource (separate GET endpoint exists, but relationship not wired in run response)
+- [x] `cost-estimate` relationship link on run resource
 - [ ] `input-state-version` relationship
 - [ ] `workspace-run-alerts` relationship
 
@@ -687,11 +688,12 @@
 - [x] OPA result details
 
 ### 11.4 Policy Enforcement in Run Pipeline
-- [ ] Plan → Policy Check → Apply integration (CRUD endpoints exist, not wired into run pipeline)
-- [ ] Hard-mandatory: failed policy blocks apply
-- [ ] Soft-mandatory: failed policy requires override to proceed
-- [ ] Advisory: failed policy logs warning, doesn't block
-- [ ] Policy override permission checks
+- [x] Plan → Policy Check → Apply integration (wired into run pipeline)
+- [x] Hard-mandatory: failed policy blocks apply (run → errored)
+- [x] Soft-mandatory: failed policy requires override to proceed (run → policy_soft_failed)
+- [x] Advisory: failed policy logs warning, doesn't block
+- [x] Policy override via `actions/override-policy` endpoint
+- [x] OPA policy evaluation in worker (`opa eval` against plan JSON)
 
 ### 11.5 Policy Set Parameters
 - [x] `GET /policy-sets/:policy_set_id/parameters` — list parameters
@@ -899,10 +901,10 @@
 - [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/versions` — list versions
 - [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version` — get module version
 - [x] `GET /api/registry/v1/modules/:namespace/:name/:provider/:version/download` — download source (uses `X-Terraform-Get` header)
-- [ ] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version (not implemented)
-- [ ] `GET /api/registry/v1/modules/:namespace/:name` — list providers for module (not implemented)
-- [ ] `GET /api/registry/v1/modules` — search/browse modules (not implemented)
-- [ ] `GET /api/registry/v1/modules/:namespace` — list modules in namespace (not implemented)
+- [x] `GET /api/registry/v1/modules/:namespace/:name/:provider` — get latest version
+- [x] `GET /api/registry/v1/modules/:namespace/:name` — list providers for module
+- [x] `GET /api/registry/v1/modules` — search/browse modules
+- [x] `GET /api/registry/v1/modules/:namespace` — list modules in namespace
 
 ### 18.2 Module Publishing & Management
 - [x] `POST /api/v2/organizations/:org/registry-modules` — publish module from VCS
@@ -932,7 +934,7 @@
 - [x] `GET /api/registry/v1/providers/:namespace/:type/versions` — list versions
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch` — download URL
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version` — get version details
-- [ ] `GET /api/registry/v1/providers/-/versions` — search providers (not implemented)
+- [x] `GET /api/registry/v1/providers/-/versions` — search providers
 - [ ] Network mirror protocol for `provider_installation` blocks (standard registry protocol endpoints exist, network mirror protocol has different URL patterns)
 
 ### 19.2 Provider Management
@@ -1026,10 +1028,10 @@
 ### 24.1 Admin Users
 - [x] `GET /api/v2/admin/users` — list all users
 - [x] `GET /api/v2/admin/users/:user_id` — show user
-- [ ] `PATCH /api/v2/admin/users/:user_id` — update user (site admin toggle, etc.)
+- [x] `PATCH /api/v2/admin/users/:user_id` — update user (username, email)
 - [x] `DELETE /api/v2/admin/users/:user_id` — suspend/delete user
-- [ ] `is-site-admin` attribute (currently hardcoded to `true`, no DB column for site admin status)
-- [ ] Site admin authorization guard (admin endpoints currently accessible to any authenticated user)
+- [x] `is-site-admin` attribute on user (first registered user is auto-promoted to site admin)
+- [x] Site admin authorization guard on all admin endpoints (403 non-site-admins)
 
 ### 24.2 Admin Organizations
 - [x] `GET /api/v2/admin/organizations` — list all orgs
@@ -1045,9 +1047,9 @@
 
 ### 24.4 Admin Runs
 - [x] `GET /api/v2/admin/runs` — list all runs (with filters)
-- [ ] `GET /api/v2/admin/runs/:run_id` — show run
-- [ ] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
-- [ ] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
+- [x] `GET /api/v2/admin/runs/:run_id` — show run
+- [x] `POST /api/v2/admin/runs/:run_id/actions/cancel` — cancel any run
+- [x] `POST /api/v2/admin/runs/:run_id/actions/force-cancel` — force cancel
 
 ### 24.5 Admin Terraform Versions
 - [x] `GET /api/v2/admin/terraform-versions` — list available versions
@@ -1281,16 +1283,16 @@
 
 ### 29.5 Observability
 - [x] Health check endpoint (`/healthz`, `/readyz`)
-- [ ] Request logging middleware (method, path, status, duration)
-- [ ] Structured JSON logging
+- [x] Request logging middleware (method, path, status, duration)
+- [x] `LOG_LEVEL` environment variable consumed at runtime (error/warn/info/debug levels)
+- [ ] Structured JSON logging (currently uses plain console format)
 - [ ] Prometheus metrics (Phase 2)
-- [ ] `LOG_LEVEL` environment variable consumed at runtime
 
 ### 29.6 Security
 - [x] Environment variable sanitization in worker
 - [x] Path traversal protection on archive extraction
 - [x] CORS configuration
-- [ ] API token storage as hash (currently plaintext in DB)
+- [x] API token storage as SHA-256 hash (backward compatible with existing plaintext tokens)
 
 ---
 

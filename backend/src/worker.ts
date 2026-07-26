@@ -10,8 +10,12 @@ import {
   variableSets,
   variableSetWorkspaces,
   variableSetVariables,
+  policySets,
+  policySetWorkspaces,
+  policies,
+  policyChecks,
 } from "./db/schema";
-import { eq, desc, asc, and, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, inArray, or } from "drizzle-orm";
 import { spawn } from "bun";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -304,16 +308,30 @@ export async function executeRun(runId: string) {
       throw new Error(`Unable to resolve CLI binary '${requestedTool}' or no Terraform configuration (.tf) files were found in workspace.`);
     }
 
-    const plannedStatus = run.planOnly ? "planned_and_finished" : "planned";
+    const plannedStatus = run.planOnly || run.refreshOnly ? "planned_and_finished" : "planned";
     await db.update(runs).set({ status: plannedStatus }).where(eq(runs.id, runId));
     await writeLog(runId, "plan", `[terrence] Run status updated to '${plannedStatus}'.`);
 
-    if (run.planOnly) {
+    if (run.planOnly || run.refreshOnly) {
       keepPlan = false;
-    } else if (workspace.autoApply || run.autoApply) {
-      await executeApply(runId);
     } else {
-      keepPlan = true;
+      // Run policy checks before deciding to apply
+      const policyResult = await runPolicyChecks(runId, workspace.id, workspace.orgId);
+      if (!policyResult.proceed) {
+        if (policyResult.hardFailed) {
+          await db.update(runs).set({ status: "errored" }).where(eq(runs.id, runId));
+          await writeLog(runId, "plan", `[terrence] Run blocked by hard-mandatory policy failure.`);
+        } else if (policyResult.softFailed) {
+          await db.update(runs).set({ status: "policy_soft_failed" }).where(eq(runs.id, runId));
+          await writeLog(runId, "plan", `[terrence] Run requires policy override before apply.`);
+        }
+        keepPlan = true;
+      } else if (workspace.autoApply || run.autoApply) {
+        await writeLog(runId, "plan", `[terrence] All policies passed. Proceeding to apply.`);
+        await executeApply(runId);
+      } else {
+        keepPlan = true;
+      }
     }
   } catch (error: any) {
     console.error(`Run ${runId} planning failed`, error);
@@ -436,6 +454,121 @@ export async function executeApply(runId: string) {
       await writeLog(runId, "apply", `[terrence] Preserving work directory for debugging: ${workDir}`);
     }
   }
+}
+
+/**
+ * Evaluate policies attached to a workspace after a plan completes.
+ * Returns an object indicating whether the run should proceed to apply.
+ */
+async function runPolicyChecks(
+  runId: string,
+  workspaceId: string,
+  orgId: string,
+): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
+  const attached = await db.query.policySetWorkspaces.findMany({
+    where: eq(policySetWorkspaces.workspaceId, workspaceId),
+  });
+  const attachedSetIds = new Set(attached.map(a => a.policySetId));
+
+  const orgPolicySets = await db.query.policySets.findMany({
+    where: and(eq(policySets.orgId, orgId), eq(policySets.global, true)),
+  });
+
+  const allSetIds = [...attachedSetIds, ...orgPolicySets.map(ps => ps.id)];
+  if (allSetIds.length === 0) return { proceed: true, hardFailed: false, softFailed: false };
+
+  const allPolicies = await db.query.policies.findMany({
+    where: inArray(policies.policySetId, allSetIds),
+  });
+  if (allPolicies.length === 0) return { proceed: true, hardFailed: false, softFailed: false };
+
+  const planJsonOutput = await db.query.stateVersions.findFirst({
+    where: eq(stateVersions.workspaceId, workspaceId),
+    orderBy: [desc(stateVersions.serial)],
+  });
+
+  await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
+
+  let hardFailed = false;
+  let softFailed = false;
+
+  for (const policy of allPolicies) {
+    const checkId = `pchk-${crypto.randomUUID()}`;
+    let checkStatus = "passed";
+    let checkResult: Record<string, any> = {};
+
+    try {
+      // For OPA policies, attempt to run opa eval
+      const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, policy.policySetId) });
+      const isOpa = policySet?.kind === "opa";
+
+      if (isOpa && policy.query && planJsonOutput?.statePayload) {
+        // Try to evaluate with OPA
+        const workDir = join(tmpdir(), "terrence", "opa", runId);
+        await mkdir(workDir, { recursive: true, timeout: 1000 }).catch(() => {});
+        const policyPath = join(workDir, "policy.rego");
+        const dataPath = join(workDir, "input.json");
+        await writeFile(policyPath, policy.query);
+        await writeFile(dataPath, planJsonOutput.statePayload);
+        const opaProc = spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, "data"], {
+          cwd: workDir,
+          env: { PATH: process.env.PATH || "" },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [opaExit, opaStdout] = await Promise.all([
+          opaProc.exited,
+          new Response(opaProc.stdout).text(),
+          new Response(opaProc.stderr).text().catch(() => ""),
+        ]);
+        if (opaExit === 0) {
+          checkResult = JSON.parse(opaStdout || "{}");
+          const violated = checkResult?.result?.[0]?.expressions?.[0]?.value?.violations;
+          if (violated && Array.isArray(violated) && violated.length > 0) {
+            checkStatus = "failed";
+          }
+        } else {
+          checkStatus = "errored";
+          checkResult = { error: "OPA evaluation failed" };
+        }
+        await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      }
+
+      await db.insert(policyChecks).values({
+        id: checkId,
+        runId,
+        status: checkStatus,
+        result: checkResult,
+        createdAt: Date.now(),
+      });
+
+      if (checkStatus === "failed") {
+        if (policy.enforcementLevel === "hard-mandatory") {
+          hardFailed = true;
+          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" HARD-FAILED (hard-mandatory). Blocking apply.`);
+        } else if (policy.enforcementLevel === "soft-mandatory") {
+          softFailed = true;
+          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`);
+        } else {
+          await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" FAILED (advisory — not blocking).`);
+        }
+      } else if (checkStatus === "passed") {
+        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" PASSED.`);
+      }
+    } catch (err: any) {
+      await db.insert(policyChecks).values({
+        id: checkId,
+        runId,
+        status: "errored",
+        result: { error: err.message },
+        createdAt: Date.now(),
+      });
+      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" evaluation error: ${err.message}`);
+    }
+  }
+
+  const proceed = !hardFailed;
+  return { proceed, hardFailed, softFailed };
 }
 
 let isWorkerLoopRunning = false;

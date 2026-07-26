@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -29,18 +30,21 @@ describe("Admin Operations API contract", () => {
     }));
 
   beforeAll(async () => {
-    await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
+    await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused", isSiteAdmin: true }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token, userId }]);
+    // Token stored as hash
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: tokenHash, userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
   });
 
   afterAll(async () => {
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
-    await db.delete(apiTokens).where(eq(apiTokens.token, token));
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, userId));

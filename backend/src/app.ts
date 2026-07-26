@@ -14,6 +14,20 @@ import { validateVersion } from "./binaryManager";
 import { startWorkerQueue, executeRun, executeApply } from "./worker";
 import { normalizeWorkingDirectory } from "./workspace";
 
+// Initialize log level
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
+type LogLevel = typeof LOG_LEVELS[number];
+function isLogLevelEnabled(level: LogLevel): boolean {
+  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
+}
+const log = {
+  error: (...args: any[]) => isLogLevelEnabled("error") && console.error(...args),
+  warn: (...args: any[]) => isLogLevelEnabled("warn") && console.warn(...args),
+  info: (...args: any[]) => isLogLevelEnabled("info") && console.log(...args),
+  debug: (...args: any[]) => isLogLevelEnabled("debug") && console.log("[DEBUG]", ...args),
+};
+
 // Initialize persistent worker queue loop
 startWorkerQueue();
 
@@ -577,6 +591,7 @@ function userResource(user: { id: string; username: string; email?: string | nul
       "auth-method": "local",
       "avatar-url": avatarUrl,
       "v2-only": false,
+      "is-site-admin": (user as any).isSiteAdmin === true,
       permissions: {
         "can-create-organizations": authenticatedResource.type === "users",
         "can-change-email": authenticatedResource.type === "users",
@@ -625,7 +640,7 @@ function orgMembershipResource(
   };
 }
 
-function tokenResource(token: typeof apiTokens.$inferSelect, includeSecret = false) {
+function tokenResource(token: typeof apiTokens.$inferSelect & { _rawToken?: string }, includeSecret = false) {
   const iso = (value: number | null) => value === null ? null : new Date(value).toISOString();
 
   return {
@@ -635,7 +650,7 @@ function tokenResource(token: typeof apiTokens.$inferSelect, includeSecret = fal
       "created-at": iso(token.createdAt),
       "last-used-at": iso(token.lastUsedAt),
       description: token.description,
-      token: includeSecret ? token.token : null,
+      token: includeSecret ? (token._rawToken || null) : null,
       "expired-at": iso(token.expiresAt),
     },
     relationships: {
@@ -912,6 +927,37 @@ function workspaceRunHistoryWhere(request: Request, workspaceId: string) {
 
   const basic = params.get("search[basic]")?.trim();
   if (basic) conditions.push(or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`))!);
+
+  const userSearch = params.get("search[user]")?.trim();
+  if (userSearch) {
+    const userMatches = db.select({ id: users.id }).from(users)
+      .where(like(users.username, `%${userSearch}%`));
+    conditions.push(inArray(runs.createdBy, userMatches));
+  }
+
+  const agentPoolNames = csv("filter[agent_pool_names]");
+  if (agentPoolNames?.length) {
+    const matchingPools = db.select({ id: agentPools.id }).from(agentPools)
+      .where(inArray(agentPools.name, agentPoolNames));
+    const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
+      .where(inArray(workspaces.agentPoolId, matchingPools));
+    conditions.push(inArray(runs.workspaceId, matchingWorkspaces));
+  }
+
+  const commitSearch = params.get("search[commit]")?.trim();
+  if (commitSearch) {
+    conditions.push(
+      inArray(runs.id,
+        db.select({ id: runs.id }).from(runs)
+          .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
+          .where(like(
+            sql<string>(`COALESCE(${configurationVersions.ingressAttributes}->>'$.commitSha', '')`),
+            `%${commitSearch}%`
+          ))
+      )
+    );
+  }
+
   return and(...conditions)!;
 }
 
@@ -989,6 +1035,9 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
       "created-by": {
         data: run.createdBy ? { id: run.createdBy, type: "users" } : null,
       },
+      "cost-estimate": {
+        links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
+      },
     },
   };
 }
@@ -1062,7 +1111,15 @@ export const app = new Elysia()
     },
   }))
   .use(oauthPlugin)
-  .onRequest(({ set }) => {
+  .onRequest(({ request, set }) => {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    const method = request.method;
+    const timestamp = Date.now();
+    (set as any).__startTime = timestamp;
+    (set as any).__method = method;
+    (set as any).__path = pathname;
+
     const allowOrigin = process.env.CORS_ORIGIN || (process.env.NODE_ENV === "production" ? undefined : "*");
     if (allowOrigin) {
       set.headers["Access-Control-Allow-Origin"] = allowOrigin;
@@ -1072,6 +1129,16 @@ export const app = new Elysia()
     set.headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining";
   })
   .onAfterHandle(({ request, response, set }) => {
+    const startTime = (set as any).__startTime as number | undefined;
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      const method = (set as any).__method || request.method;
+      const path = (set as any).__path || new URL(request.url).pathname;
+      const status = set.status || 200;
+      if (path.startsWith("/api/")) {
+        log.info(`[${new Date().toISOString()}] ${method} ${path} ${status} ${duration}ms`);
+      }
+    }
     const isJsonDocument = response !== null
       && typeof response === "object"
       && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
@@ -1205,9 +1272,10 @@ export const app = new Elysia()
     const tokenStr = `user-${crypto.randomUUID()}`;
     const tokenId = crypto.randomUUID();
 
+    const tokenHash = createHash("sha256").update(tokenStr).digest("hex");
     await db.insert(apiTokens).values({
       id: tokenId,
-      token: tokenStr,
+      token: tokenHash,
       userId: user.id,
       description: "User login token",
       createdAt: Date.now(),
@@ -1253,14 +1321,18 @@ export const app = new Elysia()
     const id = crypto.randomUUID();
     const normalizedEmail = typeof email === "string" && email.trim() ? email.trim() : null;
 
+    // First registered user becomes site admin
+    const userCount = (await db.select({ val: count() }).from(users))[0]?.val ?? 0;
+    const isSiteAdmin = userCount === 0;
+
     try {
-      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash });
+      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin });
       set.status = 201;
       return {
         data: {
           id,
           type: "users",
-          attributes: { username, email: normalizedEmail }
+          attributes: { username, email: normalizedEmail, "is-site-admin": isSiteAdmin }
         }
       };
     } catch (e: any) {
@@ -1573,9 +1645,10 @@ export const app = new Elysia()
       }
     }
 
+    const rawToken = `${orgId ? "org" : "user"}-${crypto.randomUUID()}`;
     const createdToken: typeof apiTokens.$inferSelect = {
       id: crypto.randomUUID(),
-      token: `${orgId ? "org" : "user"}-${crypto.randomUUID()}`,
+      token: createHash("sha256").update(rawToken).digest("hex"),
       userId: orgId ? null : user.id,
       orgId: orgId || null,
       description,
@@ -1594,7 +1667,7 @@ export const app = new Elysia()
     }
 
     set.status = 201;
-    return { data: tokenResource(createdToken, true) };
+    return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   }, { isAuth: true })
   .get("/api/v2/organizations/:org_name/authentication-token", async ({ params: { org_name }, user, orgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -1624,15 +1697,17 @@ export const app = new Elysia()
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
-    const createdToken: typeof apiTokens.$inferSelect = {
+    const rawToken = `org-${crypto.randomUUID()}`;
+    const createdToken = {
       id: crypto.randomUUID(),
-      token: `org-${crypto.randomUUID()}`,
+      token: createHash("sha256").update(rawToken).digest("hex"),
       userId: null,
       orgId: org.id,
       description: null,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
+      _rawToken: rawToken,
     };
     await db.transaction(async tx => {
       await tx.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
@@ -3629,13 +3704,29 @@ export const app = new Elysia()
     if (orgId) {
       set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] };
     }
-    const claimed = await db.update(runs)
-      .set({ status: "applying" })
-      .where(and(eq(runs.id, run_id), eq(runs.status, "planned")))
-      .returning({ id: runs.id });
-    if (claimed.length === 0) {
+    // Allow apply from "planned" (normal) or "policy_soft_failed" (policy override)
+    const before = await db.query.runs.findFirst({
+      where: and(eq(runs.id, run_id), inArray(runs.status, ["planned", "policy_soft_failed"])),
+    });
+    if (!before) {
       set.status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Run must be planned before apply" }] };
+      return { errors: [{ status: "409", title: "Conflict", detail: "Run must be planned or policy_soft_failed before apply" }] };
+    }
+
+    await db.update(runs)
+      .set({ status: "applying" })
+      .where(eq(runs.id, run_id));
+
+    // If this was a policy override, record the override action on all soft-failed policy checks
+    if (before.status === "policy_soft_failed") {
+      const failedChecks = await db.query.policyChecks.findMany({
+        where: and(eq(policyChecks.runId, run_id), inArray(policyChecks.status, ["soft_failed", "failed"])),
+      });
+      for (const check of failedChecks) {
+        await db.update(policyChecks)
+          .set({ status: "overridden" })
+          .where(eq(policyChecks.id, check.id));
+      }
     }
 
     const commentStr = (body as any)?.comment || (body as any)?.data?.attributes?.comment;
@@ -4211,6 +4302,23 @@ export const app = new Elysia()
     }
     return { data: { id: run_id, type: "runs", attributes: { status: "discarded" } } };
   }, { isAuth: true })
+  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params: { run_id }, user, orgId, set }) => {
+    const authorized = await findAuthorizedRun(run_id, user?.id, orgId);
+    if (!authorized) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const run = authorized.run;
+    if (run.status !== "policy_soft_failed") {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] };
+    }
+    // Override all failed policy checks
+    await db.update(policyChecks)
+      .set({ status: "overridden" })
+      .where(and(eq(policyChecks.runId, run_id), inArray(policyChecks.status, ["soft_failed", "failed"])));
+    // Move to planned so user can then apply
+    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, run_id));
+    return { data: { id: run_id, type: "runs", attributes: { status: "planned" } } };
+  }, { isAuth: true })
   // --- TEAMS API ---
   .get("/api/v2/organizations/:org_name/teams", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -4426,9 +4534,10 @@ export const app = new Elysia()
     const expiredAtStr = attrs["expired-at"] || attrs["expires-at"] || attrs.expiredAt || attrs.expiresAt;
     const expiresAt = expiredAtStr ? new Date(expiredAtStr).getTime() : null;
 
+    const tokenHash = createHash("sha256").update(secret).digest("hex");
     await db.insert(apiTokens).values({
       id: tokenId,
-      token: secret,
+      token: tokenHash,
       orgId: team.orgId,
       teamId: team.id,
       description,
@@ -5737,6 +5846,105 @@ export const app = new Elysia()
     return;
   })
 
+  // --- MODULE REGISTRY: additional protocol endpoints ---
+  .get("/api/registry/v1/modules/:namespace/:name", async ({ params: { namespace, name }, set }) => {
+    const mods = await db.query.registryModules.findMany({
+      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name)),
+    });
+    if (mods.length === 0) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      modules: mods.map(m => ({
+        id: `${namespace}/${name}/${m.provider}`,
+        owner: namespace,
+        namespace,
+        name,
+        provider: m.provider,
+        versions: [],
+      })),
+    };
+  })
+
+  .get("/api/registry/v1/modules/:namespace/:name/:provider", async ({ params: { namespace, name, provider }, set }) => {
+    const mod = await db.query.registryModules.findFirst({
+      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+    });
+    if (!mod) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const verList = await db.query.registryModuleVersions.findMany({
+      where: eq(registryModuleVersions.moduleId, mod.id),
+      orderBy: [desc(registryModuleVersions.createdAt)],
+    });
+    const latestVersion = verList[0]?.version || "0.0.0";
+    return {
+      id: `${namespace}/${name}/${provider}/${latestVersion}`,
+      owner: namespace,
+      namespace,
+      name,
+      provider,
+      version: latestVersion,
+      status: verList[0]?.status || "pending",
+      versions: verList.map(v => ({ version: v.version })),
+    };
+  })
+
+  .get("/api/registry/v1/modules/:namespace", async ({ params: { namespace }, query, set }) => {
+    const mods = await db.query.registryModules.findMany({ where: eq(registryModules.namespace, namespace) });
+    return {
+      modules: await Promise.all(mods.map(async m => {
+        const verList = await db.query.registryModuleVersions.findMany({
+          where: eq(registryModuleVersions.moduleId, m.id),
+          orderBy: [desc(registryModuleVersions.createdAt)],
+        });
+        return {
+          id: `${m.namespace}/${m.name}/${m.provider}`,
+          owner: m.namespace,
+          namespace: m.namespace,
+          name: m.name,
+          provider: m.provider,
+          version: verList[0]?.version || null,
+          versions: verList.map(v => ({ version: v.version })),
+        };
+      })),
+    };
+  })
+
+  .get("/api/registry/v1/modules", async ({ query, set }) => {
+    const searchQuery = ((query as any)?.q || "").trim();
+    let mods: (typeof registryModules.$inferSelect)[];
+    if (searchQuery) {
+      mods = await db.query.registryModules.findMany({
+        where: or(
+          like(registryModules.name, `%${searchQuery}%`),
+          like(registryModules.namespace, `%${searchQuery}%`),
+          like(registryModules.provider, `%${searchQuery}%`),
+        ),
+        limit: 50,
+      });
+    } else {
+      mods = await db.query.registryModules.findMany({ limit: 50 });
+    }
+    return {
+      modules: await Promise.all(mods.map(async m => {
+        const verList = await db.query.registryModuleVersions.findMany({
+          where: eq(registryModuleVersions.moduleId, m.id),
+          orderBy: [desc(registryModuleVersions.createdAt)],
+        });
+        return {
+          id: `${m.namespace}/${m.name}/${m.provider}`,
+          owner: m.namespace,
+          namespace: m.namespace,
+          name: m.name,
+          provider: m.provider,
+          version: verList[0]?.version || null,
+          versions: verList.map(v => ({ version: v.version })),
+        };
+      })),
+    };
+  })
+
   // --- MODULE MANAGEMENT API (TFE v2 API) ---
   .get("/api/v2/organizations/:org_name/registry-modules", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -5803,6 +6011,38 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   // --- PROVIDER REGISTRY PROTOCOL (Standard Terraform Registry Protocol) ---
+  .get("/api/registry/v1/providers/-/versions", async ({ query, set }) => {
+    const searchQuery = ((query as any)?.q || "").trim();
+    let provs: (typeof registryProviders.$inferSelect)[];
+    if (searchQuery) {
+      provs = await db.query.registryProviders.findMany({
+        where: or(
+          like(registryProviders.namespace, `%${searchQuery}%`),
+          like(registryProviders.type, `%${searchQuery}%`),
+        ),
+        limit: 50,
+      });
+    } else {
+      provs = await db.query.registryProviders.findMany({ limit: 50 });
+    }
+    const versions = await Promise.all(provs.map(async p => {
+      const verList = await db.query.registryProviderVersions.findMany({
+        where: eq(registryProviderVersions.providerId, p.id),
+        orderBy: [desc(registryProviderVersions.createdAt)],
+      });
+      return {
+        id: `${p.namespace}/${p.type}`,
+        namespace: p.namespace,
+        versions: verList.map(v => ({
+          version: v.version,
+          protocols: v.protocols ?? ["5.0"],
+          platforms: [],
+        })),
+      };
+    }));
+    return { versions };
+  })
+
   .get("/api/registry/v1/providers/:namespace/:type/versions", async ({ params: { namespace, type }, set }) => {
     const prov = await db.query.registryProviders.findFirst({
       where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)),
@@ -5945,7 +6185,7 @@ export const app = new Elysia()
 
   // --- ADMIN OPERATIONS API (TFE-Specific Site Admin) ---
   .get("/api/v2/admin/users", async ({ user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const allUsers = await db.query.users.findMany();
     const data = allUsers.map(u => ({
       id: u.id,
@@ -5960,7 +6200,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/users/:user_id", async ({ params: { user_id }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
     if (!targetUser) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -5979,7 +6219,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .patch("/api/v2/admin/users/:user_id", async ({ params: { user_id }, body, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
     if (!targetUser) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6007,7 +6247,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .delete("/api/v2/admin/users/:user_id", async ({ params: { user_id }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, user_id) });
     if (!targetUser) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6018,7 +6258,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/organizations", async ({ user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const allOrgs = await db.query.organizations.findMany();
     const data = allOrgs.map(o => ({
       id: o.id,
@@ -6032,7 +6272,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6050,7 +6290,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .delete("/api/v2/admin/organizations/:org_name", async ({ params: { org_name }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6061,7 +6301,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/workspaces", async ({ user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const allWs = await db.query.workspaces.findMany();
     const data = allWs.map(w => ({
       id: w.id,
@@ -6076,7 +6316,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/workspaces/:ws_id", async ({ params: { ws_id }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) });
     if (!ws) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6095,7 +6335,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .delete("/api/v2/admin/workspaces/:ws_id", async ({ params: { ws_id }, user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, ws_id) });
     if (!ws) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -6106,7 +6346,7 @@ export const app = new Elysia()
   }, { isAuth: true })
 
   .get("/api/v2/admin/runs", async ({ user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const allRuns = await db.query.runs.findMany();
     const data = allRuns.map(r => ({
       id: r.id,
@@ -6119,8 +6359,49 @@ export const app = new Elysia()
     return { data };
   }, { isAuth: true })
 
+  .get("/api/v2/admin/runs/:run_id", async ({ params: { run_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, run_id) });
+    if (!run) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { data: runResource(run, true) };
+  }, { isAuth: true })
+
+  .post("/api/v2/admin/runs/:run_id/actions/cancel", async ({ params: { run_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, run_id) });
+    if (!run) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const updated = await db.update(runs)
+      .set({ status: "canceled" })
+      .where(and(eq(runs.id, run_id), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"])))
+      .returning();
+    if (updated.length === 0) {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] };
+    }
+    return { data: runResource(updated[0], true) };
+  }, { isAuth: true })
+
+  .post("/api/v2/admin/runs/:run_id/actions/force-cancel", async ({ params: { run_id }, user, set }) => {
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, run_id) });
+    if (!run) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const updated = await db.update(runs)
+      .set({ status: "force_canceled" })
+      .where(and(eq(runs.id, run_id), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"])))
+      .returning();
+    if (updated.length === 0) {
+      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] };
+    }
+    return { data: runResource(updated[0], true) };
+  }, { isAuth: true })
+
   .get("/api/v2/admin/terraform-versions", async ({ user, set }) => {
-    if (!user) { set.status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (!user || !user.isSiteAdmin) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     return {
       data: [
         { id: "1.10.5", type: "terraform-versions", attributes: { version: "1.10.5", default: true, deprecated: false } },
