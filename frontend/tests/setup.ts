@@ -1,52 +1,15 @@
+import { afterEach } from "bun:test";
+import { cleanup } from "@testing-library/react";
 import { JSDOM } from "jsdom";
 
-const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-  url: "http://localhost/",
+const jsdom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
+const { window } = jsdom;
+
+global.window = window as any;
+global.document = window.document;
+global.navigator = { userAgent: "node.js" } as any;
+
+afterEach(() => {
+  cleanup();
+  if (typeof localStorage !== 'undefined') localStorage.clear();
 });
-
-Object.defineProperties(globalThis, {
-  CustomEvent: { configurable: true, value: dom.window.CustomEvent },
-  document: { configurable: true, value: dom.window.document },
-  Event: { configurable: true, value: dom.window.Event },
-  EventTarget: { configurable: true, value: dom.window.EventTarget },
-  localStorage: { configurable: true, value: dom.window.localStorage },
-  window: { configurable: true, value: dom.window },
-});
-
-for (const key of Object.getOwnPropertyNames(dom.window)) {
-  if (!(key in globalThis)) {
-    Object.defineProperty(globalThis, key, Object.getOwnPropertyDescriptor(dom.window, key)!);
-  }
-}
-
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
-  .IS_REACT_ACT_ENVIRONMENT = true;
-
-class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserver });
-globalThis.confirm = () => true;
-if (typeof window !== "undefined") window.confirm = () => true;
-
-// Stubs required by Radix UI Select/Dialog in jsdom
-if (typeof Element !== "undefined") {
-  Element.prototype.scrollIntoView = () => {};
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.releasePointerCapture = () => {};
-}
-if (typeof window !== "undefined") {
-  window.matchMedia = window.matchMedia || (() => ({
-    matches: false,
-    media: "",
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
-  }));
-}

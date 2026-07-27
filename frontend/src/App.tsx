@@ -8,12 +8,13 @@ import { RunDetail } from "./views/RunDetail";
 import { VariableSets } from "./views/VariableSets";
 import { OrganizationSettings } from "./views/OrganizationSettings";
 import { getAuthToken } from "./lib/api";
+import { Layout } from "./components/Layout";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!getAuthToken()) {
     return <Navigate to="/login" replace />;
   }
-  return <>{children}</>;
+  return <Layout>{children}</Layout>;
 }
 
 function App() {
@@ -25,6 +26,10 @@ function App() {
         <Route path="/" element={<Navigate to="/app" replace />} />
         <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
+        <Route path="/app/:orgName/projects" element={<ProtectedRoute><div className="text-gray-500">Projects coming soon</div></ProtectedRoute>} />
+        <Route path="/app/:orgName/registry" element={<ProtectedRoute><div className="text-gray-500">Registry coming soon</div></ProtectedRoute>} />
+        <Route path="/app/:orgName/usage" element={<ProtectedRoute><div className="text-gray-500">Usage coming soon</div></ProtectedRoute>} />
+        <Route path="/app/:orgName/explorer" element={<ProtectedRoute><div className="text-gray-500">Explorer coming soon</div></ProtectedRoute>} />
         <Route path="/app/:orgName/variable-sets" element={<ProtectedRoute><VariableSets /></ProtectedRoute>} />
         <Route path="/app/:orgName/settings" element={<ProtectedRoute><OrganizationSettings /></ProtectedRoute>} />
         <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><WorkspaceDetail /></ProtectedRoute>} />
