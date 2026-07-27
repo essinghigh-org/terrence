@@ -6,7 +6,7 @@ const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "..
 const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
 
 export function validateVersion(version: string): boolean {
-  if (!version) return false;
+  if (version === "") return false;
   if (version === "latest") return true;
   // Allow exact semver
   if (/^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(version)) return true;
@@ -87,9 +87,9 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as { tag_name?: string };
         const tag = data.tag_name?.replace(/^v/, "");
-        if (tag && validateVersion(tag)) return tag;
+        if (tag !== undefined && validateVersion(tag)) return tag;
       }
       return "1.7.2";
     } else {
@@ -98,12 +98,12 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) {
-        const data = await res.json();
-        if (data.current_version && validateVersion(data.current_version)) return data.current_version;
+        const data = (await res.json()) as { current_version?: string };
+        if (data.current_version !== undefined && validateVersion(data.current_version)) return data.current_version;
       }
       return "1.9.3";
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.warn(`[terrence] Could not resolve latest version for ${tool}, using default:`, err);
     return tool === "tofu" ? "1.7.2" : "1.9.3";
   }
@@ -133,11 +133,11 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
           },
         );
         if (!res.ok) break;
-        const data = await res.json() as any[];
+        const data = (await res.json()) as { tag_name?: string }[];
         if (!Array.isArray(data) || data.length === 0) break;
         versions.push(...data
-          .map(r => r.tag_name?.replace(/^v/, ""))
-          .filter((v): v is string => v && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));
+          .map((r: { tag_name?: string }) => r.tag_name?.replace(/^v/, ""))
+          .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));
         page++;
         if (data.length < 100) break;
       }
@@ -146,8 +146,8 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
         signal: AbortSignal.timeout(15000),
       });
       if (res.ok) {
-        const data = await res.json() as any;
-        versions = Object.keys(data.versions || {})
+        const data = (await res.json()) as { versions?: Record<string, unknown> };
+        versions = Object.keys(data.versions ?? {})
           .filter(v => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
       }
     }
@@ -223,14 +223,15 @@ async function verifySha256(tool: "tofu" | "terraform", version: string, filenam
     }
     console.error(`[terrence] Checksum entry not found for ${filename}`);
     return allowBypass;
-  } catch (err: any) {
-    console.warn(`[terrence] Checksum verification warning: ${err.message || err}`);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[terrence] Checksum verification warning: ${errMsg}`);
     return allowBypass;
   }
 }
 
 export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<{ binaryPath: string; tool: string; version: string } | null> {
-  const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu") as "tofu" | "terraform";
+  const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu");
   let version = versionInput || "latest";
   const allowSystemFallback = version === "latest" || process.env.ALLOW_TOOL_FALLBACK === "true";
 
@@ -246,7 +247,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   const targetDir = join(BINARY_BASE_DIR, tool, version);
   const binaryPath = join(targetDir, tool);
 
-  if (await exists(binaryPath)) {
+    if (await exists(binaryPath)) {
     return { binaryPath, tool, version };
   }
 
@@ -285,8 +286,9 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     try {
       const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
       exitCode = await unzipProc.exited;
-    } catch (spawnErr: any) {
-      console.error(`[terrence] Failed to spawn unzip process: ${spawnErr.message || spawnErr}`);
+    } catch (spawnErr: unknown) {
+      const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+      console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
     }
 
     try {
@@ -300,8 +302,9 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     } else {
       console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
     }
-  } catch (err: any) {
-    console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${err.message || err}`);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${errMsg}`);
   }
 
   if (allowSystemFallback) {
@@ -309,13 +312,13 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       const sysProc = spawn(["which", tool]);
       if ((await sysProc.exited) === 0) {
         const sysPath = (await new Response(sysProc.stdout).text()).trim();
-        if (sysPath) {
+        if (sysPath !== "") {
           // Validate the system binary version before accepting fallback
           const versionProc = spawn([sysPath, "version"]);
           if ((await versionProc.exited) === 0) {
             const versionOutput = (await new Response(versionProc.stdout).text()).trim();
-            const vMatch = versionOutput.match(/(\d+\.\d+\.\d+)/);
-            if (vMatch) {
+            const vMatch = /(\d+\.\d+\.\d+)/.exec(versionOutput);
+            if (vMatch !== null) {
               const sysVersion = vMatch[1];
               if (matchesConstraints(sysVersion, version)) {
                 console.log(`[terrence] System-installed ${tool} v${sysVersion} satisfies constraint "${version}" at ${sysPath}`);
@@ -336,7 +339,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       const sysAlt = spawn(["which", fallbackTool]);
       if ((await sysAlt.exited) === 0) {
         const sysPath = (await new Response(sysAlt.stdout).text()).trim();
-        if (sysPath) {
+        if (sysPath !== "") {
           console.warn(`[terrence] ALLOW_TOOL_FALLBACK: using alternative tool ${fallbackTool} at ${sysPath}`);
           return { binaryPath: sysPath, tool: fallbackTool, version: "system-fallback" };
         }

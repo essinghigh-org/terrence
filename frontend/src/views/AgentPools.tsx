@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { Server, Plus, Trash2, Key, ShieldCheck, Cpu } from "lucide-react";
 
-interface AgentPool {
+type AgentPool = {
   id: string;
   attributes: {
     name: string;
@@ -19,7 +19,7 @@ interface AgentPool {
   };
 }
 
-interface AgentToken {
+type AgentToken = {
   id: string;
   attributes: {
     description: string;
@@ -66,7 +66,7 @@ export function AgentPools() {
     }
   };
 
-  const handleCreatePool = async (e: React.FormEvent) => {
+  const handleCreatePool = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!orgName) return;
     setCreatingPool(true);
@@ -121,7 +121,7 @@ export function AgentPools() {
     }
   };
 
-  const handleCreateToken = async (e: React.FormEvent) => {
+  const handleCreateToken = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!selectedPool) return;
     setCreatingToken(true);
@@ -166,7 +166,7 @@ export function AgentPools() {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
           <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>
         </div>
-        <Button onClick={() => setPoolDialogOpen(true)}>
+        <Button onClick={() => { setPoolDialogOpen(true); }}>
           <Plus className="mr-1.5 size-4" /> Create Agent Pool
         </Button>
       </div>
@@ -222,10 +222,10 @@ export function AgentPools() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => openTokensModal(pool)}>
+                        <Button size="sm" variant="outline" onClick={async () => openTokensModal(pool)}>
                           <Key className="size-3.5 mr-1" /> Agent Tokens
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => handleDeletePool(pool)}>
+                        <Button size="sm" variant="destructive" onClick={async () => handleDeletePool(pool)}>
                           <Trash2 className="size-3.5 mr-1" /> Delete
                         </Button>
                       </div>
@@ -260,8 +260,8 @@ export function AgentPools() {
               <Input
                 id="pool-name"
                 value={poolName}
-                onChange={(e) => setPoolName(e.target.value)}
-                onInput={(e: any) => setPoolName(e.target.value)}
+                onChange={(e) => { setPoolName(e.target.value); }}
+                onInput={(e: any) => { setPoolName(e.target.value); }}
                 placeholder="on-prem-k8s-pool"
                 required
               />
@@ -293,8 +293,8 @@ export function AgentPools() {
                 <Input
                   id="agent-token-desc"
                   value={tokenDesc}
-                  onChange={(e) => setTokenDesc(e.target.value)}
-                  onInput={(e: any) => setTokenDesc(e.target.value)}
+                  onChange={(e) => { setTokenDesc(e.target.value); }}
+                  onInput={(e: any) => { setTokenDesc(e.target.value); }}
                   placeholder="e.g. k8s-worker-node-1"
                   required
                 />
@@ -346,7 +346,7 @@ export function AgentPools() {
                           {new Date(token.attributes["created-at"]).toLocaleDateString()}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button size="sm" variant="destructive" onClick={() => handleDeleteToken(token.id)}>
+                          <Button size="sm" variant="destructive" onClick={async () => handleDeleteToken(token.id)}>
                             <Trash2 className="size-3 mr-1" /> Revoke
                           </Button>
                         </TableCell>

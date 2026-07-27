@@ -4,11 +4,10 @@ import { rateLimit } from "elysia-rate-limit";
 import { join } from "path";
 import { authPlugin } from "./auth";
 import { oauthPlugin } from "./oauth";
-import { startWorkerQueue } from "./worker";
 import { log } from "./lib/log";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
-const serveFrontend = () => Bun.file(FRONTEND_INDEX);
+const serveFrontend = (): BunFile => Bun.file(FRONTEND_INDEX);
 
 // Import route plugins
 import { healthRoutes } from "./routes/health";
@@ -32,45 +31,48 @@ import { notificationRoutes } from "./routes/notifications";
 import { sshKeyRoutes } from "./routes/ssh-keys";
 import { miscRoutes } from "./routes/misc";
 
+// Store request metadata without polluting the set object
+const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
+
 export const app = new Elysia()
   .use(authPlugin)
   .use(rateLimit({
     max: 30,
     duration: 1000,
-    generator: async (request, server) => {
-      const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "");
-      if (bearer) {
+    generator: (request: Request, server: unknown): string => {
+      const authHeader = request.headers.get("authorization");
+      const bearer = authHeader !== null ? authHeader.replace(/^Bearer /, "") : undefined;
+      if (bearer !== undefined) {
         return `token:${Bun.hash(bearer)}`;
       }
-      return `ip:${server?.requestIP(request)?.address || "unknown"}`;
+      const srv = server as { requestIP?: (req: Request) => { address?: string } | null } | null;
+      return `ip:${srv?.requestIP?.(request)?.address ?? "unknown"}`;
     },
   }))
   .use(oauthPlugin)
-  .onRequest(({ request, set }) => {
+  .onRequest(({ request, set }): void => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
-    (set as any).__startTime = Date.now();
-    (set as any).__method = method;
-    (set as any).__path = pathname;
+    requestMeta.set(request, { startTime: Date.now(), method, path: pathname });
 
-    const allowOrigin = process.env.CORS_ORIGIN || (process.env.NODE_ENV === "production" ? undefined : "*");
-    if (allowOrigin) {
+    const allowOrigin = process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
+    if (allowOrigin !== undefined) {
       set.headers["Access-Control-Allow-Origin"] = allowOrigin;
     }
     set.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     set.headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";
     set.headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining";
   })
-  .onAfterHandle(({ request, response, set }) => {
-    const startTime = (set as any).__startTime as number | undefined;
-    if (startTime) {
-      const duration = Date.now() - startTime;
-      const method = (set as any).__method || request.method;
-      const path = (set as any).__path || new URL(request.url).pathname;
-      const status = set.status || 200;
+  .onAfterHandle(({ request, response, set }): void => {
+    const meta = requestMeta.get(request);
+    if (meta !== undefined) {
+      const duration = Date.now() - meta.startTime;
+      const method = meta.method;
+      const path = meta.path;
+      const status = set.status ?? 200;
       if (path.startsWith("/api/")) {
-        log.info(`[${new Date().toISOString()}] ${method} ${path} ${status} ${duration}ms`);
+        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`);
       }
     }
     const isJsonDocument = response !== null
@@ -79,16 +81,16 @@ export const app = new Elysia()
     if (new URL(request.url).pathname.startsWith("/api/") && isJsonDocument) {
       set.headers["Content-Type"] = "application/vnd.api+json";
     }
-    const limit = set.headers["RateLimit-Limit"];
-    const remaining = set.headers["RateLimit-Remaining"];
-    if (limit) set.headers["X-RateLimit-Limit"] = limit;
-    if (remaining) set.headers["X-RateLimit-Remaining"] = remaining;
+    const limit: string | undefined = set.headers["RateLimit-Limit"];
+    const remaining: string | undefined = set.headers["RateLimit-Remaining"];
+    if (limit !== undefined) set.headers["X-RateLimit-Limit"] = limit;
+    if (remaining !== undefined) set.headers["X-RateLimit-Remaining"] = remaining;
   })
-  .onParse(async ({ request, contentType }) => {
+  .onParse(async ({ request, contentType }): Promise<Record<string, unknown> | null | undefined> => {
     if (contentType === 'application/vnd.api+json') {
       const text = await request.text();
       try {
-        return JSON.parse(text);
+        return JSON.parse(text) as Record<string, unknown>;
       } catch {
         return null;
       }
@@ -102,21 +104,26 @@ export const app = new Elysia()
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
-  .options("/*", ({ set }) => {
+  .options("/*", ({ set }): Record<string, never> => {
     set.status = 204;
+    return {};
   })
-  .onError(({ code, error, set }) => {
-    set.headers["Content-Type"] = "application/vnd.api+json";
+  .onError(({ code, error, set }): { errors: { status: string; title: string; detail?: string }[] } => {
+    const s = set as { headers: Record<string, string | number>; status: number };
+    s.headers["Content-Type"] = "application/vnd.api+json";
     if (code === "NOT_FOUND") {
-      set.status = 404;
+      s.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    set.status = 500;
+    s.status = 500;
+    const detail = typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : "An unexpected error occurred";
     return {
       errors: [{
         status: "500",
         title: "Internal Server Error",
-        detail: error.message || "An unexpected error occurred"
+        detail
       }]
     };
   })

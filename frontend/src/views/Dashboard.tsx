@@ -50,7 +50,7 @@ export function Dashboard() {
           type="text"
           placeholder="Search by organization name"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); }}
           className="pl-9 pr-4 py-1.5 w-full border border-gray-300 rounded-[4px] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
         />
       </div>
@@ -85,7 +85,7 @@ export function Dashboard() {
                 >
                   <td className="px-4 py-3">
                     <button
-                      onClick={() => navigate(`/app/${org.attributes.name}`)}
+                      onClick={async () => navigate(`/app/${org.attributes.name}`)}
                       className="text-gray-900 font-medium hover:underline text-[13px]"
                     >
                       {org.attributes.name}

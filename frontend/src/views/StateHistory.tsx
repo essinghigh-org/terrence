@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-interface StateHistoryProps {
+type StateHistoryProps = {
   workspaceId: string;
 }
 
@@ -20,7 +20,7 @@ export function StateHistory({ workspaceId }: StateHistoryProps) {
 
   useEffect(() => {
     fetchApi(`/workspaces/${workspaceId}/state-versions`)
-      .then((res) => setStates(res.data || []))
+      .then((res) => { setStates(res.data || []); })
       .catch(console.error);
   }, [workspaceId]);
 
@@ -94,11 +94,11 @@ export function StateHistory({ workspaceId }: StateHistoryProps) {
                     variant="outline"
                     size="sm"
                     disabled={loadingStateId === s.id}
-                    onClick={() => handleViewJson(s)}
+                    onClick={async () => handleViewJson(s)}
                   >
                     {loadingStateId === s.id ? "Loading..." : "View JSON"}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDownload(s)}>
+                  <Button variant="ghost" size="sm" onClick={async () => handleDownload(s)}>
                     Download State
                   </Button>
                 </TableCell>
@@ -115,7 +115,7 @@ export function StateHistory({ workspaceId }: StateHistoryProps) {
         </Table>
       </div>
 
-      <Dialog open={!!selectedState} onOpenChange={() => setSelectedState(null)}>
+      <Dialog open={!!selectedState} onOpenChange={() => { setSelectedState(null); }}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>State Payload JSON</DialogTitle>

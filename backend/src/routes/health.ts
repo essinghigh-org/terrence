@@ -1,11 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users } from "../db/schema";
 import { authPlugin } from "../auth";
 
 export const healthRoutes = new Elysia({ name: "health" })
   .use(authPlugin)
-  .get("/.well-known/terraform.json", () => ({
+  .get("/.well-known/terraform.json", (): Record<string, unknown> => ({
     "login.v1": {
       client: "terraform-cli",
       grant_types: ["authz_code"],
@@ -20,14 +19,14 @@ export const healthRoutes = new Elysia({ name: "health" })
     "modules.v1": "/api/registry/v1/modules/",
     "providers.v1": "/api/registry/v1/providers/",
   }))
-  .get("/api", () => "Terrence API")
-  .get("/api/v2/ping", ({ set }) => {
+  .get("/api", (): string => "Terrence API")
+  .get("/api/v2/ping", ({ set }): Record<string, never> => {
     set.headers["TFP-API-Version"] = "2.5";
     set.headers["TFP-AppName"] = "Terraform Enterprise";
     return {};
   })
-  .get("/healthz", () => "ok")
-  .get("/readyz", async ({ set }) => {
+  .get("/healthz", (): string => "ok")
+  .get("/readyz", async ({ set }): Promise<string> => {
     try {
       await db.query.users.findFirst();
       return "ready";
@@ -36,14 +35,14 @@ export const healthRoutes = new Elysia({ name: "health" })
       return "not ready";
     }
   })
-  .get("/api/v1/ping", ({ user, set }) => {
-    if (!user) {
+  .get("/api/v1/ping", ({ user, set }): string | { errors: { status: string; title: string }[] } => {
+    if (user === null || user === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     return "pong";
   })
-  .get("/api/v1/readiness", async ({ set }) => {
+  .get("/api/v1/readiness", async ({ set }): Promise<{ status: string }> => {
     try {
       await db.query.users.findFirst();
       return { status: "ready" };
@@ -52,7 +51,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       return { status: "not_ready" };
     }
   })
-  .get("/api/v1/health/readiness", async ({ set }) => {
+  .get("/api/v1/health/readiness", async ({ set }): Promise<{ status: string }> => {
     try {
       await db.query.users.findFirst();
       return { status: "ready" };
@@ -61,7 +60,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       return { status: "not_ready" };
     }
   })
-  .get("/api/v1/metadata", () => ({
-    version: process.env.BUILD_VERSION || "dev",
-    build: process.env.BUILD_SHA || "unknown",
+  .get("/api/v1/metadata", (): { version: string; build: string } => ({
+    version: process.env.BUILD_VERSION ?? "dev",
+    build: process.env.BUILD_SHA ?? "unknown",
   }));

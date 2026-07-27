@@ -106,7 +106,7 @@ export function WorkspaceDetail() {
           {tabs.map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { setActiveTab(tab.id); }}
               aria-label={tab.label.toLowerCase()}
               className={`pb-3 text-[14px] font-medium border-b-2 transition-colors ${
                 activeTab === tab.id

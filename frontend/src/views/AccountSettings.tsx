@@ -7,7 +7,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Spinner } from "../components/ui/spinner";
 import { KeyRound, User, Lock, Trash2, Plus, ShieldCheck } from "lucide-react";
 
-interface AccountDetails {
+type AccountDetails = {
   id: string;
   attributes: {
     username: string;
@@ -17,7 +17,7 @@ interface AccountDetails {
   };
 }
 
-interface UserToken {
+type UserToken = {
   id: string;
   attributes: {
     description: string;
@@ -74,7 +74,7 @@ export function AccountSettings() {
     }
   };
 
-  const handleUpdateProfile = async (e: React.FormEvent) => {
+  const handleUpdateProfile = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setUpdatingProfile(true);
     setError("");
@@ -100,7 +100,7 @@ export function AccountSettings() {
     }
   };
 
-  const handleChangePassword = async (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
       setError("New passwords do not match");
@@ -137,7 +137,7 @@ export function AccountSettings() {
     }
   };
 
-  const handleCreateToken = async (e: React.FormEvent) => {
+  const handleCreateToken = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!account) return;
     setCreatingToken(true);
@@ -230,7 +230,7 @@ export function AccountSettings() {
               <Input
                 id="account-username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => { setUsername(e.target.value); }}
                 required
               />
             </div>
@@ -240,7 +240,7 @@ export function AccountSettings() {
                 id="account-email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => { setEmail(e.target.value); }}
                 placeholder="user@example.com"
               />
             </div>
@@ -271,7 +271,7 @@ export function AccountSettings() {
                 id="current-password"
                 type="password"
                 value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
+                onChange={(e) => { setCurrentPassword(e.target.value); }}
                 required
               />
             </div>
@@ -282,7 +282,7 @@ export function AccountSettings() {
                   id="new-password"
                   type="password"
                   value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  onChange={(e) => { setNewPassword(e.target.value); }}
                   placeholder="At least 10 characters"
                   required
                 />
@@ -293,7 +293,7 @@ export function AccountSettings() {
                   id="confirm-password"
                   type="password"
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(e) => { setConfirmPassword(e.target.value); }}
                   placeholder="Repeat new password"
                   required
                 />
@@ -327,7 +327,7 @@ export function AccountSettings() {
                 id="token-desc"
                 placeholder="Token description (e.g. laptop-cli)"
                 value={newTokenDesc}
-                onChange={(e) => setNewTokenDesc(e.target.value)}
+                onChange={(e) => { setNewTokenDesc(e.target.value); }}
                 required
               />
             </div>
@@ -383,7 +383,7 @@ export function AccountSettings() {
                         <Button
                           size="sm"
                           variant="destructive"
-                          onClick={() => handleDeleteToken(token.id)}
+                          onClick={async () => handleDeleteToken(token.id)}
                         >
                           <Trash2 className="size-3.5 mr-1" /> Revoke
                         </Button>

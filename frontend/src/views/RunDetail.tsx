@@ -14,7 +14,7 @@ export function RunDetail() {
   useEffect(() => {
     loadRun();
     const interval = setInterval(loadRun, 3000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); };
   }, [runId]);
 
   async function loadRun() {
@@ -24,7 +24,7 @@ export function RunDetail() {
 
       if (data.data.attributes.status !== 'pending') {
         const logData = await fetchApi(`/api/v2/runs/${runId}/logs`);
-        if (logData && logData.logs) {
+        if (logData?.logs) {
            setLogs(logData.logs.map((l: any) => l.message).join(""));
         }
       }

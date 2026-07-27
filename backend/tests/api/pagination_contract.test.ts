@@ -86,7 +86,7 @@ describe("JSON:API pagination", () => {
       `/api/v2/organizations/${orgName}/workspaces?page[number]=2&page[size]=1`,
     );
     expect(workspaceResponse.status).toBe(200);
-    const workspacePage = await workspaceResponse.json() as any;
+    const workspacePage = await workspaceResponse.json();
     expect(workspacePage.data).toHaveLength(1);
     expect(workspaceIds).toContain(workspacePage.data[0].id);
     expect(workspacePage.meta.pagination).toEqual({
@@ -109,7 +109,7 @@ describe("JSON:API pagination", () => {
       `/api/v2/organizations/${orgName}/runs?page[number]=2&page[size]=1`,
     );
     expect(runResponse.status).toBe(200);
-    const runPage = await runResponse.json() as any;
+    const runPage = await runResponse.json();
     expect(runPage.data.map((run: any) => run.id)).toEqual([runIds[1]]);
     expect(runPage.data.map((run: any) => run.id)).not.toContain(privateRunId);
     expect(runPage.meta.pagination).toEqual({

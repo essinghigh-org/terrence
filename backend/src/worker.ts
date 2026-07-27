@@ -53,9 +53,9 @@ async function updateRunStatus(runId: string, status: string, extra?: Record<str
 
 /** Parse Terraform plan output to extract resource change counts (1 to add, 0 to change, 1 to destroy) */
 function parseResourceCounts(output: string): { additions: number; changes: number; destructions: number } {
-  const additions = output.match(/Plan:\s+(\d+)\s+to add/);
-  const changes = output.match(/(\d+)\s+to change/);
-  const destructions = output.match(/(\d+)\s+to destroy/);
+  const additions = /Plan:\s+(\d+)\s+to add/.exec(output);
+  const changes = /(\d+)\s+to change/.exec(output);
+  const destructions = /(\d+)\s+to destroy/.exec(output);
   return {
     additions: additions ? parseInt(additions[1], 10) : 0,
     changes: changes ? parseInt(changes[1], 10) : 0,
@@ -100,7 +100,7 @@ async function streamLog(
   await flush();
 }
 
-function buildSanitizedEnv(workspaceVars: Array<{ key: string; value: string; category: string }>): Record<string, string> {
+function buildSanitizedEnv(workspaceVars: { key: string; value: string; category: string }[]): Record<string, string> {
   const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL"];
   const protectedKeys = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV", "TF_CLI_CONFIG_FILE", "DYLD_INSERT_LIBRARIES"];
 
@@ -755,7 +755,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       claimedRunIds.push(run.id);
       claimedWorkspaceIds.add(run.workspaceId);
       // Advance through plan_queued then dispatch to planning
-      executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
+      executeRun(run.id).catch(err => { console.error(`Worker error on run ${run.id}`, err); });
     }
   }
 

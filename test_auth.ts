@@ -1,4 +1,3 @@
-import { app } from "./backend/src/app";
 const req = new Request("http://localhost/api/v2/tokens", {
   method: "POST",
   headers: {

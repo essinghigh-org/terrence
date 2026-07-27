@@ -1,14 +1,13 @@
-import { db } from "../db";
-
-export function validVariableAttributes(attributes: any, partial = false) {
+export function validVariableAttributes(attributes: unknown, partial = false): boolean {
   if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
   const fields = Object.keys(attributes);
-  const { key, value, category, sensitive, hcl, description } = attributes;
+  const attrs = attributes as Record<string, unknown>;
+  const { key, value, category, sensitive, hcl, description } = attrs;
   return fields.every(field => allowedFields.includes(field))
     && (!partial || fields.length > 0)
     && (partial || value !== undefined)
-    && (partial && key === undefined || typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key))
+    && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
     && (value === undefined || typeof value === "string")
     && (category === undefined || category === "terraform" || category === "env")
     && (sensitive === undefined || typeof sensitive === "boolean")
@@ -16,14 +15,15 @@ export function validVariableAttributes(attributes: any, partial = false) {
     && (description === undefined || description === null || typeof description === "string");
 }
 
-export function validVariableSetVariableAttributes(attributes: any, partial = false) {
+export function validVariableSetVariableAttributes(attributes: unknown, partial = false): boolean {
   if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
-  const { key, value, category, sensitive, hcl, description } = attributes;
+  const attrs = attributes as Record<string, unknown>;
+  const { key, value, category, sensitive, hcl, description } = attrs;
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
-  const fields = Object.keys(attributes);
+  const fields = Object.keys(attrs);
   return fields.every(field => allowedFields.includes(field))
     && (!partial || fields.length > 0)
-    && (partial && key === undefined || typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key))
+    && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
     && (value === undefined || typeof value === "string")
     && (category === undefined || category === "terraform" || category === "env")
     && (sensitive === undefined || typeof sensitive === "boolean")
@@ -31,23 +31,26 @@ export function validVariableSetVariableAttributes(attributes: any, partial = fa
     && (description === undefined || description === null || typeof description === "string");
 }
 
-export function validVariableSetAttributes(attributes: any, partial = false) {
+export function validVariableSetAttributes(attributes: unknown, partial = false): boolean {
   if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
-  const { name, description, global, priority } = attributes;
-  const fields = Object.keys(attributes);
+  const attrs = attributes as Record<string, unknown>;
+  const { name, description, global, priority } = attrs;
+  const fields = Object.keys(attrs);
   return fields.length > 0
     && fields.every(field => ["name", "description", "global", "priority"].includes(field))
-    && (partial && name === undefined || typeof name === "string" && Boolean(name.trim()))
+    && ((partial && name === undefined) || (typeof name === "string" && Boolean(name.trim())))
     && (description === undefined || description === null || typeof description === "string")
     && (global === undefined || typeof global === "boolean")
     && (priority === undefined || typeof priority === "boolean");
 }
 
-export function isUniqueConstraintError(error: any) {
-  return [error, error?.cause].some(item =>
-    item?.code === "SQLITE_CONSTRAINT_UNIQUE"
-    || item?.message?.includes("UNIQUE constraint failed")
-  );
+export function isUniqueConstraintError(error: unknown): boolean {
+  const items: unknown[] = [error, (error as Record<string, unknown> | undefined)?.cause];
+  return items.some((item: unknown): boolean => {
+    const i = item as Record<string, unknown> | undefined;
+    return i?.code === "SQLITE_CONSTRAINT_UNIQUE"
+      || (typeof i?.message === "string" && (i.message).includes("UNIQUE constraint failed"));
+  });
 }
 
 export function tokenExpiry(value: unknown): number | null {
@@ -56,7 +59,7 @@ export function tokenExpiry(value: unknown): number | null {
   return Date.parse(value);
 }
 
-export function decodeStatePayload(state: unknown) {
+export function decodeStatePayload(state: unknown): string {
   if (typeof state !== "string") return JSON.stringify(state);
   try {
     JSON.parse(state);
@@ -72,10 +75,10 @@ export function decodeStatePayload(state: unknown) {
   }
 }
 
-export function parseStatePayload(payload: string | null) {
+export function parseStatePayload(payload: string | null): Record<string, unknown> | null {
   try {
-    const state = JSON.parse(payload || "{}");
-    return state && typeof state === "object" ? state : null;
+    const state = JSON.parse(payload ?? "{}");
+    return state && typeof state === "object" ? (state as Record<string, unknown>) : null;
   } catch {
     return null;
   }

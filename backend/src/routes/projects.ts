@@ -23,7 +23,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (!attributes?.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `prj-${crypto.randomUUID()}`;
     const newProj = { id, orgId: org.id, name: attributes.name, description: attributes.description ?? null, defaultExecutionMode: attributes["default-execution-mode"] ?? "remote", createdAt: Date.now() };
     await db.insert(projects).values(newProj);

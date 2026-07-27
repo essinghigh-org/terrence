@@ -1,3 +1,4 @@
+/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */
 // @ts-nocheck
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -54,7 +55,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       db.query.workspaces.findMany({ where, orderBy: [asc(workspaces.name)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(workspaces).where(where),
     ]);
-    return { data: await Promise.all(wsList.map(w => workspaceResource(w, org.defaultIacBinary, Boolean(user)))), ...pagination(request, number, size, total) };
+    return { data: await Promise.all(wsList.map(async w => workspaceResource(w, org.defaultIacBinary, Boolean(user)))), ...pagination(request, number, size, total) };
   })
   .post("/api/v2/organizations/:org_name/workspaces", async ({ params: { org_name }, body, user, orgId: principalOrgId, request, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });

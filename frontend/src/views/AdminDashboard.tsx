@@ -68,7 +68,7 @@ export function AdminDashboard() {
     loadAdminData();
   }, [activeTab]);
 
-  const handleAddVersion = async (e: React.FormEvent) => {
+  const handleAddVersion = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!newVersion) return;
     try {
@@ -147,7 +147,7 @@ export function AdminDashboard() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => { setActiveTab(tab.id as any); }}
               className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
                 isActive
                   ? "border-blue-600 text-blue-600"
@@ -356,10 +356,10 @@ export function AdminDashboard() {
                             <td className="px-4 py-3">
                               {r.attributes.actions["is-cancelable"] && (
                                 <div className="flex gap-2">
-                                  <Button size="sm" variant="outline" onClick={() => handleCancelRun(r.id, false)}>
+                                  <Button size="sm" variant="outline" onClick={async () => handleCancelRun(r.id, false)}>
                                     Cancel
                                   </Button>
-                                  <Button size="sm" variant="destructive" onClick={() => handleCancelRun(r.id, true)}>
+                                  <Button size="sm" variant="destructive" onClick={async () => handleCancelRun(r.id, true)}>
                                     Force Cancel
                                   </Button>
                                 </div>
@@ -390,7 +390,7 @@ export function AdminDashboard() {
                       <Input
                         placeholder="1.6.2"
                         value={newVersion}
-                        onChange={(e) => setNewVersion(e.target.value)}
+                        onChange={(e) => { setNewVersion(e.target.value); }}
                         required
                       />
                     </div>
@@ -399,7 +399,7 @@ export function AdminDashboard() {
                       <Input
                         placeholder="https://releases.hashicorp.com/terraform/..."
                         value={newUrl}
-                        onChange={(e) => setNewUrl(e.target.value)}
+                        onChange={(e) => { setNewUrl(e.target.value); }}
                       />
                     </div>
                     <div className="space-y-1 flex-1">
@@ -407,7 +407,7 @@ export function AdminDashboard() {
                       <Input
                         placeholder="a1b2c3..."
                         value={newSha}
-                        onChange={(e) => setNewSha(e.target.value)}
+                        onChange={(e) => { setNewSha(e.target.value); }}
                       />
                     </div>
                     <Button type="submit" className="gap-2">
@@ -446,7 +446,7 @@ export function AdminDashboard() {
                               <td className="px-4 py-3 text-xs text-gray-500 truncate max-w-xs">{v.attributes.url || "Default download"}</td>
                               <td className="px-4 py-3 text-xs font-mono text-gray-400">{v.attributes.sha ? v.attributes.sha.slice(0, 12) + "..." : "—"}</td>
                               <td className="px-4 py-3">
-                                <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={() => handleDeleteVersion(v.id)}>
+                                <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={async () => handleDeleteVersion(v.id)}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </td>

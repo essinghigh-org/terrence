@@ -31,12 +31,12 @@ const authorizationCodes = new Map<string, {
   userId: string;
 }>();
 
-function field(input: unknown, name: string) {
-  const value = (input as Record<string, unknown> | null)?.[name];
+function field(input: unknown, name: string): string {
+  const value = (input as Record<string, unknown> | null)?.[name] as string | undefined;
   return typeof value === "string" ? value : "";
 }
 
-function validRedirectUri(value: string) {
+function validRedirectUri(value: string): boolean {
   try {
     const url = new URL(value);
     const port = Number(url.port);
@@ -45,10 +45,10 @@ function validRedirectUri(value: string) {
       && port >= MIN_PORT
       && port <= MAX_PORT
       && url.pathname === "/login"
-      && !url.username
-      && !url.password
-      && !url.search
-      && !url.hash;
+      && url.username === ""
+      && url.password === ""
+      && url.search === ""
+      && url.hash === "";
   } catch {
     return false;
   }
@@ -68,7 +68,7 @@ function parseAuthorizationRequest(input: unknown): AuthorizationRequest | null 
     || request.responseType !== "code"
     || field(input, "code_challenge_method") !== "S256"
     || !/^[A-Za-z0-9_-]{43}$/.test(request.codeChallenge)
-    || !request.state
+    || request.state === ""
     || !validRedirectUri(request.redirectUri)
   ) {
     return null;
@@ -130,7 +130,7 @@ function loginPage(request: AuthorizationRequest | null, error = "", username = 
 </html>`;
 }
 
-function htmlResponse(body: string, status = 200) {
+function htmlResponse(body: string, status = 200): Response {
   return new Response(body, {
     status,
     headers: {
@@ -143,16 +143,16 @@ function htmlResponse(body: string, status = 200) {
   });
 }
 
-function oauthError(set: { headers: Record<string, string | number>; status?: number | string }, error: string) {
+function oauthError(set: { headers: Record<string, string | number>; status?: number | string }, error: string): { error: string } {
   set.status = 400;
   set.headers["Cache-Control"] = "no-store";
   set.headers.Pragma = "no-cache";
   return { error };
 }
 
-function tokenClientId(body: unknown, request: Request) {
+function tokenClientId(body: unknown, request: Request): string {
   const bodyClientId = field(body, "client_id");
-  if (bodyClientId) return bodyClientId;
+  if (bodyClientId !== "") return bodyClientId;
 
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Basic ")) return "";
@@ -166,27 +166,27 @@ function tokenClientId(body: unknown, request: Request) {
   }
 }
 
-async function s256(value: string) {
+async function s256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Buffer.from(digest).toString("base64url");
 }
 
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
-  .get("/oauth/authorization", ({ query }) => {
+  .get("/oauth/authorization", ({ query }): Response => {
     const request = parseAuthorizationRequest(query);
-    return htmlResponse(loginPage(request), request ? 200 : 400);
+    return htmlResponse(loginPage(request), request !== null ? 200 : 400);
   })
-  .post("/oauth/authorization", async ({ body }) => {
+  .post("/oauth/authorization", async ({ body }): Promise<Response> => {
     const authorization = parseAuthorizationRequest(body);
-    if (!authorization) return htmlResponse(loginPage(null), 400);
+    if (authorization === null) return htmlResponse(loginPage(null), 400);
 
     const username = field(body, "username");
     const password = field(body, "password");
-    const user = username
+    const user = username !== ""
       ? await db.query.users.findFirst({ where: eq(users.username, username) })
       : null;
 
-    if (!user || !password || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (user === null || user === undefined || password === "" || !(await bcrypt.compare(password, user.passwordHash))) {
       return htmlResponse(loginPage(authorization, "Invalid username or password.", username), 401);
     }
 
@@ -214,7 +214,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       },
     });
   })
-  .post("/oauth/token", async ({ body, request, set }) => {
+  .post("/oauth/token", async ({ body, request, set }): Promise<{ access_token: string; token_type: string } | { error: string }> => {
     if (
       field(body, "grant_type") !== "authorization_code"
       || tokenClientId(body, request) !== CLIENT_ID
@@ -224,7 +224,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     const code = field(body, "code");
     const entry = authorizationCodes.get(code);
-    if (!entry) return oauthError(set, "invalid_grant");
+    if (entry === undefined) return oauthError(set, "invalid_grant");
     authorizationCodes.delete(code);
 
     const verifier = field(body, "code_verifier");
@@ -238,7 +238,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     const user = await db.query.users.findFirst({ where: eq(users.id, entry.userId) });
-    if (!user) return oauthError(set, "invalid_grant");
+    if (user === null || user === undefined) return oauthError(set, "invalid_grant");
 
     const accessToken = `user-${crypto.randomUUID()}`;
     const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS ?? 30 * 24 * 60 * 60 * 1000);

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Elysia } from "elysia";
 
 /**
@@ -6,8 +5,8 @@ import { Elysia } from "elysia";
  * Checks that the user or token identity is present.
  */
 export const authGuard = new Elysia({ name: "auth-guard" })
-  .derive({ as: "global" }, async ({ user, set }: any) => {
-    if (!user) {
+  .derive({ as: "global" }, ({ user, set }: { user: unknown; set: { status: number } }): { errors?: { status: string; title: string }[] } => {
+    if (user === null || user === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }

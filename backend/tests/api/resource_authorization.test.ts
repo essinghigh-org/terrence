@@ -133,7 +133,7 @@ describe("direct resource authorization", () => {
       },
     });
 
-    const crossOrgRequests: Array<[string, string, unknown?]> = [
+    const crossOrgRequests: [string, string, unknown?][] = [
       [`/api/v2/workspaces/${workspaceId}/state-versions`, "GET"],
       [`/api/v2/workspaces/${workspaceId}/current-state-version`, "GET"],
       [`/api/v2/state-versions/${stateId}`, "GET"],

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 
-interface CreateWorkspaceModalProps {
+type CreateWorkspaceModalProps = {
   orgName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,7 +26,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() || "latest";
@@ -71,8 +71,8 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="ws-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              onInput={(e: any) => setName(e.target.value)}
+              onChange={(e) => { setName(e.target.value); }}
+              onInput={(e: any) => { setName(e.target.value); }}
               placeholder="my-infrastructure"
             />
           </div>
@@ -83,7 +83,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
               id="iac-tool"
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
               value={iacBinary}
-              onChange={(e) => setIacBinary(e.target.value)}
+              onChange={(e) => { setIacBinary(e.target.value); }}
             >
               <option value="tofu">OpenTofu (tofu)</option>
               <option value="terraform">Terraform (terraform)</option>
@@ -95,14 +95,14 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="tf-version"
               value={terraformVersion}
-              onChange={(e) => setTerraformVersion(e.target.value)}
-              onInput={(e: any) => setTerraformVersion(e.target.value)}
+              onChange={(e) => { setTerraformVersion(e.target.value); }}
+              onInput={(e: any) => { setTerraformVersion(e.target.value); }}
               placeholder="latest"
             />
           </div>
 
           <div className="flex items-center gap-2 mt-1">
-            <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean) => setAutoApply(c)} />
+            <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean) => { setAutoApply(c); }} />
             <label htmlFor="auto-apply" className="text-sm font-medium leading-none cursor-pointer">
               Auto-apply plans upon completion
             </label>

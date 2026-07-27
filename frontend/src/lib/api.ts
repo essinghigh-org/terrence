@@ -8,7 +8,7 @@ export function setAuthToken(token: string) {
   localStorage.setItem("tfe_token", token);
 }
 
-export function readResponseBody(response: Response) {
+export async function readResponseBody(response: Response) {
   if (response.status === 204) return null;
   return response.headers.get("Content-Type")?.includes("json")
     ? response.json()

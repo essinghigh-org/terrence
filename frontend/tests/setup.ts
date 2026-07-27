@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-empty-function */
 import { afterEach } from "bun:test";
 import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
@@ -16,8 +17,10 @@ Object.defineProperty(window, "confirm", {
   writable: true,
   configurable: true,
 });
+/* eslint-disable-next-line @typescript-eslint/no-empty-function */
+const noop = (): void => {};
 Object.defineProperty(window, "alert", {
-  value: () => {},
+  value: noop,
   writable: true,
   configurable: true,
 });
@@ -54,7 +57,7 @@ Object.defineProperty(window, "alert", {
 };
 
 const observer = new window.MutationObserver((mutations) => {
-  if (window.document && window.document.body) {
+  if (window.document?.body) {
     if (window.document.body.style.pointerEvents === "none") {
       window.document.body.style.pointerEvents = "";
     }
@@ -80,7 +83,7 @@ const observer = new window.MutationObserver((mutations) => {
   }
 });
 
-if (window.document && window.document.body) {
+if (window.document?.body) {
   observer.observe(window.document.body, { attributes: true, subtree: true, attributeFilter: ["aria-hidden", "data-aria-hidden", "data-state", "style", "data-scroll-locked"] });
 }
 

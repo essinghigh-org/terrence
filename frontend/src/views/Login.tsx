@@ -8,7 +8,7 @@ export function Login() {
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.SyntheticEvent) {
     e.preventDefault();
     try {
       const data = await fetchApi("/users/login", {
@@ -47,8 +47,8 @@ export function Login() {
               id="username"
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              onInput={(e: any) => setUsername(e.target.value)}
+              onChange={(e) => { setUsername(e.target.value); }}
+              onInput={(e: any) => { setUsername(e.target.value); }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>
@@ -58,8 +58,8 @@ export function Login() {
               id="password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onInput={(e: any) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); }}
+              onInput={(e: any) => { setPassword(e.target.value); }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>

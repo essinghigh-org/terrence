@@ -16,12 +16,18 @@ await sqlite.executeMultiple(`
   PRAGMA busy_timeout = 5000;
 `);
 
+type TableInfoRow = { name: string };
+
+function getColumnNames(info: Awaited<ReturnType<typeof sqlite.execute>>): Set<string> {
+  return new Set(info.rows.map((r: unknown) => (r as TableInfoRow).name));
+}
+
 export const db = drizzle(sqlite, { schema });
 await migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
 
 // Apply schema additions that may not be in the migration history
 const tableInfo = await sqlite.execute("PRAGMA table_info(runs)");
-const existingRunsColumns = new Set(tableInfo.rows.map((r: any) => r.name));
+const existingRunsColumns = getColumnNames(tableInfo);
 const runsAdditions: [string, string][] = [
   ["allow_empty_apply", "integer DEFAULT false NOT NULL"],
   ["save_plan", "integer DEFAULT false NOT NULL"],
@@ -42,7 +48,7 @@ for (const [col, def] of runsAdditions) {
 
 // Check state_versions for missing columns too
 const svTableInfo = await sqlite.execute("PRAGMA table_info(state_versions)");
-const existingSvCols = new Set(svTableInfo.rows.map((r: any) => r.name));
+const existingSvCols = getColumnNames(svTableInfo);
 const svAdditions: [string, string][] = [
   ["status", "text DEFAULT 'finalized'"],
   ["json_state", "text"],
@@ -59,21 +65,21 @@ for (const [col, def] of svAdditions) {
 
 // Check workspaces for created_at column
 const wsTableInfo = await sqlite.execute("PRAGMA table_info(workspaces)");
-const existingWsCols = new Set(wsTableInfo.rows.map((r: any) => r.name));
+const existingWsCols = getColumnNames(wsTableInfo);
 if (!existingWsCols.has("created_at")) {
   await sqlite.execute("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
 }
 
 // Check state_versions for created_at column
 const svCreatedAtInfo = await sqlite.execute("PRAGMA table_info(state_versions)");
-const existingSvCreatedAtCols = new Set(svCreatedAtInfo.rows.map((r: any) => r.name));
+const existingSvCreatedAtCols = getColumnNames(svCreatedAtInfo);
 if (!existingSvCreatedAtCols.has("created_at")) {
   await sqlite.execute("ALTER TABLE state_versions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
 }
 
 // Check policy_sets for missing columns
 const psTableInfo = await sqlite.execute("PRAGMA table_info(policy_sets)");
-const existingPsCols = new Set(psTableInfo.rows.map((r: any) => r.name));
+const existingPsCols = getColumnNames(psTableInfo);
 const psAdditions: [string, string][] = [
   ["agent_enabled", "integer DEFAULT false"],
   ["policy_tool_version", "text"],
@@ -130,7 +136,7 @@ await sqlite.executeMultiple(`
 
 // Check notification_configurations for missing columns
 const ncTableInfo = await sqlite.execute("PRAGMA table_info(notification_configurations)");
-const existingNcCols = new Set(ncTableInfo.rows.map((r: any) => r.name));
+const existingNcCols = getColumnNames(ncTableInfo);
 const ncAdditions: [string, string][] = [
   ["team_id", "text REFERENCES teams(id)"],
   ["project_id", "text REFERENCES projects(id)"],
@@ -143,7 +149,7 @@ for (const [col, def] of ncAdditions) {
 
 // Check policy_checks for missing columns
 const pcTableInfo = await sqlite.execute("PRAGMA table_info(policy_checks)");
-const existingPcCols = new Set(pcTableInfo.rows.map((r: any) => r.name));
+const existingPcCols = getColumnNames(pcTableInfo);
 const pcAdditions: [string, string][] = [
   ["policy_id", "text REFERENCES policies(id)"],
   ["policy_set_id", "text REFERENCES policy_sets(id)"],

@@ -14,7 +14,7 @@ export function Register() {
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
-  const handleRegister = async (event: React.FormEvent) => {
+  const handleRegister = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     setError("");
     setSubmitting(true);
@@ -62,7 +62,7 @@ export function Register() {
                 <Input
                   id="register-username"
                   value={username}
-                  onChange={(event) => setUsername(event.target.value)}
+                  onChange={(event) => { setUsername(event.target.value); }}
                   autoComplete="username"
                   aria-invalid={Boolean(error)}
                   required
@@ -75,7 +75,7 @@ export function Register() {
                   id="register-password"
                   type="password"
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  onChange={(event) => { setPassword(event.target.value); }}
                   autoComplete="new-password"
                   minLength={10}
                   aria-invalid={Boolean(error)}

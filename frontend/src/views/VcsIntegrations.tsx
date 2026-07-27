@@ -10,7 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { GitBranch, Plus, Trash2, CheckCircle } from "lucide-react";
 
-interface OAuthClient {
+type OAuthClient = {
   id: string;
   attributes: {
     name: string;
@@ -55,7 +55,7 @@ export function VcsIntegrations() {
     }
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!orgName) return;
     setCreating(true);
@@ -107,7 +107,7 @@ export function VcsIntegrations() {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / VCS Integrations</h1>
           <p className="text-sm text-muted-foreground">Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs.</p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
+        <Button onClick={() => { setDialogOpen(true); }}>
           <Plus className="mr-1.5 size-4" /> Add VCS Provider
         </Button>
       </div>
@@ -167,7 +167,7 @@ export function VcsIntegrations() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="destructive" onClick={() => handleDelete(client)}>
+                      <Button size="sm" variant="destructive" onClick={async () => handleDelete(client)}>
                         <Trash2 className="size-3.5 mr-1" /> Delete
                       </Button>
                     </TableCell>
@@ -201,8 +201,8 @@ export function VcsIntegrations() {
               <Input
                 id="vcs-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                onInput={(e: any) => setName(e.target.value)}
+                onChange={(e) => { setName(e.target.value); }}
+                onInput={(e: any) => { setName(e.target.value); }}
                 placeholder="GitHub Commercial"
                 required
               />
@@ -238,8 +238,8 @@ export function VcsIntegrations() {
                 <Input
                   id="vcs-http-url"
                   value={httpUrl}
-                  onChange={(e) => setHttpUrl(e.target.value)}
-                  onInput={(e: any) => setHttpUrl(e.target.value)}
+                  onChange={(e) => { setHttpUrl(e.target.value); }}
+                  onInput={(e: any) => { setHttpUrl(e.target.value); }}
                   placeholder="https://github.com"
                 />
               </div>
@@ -248,8 +248,8 @@ export function VcsIntegrations() {
                 <Input
                   id="vcs-api-url"
                   value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  onInput={(e: any) => setApiUrl(e.target.value)}
+                  onChange={(e) => { setApiUrl(e.target.value); }}
+                  onInput={(e: any) => { setApiUrl(e.target.value); }}
                   placeholder="https://api.github.com"
                 />
               </div>
@@ -260,8 +260,8 @@ export function VcsIntegrations() {
               <Input
                 id="vcs-key"
                 value={key}
-                onChange={(e) => setKey(e.target.value)}
-                onInput={(e: any) => setKey(e.target.value)}
+                onChange={(e) => { setKey(e.target.value); }}
+                onInput={(e: any) => { setKey(e.target.value); }}
                 placeholder="Client ID or Application ID"
                 required
               />
@@ -273,8 +273,8 @@ export function VcsIntegrations() {
                 id="vcs-secret"
                 type="password"
                 value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                onInput={(e: any) => setSecret(e.target.value)}
+                onChange={(e) => { setSecret(e.target.value); }}
+                onInput={(e: any) => { setSecret(e.target.value); }}
                 placeholder="Client Secret"
                 required
               />

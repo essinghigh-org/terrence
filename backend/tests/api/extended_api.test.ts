@@ -8,7 +8,7 @@ import { join } from "path";
 
 describe("TFE API v2 - Extended APIs", () => {
   let userToken: string;
-  let orgName = `ext-org-${Date.now()}`;
+  const orgName = `ext-org-${Date.now()}`;
   let workspaceId = "";
   let varId = "";
   let cvId = "";
@@ -314,7 +314,7 @@ describe("TFE API v2 - Extended APIs", () => {
 
 describe("TFE API v2 - Organization Management Lifecycle", () => {
   let userToken: string;
-  let isolatedOrgName = `isolated-org-${Date.now()}`;
+  const isolatedOrgName = `isolated-org-${Date.now()}`;
 
   beforeAll(async () => {
     const loginRes = await app.handle(

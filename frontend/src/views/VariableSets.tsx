@@ -64,12 +64,12 @@ async function fetchAllPages(path: string): Promise<any[]> {
   return results;
 }
 
-interface ResourceIdentifier {
+type ResourceIdentifier = {
   id: string;
   type: string;
 }
 
-interface VariableSet {
+type VariableSet = {
   id: string;
   attributes: {
     name: string;
@@ -83,14 +83,14 @@ interface VariableSet {
   };
 }
 
-interface Workspace {
+type Workspace = {
   id: string;
   attributes: { name: string };
 }
 
 type VariableCategory = "terraform" | "env";
 
-interface VariableSetVariable {
+type VariableSetVariable = {
   id: string;
   attributes: {
     key: string;
@@ -165,7 +165,7 @@ function VariablesDialog({
     setFormOpen(true);
   };
 
-  const saveVariable = async (event: React.FormEvent) => {
+  const saveVariable = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     if (!variableSetId) return;
     if (editing?.attributes.sensitive && !sensitive && !value) {
@@ -248,8 +248,8 @@ function VariablesDialog({
                 <Input
                   id="variable-key"
                   value={key}
-                  onChange={(event) => setKey(event.target.value)}
-                  onInput={(event: any) => setKey(event.target.value)}
+                  onChange={(event) => { setKey(event.target.value); }}
+                  onInput={(event: any) => { setKey(event.target.value); }}
                   autoFocus
                   aria-invalid={Boolean(error)}
                 />
@@ -260,8 +260,8 @@ function VariablesDialog({
                   id="variable-value"
                   type={sensitive ? "password" : "text"}
                   value={value}
-                  onChange={(event) => setValue(event.target.value)}
-                  onInput={(event: any) => setValue(event.target.value)}
+                  onChange={(event) => { setValue(event.target.value); }}
+                  onInput={(event: any) => { setValue(event.target.value); }}
                 />
                 {editing?.attributes.sensitive && (
                   <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
@@ -269,7 +269,7 @@ function VariablesDialog({
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                <Select value={category} onValueChange={(val) => setCategory(val as VariableCategory)}>
+                <Select value={category} onValueChange={(val) => { setCategory(val as VariableCategory); }}>
                   <SelectTrigger id="variable-category" className="w-full">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
@@ -284,15 +284,15 @@ function VariablesDialog({
                 <Input
                   id="variable-description"
                   value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  onInput={(event: any) => setDescription(event.target.value)}
+                  onChange={(event) => { setDescription(event.target.value); }}
+                  onInput={(event: any) => { setDescription(event.target.value); }}
                 />
               </Field>
               <Field orientation="horizontal">
                 <Checkbox
                   id="variable-sensitive"
                   checked={sensitive}
-                  onCheckedChange={(checked) => setSensitive(checked === true)}
+                  onCheckedChange={(checked) => { setSensitive(checked === true); }}
                 />
                 <div className="flex flex-col gap-0.5">
                   <FieldLabel htmlFor="variable-sensitive">Sensitive</FieldLabel>
@@ -301,7 +301,7 @@ function VariablesDialog({
               </Field>
               <FieldError>{error}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => { setFormOpen(false); }}>
                   Back
                 </Button>
                 <Button type="submit" disabled={saving}>
@@ -314,7 +314,7 @@ function VariablesDialog({
         ) : (
           <div className="flex flex-col gap-4">
             <div className="flex justify-end">
-              <Button onClick={() => openForm()}>Add variable</Button>
+              <Button onClick={() => { openForm(); }}>Add variable</Button>
             </div>
             {error && (
               <p role="alert" className="text-sm text-destructive">
@@ -362,14 +362,14 @@ function VariablesDialog({
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => openForm(variable)}
+                              onClick={() => { openForm(variable); }}
                             >
                               Edit
                             </Button>
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={() => deleteVariable(variable)}
+                              onClick={async () => deleteVariable(variable)}
                             >
                               Delete
                             </Button>
@@ -453,7 +453,7 @@ export function VariableSets() {
     setEditorOpen(true);
   };
 
-  const saveVariableSet = async (event: React.FormEvent) => {
+  const saveVariableSet = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     if (!orgName) return;
     setSavingSet(true);
@@ -545,7 +545,7 @@ export function VariableSets() {
     });
   };
 
-  const saveWorkspaceRelationships = async (event: React.FormEvent) => {
+  const saveWorkspaceRelationships = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     if (!workspaceSet) return;
 
@@ -621,7 +621,7 @@ export function VariableSets() {
           <Link to={`/app/${orgName}`} className={buttonVariants({ variant: "outline" })}>
             Workspaces
           </Link>
-          <Button onClick={() => openEditor()}>New variable set</Button>
+          <Button onClick={() => { openEditor(); }}>New variable set</Button>
         </div>
       </header>
 
@@ -670,25 +670,25 @@ export function VariableSets() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => openVariables(variableSet)}
+                        onClick={() => { openVariables(variableSet); }}
                       >
                         Variables
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => openWorkspaceEditor(variableSet)}
+                        onClick={() => { openWorkspaceEditor(variableSet); }}
                         disabled={variableSet.attributes.global}
                       >
                         Workspaces
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => openEditor(variableSet)}>
+                      <Button size="sm" variant="outline" onClick={() => { openEditor(variableSet); }}>
                         Edit
                       </Button>
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={() => deleteVariableSet(variableSet)}
+                        onClick={async () => deleteVariableSet(variableSet)}
                       >
                         Delete
                       </Button>
@@ -724,8 +724,8 @@ export function VariableSets() {
                 <Input
                   id="variable-set-name"
                   value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  onInput={(event: any) => setName(event.target.value)}
+                  onChange={(event) => { setName(event.target.value); }}
+                  onInput={(event: any) => { setName(event.target.value); }}
                   autoFocus
                   aria-invalid={Boolean(editorError)}
                 />
@@ -735,15 +735,15 @@ export function VariableSets() {
                 <Input
                   id="variable-set-description"
                   value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  onInput={(event: any) => setDescription(event.target.value)}
+                  onChange={(event) => { setDescription(event.target.value); }}
+                  onInput={(event: any) => { setDescription(event.target.value); }}
                 />
               </Field>
               <Field orientation="horizontal">
                 <Checkbox
                   id="variable-set-global"
                   checked={global}
-                  onCheckedChange={(checked) => setGlobal(checked === true)}
+                  onCheckedChange={(checked) => { setGlobal(checked === true); }}
                 />
                 <div className="flex flex-col gap-0.5">
                   <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
@@ -752,7 +752,7 @@ export function VariableSets() {
               </Field>
               <FieldError>{editorError}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setEditorOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => { setEditorOpen(false); }}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={savingSet}>
@@ -782,7 +782,7 @@ export function VariableSets() {
                       id={`variable-set-workspace-${workspace.id}`}
                       checked={selectedWorkspaceIds.has(workspace.id)}
                       onCheckedChange={(checked) =>
-                        toggleWorkspace(workspace.id, checked === true)
+                        { toggleWorkspace(workspace.id, checked === true); }
                       }
                     />
                     <FieldLabel htmlFor={`variable-set-workspace-${workspace.id}`}>
@@ -798,7 +798,7 @@ export function VariableSets() {
               </div>
               <FieldError>{workspaceError}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setWorkspaceOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => { setWorkspaceOpen(false); }}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={savingWorkspaces}>

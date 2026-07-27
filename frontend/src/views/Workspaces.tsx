@@ -61,7 +61,7 @@ export function Workspaces() {
             type="text"
             placeholder="Search by workspace name"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); }}
             className="pl-9 pr-4 py-1.5 h-9 w-full border border-gray-300 rounded-[4px] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
           />
         </div>
@@ -132,7 +132,7 @@ export function Workspaces() {
                       </div>
                       <div>
                         <button
-                          onClick={() => navigate(`/app/${orgName}/workspaces/${ws.attributes.name}`)}
+                          onClick={async () => navigate(`/app/${orgName}/workspaces/${ws.attributes.name}`)}
                           className="text-gray-900 font-medium hover:underline text-[13px] text-left break-all"
                         >
                           {ws.attributes.name}

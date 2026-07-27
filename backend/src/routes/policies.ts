@@ -24,7 +24,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (!attributes?.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `polset-${crypto.randomUUID()}`;
     await db.insert(policySets).values({ id, orgId: org.id, name: attributes.name, description: attributes.description ?? null, kind: attributes.kind ?? "sentinel", global: attributes.global ?? false, overridable: attributes.overridable ?? true, agentEnabled: attributes["agent-enabled"] ?? false, policyToolVersion: attributes["policy-tool-version"] ?? null, policiesPath: attributes["policies-path"] ?? null, vcsRepo: attributes["vcs-repo"] ?? null, createdAt: Date.now() });
     set.status = 201;
@@ -117,7 +117,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policy_set_id) });
     if (!ps || !(await checkOrgPermission(user?.id, ps.orgId, "member", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (!attributes?.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `pol-${crypto.randomUUID()}`;
     await db.insert(policies).values({ id, policySetId: policy_set_id, name: attributes.name, description: attributes.description ?? null, enforcementLevel: attributes["enforcement-level"] ?? "soft-mandatory", query: attributes.query ?? null, createdAt: Date.now() });
     set.status = 201;

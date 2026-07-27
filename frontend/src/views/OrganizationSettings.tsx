@@ -44,7 +44,7 @@ export function OrganizationSettings() {
     }
   };
 
-  const saveSettings = async (e: React.FormEvent) => {
+  const saveSettings = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
@@ -82,7 +82,7 @@ export function OrganizationSettings() {
     }
   };
 
-  const createTeam = async (e: React.FormEvent) => {
+  const createTeam = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!newTeamName.trim()) return;
     try {
@@ -122,7 +122,7 @@ export function OrganizationSettings() {
         <aside className="w-full md:w-56 flex-shrink-0">
           <nav className="flex flex-col gap-1">
             <button
-              onClick={() => setActiveTab("general")}
+              onClick={() => { setActiveTab("general"); }}
               className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                 activeTab === "general" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
@@ -131,7 +131,7 @@ export function OrganizationSettings() {
             </button>
 
             <button
-              onClick={() => setActiveTab("teams")}
+              onClick={() => { setActiveTab("teams"); }}
               className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                 activeTab === "teams" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
@@ -176,7 +176,7 @@ export function OrganizationSettings() {
                       <Input
                         id="org-name"
                         value={name}
-                        onChange={(e) => setName(e.target.value)}
+                        onChange={(e) => { setName(e.target.value); }}
                         required
                         className="h-9"
                       />
@@ -190,7 +190,7 @@ export function OrganizationSettings() {
                         id="org-iac"
                         className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                         value={defaultIacBinary}
-                        onChange={(e) => setDefaultIacBinary(e.target.value)}
+                        onChange={(e) => { setDefaultIacBinary(e.target.value); }}
                       >
                         <option value="tofu">OpenTofu (tofu)</option>
                         <option value="terraform">Terraform (terraform)</option>
@@ -205,7 +205,7 @@ export function OrganizationSettings() {
                       <Input
                         id="org-version"
                         value={defaultTerraformVersion}
-                        onChange={(e) => setDefaultTerraformVersion(e.target.value)}
+                        onChange={(e) => { setDefaultTerraformVersion(e.target.value); }}
                         placeholder="latest"
                         className="h-9"
                       />
@@ -246,7 +246,7 @@ export function OrganizationSettings() {
                     <Input
                       placeholder="New team name"
                       value={newTeamName}
-                      onChange={(e) => setNewTeamName(e.target.value)}
+                      onChange={(e) => { setNewTeamName(e.target.value); }}
                       className="h-9"
                     />
                     <Button type="submit" className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 h-9 shadow-sm">

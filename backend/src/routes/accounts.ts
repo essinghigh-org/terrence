@@ -4,29 +4,40 @@ import { users, apiTokens, organizations } from "../db/schema";
 import { eq, count } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { createHash } from "node:crypto";
-import { userResource } from "../lib/response";
+import { type userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
-import { auditLog, checkOrgPermission } from "../lib/utils";
+import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
+
+type Attrs = Record<string, unknown>;
+type DataPayload = { data?: { attributes?: Attrs; type?: string; id?: string } };
+
+function extractAttrs(body: unknown): Attrs | undefined {
+  if (body === null || typeof body !== "object") return undefined;
+  const payload = body as DataPayload;
+  return payload.data?.attributes;
+}
 
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
-  .post("/api/v2/users/login", async ({ body, set }) => {
-    let payload;
+  .post("/api/v2/users/login", async ({ body, set }): Promise<unknown> => {
+    let payload: DataPayload | undefined;
     if (typeof body === 'string') {
         try {
-            payload = JSON.parse(body);
-        } catch (e) {
+            payload = JSON.parse(body) as DataPayload;
+        } catch {
             set.status = 400;
             return { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] };
         }
-    } else {
+    } else if (body !== null && typeof body === "object") {
         payload = body;
     }
 
-    const { username, password } = payload?.data?.attributes || {};
+    const attrs = payload?.data?.attributes ?? {};
+    const username = typeof attrs.username === "string" ? attrs.username : "";
+    const password = typeof attrs.password === "string" ? attrs.password : "";
 
-    if (!username || !password) {
+    if (username === "" || password === "") {
       set.status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
     }
@@ -35,7 +46,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       where: eq(users.username, username)
     });
 
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (user === null || user === undefined || !(await bcrypt.compare(password, user.passwordHash))) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
@@ -62,11 +73,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       }
     };
   })
-  .post("/api/v2/users", async ({ body, set }) => {
-    const payload = body as any;
-    const { username, password, email } = payload?.data?.attributes || {};
+  .post("/api/v2/users", async ({ body, set }): Promise<unknown> => {
+    const attrs = extractAttrs(body) ?? {};
+    const username = typeof attrs.username === "string" ? attrs.username : "";
+    const password = typeof attrs.password === "string" ? attrs.password : "";
+    const email = attrs.email;
 
-    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
+    if (username === "" || password === "") {
       set.status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
     }
@@ -83,17 +96,17 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const existing = await db.query.users.findFirst({
       where: eq(users.username, username)
     });
-    if (existing) {
+    if (existing !== null && existing !== undefined) {
       set.status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const id = crypto.randomUUID();
-    const normalizedEmail = typeof email === "string" && email.trim() ? email.trim() : null;
+    const normalizedEmail = typeof email === "string" && email.trim() !== "" ? email.trim() : null;
 
     try {
-      const isSiteAdmin = await db.transaction(async (tx) => {
+      const isSiteAdmin = await db.transaction(async (tx): Promise<boolean> => {
         const userCount = (await tx.select({ val: count() }).from(users))[0]?.val ?? 0;
         const admin = userCount === 0;
         await tx.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: admin });
@@ -108,8 +121,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           attributes: { username, email: normalizedEmail, "is-site-admin": isSiteAdmin }
         }
       };
-    } catch (e: any) {
-      if (e.message?.includes("UNIQUE") || e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.message?.includes("SQLITE_CONSTRAINT")) {
+    } catch (e: unknown) {
+      const err = e as Record<string, unknown>;
+      if (
+        (typeof err.message === "string" && (err.message).includes("UNIQUE")) ||
+        err.code === "SQLITE_CONSTRAINT_UNIQUE" ||
+        (typeof err.message === "string" && (err.message).includes("SQLITE_CONSTRAINT"))
+      ) {
         set.status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
       }
@@ -117,18 +135,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
   })
   .use(authPlugin)
-  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }) => {
+  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }): Promise<unknown> => {
     // Return 401 for invalid or expired tokens (distinct from "no auth" → 404)
-    if (tokenError) {
+    if (tokenError !== null && tokenError !== undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: tokenError === "expired" ? "Token expired" : "Invalid token" }] };
     }
-    if (user) return { data: userResource(user) };
+    if (user !== null && user !== undefined) return { data: userResource(user) };
 
-    const org = orgId
+    const org = orgId !== null && orgId !== undefined
       ? await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })
       : null;
-    if (!org) {
+    if (org === null || org === undefined) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -136,32 +154,33 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const synthetic = { id: `service-user-${org.id}`, username: `${org.name}-service-user` };
     return { data: userResource(synthetic, { id: org.id, type: "organizations" }) };
   })
-  .patch("/api/v2/account/update", async ({ user, body, set }) => {
-    if (!user) {
+  .patch("/api/v2/account/update", async ({ user, body, set }): Promise<unknown> => {
+    if (user === null || user === undefined) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const attributes = (body as any)?.data?.attributes;
-    if (!attributes || typeof attributes !== "object") {
+    const attrs = extractAttrs(body);
+    if (attrs === undefined) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
     const changes: { username?: string; email?: string | null } = {};
-    if (Object.hasOwn(attributes, "username")) {
-      if (typeof attributes.username !== "string" || !attributes.username.trim()) {
+    if (Object.hasOwn(attrs, "username")) {
+      if (typeof attrs.username !== "string" || (attrs.username).trim() === "") {
         set.status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
       }
-      changes.username = attributes.username.trim();
+      changes.username = (attrs.username).trim();
     }
-    if (Object.hasOwn(attributes, "email")) {
-      if (attributes.email !== null && (typeof attributes.email !== "string" || !attributes.email.trim())) {
+    if (Object.hasOwn(attrs, "email")) {
+      const emailVal = attrs.email;
+      if (emailVal !== null && (typeof emailVal !== "string" || (emailVal).trim() === "")) {
         set.status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
       }
-      changes.email = attributes.email === null ? null : attributes.email.trim();
+      changes.email = emailVal === null ? null : (emailVal).trim();
     }
     if (Object.keys(changes).length === 0) {
       set.status = 422;
@@ -170,7 +189,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     try {
       await db.update(users).set(changes).where(eq(users.id, user.id));
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
         set.status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "Username is already in use" }] };
@@ -180,17 +199,17 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     return { data: userResource({ ...user, ...changes }) };
   })
-  .patch("/api/v2/account/password", async ({ user, body, set }) => {
-    if (!user) {
+  .patch("/api/v2/account/password", async ({ user, body, set }): Promise<unknown> => {
+    if (user === null || user === undefined) {
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const attributes = (body as any)?.data?.attributes || {};
-    const currentPassword = attributes.current_password ?? attributes["current-password"];
-    const password = attributes.password;
-    const confirmation = attributes.password_confirmation ?? attributes["password-confirmation"];
-    if (!currentPassword || !password || password !== confirmation || password.length < 10) {
+    const attrs = extractAttrs(body) ?? {};
+    const currentPassword = typeof attrs.current_password === "string" ? attrs.current_password : (typeof attrs["current-password"] === "string" ? attrs["current-password"] : "");
+    const password = typeof attrs.password === "string" ? attrs.password : "";
+    const confirmation = typeof attrs.password_confirmation === "string" ? attrs.password_confirmation : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
+    if (currentPassword === "" || password === "" || password !== confirmation || password.length < 10) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
     }

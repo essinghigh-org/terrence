@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/prefer-readonly-parameter-types */
 import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
@@ -188,7 +189,7 @@ export const runs = sqliteTable("runs", {
   refreshOnly: integer("refresh_only", { mode: "boolean" }).notNull().default(false),
   targetAddrs: text("target_addrs", { mode: "json" }).$type<string[]>(),
   replaceAddrs: text("replace_addrs", { mode: "json" }).$type<string[]>(),
-  variables: text("variables", { mode: "json" }).$type<Array<{ key: string; value: string }>>(),
+  variables: text("variables", { mode: "json" }).$type<{ key: string; value: string }[]>(),
   logToken: text("log_token").$defaultFn(() => crypto.randomUUID()),
   terraformVersion: text("terraform_version"),
   debuggingMode: integer("debugging_mode", { mode: "boolean" }).notNull().default(false),

@@ -90,7 +90,7 @@ describe("Terraform cloud protocol contract", () => {
       headers: authHeaders,
     });
     expect(workspaceResponse.status).toBe(200);
-    const workspace = (await workspaceResponse.json() as any).data;
+    const workspace = (await workspaceResponse.json()).data;
     expect(workspace.attributes["execution-mode"]).toBe("remote");
     expect(workspace.attributes["iac-binary"]).toBe("tofu");
     expect(workspace.attributes.permissions).toMatchObject({
@@ -115,7 +115,7 @@ describe("Terraform cloud protocol contract", () => {
       },
     );
     expect(createConfigurationResponse.status).toBe(201);
-    const createdConfiguration = await createConfigurationResponse.json() as any;
+    const createdConfiguration = await createConfigurationResponse.json();
     configurationVersionId = createdConfiguration.data.id;
     const uploadUrl = createdConfiguration.data.attributes["upload-url"];
     expect(uploadUrl).toBe(
@@ -135,7 +135,7 @@ describe("Terraform cloud protocol contract", () => {
       { headers: authHeaders },
     );
     expect(configurationListResponse.status).toBe(200);
-    const configurationList = await configurationListResponse.json() as any;
+    const configurationList = await configurationListResponse.json();
     expect(configurationList.data).toContainEqual(expect.objectContaining({
       id: configurationVersionId,
       attributes: expect.objectContaining({
@@ -180,7 +180,7 @@ describe("Terraform cloud protocol contract", () => {
       }),
     });
     expect(speculativeRunResponse.status).toBe(201);
-    const speculativeRun = (await speculativeRunResponse.json() as any).data;
+    const speculativeRun = (await speculativeRunResponse.json()).data;
     expect(speculativeRun.attributes).toMatchObject({
       "plan-only": true,
       refresh: false,
@@ -194,12 +194,12 @@ describe("Terraform cloud protocol contract", () => {
     const promotedWorkspace = (await (await request(
       `/api/v2/workspaces/${workspaceId}`,
       { headers: authHeaders },
-    )).json() as any).data;
+    )).json()).data;
     expect(promotedWorkspace.attributes["iac-binary"]).toBe("terraform");
     const speculativePlan = (await (await request(
       `/api/v2/plans/plan-${speculativeRun.id}`,
       { headers: authHeaders },
-    )).json() as any).data;
+    )).json()).data;
     expect(speculativePlan.attributes["log-read-url"]).toMatch(
       new RegExp(`^http://terrence\\.test/api/v2/runs/${speculativeRun.id}/plan/log/[^/]+$`),
     );
@@ -223,7 +223,7 @@ describe("Terraform cloud protocol contract", () => {
       },
     );
     expect(metadataOnlyStateResponse.status).toBe(400);
-    expect((await metadataOnlyStateResponse.json() as any).errors[0].detail).toBe(
+    expect((await metadataOnlyStateResponse.json()).errors[0].detail).toBe(
       "param is missing or the value is empty: state",
     );
 
@@ -245,7 +245,7 @@ describe("Terraform cloud protocol contract", () => {
       },
     );
     expect(createStateResponse.status).toBe(201);
-    const createdState = await createStateResponse.json() as any;
+    const createdState = await createStateResponse.json();
     const stateDownloadUrl = createdState.data.attributes["hosted-state-download-url"];
     expect(stateDownloadUrl).toMatch(
       /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/download$/,
@@ -256,7 +256,7 @@ describe("Terraform cloud protocol contract", () => {
       { headers: authHeaders },
     );
     expect(currentStateResponse.status).toBe(200);
-    const currentState = await currentStateResponse.json() as any;
+    const currentState = await currentStateResponse.json();
     expect(currentState.data.attributes["hosted-state-download-url"]).toBe(stateDownloadUrl);
 
     const stateDownloadResponse = await request(stateDownloadUrl, { headers: authHeaders });
@@ -294,7 +294,7 @@ describe("Terraform cloud protocol contract", () => {
 
     const runResponse = await request(`/api/v2/runs/${runId}`, { headers: authHeaders });
     expect(runResponse.status).toBe(200);
-    const run = (await runResponse.json() as any).data;
+    const run = (await runResponse.json()).data;
     expect(run.attributes.actions).toEqual(expect.objectContaining({
       "is-confirmable": true,
       "is-discardable": true,
@@ -313,7 +313,7 @@ describe("Terraform cloud protocol contract", () => {
 
     const planResponse = await request(`/api/v2/plans/plan-${runId}`, { headers: authHeaders });
     expect(planResponse.status).toBe(200);
-    const plan = (await planResponse.json() as any).data;
+    const plan = (await planResponse.json()).data;
     expect(plan.attributes.status).toBe("finished");
     expect(plan.attributes["generated-configuration"]).toBe(false);
     expect(plan.attributes["execution-details"]).toEqual({ mode: "remote" });
@@ -327,7 +327,7 @@ describe("Terraform cloud protocol contract", () => {
 
     const applyResponse = await request(`/api/v2/applies/apply-${runId}`, { headers: authHeaders });
     expect(applyResponse.status).toBe(200);
-    const apply = (await applyResponse.json() as any).data;
+    const apply = (await applyResponse.json()).data;
     expect(apply.attributes.status).toBe("pending");
     expect(apply.attributes["log-read-url"]).toBe(
       `http://terrence.test/api/v2/runs/${runId}/apply/log/${runId}`,
@@ -348,7 +348,7 @@ describe("Terraform cloud protocol contract", () => {
       { headers: authHeaders },
     );
     expect(organizationRunsResponse.status).toBe(200);
-    const organizationRuns = await organizationRunsResponse.json() as any;
+    const organizationRuns = await organizationRunsResponse.json();
     expect(organizationRuns.data.map((item: any) => item.id)).toContain(runId);
 
     for (const [action, status] of [
@@ -362,7 +362,7 @@ describe("Terraform cloud protocol contract", () => {
         { method: "POST", headers: authHeaders },
       );
       expect(actionResponse.status).toBe(200);
-      expect((await actionResponse.json() as any).data.attributes.status).toBe(status);
+      expect((await actionResponse.json()).data.attributes.status).toBe(status);
     }
   });
 

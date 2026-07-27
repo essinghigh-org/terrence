@@ -24,7 +24,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (!attributes?.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `team-${crypto.randomUUID()}`;
     const newTeam = { id, orgId: org.id, name: attributes.name, description: attributes.description ?? null, visibility: attributes.visibility ?? "organization", ssoTeamId: attributes["sso-team-id"] ?? null, createdAt: Date.now() };
     await db.insert(teams).values(newTeam);
@@ -188,7 +188,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, team_id) });
     if (!team || !(await checkOrgPermission(user?.id, team.orgId, "owner", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.url || !attributes["destination-type"]) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL and destination-type are required" }] }; }
+    if (!attributes?.url || !attributes["destination-type"]) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL and destination-type are required" }] }; }
     const id = `nc-${crypto.randomUUID()}`;
     await db.insert(notificationConfigurations).values({ id, workspaceId: null, teamId: team_id, name: attributes.name ?? `Team notification for ${team.name}`, destinationType: attributes["destination-type"], url: attributes.url, triggers: Array.isArray(attributes.triggers) ? attributes.triggers : ["team:change_request"], enabled: attributes.enabled ?? true, token: attributes.token ?? null, createdAt: Date.now() });
     set.status = 201;

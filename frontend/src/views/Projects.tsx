@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { FolderKanban, Plus, Pencil, Trash2, Layers } from "lucide-react";
 
-interface Project {
+type Project = {
   id: string;
   attributes: {
     name: string;
@@ -65,7 +65,7 @@ export function Projects() {
     setDialogOpen(true);
   };
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleSave = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!orgName) return;
     setSaving(true);
@@ -184,10 +184,10 @@ export function Projects() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => openEditDialog(project)}>
+                        <Button size="sm" variant="outline" onClick={() => { openEditDialog(project); }}>
                           <Pencil className="size-3.5 mr-1" /> Edit
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => handleDelete(project)}>
+                        <Button size="sm" variant="destructive" onClick={async () => handleDelete(project)}>
                           <Trash2 className="size-3.5 mr-1" /> Delete
                         </Button>
                       </div>
@@ -222,8 +222,8 @@ export function Projects() {
               <Input
                 id="project-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                onInput={(e: any) => setName(e.target.value)}
+                onChange={(e) => { setName(e.target.value); }}
+                onInput={(e: any) => { setName(e.target.value); }}
                 placeholder="e.g. Core Infrastructure"
                 required
               />
@@ -233,8 +233,8 @@ export function Projects() {
               <Input
                 id="project-description"
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onInput={(e: any) => setDescription(e.target.value)}
+                onChange={(e) => { setDescription(e.target.value); }}
+                onInput={(e: any) => { setDescription(e.target.value); }}
                 placeholder="Optional description"
               />
             </div>

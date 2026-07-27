@@ -17,7 +17,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attributes = (body as any)?.data?.attributes;
-    if (!attributes || !attributes.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    if (!attributes?.name || typeof attributes.name !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `oc-${crypto.randomUUID()}`;
     await db.insert(oauthClients).values({ id, orgId: org.id, name: attributes.name, serviceProvider: attributes["service-provider"] ?? "github", apiUrl: attributes["api-url"] ?? null, httpUrl: attributes["http-url"] ?? null, key: attributes.key ?? null, secret: attributes.secret ?? null, rsaPublicKey: attributes["rsa-public-key"] ?? null, createdAt: Date.now() });
     set.status = 201;

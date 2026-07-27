@@ -78,7 +78,7 @@ describe("native Terraform organization run queue", () => {
       `/api/v2/organizations/${orgName}/runs/queue?page[number]=2&page[size]=2`,
     );
     expect(response.status).toBe(200);
-    const body = await response.json() as any;
+    const body = await response.json();
     expect(body.data.map((run: any) => run.id)).toEqual([
       runIds.firstPending,
       runIds.secondPending,

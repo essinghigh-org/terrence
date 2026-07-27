@@ -2,7 +2,7 @@ import { db } from "./src/db";
 import { users, organizations, workspaces } from "./src/db/schema";
 import * as bcrypt from "bcryptjs";
 
-async function seed() {
+async function seed(): Promise<void> {
     const passwordHash = await bcrypt.hash("testpass", 10);
     const userId = crypto.randomUUID();
     await db.insert(users).values({
@@ -26,4 +26,4 @@ async function seed() {
 
     console.log("Seeded database.");
 }
-seed().then(() => process.exit(0));
+void seed().then((): void => { process.exit(0); });

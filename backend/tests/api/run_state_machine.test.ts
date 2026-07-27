@@ -55,7 +55,7 @@ async function createRun(message = "test run"): Promise<string> {
       relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } },
     },
   });
-  const body = await res.json() as any;
+  const body = await res.json();
   return body.data.id;
 }
 
@@ -66,7 +66,7 @@ describe("TFE API v2 - Run resource relationships", () => {
     const runId = await createRun("workspace-run-alerts test");
     const res = await req(`/api/v2/runs/${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     const run = body.data;
 
     expect(run.relationships).toHaveProperty("workspace-run-alerts");
@@ -78,7 +78,7 @@ describe("TFE API v2 - Run resource relationships", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     const plan = body.data;
 
     expect(plan.type).toBe("plans");
@@ -94,7 +94,7 @@ describe("TFE API v2 - Run resource relationships", () => {
 
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     const apply = body.data;
 
     expect(apply.type).toBe("applies");
@@ -120,7 +120,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("queued");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -137,7 +137,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("queued");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -154,7 +154,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("running");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -171,7 +171,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("finished");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -188,7 +188,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/runs/${runId}/plan`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("unreachable");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -205,7 +205,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("queued");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -222,7 +222,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("running");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -239,7 +239,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("finished");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -256,7 +256,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
 
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes.status).toBe("unreachable");
 
     await db.delete(runs).where(eq(runs.id, runId));
@@ -271,7 +271,7 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
 
     const res = await req(`/api/v2/runs/${runId}/cost-estimate`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     const attrs = body.data.attributes;
 
     expect(attrs.status).toBe("finished");
@@ -289,7 +289,7 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
 
     const res = await req(`/api/v2/cost-estimates/ce-${runId}`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     const attrs = body.data.attributes;
 
     expect(attrs["resources-count"]).toBe(0);
@@ -319,7 +319,7 @@ describe("TFE API v2 - OAuth client service-provider-display-name", () => {
       },
     );
     expect(res.status).toBe(201);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data.attributes["service-provider"]).toBe("github");
     expect(body.data.attributes["service-provider-display-name"]).toBe("GitHub");
   });
@@ -335,20 +335,20 @@ describe("TFE API v2 - OAuth client service-provider-display-name", () => {
         },
       },
     );
-    const createBody = await createRes.json() as any;
+    const createBody = await createRes.json();
     const clientId = createBody.data?.id;
     expect(clientId).toBeTruthy();
 
     const getRes = await req(`/api/v2/oauth-clients/${clientId}`);
     expect(getRes.status).toBe(200);
-    const getBody = await getRes.json() as any;
+    const getBody = await getRes.json();
     expect(getBody.data.attributes["service-provider-display-name"]).toBe("GitLab");
   });
 
   it("GET oauth-clients list includes service-provider-display-name on all entries", async () => {
     const listRes = await req(`/api/v2/organizations/${orgName}/oauth-clients`);
     expect(listRes.status).toBe(200);
-    const listBody = await listRes.json() as any;
+    const listBody = await listRes.json();
     for (const client of listBody.data) {
       expect(client.attributes).toHaveProperty("service-provider-display-name");
       expect(typeof client.attributes["service-provider-display-name"]).toBe("string");
@@ -367,7 +367,7 @@ describe("TFE API v2 - OAuth client service-provider-display-name", () => {
         },
       },
     );
-    const createBody = await createRes.json() as any;
+    const createBody = await createRes.json();
     const clientId = createBody.data?.id;
 
     const patchRes = await req(`/api/v2/oauth-clients/${clientId}`, "PATCH", {
@@ -378,7 +378,7 @@ describe("TFE API v2 - OAuth client service-provider-display-name", () => {
       },
     });
     expect(patchRes.status).toBe(200);
-    const patchBody = await patchRes.json() as any;
+    const patchBody = await patchRes.json();
     expect(patchBody.data.attributes["service-provider-display-name"]).toBe("GitLab Enterprise Edition");
   });
 });
@@ -389,7 +389,7 @@ describe("TFE API v2 - Capacity endpoint with intermediate run states", () => {
   it("capacity endpoint returns pending and running counts", async () => {
     const res = await req(`/api/v2/organizations/${orgName}/capacity`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     expect(body.data).toBeDefined();
     expect(typeof body.data.attributes.pending).toBe("number");
     expect(typeof body.data.attributes.running).toBe("number");
@@ -406,7 +406,7 @@ describe("TFE API v2 - Capacity endpoint with intermediate run states", () => {
 
     const res = await req(`/api/v2/organizations/${orgName}/capacity`);
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = await res.json();
     // queuing and plan_queued should contribute to capacity
     expect(body.data.attributes.pending).toBeGreaterThanOrEqual(0);
 

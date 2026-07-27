@@ -145,7 +145,7 @@ describe("workspace run history and state metadata", () => {
   });
 
   it("filters the workspace run query before pagination and count", async () => {
-    const cases: Array<[Record<string, string>, string[]]> = [
+    const cases: [Record<string, string>, string[]][] = [
       [{ "filter[status]": "planned,applied" }, [runIds.planned, runIds.applied]],
       [{ "filter[operation]": "destroy" }, [runIds.destroy]],
       [{ "filter[source]": "tfe-ui" }, []],
@@ -159,7 +159,7 @@ describe("workspace run history and state metadata", () => {
     for (const [query, expected] of cases) {
       const response = await runHistory(query);
       expect(response.status).toBe(200);
-      const body = await response.json() as any;
+      const body = await response.json();
       expect(body.data.map((run: any) => run.id).sort()).toEqual(expected.sort());
       expect(body.meta.pagination["total-count"]).toBe(expected.length);
     }
@@ -169,7 +169,7 @@ describe("workspace run history and state metadata", () => {
       "page[number]": "2",
       "page[size]": "1",
     });
-    const page = await filteredPage.json() as any;
+    const page = await filteredPage.json();
     expect(page.data.map((run: any) => run.id)).toEqual([runIds.old]);
     expect(page.meta.pagination).toMatchObject({
       "current-page": 2,
@@ -183,7 +183,7 @@ describe("workspace run history and state metadata", () => {
   it("returns derived state metadata and authenticated paginated outputs", async () => {
     const listResponse = await request(`/api/v2/workspaces/${workspaceId}/state-versions`);
     expect(listResponse.status).toBe(200);
-    const listed = (await listResponse.json() as any).data[0];
+    const listed = (await listResponse.json()).data[0];
     expect(listed.attributes).toMatchObject({
       serial: 7,
       md5: createHash("md5").update(statePayload).digest("hex"),
@@ -210,13 +210,13 @@ describe("workspace run history and state metadata", () => {
 
     const showResponse = await request(`/api/v2/state-versions/${stateId}`);
     expect(showResponse.status).toBe(200);
-    expect((await showResponse.json() as any).data.attributes.state).toBe(statePayload);
+    expect((await showResponse.json()).data.attributes.state).toBe(statePayload);
 
     const outputsResponse = await request(
       `/api/v2/state-versions/${stateId}/state-version-outputs?page[number]=2&page[size]=1`,
     );
     expect(outputsResponse.status).toBe(200);
-    const outputs = await outputsResponse.json() as any;
+    const outputs = await outputsResponse.json();
     expect(outputs.data).toHaveLength(1);
     expect(outputs.data[0]).toMatchObject({
       type: "state-version-outputs",
@@ -239,7 +239,7 @@ describe("workspace run history and state metadata", () => {
 
     const outputResponse = await request(`/api/v2/state-version-outputs/${outputs.data[0].id}`);
     expect(outputResponse.status).toBe(200);
-    expect((await outputResponse.json() as any).data).toEqual(outputs.data[0]);
+    expect((await outputResponse.json()).data).toEqual(outputs.data[0]);
     expect((await request(
       "/api/v2/state-version-outputs/wsout-missing",
     )).status).toBe(404);
@@ -268,13 +268,13 @@ describe("workspace run history and state metadata", () => {
 
     const goTfeOutputs = await request(`/api/v2/state-versions/${stateId}/outputs`);
     expect(goTfeOutputs.status).toBe(200);
-    expect((await goTfeOutputs.json() as any).data).toHaveLength(2);
+    expect((await goTfeOutputs.json()).data).toHaveLength(2);
 
     const currentOutputs = await request(
       `/api/v2/workspaces/${workspaceId}/current-state-version-outputs`,
     );
     expect(currentOutputs.status).toBe(200);
-    expect((await currentOutputs.json() as any).data).toHaveLength(2);
+    expect((await currentOutputs.json()).data).toHaveLength(2);
 
     expect((await request(
       `/api/v2/state-versions/${stateId}/state-version-outputs`,

@@ -1,19 +1,19 @@
 // Initialize log level
-const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LOG_LEVEL = (process.env.LOG_LEVEL ?? "info").toLowerCase();
 const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
-type LogLevel = typeof LOG_LEVELS[number];
+type LogLevel = (typeof LOG_LEVELS)[number];
 
 function isLogLevelEnabled(level: LogLevel): boolean {
   return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
 }
 
-function structuredLog(level: LogLevel, message: string, meta?: Record<string, any>) {
+function structuredLog(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
   if (!isLogLevelEnabled(level)) return;
-  const entry = {
+  const entry: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
     level,
     message,
-    ...(meta ? { ...meta } : {}),
+    ...(meta !== undefined ? { ...meta } : {}),
   };
   const output = JSON.stringify(entry);
   if (level === "error") {
@@ -26,8 +26,16 @@ function structuredLog(level: LogLevel, message: string, meta?: Record<string, a
 }
 
 export const log = {
-  error: (msg: string, meta?: Record<string, any>) => structuredLog("error", msg, meta),
-  warn: (msg: string, meta?: Record<string, any>) => structuredLog("warn", msg, meta),
-  info: (msg: string, meta?: Record<string, any>) => structuredLog("info", msg, meta),
-  debug: (msg: string, meta?: Record<string, any>) => structuredLog("debug", msg, meta),
+  error: (msg: string, meta?: Record<string, unknown>): void => {
+    structuredLog("error", msg, meta);
+  },
+  warn: (msg: string, meta?: Record<string, unknown>): void => {
+    structuredLog("warn", msg, meta);
+  },
+  info: (msg: string, meta?: Record<string, unknown>): void => {
+    structuredLog("info", msg, meta);
+  },
+  debug: (msg: string, meta?: Record<string, unknown>): void => {
+    structuredLog("debug", msg, meta);
+  },
 };

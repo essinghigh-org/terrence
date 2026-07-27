@@ -1,12 +1,12 @@
 import { db } from "../db";
 import {
-  users, apiTokens, organizations, workspaces, organizationMemberships,
-  runs, logs, stateVersions, workspaceVariables, workspaceTags,
-  configurationVersions, variableSets, variableSetWorkspaces,
+  users, workspaces,
+  runs, stateVersions, workspaceVariables, workspaceTags,
+  configurationVersions, variableSets,
   auditLogs, dataRetentionPolicies, remoteStateConsumers,
   agentPools, workspaceRunTasks,
 } from "../db/schema";
-import { and, eq, ne, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, like, lt, notInArray, or, type SQL } from "drizzle-orm";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
 
@@ -20,8 +20,8 @@ export async function auditLog(
   resourceId: string | null,
   userId: string | null,
   orgId: string | null,
-  details?: Record<string, any>,
-) {
+  details?: Record<string, unknown>,
+): Promise<void> {
   try {
     await db.insert(auditLogs).values({
       id: crypto.randomUUID(),
@@ -42,12 +42,12 @@ export async function checkOrgPermission(
   requiredRole: "owner" | "member" = "member",
   tokenOrgId: string | null = null,
 ): Promise<boolean> {
-  if (tokenOrgId) return tokenOrgId === orgId && requiredRole === "member";
-  if (!userId) return false;
+  if (tokenOrgId !== null) return tokenOrgId === orgId && requiredRole === "member";
+  if (userId === undefined || userId === null) return false;
   const membership = await db.query.organizationMemberships.findFirst({
     where: (m, { and, eq }) => and(eq(m.userId, userId), eq(m.orgId, orgId)),
   });
-  if (!membership) return false;
+  if (membership === null || membership === undefined) return false;
   if (requiredRole === "owner" && membership.role !== "owner") return false;
   return true;
 }
@@ -69,66 +69,84 @@ export async function findAuthorizedVariableSet(
     : undefined;
 }
 
-export function workspaceRelationshipIds(body: unknown) {
-  const data = (body as any)?.data;
-  if (!Array.isArray(data) || data.length === 0) return;
-  if (data.some(item => item?.type !== "workspaces" || typeof item?.id !== "string" || !item.id)) return;
-  return [...new Set(data.map(item => item.id as string))];
+type JsonApiData = { type?: string; id?: string };
+
+export function workspaceRelationshipIds(body: unknown): string[] | undefined {
+  const payload = body as Record<string, unknown> | null;
+  const data = payload?.data;
+  if (!Array.isArray(data) || data.length === 0) return undefined;
+  const items = data as unknown[];
+  if (items.some((item): boolean => {
+    const i = item as JsonApiData | null;
+    return i?.type !== "workspaces" || typeof i?.id !== "string" || (i?.id ?? "") === "";
+  })) return undefined;
+  return [...new Set(items.map((item): string => (item as JsonApiData).id as string))];
 }
 
-export function projectRelationshipIds(body: unknown) {
-  const data = (body as any)?.data;
-  if (!Array.isArray(data) || data.length === 0) return;
-  if (data.some(item => item?.type !== "projects" || typeof item?.id !== "string" || !item.id)) return;
-  return [...new Set(data.map(item => item.id as string))];
+export function projectRelationshipIds(body: unknown): string[] | undefined {
+  const payload = body as Record<string, unknown> | null;
+  const data = payload?.data;
+  if (!Array.isArray(data) || data.length === 0) return undefined;
+  const items = data as unknown[];
+  if (items.some((item): boolean => {
+    const i = item as JsonApiData | null;
+    return i?.type !== "projects" || typeof i?.id !== "string" || (i?.id ?? "") === "";
+  })) return undefined;
+  return [...new Set(items.map((item): string => (item as JsonApiData).id as string))];
 }
 
-export function variableRelationshipResources(body: unknown) {
-  const data = (body as any)?.data;
+type VarRelationshipResult = { many: boolean; resources: unknown[] };
+
+export function variableRelationshipResources(body: unknown): VarRelationshipResult | undefined {
+  const payload = body as Record<string, unknown> | null;
+  const data = payload?.data;
   const many = Array.isArray(data);
-  const resources = many ? data : [data];
+  const resources = many ? data as unknown[] : [data];
   if (
     resources.length === 0
-    || resources.some(item => item?.type !== "vars" || typeof item?.id !== "string" || !item.id)
-    || new Set(resources.map(item => item.id)).size !== resources.length
-  ) return;
+    || resources.some((item): boolean => {
+      const i = item as JsonApiData | null;
+      return i?.type !== "vars" || typeof i?.id !== "string" || (i?.id ?? "") === "";
+    })
+    || new Set(resources.map((item): unknown => (item as JsonApiData).id)).size !== resources.length
+  ) return undefined;
   return { many, resources };
 }
 
-export async function findWorkspaceByName(orgId: string, name: string) {
+export async function findWorkspaceByName(orgId: string, name: string): Promise<typeof workspaces.$inferSelect | undefined> {
   return db.query.workspaces.findFirst({
     where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, name)),
-  });
+  }) as Promise<typeof workspaces.$inferSelect | undefined>;
 }
 
 export async function findAuthorizedWorkspace(
   workspaceId: string,
   userId: string | undefined,
   tokenOrgId: string | null,
-) {
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-  return workspace && await checkOrgPermission(userId, workspace.orgId, "member", tokenOrgId)
+): Promise<typeof workspaces.$inferSelect | undefined> {
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) }) as typeof workspaces.$inferSelect | undefined;
+  return workspace !== undefined && await checkOrgPermission(userId, workspace.orgId, "member", tokenOrgId)
     ? workspace
     : undefined;
 }
 
-export async function findAuthorizedRun(runId: string, userId: string | undefined, tokenOrgId: string | null) {
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  if (!run) return;
+export async function findAuthorizedRun(runId: string, userId: string | undefined, tokenOrgId: string | null): Promise<{ run: typeof runs.$inferSelect; workspace: typeof workspaces.$inferSelect } | undefined> {
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) }) as typeof runs.$inferSelect | undefined;
+  if (run === null || run === undefined) return undefined;
   const workspace = await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId);
-  return workspace ? { run, workspace } : undefined;
+  return workspace !== undefined ? { run, workspace } : undefined;
 }
 
-export async function findLogCapability(runId: string, token: string) {
+export async function findLogCapability(runId: string, token: string): Promise<typeof runs.$inferSelect | undefined> {
   const { timingSafeEqual } = await import("node:crypto");
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  if (!run || !run.logToken) return;
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) }) as typeof runs.$inferSelect | undefined;
+  if (run === null || run === undefined || run.logToken === null || run.logToken === undefined) return undefined;
   const expected = Buffer.from(run.logToken);
   const actual = Buffer.from(token);
   return expected.length === actual.length && timingSafeEqual(expected, actual) ? run : undefined;
 }
 
-export function pageRequest(request: Request) {
+export function pageRequest(request: Request): { number: number; size: number } {
   const params = new URL(request.url).searchParams;
   const number = Number.parseInt(params.get("page[number]") ?? "1", 10);
   const size = Number.parseInt(params.get("page[size]") ?? "20", 10);
@@ -138,7 +156,7 @@ export function pageRequest(request: Request) {
   };
 }
 
-export function pagination(request: Request, currentPage: number, pageSize: number, totalCount: number) {
+export function pagination(request: Request, currentPage: number, pageSize: number, totalCount: number): { links: Record<string, string | null>; meta: Record<string, unknown> } {
   const totalPages = Math.ceil(totalCount / pageSize);
   const pageLink = (page: number) => {
     const url = new URL(request.url);
@@ -168,14 +186,14 @@ export function pagination(request: Request, currentPage: number, pageSize: numb
   };
 }
 
-export function apiURL(request: Request, path: string) {
-  return new URL(path, PUBLIC_URL || request.url).toString();
+export function apiURL(request: Request, path: string): string {
+  return new URL(path, PUBLIC_URL ?? request.url).toString();
 }
 
-export function logChunk(output: string, request: Request) {
+export function logChunk(output: string, request: Request): Uint8Array {
   const params = new URL(request.url).searchParams;
-  const parsedOffset = Number.parseInt(params.get("offset") || "0", 10);
-  const parsedLimit = Number.parseInt(params.get("limit") || "", 10);
+  const parsedOffset = Number.parseInt(params.get("offset") ?? "0", 10);
+  const parsedLimit = Number.parseInt(params.get("limit") ?? "", 10);
   const offset = Number.isInteger(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
   const bytes = Buffer.from(output);
   const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : bytes.length;
@@ -198,25 +216,30 @@ export function serviceProviderDisplayName(provider: string): string {
   return map[provider] ?? provider;
 }
 
-export function parseTagBindings(data: unknown) {
-  if (!Array.isArray(data)) return;
+export function parseTagBindings(data: unknown): Array<{ key: string; value: string }> | undefined {
+  if (!Array.isArray(data)) return undefined;
   const bindings = new Map<string, { key: string; value: string }>();
   for (const item of data) {
-    const { key, value = "" } = item?.attributes || {};
-    if (item?.type !== "tag-bindings" || typeof key !== "string" || !key.trim() || typeof value !== "string") {
-      return;
+    const i = item as Record<string, unknown> | null;
+    if (i === null) return undefined;
+    const attrs = i.attributes as Record<string, unknown> | undefined;
+    const key = attrs?.key as string | undefined;
+    const value = (attrs?.value as string) ?? "";
+    if (i.type !== "tag-bindings" || typeof key !== "string" || (key ?? "").trim() === "" || typeof value !== "string") {
+      return undefined;
     }
     bindings.set(key.trim(), { key: key.trim(), value });
   }
+  if (bindings.size === 0) return undefined;
   return [...bindings.values()];
 }
 
-export function workspaceRunHistoryWhere(request: Request, workspaceId: string) {
+export function workspaceRunHistoryWhere(request: Request, workspaceId: string): ReturnType<typeof and> {
   const params = new URL(request.url).searchParams;
-  const csv = (name: string) => params.get(name)?.split(",").map(value => value.trim()).filter(Boolean);
-  const conditions = [eq(runs.workspaceId, workspaceId)];
+  const csv = (name: string): string[] | undefined => params.get(name)?.split(",").map(value => value.trim()).filter((s): boolean => s !== "");
+  const conditions: ReturnType<typeof eq>[] = [eq(runs.workspaceId, workspaceId)];
   const statuses = csv("filter[status]");
-  if (statuses?.length) conditions.push(inArray(runs.status, statuses));
+  if (statuses !== undefined && statuses.length > 0) conditions.push(inArray(runs.status, statuses));
 
   const operations = csv("filter[operation]");
   if (operations?.length) {
@@ -337,7 +360,7 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
     const latest = relevantStates[0];
     if (latest.statePayload) {
       try {
-        const parsed = JSON.parse(decodeStatePayload(latest.statePayload) as string);
+        const parsed = JSON.parse(decodeStatePayload(latest.statePayload));
         // Check if state contains any resources
         const resources = parsed?.resources;
         if (resources && Array.isArray(resources) && resources.length > 0) {

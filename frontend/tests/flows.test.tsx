@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 const changeInput = (element: HTMLElement, value: string) => {
-  const input = element as HTMLInputElement;
+  const input = element;
   const tracker = (input as any)._valueTracker;
   if (tracker) {
     tracker.setValue(value === "" ? "x" : "");
@@ -51,10 +51,10 @@ test("logs in, stores the token, and navigates home", async () => {
   changeInput(view.getByLabelText("Username"), "alice");
   changeInput(view.getByLabelText("Password"), "correct horse");
   await act(async () => {
-    fireEvent.submit(view.getByRole("button", { name: "Sign in" }).closest("form")!);
+    fireEvent.submit(view.getByRole("button", { name: "Sign in" }).closest("form"));
   });
 
-  await waitFor(() => expect(view.getByText("Home")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Home")).toBeTruthy(); });
   expect(localStorage.getItem("tfe_token")).toBe("user-token");
   const [loginUrl, loginOptions] = fetchMock.mock.calls[0]!;
   expect(loginUrl).toBe("/api/v2/users/login");
@@ -83,10 +83,10 @@ test("creates a workspace from the modal", async () => {
   changeInput(view.getByLabelText(/Engine Version/), "1.9.3");
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
   await act(async () => {
-    fireEvent.submit(view.getByRole("button", { name: "Create Workspace" }).closest("form")!);
+    fireEvent.submit(view.getByRole("button", { name: "Create Workspace" }).closest("form"));
   });
 
-  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  await waitFor(() => { expect(onCreated).toHaveBeenCalledTimes(1); });
   const [workspaceUrl, workspaceOptions] = fetchMock.mock.calls[0]!;
   expect(workspaceUrl).toBe("/api/v2/organizations/acme/workspaces");
   expect(JSON.parse((workspaceOptions as RequestInit).body as string)).toEqual({
@@ -149,7 +149,7 @@ test("creates and deletes a workspace variable", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor(() => expect(view.getByText("Workspace details")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Workspace details")).toBeTruthy(); });
   // The variables tab is currently stubbed out in the new UI layout.
 });
 
@@ -193,9 +193,9 @@ test("queues a run, displays its logs, and applies it", async () => {
       />
     </MemoryRouter>,
   );
-  await waitFor(() => expect(list.getByText("There is no run history for this workspace.")).toBeTruthy());
+  await waitFor(() => { expect(list.getByText("There is no run history for this workspace.")).toBeTruthy(); });
   fireEvent.click(list.getByRole("button", { name: "Start new run" }));
-  await waitFor(() => expect(list.getByText("Queued manually via UI")).toBeTruthy());
+  await waitFor(() => { expect(list.getByText("Queued manually via UI")).toBeTruthy(); });
   cleanup();
 
   const detail = render(
@@ -208,12 +208,12 @@ test("queues a run, displays its logs, and applies it", async () => {
       </Routes>
     </MemoryRouter>,
   );
-  await waitFor(() => expect(detail.getByText(/Plan: 1 to add./)).toBeTruthy(), { timeout: 5000 });
+  await waitFor(() => { expect(detail.getByText(/Plan: 1 to add./)).toBeTruthy(); }, { timeout: 5000 });
   fireEvent.click(detail.getByRole("button", { name: "Confirm & Apply" }));
-  await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
+  await waitFor(() => { expect(fetchMock.mock.calls.some(([url, init]) =>
     String(url).endsWith("/runs/run-12345678/actions/apply") &&
-    (init as RequestInit)?.method === "POST"
-  )).toBeTrue());
+    (init)?.method === "POST"
+  )).toBeTrue(); });
 });
 
 const createVarsetsFetchMock = (initialSets: any[] = []) => {
@@ -371,24 +371,24 @@ test("creates variable sets and toggles global scope", async () => {
   );
 
   const body = within(window.document.body);
-  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Shared credentials")).toBeTruthy(); });
 
   fireEvent.click(view.getByRole("button", { name: "New variable set" }));
   changeInput(body.getByLabelText("Name"), "Global defaults");
   changeInput(body.getByLabelText("Description"), "Organization defaults");
   fireEvent.click(body.getByLabelText("Global"));
   await act(async () => {
-    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form")!);
+    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form"));
   });
 
-  await waitFor(() => expect(view.getByText("Global defaults")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Global defaults")).toBeTruthy(); });
   const createCall = fetchMock.mock.calls.find(
     ([url, init]) =>
       String(url).endsWith("/organizations/acme/varsets") &&
-      (init as RequestInit)?.method === "POST",
+      (init)?.method === "POST",
   );
   expect(createCall).toBeDefined();
-  expect(JSON.parse((createCall![1] as RequestInit).body as string)).toEqual({
+  expect(JSON.parse((createCall![1]!).body as string)).toEqual({
     data: {
       type: "varsets",
       attributes: {
@@ -405,12 +405,12 @@ test("creates variable sets and toggles global scope", async () => {
   changeInput(body.getByLabelText("Name"), "Environment defaults");
   fireEvent.click(body.getByLabelText("Global"));
   await act(async () => {
-    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form")!);
+    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form"));
   });
 
-  await waitFor(() => expect(view.getByText("Environment defaults")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Environment defaults")).toBeTruthy(); });
   expect(
-    within(view.getByText("Environment defaults").closest("tr")!).getByText("Selected"),
+    within(view.getByText("Environment defaults").closest("tr")).getByText("Selected"),
   ).toBeTruthy();
 });
 
@@ -426,33 +426,33 @@ test("manages workspace attachments for variable sets", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Shared credentials")).toBeTruthy(); });
 
   const sharedRow = view.getByText("Shared credentials").closest("tr")!;
   fireEvent.click(within(sharedRow).getByRole("button", { name: "Workspaces" }));
   fireEvent.click(view.getByLabelText("development"));
   fireEvent.click(view.getByLabelText("production"));
-  fireEvent.submit(view.getByRole("button", { name: "Save workspaces" }).closest("form")!);
+  fireEvent.submit(view.getByRole("button", { name: "Save workspaces" }).closest("form"));
 
   await waitFor(() =>
-    expect(view.queryByRole("heading", { name: "Manage workspaces" })).toBeNull(),
+    { expect(view.queryByRole("heading", { name: "Manage workspaces" })).toBeNull(); },
   );
   const attachmentCalls = fetchMock.mock.calls.filter(([url]) =>
     String(url).endsWith("/varsets/varset-shared/relationships/workspaces"),
   );
   expect(attachmentCalls).toHaveLength(2);
   const attachCall = attachmentCalls.find(([, init]) =>
-    (init as RequestInit)?.method === "POST"
+    (init)?.method === "POST"
   );
   const detachCall = attachmentCalls.find(([, init]) =>
-    (init as RequestInit)?.method === "DELETE"
+    (init)?.method === "DELETE"
   );
   expect(attachCall).toBeDefined();
   expect(detachCall).toBeDefined();
-  expect(JSON.parse((attachCall![1] as RequestInit).body as string)).toEqual({
+  expect(JSON.parse((attachCall![1]!).body as string)).toEqual({
     data: [{ id: "ws-prod", type: "workspaces" }],
   });
-  expect(JSON.parse((detachCall![1] as RequestInit).body as string)).toEqual({
+  expect(JSON.parse((detachCall![1]!).body as string)).toEqual({
     data: [{ id: "ws-dev", type: "workspaces" }],
   });
 });
@@ -469,31 +469,31 @@ test("manages variable set variables (CRUD)", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Shared credentials")).toBeTruthy(); });
 
   fireEvent.click(
-    within(view.getByText("Shared credentials").closest("tr")!).getByRole("button", {
+    within(view.getByText("Shared credentials").closest("tr")).getByRole("button", {
       name: "Variables",
     }),
   );
   const getBody = () => within(window.document.body);
-  await waitFor(() => expect(getBody().getByText("API_TOKEN")).toBeTruthy());
+  await waitFor(() => { expect(getBody().getByText("API_TOKEN")).toBeTruthy(); });
   expect(getBody().getByText("••••••••")).toBeTruthy();
 
   fireEvent.click(
-    within(getBody().getByText("API_TOKEN").closest("tr")!).getByRole("button", { name: "Edit" }),
+    within(getBody().getByText("API_TOKEN").closest("tr")).getByRole("button", { name: "Edit" }),
   );
-  expect((getBody().getByLabelText("Value") as HTMLInputElement).value).toBe("");
+  expect((getBody().getByLabelText("Value")).value).toBe("");
   changeInput(getBody().getByLabelText("Description"), "Rotated secret");
   await act(async () => {
-    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form")!);
+    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form"));
   });
   await waitFor(() =>
-    expect(getBody().getByText("Variables in Shared credentials")).toBeTruthy(),
+    { expect(getBody().getByText("Variables in Shared credentials")).toBeTruthy(); },
   );
 
   fireEvent.click(getBody().getByRole("button", { name: "Add variable" }));
-  await waitFor(() => expect(window.document.getElementById("variable-key")).not.toBeNull());
+  await waitFor(() => { expect(window.document.getElementById("variable-key")).not.toBeNull(); });
   const k = window.document.getElementById("variable-key") as HTMLInputElement;
   const v = window.document.getElementById("variable-value") as HTMLInputElement;
   const d = window.document.getElementById("variable-description") as HTMLInputElement;
@@ -501,27 +501,27 @@ test("manages variable set variables (CRUD)", async () => {
   changeInput(v, "postgres://database");
   changeInput(d, "Application database");
   await act(async () => {
-    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form")!);
+    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form"));
   });
-  await waitFor(() => expect(window.document.body.textContent).toContain("DATABASE_URL"));
+  await waitFor(() => { expect(window.document.body.textContent).toContain("DATABASE_URL"); });
 
   const createVariableCall = fetchMock.mock.calls.find(
     ([url, init]) =>
       String(url).endsWith("/varsets/varset-shared/relationships/vars") &&
-      (init as RequestInit)?.method === "POST",
+      (init)?.method === "POST",
   );
   expect(createVariableCall).toBeDefined();
 
   fireEvent.click(
-    within(getBody().getByText("DATABASE_URL").closest("tr")!).getByRole("button", {
+    within(getBody().getByText("DATABASE_URL").closest("tr")).getByRole("button", {
       name: "Delete",
     }),
   );
-  await waitFor(() => expect(getBody().queryByText("DATABASE_URL")).toBeNull());
+  await waitFor(() => { expect(getBody().queryByText("DATABASE_URL")).toBeNull(); });
   expect(fetchMock.mock.calls.some(
     ([url, init]) =>
       String(url).endsWith("/varsets/varset-shared/relationships/vars/var-database") &&
-      (init as RequestInit)?.method === "DELETE",
+      (init)?.method === "DELETE",
   )).toBeTrue();
 });
 
@@ -537,14 +537,14 @@ test("deletes variable sets", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("Shared credentials")).toBeTruthy(); });
 
   const sharedRow = view.getByText("Shared credentials").closest("tr")!;
   fireEvent.click(within(sharedRow).getByRole("button", { name: "Delete" }));
-  await waitFor(() => expect(view.queryByText("Shared credentials")).toBeNull());
+  await waitFor(() => { expect(view.queryByText("Shared credentials")).toBeNull(); });
   expect(fetchMock.mock.calls.some(
     ([url, init]) =>
       String(url).endsWith("/varsets/varset-shared") &&
-      (init as RequestInit)?.method === "DELETE",
+      (init)?.method === "DELETE",
   )).toBeTrue();
 });

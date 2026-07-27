@@ -1,3 +1,4 @@
+/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */
 // @ts-nocheck
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -63,7 +64,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateOutputResources(sv) };
   })
   .get("/api/v2/state-version-outputs/:state_version_output_id", async ({ params: { state_version_output_id }, user, orgId, set }) => {
-    const match = state_version_output_id.match(/^wsout-([a-f0-9]+)$/);
+    const match = /^wsout-([a-f0-9]+)$/.exec(state_version_output_id);
     if (!match) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: null };
   })

@@ -1,10 +1,12 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any */
 import { createHash } from "node:crypto";
 import { db } from "../db";
-import {
-  workspaces, workspaceTags, stateVersions, users, apiTokens, organizations,
-  organizationMemberships, variableSets, variableSetWorkspaces,
-  variableSetProjects, variableSetVariables, workspaceVariables,
-  projects, runs, configurationVersions, logs, agentPools,
+import type {
+  workspaces, stateVersions, apiTokens, organizations, variableSets, workspaceVariables,
+  projects, runs} from "../db/schema";
+import { workspaceTags, users,
+  organizationMemberships, variableSetWorkspaces,
+  variableSetProjects, variableSetVariables, configurationVersions, logs, agentPools,
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
 import { apiURL } from "./utils";
@@ -538,7 +540,7 @@ export function stateOutputResources(state: typeof stateVersions.$inferSelect) {
 
   return Object.entries(outputs).map(([name, raw]) => {
     const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex").slice(0, 16)}`;
-    const output = raw && typeof raw === "object" ? raw as any : { value: raw };
+    const output = raw && typeof raw === "object" ? raw : { value: raw };
     const value = output.value;
     const detailedType = output.type ?? (
       Array.isArray(value) ? ["tuple", value.map(item => typeof item)] :
