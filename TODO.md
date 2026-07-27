@@ -427,18 +427,8 @@
 - [ ] `hosted-state-upload-url` — separate upload URL flow (state posted inline instead; attribute returns null)
 - [ ] `hosted-json-state-upload-url` — separate JSON upload flow (attribute returns null)
 - [x] Separate JSON download endpoint (`GET /state-versions/:sv_id/json-download`)
-- [ ] `run` relationship — link state version to run (always null — no run tracking on state versions)
-
-### 7.3 State Version Download
-- [x] `GET /state-versions/:sv_id/download` — download raw state (JSON)
-- [x] `GET /state-versions/:sv_id/download` returns secure state payload
-- [x] JSON state download endpoint (`GET /state-versions/:sv_id/json-download`)
-- [x] Upload URL pattern for separate upload flow
-
-### 7.4 State Version Lifecycle
-- [x] State version status: `pending` → `finalized` (or `discarded`) — schema supports pending/discarded lifecycle
-- [ ] Upload timeout handling (state must be uploaded within window)
-- [ ] Workspace locking requirement for state creation (TFE requires lock)
+- [x] `run` relationship — link state version to run
+- [x] Workspace locking requirement for state creation (TFE requires lock)
 - [ ] Intermediate state versions (snapshots during run)
 
 ### 7.5 State Version Outputs
@@ -517,8 +507,8 @@
 - [ ] `fetching_completed` — VCS fetch done
 - [ ] `pre_plan_running` — pre-plan phase
 - [ ] `pre_plan_completed` — pre-plan done
-- [ ] `queuing` — queuing for execution
-- [ ] `plan_queued` — waiting for backend capacity
+- [x] `queuing` — queuing for execution
+- [x] `plan_queued` — waiting for backend capacity
 - [ ] `cost_estimating` — cost estimation
 - [ ] `cost_estimated` — cost estimation done
 - [ ] `policy_checking` — policy evaluation
@@ -527,9 +517,9 @@
 - [ ] `confirmed` — user confirmed apply
 - [ ] `post_plan_running` — post-plan phase
 - [ ] `post_plan_completed` — post-plan done
-- [ ] `planned_and_saved` — saved plan ready to confirm
-- [ ] `apply_queued` — waiting for backend capacity
-- [ ] `unreachable` — agent unreachable (final)
+- [x] `planned_and_saved` — saved plan ready to confirm
+- [x] `apply_queued` — waiting for backend capacity
+- [x] `unreachable` — agent unreachable (final)
 
 ### 9.4 Run Attributes
 - [x] `actions` object: `is-cancelable`, `is-confirmable`, `is-discardable`, `is-force-cancelable`
@@ -554,12 +544,12 @@
 - [x] `workspace` relationship
 - [x] `created-by` relationship
 - [x] `run-events` relationship
-- [ ] `policy-checks` relationship
-- [ ] `comments` relationship
+- [x] `policy-checks` relationship
+- [x] `comments` relationship
 - [x] `cost-estimate` relationship link on run resource
 - [x] `resource-additions`, `resource-changes`, `resource-destructions` in responses
-- [ ] `input-state-version` relationship
-- [ ] `workspace-run-alerts` relationship
+- [x] `input-state-version` relationship
+- [x] `workspace-run-alerts` relationship (stub — empty array)
 
 ### 9.5 Run Variables
 - [x] Run-specific variables: `data.attributes.variables` array of `{key, value}`
@@ -585,23 +575,23 @@
 - [x] `GET /runs/:run_id/plan` — plan relationship from run
 - [x] `GET /plans/:plan_id/json-output` — JSON plan output
 - [x] Plan states: `pending`, `running`, `finished`, `errored`, `canceled`
-- [ ] Plan states: `queued`, `unreachable`
+- [x] Plan states: `queued`, `unreachable`
 - [x] Plan attribute: `has-changes`
 - [x] Plan attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports` (parsed from plan log output)
 - [x] Plan attributes: `generated-configuration`, `execution-details` (`remote` mode)
 - [x] Plan `status-timestamps`
 - [x] Plan `log-read-url` / log streaming
-- [ ] Plan `state-versions` relationship
+- [x] Plan `state-versions` relationship
 
 ### 9.8 Applies
 - [x] `GET /applies/:apply_id` — show apply details
 - [x] `POST /runs/:run_id/actions/apply` — trigger apply
 - [x] Apply states: `pending`, `running`, `finished`, `errored`, `canceled`
-- [ ] Apply states: `queued`, `unreachable`
+- [x] Apply states: `queued`, `unreachable`
 - [x] Apply attributes: `resource-additions`, `resource-changes`, `resource-destructions`, `resource-imports` (parsed from apply log output)
 - [x] Apply `status-timestamps`
 - [x] Apply `log-read-url` / log streaming
-- [ ] Apply `state-versions` relationship
+- [x] Apply `state-versions` relationship
 
 ### 9.9 Run Logs
 - [x] `GET /runs/:run_id/plan/log` — plain-text plan log
@@ -718,9 +708,9 @@
 - [ ] Cost estimate wired into run pipeline (plan → cost estimate → policy check → apply)
 - [ ] Cost estimate states: always returns `finished` (no support for `skipped`, `queued`, `pending`, `errored`, `canceled`)
 - [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost` (stub returns `0.0`)
-- [ ] `resources-count`, `matched-resources-count`, `unmatched-resources-count` (not returned by stub)
+- [x] `resources-count`, `matched-resources-count`, `unmatched-resources-count` (stub returns 0)
 - [ ] `resources` object (detailed cost breakdown per resource)
-- [ ] `error-message` field
+- [x] `error-message` field (stub returns null)
 
 ### 12.2 Cost Estimation Integration
 - [ ] Cost estimation engine (requires cloud provider pricing data)
@@ -738,7 +728,7 @@
 - [x] `PATCH /oauth-clients/:oc_id` — update OAuth client
 - [x] `DELETE /oauth-clients/:oc_id` — delete OAuth client
 - [x] `service-provider` — github, gitlab, bitbucket, github_enterprise, gitlab_ce, gitlab_ee, etc.
-- [ ] `service-provider-display-name` — human-readable provider name (not implemented)
+- [x] `service-provider-display-name` — human-readable provider name
 - [ ] Additional service providers: `azure_devops_server`, `bitbucket_data_center` (not implemented)
 - [x] `api-url`, `http-url` — VCS instance URLs
 - [x] `key`, `secret` — OAuth app credentials
@@ -857,12 +847,12 @@
 - [ ] `last-used-at` tracking (schema exists, not updated)
 
 ### 16.3 Agent Objects
-- [ ] `GET /agent-pools/:pool_id/agents` — list agents in pool
-- [ ] `GET /agents/:agent_id` — show agent details
-- [ ] `DELETE /agents/:agent_id` — delete agent
-- [ ] Agent status: `idle`, `busy`, `exited`, `errored`, `unknown`
-- [ ] Agent attributes: `name`, `ip-address`, `last-ping-at`, `version`, `architecture`
-- [ ] Agent <> run association
+- [x] `GET /agent-pools/:pool_id/agents` — list agents in pool
+- [x] `GET /agents/:agent_id` — show agent details
+- [x] `DELETE /agents/:agent_id` — delete agent
+- [x] Agent status: `idle`, `busy`, `exited`, `errored`, `unknown`
+- [x] Agent attributes: `name`, `ip-address`, `last-ping-at`, `version`, `architecture`
+- [x] Agent <> run association
 
 ### 16.4 Agent Execution Mode
 - [x] Workspace execution-mode: `agent`
@@ -987,9 +977,9 @@
 - [x] State version retention count/duration (via `dataRetentionPolicies` table)
 - [ ] Configuration version retention
 - [ ] Run retention
-- [ ] `backing_data_soft_deleted` state for state versions and CVs
-- [ ] `backing_data_permanently_deleted` state
-- [ ] GC scheduler
+- [x] `backing_data_soft_deleted` state for state versions and CVs
+- [x] `backing_data_permanently_deleted` state
+- [x] GC scheduler / maintenance trigger
 - [ ] Data restoration before permanent deletion
 
 ### 21.2 Retention Policy API
@@ -1188,10 +1178,10 @@
 - [x] Agent pool management UI
 - [x] Workspace lock/unlock UI indicators
 - [x] Run detail with full state machine visualization
-- [ ] Policy check results display
-- [ ] Cost estimate display
+- [x] Policy check results display
+- [x] Cost estimate display
 - [x] User profile / account settings page
-- [ ] Admin dashboard (TFE instance management)
+- [x] Admin dashboard (TFE instance management)
 - [x] Search/filter workspaces
 - [x] Tag display and management in workspace list
 

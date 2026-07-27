@@ -35,11 +35,11 @@ function Select({
   )
 }
 
-function SelectTrigger({ children }: React.ComponentProps<"div">) {
+function SelectTrigger(_props: React.ComponentProps<"div">) {
   return null;
 }
 
-function SelectValue({ placeholder }: { placeholder?: string }) {
+function SelectValue(_props: { placeholder?: string }) {
   return null;
 }
 

@@ -11,6 +11,7 @@ import { AccountSettings } from "./views/AccountSettings";
 import { Projects } from "./views/Projects";
 import { VcsIntegrations } from "./views/VcsIntegrations";
 import { AgentPools } from "./views/AgentPools";
+import { AdminDashboard } from "./views/AdminDashboard";
 import { getAuthToken } from "./lib/api";
 import { Layout } from "./components/Layout";
 
@@ -29,6 +30,7 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/" element={<Navigate to="/app" replace />} />
         <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/app/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
         <Route path="/app/account" element={<ProtectedRoute><AccountSettings /></ProtectedRoute>} />
         <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
         <Route path="/app/:orgName/projects" element={<ProtectedRoute><Projects /></ProtectedRoute>} />

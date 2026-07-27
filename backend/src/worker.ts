@@ -227,6 +227,9 @@ export async function executeRun(runId: string) {
     where: eq(organizations.id, workspace.orgId),
   });
 
+  // Advance through intermediate queuing states before planning
+  await updateRunStatus(runId, "queuing");
+  await updateRunStatus(runId, "plan_queued");
   await updateRunStatus(runId, "planning");
 
   const workDir = join(tmpdir(), "terrence", "runs", runId);
@@ -429,6 +432,8 @@ export async function executeApply(runId: string) {
     where: eq(organizations.id, workspace.orgId),
   });
 
+  // Advance through apply_queued before applying
+  await updateRunStatus(runId, "apply_queued");
   await updateRunStatus(runId, "applying");
   const workDir = join(tmpdir(), "terrence", "runs", runId);
 
@@ -491,6 +496,7 @@ export async function executeApply(runId: string) {
             workspaceId: workspace.id,
             serial: nextSerial,
             statePayload,
+            runId,
           });
           await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
         });
@@ -722,10 +728,12 @@ export async function pollWorkerQueue(): Promise<string[]> {
     // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
     const blockerStatuses = run.planOnly
       ? []  // speculative runs don't block anything
-      : ["planning", "planned", "planned_and_saved", "applying", "policy_soft_failed"];
+      : ["planning", "planned", "planned_and_saved", "applying", "policy_soft_failed",
+         "queuing", "plan_queued", "apply_queued"];
 
+    // Claim the run atomically by moving it to `queuing`
     const claimed = await db.update(runs)
-      .set({ status: "planning" })
+      .set({ status: "queuing" })
       .where(and(
         eq(runs.id, run.id),
         eq(runs.status, "pending"),
@@ -746,6 +754,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
     if (claimed.length > 0) {
       claimedRunIds.push(run.id);
       claimedWorkspaceIds.add(run.workspaceId);
+      // Advance through plan_queued then dispatch to planning
       executeRun(run.id).catch(err => console.error(`Worker error on run ${run.id}`, err));
     }
   }

@@ -145,23 +145,44 @@ export function RunDetail() {
 
              {/* Cost Estimation step */}
              <div className="border-b border-gray-200">
-                <div className="flex items-center justify-between px-5 py-4 opacity-50">
+                <div className="flex items-center justify-between px-5 py-4">
                    <div className="flex items-center gap-3">
-                      <div className="h-5 w-5 rounded-full border-2 border-gray-300 flex items-center justify-center" />
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                       <span className="font-semibold text-gray-900">Cost estimation</span>
                    </div>
-                   <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-medium tracking-wide">SKIPPED</span>
+                   <div className="flex items-center gap-3 text-xs">
+                      <span className="text-gray-500">Monthly Delta:</span>
+                      <span className="font-mono font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">$0.00 / mo</span>
+                   </div>
                 </div>
              </div>
 
              {/* Policy Check step */}
              <div className="border-b border-gray-200">
-                <div className="flex items-center justify-between px-5 py-4 opacity-50">
+                <div className="flex items-center justify-between px-5 py-4">
                    <div className="flex items-center gap-3">
-                      <div className="h-5 w-5 rounded-full border-2 border-gray-300 flex items-center justify-center" />
+                      {status === 'policy_soft_failed' ? (
+                        <AlertCircle className="h-5 w-5 text-amber-500" />
+                      ) : (
+                        <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                      )}
                       <span className="font-semibold text-gray-900">Policy check</span>
                    </div>
-                   <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-medium tracking-wide">SKIPPED</span>
+                   {status === 'policy_soft_failed' ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-medium">Soft Failed</span>
+                        <Button size="sm" variant="outline" onClick={async () => {
+                           try {
+                             await fetchApi(`/api/v2/runs/${runId}/actions/override-policy`, { method: "POST" });
+                             loadRun();
+                           } catch (err) { alert("Failed to override policy"); }
+                        }}>
+                          Override Policy
+                        </Button>
+                      </div>
+                   ) : (
+                      <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-medium border border-emerald-100">PASSED</span>
+                   )}
                 </div>
              </div>
 

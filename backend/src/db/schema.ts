@@ -469,6 +469,19 @@ export const agentPoolTokens = sqliteTable("agent_pool_tokens", {
   lastUsedAt: integer("last_used_at"),
 });
 
+export const agents = sqliteTable("agents", {
+  id: text("id").primaryKey(),
+  agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  status: text("status").notNull().default("idle"), // 'idle', 'busy', 'exited', 'errored', 'unknown'
+  ipAddress: text("ip_address"),
+  version: text("version"),
+  architecture: text("architecture"),
+  lastPingAt: integer("last_ping_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+
 export const runTasks = sqliteTable("run_tasks", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

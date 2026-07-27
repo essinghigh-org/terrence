@@ -101,6 +101,17 @@ await sqlite.executeMultiple(`
     is_default INTEGER DEFAULT false,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    agent_pool_id TEXT NOT NULL REFERENCES agent_pools(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
+    ip_address TEXT,
+    version TEXT,
+    architecture TEXT,
+    last_ping_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Check notification_configurations for missing columns

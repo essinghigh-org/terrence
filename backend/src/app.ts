@@ -2,13 +2,13 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit } from "elysia-rate-limit";
 import { db } from "./db";
-import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments, adminTerraformVersions, adminSentinelVersions, adminOpaVersions } from "./db/schema";
-import { and, eq, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql, SQL } from "drizzle-orm";
+import { users, apiTokens, organizations, workspaces, organizationMemberships, runs, logs, stateVersions, workspaceVariables, workspaceTags, configurationVersions, variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, teams, teamMemberships, teamWorkspaces, projects, projectTags, remoteStateConsumers, dataRetentionPolicies, sshKeys, notificationConfigurations, oauthClients, oauthTokens, policySets, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, oauthClientProjects, agentPools, agentPoolTokens, agents, runTasks, workspaceRunTasks, runTaskResults, auditLogs, policies, policyChecks, registryModules, registryModuleVersions, registryProviders, registryProviderVersions, registryProviderPlatforms, runTriggers, runComments, adminTerraformVersions, adminSentinelVersions, adminOpaVersions } from "./db/schema";
+import { and, eq, ne, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql, SQL } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { authPlugin } from "./auth";
 import { oauthPlugin } from "./oauth";
 import { join } from "path";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, writeFile, unlink } from "fs/promises";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { validateVersion } from "./binaryManager";
 import { startWorkerQueue, executeRun, executeApply } from "./worker";
@@ -54,6 +54,44 @@ const CV_STORAGE_DIR = join(process.env.STORAGE_DIR || join(import.meta.dir, "..
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const PUBLIC_URL = process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL) : null;
 const serveFrontend = () => Bun.file(FRONTEND_INDEX);
+
+async function applyDataRetentionGarbageCollection(workspaceId: string) {
+  const policy = await db.query.dataRetentionPolicies.findFirst({
+    where: eq(dataRetentionPolicies.workspaceId, workspaceId),
+  });
+  if (!policy || typeof policy.stateVersionsCount !== "number" || policy.stateVersionsCount <= 0) {
+    return { softDeleted: 0, permanentlyDeleted: 0 };
+  }
+
+  const limit = policy.stateVersionsCount;
+  const versions = await db.query.stateVersions.findMany({
+    where: eq(stateVersions.workspaceId, workspaceId),
+    orderBy: [desc(stateVersions.serial)],
+  });
+
+  let softDeleted = 0;
+  let permanentlyDeleted = 0;
+
+  for (let i = limit; i < versions.length; i++) {
+    const sv = versions[i];
+    if (sv.status === "backing_data_soft_deleted") {
+      await db.update(stateVersions).set({
+        status: "backing_data_permanently_deleted",
+        statePayload: null,
+        jsonState: null,
+        jsonStateOutputs: null,
+      }).where(eq(stateVersions.id, sv.id));
+      permanentlyDeleted++;
+    } else if (sv.status !== "backing_data_permanently_deleted") {
+      await db.update(stateVersions).set({
+        status: "backing_data_soft_deleted",
+      }).where(eq(stateVersions.id, sv.id));
+      softDeleted++;
+    }
+  }
+
+  return { softDeleted, permanentlyDeleted };
+}
 
 async function auditLog(
   action: string,
@@ -902,7 +940,7 @@ function stateVersionResource(
     },
     relationships: {
       workspace: { data: { id: state.workspaceId, type: "workspaces" } },
-      run: { data: null },
+      run: state.runId ? { data: { id: state.runId, type: "runs" } } : { data: null },
       outputs: {
         data: outputResources.map(output => ({ id: output.id, type: output.type })),
       },
@@ -1085,6 +1123,18 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
       "cost-estimate": {
         links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
       },
+      "policy-checks": {
+        links: { related: `/api/v2/runs/${run.id}/policy-checks` },
+      },
+      comments: {
+        links: { related: `/api/v2/runs/${run.id}/comments` },
+      },
+      "input-state-version": {
+        links: { related: `/api/v2/runs/${run.id}/input-state-version` },
+      },
+      "workspace-run-alerts": {
+        data: [],
+      },
     },
   };
 }
@@ -1092,13 +1142,17 @@ function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
 function planResource(run: typeof runs.$inferSelect, request: Request) {
   const status = run.status === "planning"
     ? "running"
-    : ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status)
-      ? "finished"
-      : run.status === "errored"
-        ? "errored"
-        : ["canceled", "discarded", "force_canceled"].includes(run.status)
-          ? "canceled"
-          : "pending";
+    : run.status === "plan_queued" || run.status === "queuing"
+      ? "queued"
+      : ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status)
+        ? "finished"
+        : run.status === "errored"
+          ? "errored"
+          : ["canceled", "discarded", "force_canceled"].includes(run.status)
+            ? "canceled"
+            : run.status === "unreachable"
+              ? "unreachable"
+              : "pending";
 
   return {
     id: `plan-${run.id}`,
@@ -1115,19 +1169,28 @@ function planResource(run: typeof runs.$inferSelect, request: Request) {
       "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
       "status-timestamps": run.statusTimestamps ?? null,
     },
+    relationships: {
+      "state-versions": {
+        links: { related: `/api/v2/state-versions?filter[run][id]=${run.id}` },
+      },
+    },
   };
 }
 
 function applyResource(run: typeof runs.$inferSelect, request: Request) {
   const status = run.status === "applying"
     ? "running"
-    : run.status === "applied"
-      ? "finished"
-      : run.status === "errored"
-        ? "errored"
-        : ["canceled", "discarded", "force_canceled"].includes(run.status)
-          ? "canceled"
-          : "pending";
+    : run.status === "apply_queued"
+      ? "queued"
+      : run.status === "applied"
+        ? "finished"
+        : run.status === "errored"
+          ? "errored"
+          : ["canceled", "discarded", "force_canceled"].includes(run.status)
+            ? "canceled"
+            : run.status === "unreachable"
+              ? "unreachable"
+              : "pending";
 
   return {
     id: `apply-${run.id}`,
@@ -1141,6 +1204,11 @@ function applyResource(run: typeof runs.$inferSelect, request: Request) {
       "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
       "status-timestamps": run.statusTimestamps ?? null,
     },
+    relationships: {
+      "state-versions": {
+        links: { related: `/api/v2/state-versions?filter[run][id]=${run.id}` },
+      },
+    },
   };
 }
 
@@ -1152,6 +1220,22 @@ function logChunk(output: string, request: Request) {
   const bytes = Buffer.from(output);
   const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : bytes.length;
   return bytes.subarray(offset, offset + limit);
+}
+
+/** Map VCS service provider identifier to human-readable display name */
+function serviceProviderDisplayName(provider: string): string {
+  const map: Record<string, string> = {
+    github: "GitHub",
+    github_enterprise: "GitHub Enterprise",
+    gitlab: "GitLab",
+    gitlab_ce: "GitLab Community Edition",
+    gitlab_ee: "GitLab Enterprise Edition",
+    bitbucket: "Bitbucket Cloud",
+    bitbucket_data_center: "Bitbucket Data Center",
+    azure_devops_server: "Azure DevOps Server",
+    ado_server: "Azure DevOps Server",
+  };
+  return map[provider] ?? provider;
 }
 
 export const app = new Elysia()
@@ -3321,6 +3405,10 @@ export const app = new Elysia()
     if (!workspace) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if (workspace.locked) {
+      set.status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is locked" }] };
+    }
 
     const payload = body as any;
     const { serial, state } = payload?.data?.attributes || {};
@@ -3334,6 +3422,7 @@ export const app = new Elysia()
     const statePayload = decodeStatePayload(state);
     const status = payload?.data?.attributes?.status || "pending";
     const jsonState = payload?.data?.attributes?.["json-state"] || null;
+    const runId = payload?.data?.relationships?.run?.data?.id || payload?.data?.attributes?.["run-id"] || null;
     const id = crypto.randomUUID();
     await db.insert(stateVersions).values({
         id,
@@ -3342,12 +3431,13 @@ export const app = new Elysia()
         statePayload,
         jsonState,
         status,
+        runId,
     });
 
     set.status = 201;
     return {
       data: stateVersionResource(
-        { id, workspaceId: workspace_id, serial, statePayload, jsonState, status },
+        { id, workspaceId: workspace_id, serial, statePayload, jsonState, status, runId, vcsCommitSha: null, vcsCommitUrl: null, jsonStateOutputs: null },
         request,
         true,
       ),
@@ -3766,6 +3856,23 @@ export const app = new Elysia()
     }
     return { data: [] };
   }, { isAuth: true })
+  .get("/api/v2/runs/:run_id/input-state-version", async ({ params: { run_id }, user, orgId, request, set }) => {
+    const authorized = await findAuthorizedRun(run_id, user?.id, orgId);
+    if (!authorized) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const currentSV = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, authorized.run.workspaceId),
+        ne(stateVersions.runId, run_id)
+      ),
+      orderBy: desc(stateVersions.serial),
+    });
+    if (!currentSV) {
+      return { data: null };
+    }
+    return { data: stateVersionResource(currentSV, request) };
+  }, { isAuth: true })
   .get("/api/v2/runs/:run_id/logs", async ({ params: { run_id }, user, orgId, set }) => {
     if (!(await findAuthorizedRun(run_id, user?.id, orgId))) {
         set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -3897,17 +4004,19 @@ export const app = new Elysia()
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
-    return {
-      data: pools.map(p => ({
+    const poolData = await Promise.all(pools.map(async p => {
+      const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, p.id) });
+      return {
         id: p.id,
         type: "agent-pools",
         attributes: {
           name: p.name,
           "organization-scoped": p.organizationScoped,
-          "agent-count": 0,
+          "agent-count": agentList.length,
         },
-      })),
-    };
+      };
+    }));
+    return { data: poolData };
   }, { isAuth: true })
   .post("/api/v2/organizations/:org_name/agent-pools", async ({ params: { org_name }, body, user, orgId: tokenOrgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
@@ -3944,6 +4053,7 @@ export const app = new Elysia()
     if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, pool_id) });
     return {
       data: {
         id: pool.id,
@@ -3951,7 +4061,7 @@ export const app = new Elysia()
         attributes: {
           name: pool.name,
           "organization-scoped": pool.organizationScoped,
-          "agent-count": 0,
+          "agent-count": agentList.length,
         },
       },
     };
@@ -3969,6 +4079,7 @@ export const app = new Elysia()
       await db.update(agentPools).set(updates).where(eq(agentPools.id, pool_id));
     }
     const updated = (await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) }))!;
+    const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, pool_id) });
     return {
       data: {
         id: updated.id,
@@ -3976,7 +4087,7 @@ export const app = new Elysia()
         attributes: {
           name: updated.name,
           "organization-scoped": updated.organizationScoped,
-          "agent-count": 0,
+          "agent-count": agentList.length,
         },
       },
     };
@@ -3987,6 +4098,118 @@ export const app = new Elysia()
       set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(agentPools).where(eq(agentPools.id, pool_id));
+    set.status = 204;
+  }, { isAuth: true })
+
+  // --- AGENT OBJECTS API ---
+  .get("/api/v2/agent-pools/:pool_id/agents", async ({ params: { pool_id }, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, pool_id) });
+    return {
+      data: agentList.map(a => ({
+        id: a.id,
+        type: "agents",
+        attributes: {
+          name: a.name,
+          status: a.status,
+          "ip-address": a.ipAddress,
+          version: a.version,
+          architecture: a.architecture,
+          "last-ping-at": a.lastPingAt ? new Date(a.lastPingAt).toISOString() : null,
+        },
+        relationships: {
+          "agent-pool": {
+            data: { id: pool.id, type: "agent-pools" }
+          }
+        }
+      })),
+    };
+  }, { isAuth: true })
+  .post("/api/v2/agent-pools/:pool_id/agents", async ({ params: { pool_id }, body, user, orgId: tokenOrgId, set }) => {
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, pool_id) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = (body as any)?.data?.attributes || {};
+    if (!attrs.name) {
+      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const agentId = `agent-${crypto.randomUUID()}`;
+    const now = Date.now();
+    await db.insert(agents).values({
+      id: agentId,
+      agentPoolId: pool.id,
+      name: attrs.name,
+      status: attrs.status ?? "idle",
+      ipAddress: attrs["ip-address"] ?? null,
+      version: attrs.version ?? null,
+      architecture: attrs.architecture ?? null,
+      lastPingAt: now,
+      createdAt: now,
+    });
+    set.status = 201;
+    return {
+      data: {
+        id: agentId,
+        type: "agents",
+        attributes: {
+          name: attrs.name,
+          status: attrs.status ?? "idle",
+          "ip-address": attrs["ip-address"] ?? null,
+          version: attrs.version ?? null,
+          architecture: attrs.architecture ?? null,
+          "last-ping-at": new Date(now).toISOString(),
+        },
+        relationships: {
+          "agent-pool": {
+            data: { id: pool.id, type: "agent-pools" }
+          }
+        }
+      },
+    };
+  }, { isAuth: true })
+  .get("/api/v2/agents/:agent_id", async ({ params: { agent_id }, user, orgId: tokenOrgId, set }) => {
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, agent_id) });
+    if (!agent) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: agent.id,
+        type: "agents",
+        attributes: {
+          name: agent.name,
+          status: agent.status,
+          "ip-address": agent.ipAddress,
+          version: agent.version,
+          architecture: agent.architecture,
+          "last-ping-at": agent.lastPingAt ? new Date(agent.lastPingAt).toISOString() : null,
+        },
+        relationships: {
+          "agent-pool": {
+            data: { id: pool.id, type: "agent-pools" }
+          }
+        }
+      },
+    };
+  }, { isAuth: true })
+  .delete("/api/v2/agents/:agent_id", async ({ params: { agent_id }, user, orgId: tokenOrgId, set }) => {
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, agent_id) });
+    if (!agent) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
+    if (!pool || !(await checkOrgPermission(user?.id, pool.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(agents).where(eq(agents.id, agent_id));
     set.status = 204;
   }, { isAuth: true })
 
@@ -5195,6 +5418,9 @@ export const app = new Elysia()
     } else {
       await db.insert(dataRetentionPolicies).values(values);
     }
+
+    const gcSummary = await applyDataRetentionGarbageCollection(workspace_id);
+
     set.status = 201;
     return {
       data: {
@@ -5205,8 +5431,19 @@ export const app = new Elysia()
           "auto-destroy-at": values.autoDestroyAt,
           "auto-destroy-activity-duration": values.autoDestroyActivityDuration,
         },
+        meta: {
+          gc: gcSummary,
+        },
       },
     };
+  }, { isAuth: true })
+  .post("/api/v2/workspaces/:workspace_id/actions/gc", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
+    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) {
+      set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const gcSummary = await applyDataRetentionGarbageCollection(workspace_id);
+    return { data: { status: "ok", ...gcSummary } };
   }, { isAuth: true })
   .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace_id) });
@@ -5545,7 +5782,6 @@ export const app = new Elysia()
     };
   }, { isAuth: true })
 
-  // --- OAUTH CLIENTS & TOKENS API ---
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params: { org_name }, user, orgId: tokenOrgId, set }) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
     if (!org || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
@@ -5558,6 +5794,7 @@ export const app = new Elysia()
       attributes: {
         name: oc.name,
         "service-provider": oc.serviceProvider,
+        "service-provider-display-name": serviceProviderDisplayName(oc.serviceProvider),
         "api-url": oc.apiUrl,
         "http-url": oc.httpUrl,
         "rsa-public-key": oc.rsaPublicKey,
@@ -5597,6 +5834,7 @@ export const app = new Elysia()
         attributes: {
           name: newOc.name,
           "service-provider": newOc.serviceProvider,
+          "service-provider-display-name": serviceProviderDisplayName(newOc.serviceProvider),
           "api-url": newOc.apiUrl,
           "http-url": newOc.httpUrl,
           "rsa-public-key": newOc.rsaPublicKey,
@@ -5617,6 +5855,7 @@ export const app = new Elysia()
         attributes: {
           name: oc.name,
           "service-provider": oc.serviceProvider,
+          "service-provider-display-name": serviceProviderDisplayName(oc.serviceProvider),
           "api-url": oc.apiUrl,
           "http-url": oc.httpUrl,
           "rsa-public-key": oc.rsaPublicKey,
@@ -5651,6 +5890,7 @@ export const app = new Elysia()
         attributes: {
           name: updated.name,
           "service-provider": updated.serviceProvider,
+          "service-provider-display-name": serviceProviderDisplayName(updated.serviceProvider),
           "api-url": updated.apiUrl,
           "http-url": updated.httpUrl,
           "rsa-public-key": updated.rsaPublicKey,
@@ -7412,6 +7652,10 @@ export const app = new Elysia()
           "delta-monthly-cost": "0.0",
           "prior-monthly-cost": "0.0",
           "proposed-monthly-cost": "0.0",
+          "resources-count": 0,
+          "matched-resources-count": 0,
+          "unmatched-resources-count": 0,
+          "error-message": null,
         },
       },
     };
@@ -7431,6 +7675,10 @@ export const app = new Elysia()
           "delta-monthly-cost": "0.0",
           "prior-monthly-cost": "0.0",
           "proposed-monthly-cost": "0.0",
+          "resources-count": 0,
+          "matched-resources-count": 0,
+          "unmatched-resources-count": 0,
+          "error-message": null,
         },
       },
     };
