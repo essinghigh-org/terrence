@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "eslint .",
     "test": "bun test --preload ./tests/setup.ts",
     "preview": "vite preview"
   },

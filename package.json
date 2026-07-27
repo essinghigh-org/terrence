@@ -5,7 +5,10 @@
   "scripts": {
     "dev:backend": "cd backend && bun run --watch index.ts",
     "dev:frontend": "cd frontend && bun run dev",
-    "test:backend": "cd backend && bun test"
+    "test:backend": "cd backend && bun test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit"
   },
   "workspaces": [
     "backend",
@@ -14,6 +17,8 @@
   "devDependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
-    "frontend": "workspace:*"
+    "eslint": "^10.7.0",
+    "frontend": "workspace:*",
+    "typescript-eslint": "^8.65.0"
   }
 }

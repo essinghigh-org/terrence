@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    // Environment setup & latest features
+    // ── Environment & latest features ────────────────────────────────────
     "lib": ["ESNext"],
     "target": "ESNext",
     "module": "Preserve",
@@ -8,22 +8,37 @@
     "jsx": "react-jsx",
     "allowJs": true,
 
-    // Bundler mode
+    // ── Bundler mode ─────────────────────────────────────────────────────
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
-    // Best practices
+    // ── Full strict mode — every single strict flag ON ───────────────────
     "strict": true,
-    "skipLibCheck": true,
-    "noFallthroughCasesInSwitch": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "useUnknownInCatchVariables": true,
+
+    // ── Additional strictness ────────────────────────────────────────────
+    "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "strictBuiltinIteratorReturn": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
 
-    // Some stricter flags (disabled by default)
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    // We skip lib check to avoid flooding with node_module errors
+    "skipLibCheck": true
   }
 }
