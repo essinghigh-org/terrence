@@ -6,49 +6,50 @@ import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Settings, Users, Trash2, HelpCircle } from "lucide-react";
 
-export function OrganizationSettings() {
-  const { orgName } = useParams();
+export function OrganizationSettings(): React.JSX.Element {
+  const { orgName } = useParams<{ orgName: string }>();
   const navigate = useNavigate();
-  const [org, setOrg] = useState<any>(null);
+  const orgNameParam = orgName ?? "";
+  const [org, setOrg] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
   const [name, setName] = useState("");
   const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [saving, setSaving] = useState(false);
-  const [teams, setTeams] = useState<any[]>([]);
+  const [teams, setTeams] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [newTeamName, setNewTeamName] = useState("");
   const [activeTab, setActiveTab] = useState("general");
 
-  useEffect(() => {
-    loadOrg();
-    loadTeams();
+  useEffect((): void => {
+    void loadOrg();
+    void loadTeams();
   }, [orgName]);
 
-  const loadOrg = async () => {
+  const loadOrg = async (): Promise<void> => {
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgName}`);
+      const res = await fetchApi(`/api/v2/organizations/${orgName ?? ""}`) as { data: { id: string; attributes: Record<string, unknown> } };
       setOrg(res.data);
-      setName(res.data.attributes.name);
-      setDefaultIacBinary(res.data.attributes["default-iac-binary"] || "tofu");
-      setDefaultTerraformVersion(res.data.attributes["default-terraform-version"] || "latest");
-    } catch (err: any) {
+      setName(res.data.attributes["name"] as string);
+      setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "tofu");
+      setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
+    } catch (err: unknown) {
       console.error("Failed to load organization", err);
     }
   };
 
-  const loadTeams = async () => {
+  const loadTeams = async (): Promise<void> => {
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgName}/teams`);
-      setTeams(res.data || []);
+      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+      setTeams(res.data);
     } catch {
       setTeams([]);
     }
   };
 
-  const saveSettings = async (e: React.SyntheticEvent) => {
+  const saveSettings = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgName}`, {
+      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -59,47 +60,50 @@ export function OrganizationSettings() {
             },
           },
         }),
-      });
+      }) as { data: { id: string; attributes: Record<string, unknown> } };
       setOrg(res.data);
-      if (name !== orgName) {
+      if (name !== orgNameParam) {
         navigate(`/app/${name}/settings`);
       }
       alert("Organization settings saved");
-    } catch (err: any) {
-      alert(err.message || "Failed to save settings");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save settings";
+      alert(msg);
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteOrg = async () => {
-    if (!confirm(`Are you sure you want to delete organization "${orgName}"? This will remove all workspaces, runs, and data.`)) return;
+  const deleteOrg = async (): Promise<void> => {
+    if (!confirm(`Are you sure you want to delete organization "${orgName ?? ""}"? This will remove all workspaces, runs, and data.`)) return;
     try {
-      await fetchApi(`/api/v2/organizations/${orgName}`, { method: "DELETE" });
+      await fetchApi(`/api/v2/organizations/${orgNameParam}`, { method: "DELETE" });
       navigate("/app");
-    } catch (err: any) {
-      alert(err.message || "Failed to delete organization");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete organization";
+      alert(msg);
     }
   };
 
-  const createTeam = async (e: React.SyntheticEvent) => {
+  const createTeam = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (!newTeamName.trim()) return;
+    if (newTeamName.trim() === "") return;
     try {
-      await fetchApi(`/api/v2/organizations/${orgName}/teams`, {
+      await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`, {
         method: "POST",
         body: JSON.stringify({
           data: { attributes: { name: newTeamName.trim() } },
         }),
       });
       setNewTeamName("");
-      loadTeams();
-    } catch (err: any) {
-      alert(err.message || "Failed to create team");
+      void loadTeams();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create team";
+      alert(msg);
     }
   };
 
-  if (!org) {
+  if (org == null) {
     return <div className="p-8 text-center text-gray-500">Loading organization settings...</div>;
   }
 
@@ -109,7 +113,7 @@ export function OrganizationSettings() {
       <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
         <Link to={`/app`} className="hover:underline">Dashboard</Link>
         <span className="text-gray-300">/</span>
-        <Link to={`/app/${orgName}`} className="hover:underline">{orgName}</Link>
+        <Link to={"/app/" + (orgNameParam)} className="hover:underline">{orgName}</Link>
         <span className="text-gray-300">/</span>
         <span className="text-gray-900">Settings</span>
       </div>
@@ -122,7 +126,7 @@ export function OrganizationSettings() {
         <aside className="w-full md:w-56 flex-shrink-0">
           <nav className="flex flex-col gap-1">
             <button
-              onClick={() => { setActiveTab("general"); }}
+              onClick={(): void => { setActiveTab("general"); }}
               className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                 activeTab === "general" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
@@ -131,7 +135,7 @@ export function OrganizationSettings() {
             </button>
 
             <button
-              onClick={() => { setActiveTab("teams"); }}
+              onClick={(): void => { setActiveTab("teams"); }}
               className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                 activeTab === "teams" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
@@ -140,21 +144,21 @@ export function OrganizationSettings() {
             </button>
 
             <Link
-              to={`/app/${orgName}/variable-sets`}
+              to={"/app/" + (orgNameParam) + "/variable-sets"}
               className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
             >
               Variable Sets
             </Link>
 
             <Link
-              to={`/app/${orgName}/settings/vcs`}
+              to={"/app/" + (orgNameParam) + "/settings/vcs"}
               className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
             >
               VCS Providers
             </Link>
 
             <Link
-              to={`/app/${orgName}/settings/agents`}
+              to={"/app/" + (orgNameParam) + "/settings/agents"}
               className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
             >
               Agent Pools
@@ -176,7 +180,7 @@ export function OrganizationSettings() {
                       <Input
                         id="org-name"
                         value={name}
-                        onChange={(e) => { setName(e.target.value); }}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                         required
                         className="h-9"
                       />
@@ -190,7 +194,7 @@ export function OrganizationSettings() {
                         id="org-iac"
                         className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                         value={defaultIacBinary}
-                        onChange={(e) => { setDefaultIacBinary(e.target.value); }}
+                        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
                       >
                         <option value="tofu">OpenTofu (tofu)</option>
                         <option value="terraform">Terraform (terraform)</option>
@@ -205,7 +209,7 @@ export function OrganizationSettings() {
                       <Input
                         id="org-version"
                         value={defaultTerraformVersion}
-                        onChange={(e) => { setDefaultTerraformVersion(e.target.value); }}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
                         placeholder="latest"
                         className="h-9"
                       />
@@ -246,7 +250,7 @@ export function OrganizationSettings() {
                     <Input
                       placeholder="New team name"
                       value={newTeamName}
-                      onChange={(e) => { setNewTeamName(e.target.value); }}
+                      onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTeamName(event.target.value); }}
                       className="h-9"
                     />
                     <Button type="submit" className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 h-9 shadow-sm">
@@ -255,7 +259,7 @@ export function OrganizationSettings() {
                   </form>
                 </div>
                 <div className="divide-y divide-gray-100">
-                  {teams.map((team: any) => (
+                  {teams.map((team: { id: string; attributes: Record<string, unknown> }): React.JSX.Element => (
                     <div key={team.id} className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors">
                       <div className="flex items-center gap-3">
                          <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center border border-gray-200">
@@ -263,13 +267,13 @@ export function OrganizationSettings() {
                          </div>
                         <div>
                           <p className="font-semibold text-[14px] text-blue-700 hover:underline cursor-pointer">
-                            {team.attributes?.name}
+                            {(team.attributes["name"] as string) ?? ""}
                           </p>
-                          <p className="text-xs text-gray-500 mt-0.5">{team.attributes?.["users-count"] || 0} members</p>
+                          <p className="text-xs text-gray-500 mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
                         </div>
                       </div>
                       <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full border border-gray-200 capitalize font-medium tracking-wide">
-                        {team.attributes?.visibility || "organization"}
+                        {(team.attributes["visibility"] as string) ?? "organization"}
                       </span>
                     </div>
                   ))}

@@ -8,7 +8,7 @@ import { Spinner } from "../components/ui/spinner";
 import { KeyRound, User, Lock, Trash2, Plus, ShieldCheck } from "lucide-react";
 
 export function AccountSettings(): React.JSX.Element {
-  const [_account, setAccount] = useState<{ id: string; attributes: { username: string; email: string | null } } | null>(null);
+  const [, setAccount] = useState<{ id: string; attributes: { username: string; email: string | null } } | null>(null);
   const [tokens, setTokens] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -31,8 +31,8 @@ export function AccountSettings(): React.JSX.Element {
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
 
   /* ---- Data Loading ---- */
-  useEffect(() => {
-    loadAccount().catch(() => {});
+  useEffect((): void => {
+    void loadAccount();
   }, []);
 
   async function loadAccount(): Promise<void> {
@@ -130,7 +130,7 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       await fetchApi(`/users/me/tokens/${tokenId}`, { method: "DELETE" });
-      setTokens((prev) => prev.filter((t) => t.id !== tokenId));
+      setTokens((prev: { id: string; attributes: Record<string, unknown> }[]): { id: string; attributes: Record<string, unknown> }[] => prev.filter((t: { id: string; attributes: Record<string, unknown> }): boolean => t.id !== tokenId));
       setSuccessMsg("Token deleted");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to delete token";
@@ -168,11 +168,11 @@ export function AccountSettings(): React.JSX.Element {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Username</label>
-              <Input value={username} onChange={(e): void => setUsername(e.target.value)} />
+              <Input value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Email</label>
-              <Input value={email} onChange={(e): void => setEmail(e.target.value)} placeholder="optional" />
+              <Input value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional" />
             </div>
           </div>
         </CardContent>
@@ -194,16 +194,16 @@ export function AccountSettings(): React.JSX.Element {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Current password</label>
-            <Input type="password" value={currentPassword} onChange={(e): void => setCurrentPassword(e.target.value)} />
+            <Input type="password" value={currentPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setCurrentPassword(event.target.value); }} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">New password</label>
-              <Input type="password" value={newPassword} onChange={(e): void => setNewPassword(e.target.value)} />
+              <Input type="password" value={newPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewPassword(event.target.value); }} />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Confirm new password</label>
-              <Input type="password" value={confirmPassword} onChange={(e): void => setConfirmPassword(e.target.value)} />
+              <Input type="password" value={confirmPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setConfirmPassword(event.target.value); }} />
             </div>
           </div>
         </CardContent>
@@ -228,7 +228,7 @@ export function AccountSettings(): React.JSX.Element {
           <div className="flex gap-2">
             <Input
               value={newTokenDesc}
-              onChange={(e): void => setNewTokenDesc(e.target.value)}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTokenDesc(event.target.value); }}
               placeholder="Token description (e.g., CI/CD)"
               className="flex-1"
             />
@@ -262,7 +262,7 @@ export function AccountSettings(): React.JSX.Element {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {tokens.map((token) => (
+                {tokens.map((token): React.JSX.Element => (
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">{token.attributes["description"] as string}</TableCell>
                     <TableCell className="text-muted-foreground">{token.attributes["created-at"] as string}</TableCell>
@@ -272,7 +272,7 @@ export function AccountSettings(): React.JSX.Element {
                         variant="destructive"
                         size="sm"
                         disabled={deletingTokenId === token.id}
-                        onClick={(): void => { handleDeleteToken(token.id).catch(() => {}); }}
+                        onClick={(): void => { void handleDeleteToken(token.id); }}
                       >
                         {deletingTokenId === token.id ? (
                           <Spinner className="w-3 h-3" />

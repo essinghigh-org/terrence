@@ -16,7 +16,7 @@ type CreateWorkspaceModalProps = {
   orgName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (ws: { id: string }) => void;
+  onCreated: (ws: Readonly<{ id: string }>) => void;
 }
 
 export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }: CreateWorkspaceModalProps): React.JSX.Element {
@@ -72,8 +72,8 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="ws-name"
               value={name}
-              onChange={(e): void => { setName(e.currentTarget.value); }}
-              onInput={(e): void => { setName(e.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
               placeholder="my-infrastructure"
             />
           </div>
@@ -84,7 +84,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
               id="iac-tool"
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
               value={iacBinary}
-              onChange={(e): void => { setIacBinary(e.target.value); }}
+              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setIacBinary(event.target.value); }}
             >
               <option value="tofu">OpenTofu (tofu)</option>
               <option value="terraform">Terraform (terraform)</option>
@@ -96,8 +96,8 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="tf-version"
               value={terraformVersion}
-              onChange={(e): void => { setTerraformVersion(e.currentTarget.value); }}
-              onInput={(e): void => { setTerraformVersion(e.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setTerraformVersion(event.currentTarget.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTerraformVersion(event.currentTarget.value); }}
               placeholder="latest"
             />
           </div>

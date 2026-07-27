@@ -46,8 +46,8 @@ export function Login(): React.JSX.Element {
               id="username"
               type="text"
               value={username}
-              onChange={(e): void => { setUsername(e.currentTarget.value); }}
-              onInput={(e): void => { setUsername(e.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>
@@ -57,8 +57,8 @@ export function Login(): React.JSX.Element {
               id="password"
               type="password"
               value={password}
-              onChange={(e): void => { setPassword(e.currentTarget.value); }}
-              onInput={(e): void => { setPassword(e.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>

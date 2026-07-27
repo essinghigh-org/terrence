@@ -25,7 +25,7 @@ export function Projects(): React.JSX.Element {
 
   useEffect(() => {
     if (orgName != null) {
-      loadProjects().catch(() => {});
+      void loadProjects();
     }
   }, [orgName]);
 
@@ -147,7 +147,7 @@ export function Projects(): React.JSX.Element {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  projects.map((project) => (
+                  projects.map((project): React.JSX.Element => (
                     <TableRow key={project.id}>
                       <TableCell className="font-medium">{project.attributes["name"] as string}</TableCell>
                       <TableCell className="text-muted-foreground">
@@ -171,7 +171,7 @@ export function Projects(): React.JSX.Element {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={(): void => { handleDelete(project.id).catch(() => {}); }}
+                            onClick={(): void => { void handleDelete(project.id); }}
                           >
                             <Trash2 className="w-3 h-3" />
                           </Button>
@@ -201,11 +201,11 @@ export function Projects(): React.JSX.Element {
             )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
-              <Input value={name} onChange={(e): void => setName(e.target.value)} placeholder="My Project" />
+              <Input value={name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setName(event.target.value)} placeholder="My Project" />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Description</label>
-              <Input value={description} onChange={(e): void => setDescription(e.target.value)} placeholder="Optional description" />
+              <Input value={description} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setDescription(event.target.value)} placeholder="Optional description" />
             </div>
           </div>
           <DialogFooter>

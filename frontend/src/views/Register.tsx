@@ -63,7 +63,7 @@ export function Register(): React.JSX.Element {
                 <Input
                   id="register-username"
                   value={username}
-                  onChange={(event): void => { setUsername(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }}
                   autoComplete="username"
                   aria-invalid={Boolean(error)}
                   required
@@ -76,7 +76,7 @@ export function Register(): React.JSX.Element {
                   id="register-password"
                   type="password"
                   value={password}
-                  onChange={(event): void => { setPassword(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.target.value); }}
                   autoComplete="new-password"
                   minLength={10}
                   aria-invalid={Boolean(error)}

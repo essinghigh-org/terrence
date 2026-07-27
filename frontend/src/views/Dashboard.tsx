@@ -17,16 +17,16 @@ export function Dashboard(): React.JSX.Element {
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
-  useEffect(() => {
-    loadOrgs().catch(console.error);
+  useEffect((): void => {
+    void loadOrgs();
   }, []);
 
   async function loadOrgs(): Promise<void> {
     try {
       const data = await fetchApi("/api/v2/organizations") as { data: Organization[] };
-      setOrgs(data.data ?? []);
-    } catch (_err: unknown) {
-      console.error(_err);
+      setOrgs(data.data);
+    } catch (err: unknown) {
+      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -85,14 +85,14 @@ export function Dashboard(): React.JSX.Element {
                 </td>
               </tr>
             ) : (
-              filteredOrgs.map((org: Organization) => (
+              filteredOrgs.map((org: Organization): React.JSX.Element => (
                 <tr
                   key={org.id}
                   className="border-b border-gray-200 hover:bg-gray-50 transition-colors group"
                 >
                   <td className="px-4 py-3">
                     <button
-                      onClick={async () => navigate(`/app/${org.attributes.name}`)}
+                      onClick={async (): Promise<void> => navigate(`/app/${org.attributes.name}`)}
                       className="text-gray-900 font-medium hover:underline text-[13px]"
                     >
                       {org.attributes.name}

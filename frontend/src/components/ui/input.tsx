@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils"
 
 export type InputProps = {} & React.InputHTMLAttributes<HTMLInputElement>
 
-const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, ...props }: InputProps, ref): React.JSX.Element => {
+const inputComponent = React.forwardRef<HTMLInputElement, InputProps>(
+  ({ className, type, ...props }: Readonly<InputProps>, ref: React.Ref<HTMLInputElement>): React.JSX.Element => {
     return (
       <input
         type={type}
@@ -19,6 +19,6 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
     )
   }
 )
-Input.displayName = "Input"
+inputComponent.displayName = "Input"
 
-export { Input }
+export { inputComponent as Input }

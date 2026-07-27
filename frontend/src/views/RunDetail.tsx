@@ -4,31 +4,31 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { CheckCircle2, XCircle, Clock, AlertCircle, ChevronDown, ExternalLink } from "lucide-react";
 
-export function RunDetail() {
-  const { orgName, workspaceName, runId } = useParams();
-  const [run, setRun] = useState<any>(null);
+export function RunDetail(): React.JSX.Element {
+  const { orgName, workspaceName, runId } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
+  const [run, setRun] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<string>("");
   const logsRef = useRef<HTMLPreElement>(null);
 
-  useEffect(() => {
-    loadRun();
-    const interval = setInterval(loadRun, 3000);
+  useEffect((): (() => void) | void => {
+    void loadRun();
+    const interval = window.setInterval((): void => { void loadRun(); }, 3000);
     return () => { clearInterval(interval); };
   }, [runId]);
 
-  async function loadRun() {
+  async function loadRun(): Promise<void> {
     try {
-      const data = await fetchApi(`/api/v2/runs/${runId}`);
+      const data = await fetchApi(`/api/v2/runs/${runId}`) as { data: { id: string; attributes: Record<string, unknown> } };
       setRun(data.data);
 
-      if (data.data.attributes.status !== 'pending') {
-        const logData = await fetchApi(`/api/v2/runs/${runId}/logs`);
-        if (logData?.logs) {
-           setLogs(logData.logs.map((l: any) => l.message).join(""));
+      if (data.data.attributes["status"] !== 'pending') {
+        const logData = await fetchApi(`/api/v2/runs/${runId}/logs`) as { logs?: Array<{ message: string }> };
+        if (logData.logs != null) {
+           setLogs(logData.logs.map((l: { message: string }): string => l.message).join(""));
         }
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error(err);
     } finally {
       setLoading(false);
@@ -41,28 +41,37 @@ export function RunDetail() {
     }
   }, [logs]);
 
-  async function handleApply() {
+  async function handleApply(): Promise<void> {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/apply`, { method: "POST" });
-      loadRun();
-    } catch (err) {
+      void loadRun();
+    } catch (err: unknown) {
       alert("Failed to apply run");
     }
   }
 
-  async function handleDiscard() {
+  async function handleDiscard(): Promise<void> {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/discard`, { method: "POST" });
-      loadRun();
-    } catch (err) {
+      void loadRun();
+    } catch (err: unknown) {
       alert("Failed to discard run");
     }
   }
 
-  if (loading && !run) return <div className="p-8 text-gray-500">Loading run...</div>;
-  if (!run) return <div className="p-8 text-gray-500">Run not found</div>;
+  async function handleOverridePolicy(): Promise<void> {
+    try {
+      await fetchApi(`/api/v2/runs/${runId}/actions/override-policy`, { method: "POST" });
+      void loadRun();
+    } catch (_err: unknown) {
+      alert("Failed to override policy");
+    }
+  }
 
-  const status = run.attributes.status;
+  if (loading === true && run === null) return <div className="p-8 text-gray-500">Loading run...</div>;
+  if (run === null) return <div className="p-8 text-gray-500">Run not found</div>;
+
+  const status = run.attributes["status"] as string;
   const isPending = status === 'pending';
   const isPlanning = status === 'planning';
   const isPlanned = status === 'planned';
@@ -86,7 +95,7 @@ export function RunDetail() {
       <div className="flex items-start justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight mb-2">
-            {run.attributes.message || "Manual run"}
+            {(run.attributes["message"] as string | null) ?? "Manual run"}
           </h1>
           <div className="flex items-center gap-4 text-[13px] text-gray-600">
              <div className="flex items-center gap-1.5">
@@ -94,7 +103,7 @@ export function RunDetail() {
                <span>User triggered</span>
              </div>
              <span>•</span>
-             <span>Created {new Date(run.attributes["created-at"]).toLocaleString()}</span>
+              <span>Created {new Date(run.attributes["created-at"] as string).toLocaleString()}</span>
           </div>
         </div>
 
@@ -171,12 +180,7 @@ export function RunDetail() {
                    {status === 'policy_soft_failed' ? (
                       <div className="flex items-center gap-2">
                         <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-medium">Soft Failed</span>
-                        <Button size="sm" variant="outline" onClick={async () => {
-                           try {
-                             await fetchApi(`/api/v2/runs/${runId}/actions/override-policy`, { method: "POST" });
-                             loadRun();
-                           } catch (err) { alert("Failed to override policy"); }
-                        }}>
+                        <Button size="sm" variant="outline" onClick={(): void => { void handleOverridePolicy(); }}>
                           Override Policy
                         </Button>
                       </div>

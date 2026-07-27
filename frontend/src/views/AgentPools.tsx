@@ -15,6 +15,7 @@ type AgentPool = {
   attributes: {
     name: string;
     organization: string;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
     "agent-count"?: number;
   };
 }
@@ -23,12 +24,14 @@ type AgentToken = {
   id: string;
   attributes: {
     description: string;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
     "created-at": string;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
     "last-used-at"?: string | null;
   };
 }
 
-export function AgentPools() {
+export function AgentPools(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
   const [pools, setPools] = useState<AgentPool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,26 +52,27 @@ export function AgentPools() {
   const [creatingToken, setCreatingToken] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (orgName) loadAgentPools();
+  useEffect((): void => {
+    if (orgName != null) void loadAgentPools();
   }, [orgName]);
 
-  const loadAgentPools = async () => {
+  const loadAgentPools = async (): Promise<void> => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/agent-pools`);
-      setPools(res.data || []);
-    } catch (err: any) {
-      setError(err.message || "Failed to load agent pools");
+      const res = await fetchApi(`/organizations/${orgName ?? ""}/agent-pools`) as { data: AgentPool[] };
+      setPools(res.data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load agent pools";
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreatePool = async (e: React.SyntheticEvent) => {
+  const handleCreatePool = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (!orgName) return;
+    if (orgName == null) return;
     setCreatingPool(true);
     setPoolFormError("");
     try {
@@ -82,29 +86,31 @@ export function AgentPools() {
             },
           },
         }),
-      });
+      }) as { data: AgentPool };
       setPools((prev) => [...prev, res.data]);
       setPoolDialogOpen(false);
       setPoolName("");
-    } catch (err: any) {
-      setPoolFormError(err.message || "Failed to create agent pool");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create agent pool";
+      setPoolFormError(msg);
     } finally {
       setCreatingPool(false);
     }
   };
 
-  const handleDeletePool = async (pool: AgentPool) => {
+  const handleDeletePool = async (pool: AgentPool): Promise<void> => {
     if (!window.confirm(`Delete agent pool "${pool.attributes.name}"?`)) return;
     setError("");
     try {
       await fetchApi(`/agent-pools/${pool.id}`, { method: "DELETE" });
       setPools((prev) => prev.filter((p) => p.id !== pool.id));
-    } catch (err: any) {
-      setError(err.message || "Failed to delete agent pool");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete agent pool";
+      setError(msg);
     }
   };
 
-  const openTokensModal = async (pool: AgentPool) => {
+  const openTokensModal = async (pool: AgentPool): Promise<void> => {
     setSelectedPool(pool);
     setTokens([]);
     setCreatedSecret(null);
@@ -112,18 +118,19 @@ export function AgentPools() {
     setTokensDialogOpen(true);
     setLoadingTokens(true);
     try {
-      const res = await fetchApi(`/agent-pools/${pool.id}/authentication-tokens`);
-      setTokens(res.data || []);
-    } catch (err: any) {
-      setError(err.message || "Failed to load agent pool tokens");
+      const res = await fetchApi(`/agent-pools/${pool.id}/authentication-tokens`) as { data: AgentToken[] };
+      setTokens(res.data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load agent pool tokens";
+      setError(msg);
     } finally {
       setLoadingTokens(false);
     }
   };
 
-  const handleCreateToken = async (e: React.SyntheticEvent) => {
+  const handleCreateToken = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (!selectedPool) return;
+    if (selectedPool == null) return;
     setCreatingToken(true);
     setCreatedSecret(null);
     try {
@@ -133,29 +140,32 @@ export function AgentPools() {
           data: {
             type: "authentication-tokens",
             attributes: {
-              description: tokenDesc.trim() || "Agent Worker Token",
+              description: tokenDesc.trim() !== "" ? tokenDesc.trim() : "Agent Worker Token",
             },
           },
         }),
-      });
-      setCreatedSecret(res.data.attributes.token || res.data.attributes.secret || "Token created successfully");
+      }) as { data: { attributes: { token?: string; secret?: string } } };
+      const attrs = res.data.attributes;
+      setCreatedSecret(attrs.token ?? attrs.secret ?? "Token created successfully");
       setTokenDesc("");
-      const tokensRes = await fetchApi(`/agent-pools/${selectedPool.id}/authentication-tokens`);
-      setTokens(tokensRes.data || []);
-    } catch (err: any) {
-      setError(err.message || "Failed to create agent token");
+      const tokensRes = await fetchApi(`/agent-pools/${selectedPool.id}/authentication-tokens`) as { data: AgentToken[] };
+      setTokens(tokensRes.data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create agent token";
+      setError(msg);
     } finally {
       setCreatingToken(false);
     }
   };
 
-  const handleDeleteToken = async (tokenId: string) => {
+  const handleDeleteToken = async (tokenId: string): Promise<void> => {
     if (!window.confirm("Revoke this agent token?")) return;
     try {
       await fetchApi(`/agent-tokens/${tokenId}`, { method: "DELETE" });
       setTokens((prev) => prev.filter((t) => t.id !== tokenId));
-    } catch (err: any) {
-      setError(err.message || "Failed to revoke token");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to revoke token";
+      setError(msg);
     }
   };
 
@@ -203,7 +213,7 @@ export function AgentPools() {
                   </TableCell>
                 </TableRow>
               ) : (
-                pools.map((pool) => (
+                pools.map((pool): React.JSX.Element => (
                   <TableRow key={pool.id}>
                     <TableCell className="font-semibold">
                       <div className="flex items-center gap-2">
@@ -212,7 +222,7 @@ export function AgentPools() {
                       </div>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {pool.attributes.organization || orgName}
+                      {pool.attributes.organization ?? orgName}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
@@ -222,10 +232,10 @@ export function AgentPools() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={async () => openTokensModal(pool)}>
+                        <Button size="sm" variant="outline" onClick={(): void => { void openTokensModal(pool); }}>
                           <Key className="size-3.5 mr-1" /> Agent Tokens
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={async () => handleDeletePool(pool)}>
+                        <Button size="sm" variant="destructive" onClick={(): void => { void handleDeletePool(pool); }}>
                           <Trash2 className="size-3.5 mr-1" /> Delete
                         </Button>
                       </div>
@@ -248,7 +258,7 @@ export function AgentPools() {
             </DialogDescription>
           </DialogHeader>
 
-          {poolFormError && (
+          {poolFormError !== "" && (
             <div className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
               {poolFormError}
             </div>
@@ -260,8 +270,8 @@ export function AgentPools() {
               <Input
                 id="pool-name"
                 value={poolName}
-                onChange={(e) => { setPoolName(e.target.value); }}
-                onInput={(e: any) => { setPoolName(e.target.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPoolName(event.target.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPoolName(event.currentTarget.value); }}
                 placeholder="on-prem-k8s-pool"
                 required
               />
@@ -293,8 +303,8 @@ export function AgentPools() {
                 <Input
                   id="agent-token-desc"
                   value={tokenDesc}
-                  onChange={(e) => { setTokenDesc(e.target.value); }}
-                  onInput={(e: any) => { setTokenDesc(e.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setTokenDesc(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTokenDesc(event.currentTarget.value); }}
                   placeholder="e.g. k8s-worker-node-1"
                   required
                 />
@@ -305,7 +315,7 @@ export function AgentPools() {
               </Button>
             </form>
 
-            {createdSecret && (
+            {createdSecret != null && (
               <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-1">
                 <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
                   <ShieldCheck className="size-4" /> Agent Token Created!
@@ -339,14 +349,14 @@ export function AgentPools() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    tokens.map((token) => (
-                      <TableRow key={token.id}>
-                        <TableCell className="font-medium text-xs">{token.attributes.description || "Agent Token"}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {new Date(token.attributes["created-at"]).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button size="sm" variant="destructive" onClick={async () => handleDeleteToken(token.id)}>
+                  tokens.map((token): React.JSX.Element => (
+                    <TableRow key={token.id}>
+                      <TableCell className="font-medium text-xs">{token.attributes.description ?? "Agent Token"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {new Date(token.attributes["created-at"]).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="destructive" onClick={(): void => { void handleDeleteToken(token.id); }}>
                             <Trash2 className="size-3 mr-1" /> Revoke
                           </Button>
                         </TableCell>

@@ -38,24 +38,23 @@ function buildNextPageUrl(current: string, nextPage: number): string {
   return base + "?" + search.toString();
 }
 
-async function fetchAllPages(path: string): Promise<any[]> {
-  const results: any[] = [];
+async function fetchAllPages(path: string): Promise<unknown[]> {
+  const results: unknown[] = [];
   let url: string | null = path;
   let page = 1;
-  while (url) {
-    const res = await fetchApi(url);
-    if (res?.data && Array.isArray(res.data)) {
+  while (url != null) {
+    const res = await fetchApi(url) as { data?: unknown[]; links?: { next?: string | null }; meta?: { pagination?: Record<string, unknown> } };
+    if (res.data != null && Array.isArray(res.data)) {
       for (const item of res.data) results.push(item);
     }
-    const nextLink = res?.links?.next || null;
-    const nextPage = res?.meta?.pagination?.["next-page"] as number | undefined;
-    const total = res?.meta?.pagination?.["total-pages"] as number | undefined;
-    if (nextLink) {
+    const nextLink = res?.links?.next ?? null;
+    const nextPage = res?.meta?.pagination?.["next-page"];
+    const total = res?.meta?.pagination?.["total-pages"];
+    if (nextLink != null) {
       url = nextLink;
       page++;
-    } else if (nextPage && typeof nextPage === "number" && nextPage > page && (total == null || nextPage <= total)) {
+    } else if (nextPage != null && typeof nextPage === "number" && nextPage > page && (total == null || nextPage <= total)) {
       url = buildNextPageUrl(url, nextPage);
-      page = nextPage;
       page = nextPage;
     } else {
       url = null;

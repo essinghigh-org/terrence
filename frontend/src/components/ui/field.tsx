@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 
-function FieldSet({ className, ...props }: React.ComponentProps<"fieldset">): React.JSX.Element {
+function FieldSet({ className, ...props }: Readonly<React.ComponentProps<"fieldset">>): React.JSX.Element {
   return (
     <fieldset
       data-slot="field-set"
@@ -23,7 +23,7 @@ function FieldLegend({
   className,
   variant = "legend",
   ...props
-}: React.ComponentProps<"legend"> & { variant?: "legend" | "label" }): React.JSX.Element {
+}: Readonly<React.ComponentProps<"legend"> & { variant?: "legend" | "label" }>): React.JSX.Element {
   return (
     <legend
       data-slot="field-legend"
@@ -37,7 +37,7 @@ function FieldLegend({
   )
 }
 
-function FieldGroup({ className, ...props }: React.ComponentProps<"div">): React.JSX.Element {
+function FieldGroup({ className, ...props }: Readonly<React.ComponentProps<"div">>): React.JSX.Element {
   return (
     <div
       data-slot="field-group"
@@ -72,7 +72,7 @@ function Field({
   className,
   orientation = "vertical",
   ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof fieldVariants>): React.JSX.Element {
+}: Readonly<React.ComponentProps<"div"> & VariantProps<typeof fieldVariants>>): React.JSX.Element {
   return (
     <div
       role="group"
@@ -84,7 +84,7 @@ function Field({
   )
 }
 
-function FieldContent({ className, ...props }: React.ComponentProps<"div">): React.JSX.Element {
+function FieldContent({ className, ...props }: Readonly<React.ComponentProps<"div">>): React.JSX.Element {
   return (
     <div
       data-slot="field-content"
@@ -100,7 +100,7 @@ function FieldContent({ className, ...props }: React.ComponentProps<"div">): Rea
 function FieldLabel({
   className,
   ...props
-}: React.ComponentProps<typeof Label>): React.JSX.Element {
+}: Readonly<React.ComponentProps<typeof Label>>): React.JSX.Element {
   return (
     <Label
       data-slot="field-label"
@@ -114,7 +114,7 @@ function FieldLabel({
   )
 }
 
-function FieldTitle({ className, ...props }: React.ComponentProps<"div">): React.JSX.Element {
+function FieldTitle({ className, ...props }: Readonly<React.ComponentProps<"div">>): React.JSX.Element {
   return (
     <div
       data-slot="field-label"
@@ -127,7 +127,7 @@ function FieldTitle({ className, ...props }: React.ComponentProps<"div">): React
   )
 }
 
-function FieldDescription({ className, ...props }: React.ComponentProps<"p">): React.JSX.Element {
+function FieldDescription({ className, ...props }: Readonly<React.ComponentProps<"p">>): React.JSX.Element {
   return (
     <p
       data-slot="field-description"
@@ -146,9 +146,9 @@ function FieldSeparator({
   children,
   className,
   ...props
-}: React.ComponentProps<"div"> & {
+}: Readonly<React.ComponentProps<"div"> & {
   children?: React.ReactNode
-}): React.JSX.Element {
+}>): React.JSX.Element {
   return (
     <div
       data-slot="field-separator"
@@ -177,12 +177,12 @@ function FieldError({
   children,
   errors,
   ...props
-}: React.ComponentProps<"div"> & {
+}: Readonly<React.ComponentProps<"div"> & {
   errors?: ({ message?: string } | undefined)[]
-}): React.JSX.Element | null {
+}>): React.JSX.Element | null {
   const nonNullErrors = errors ?? []
 
-  const content = useMemo(() => {
+  const content = useMemo((): React.ReactNode => {
     if (children != null) {
       return children
     }
@@ -192,7 +192,7 @@ function FieldError({
     }
 
     const uniqueErrors = [
-      ...new Map(nonNullErrors.map((error) => [error?.message, error])).values(),
+      ...new Map(nonNullErrors.map((error): [string | undefined, { message?: string } | undefined] => [error?.message, error])).values(),
     ]
 
     if (uniqueErrors.length === 1) {
@@ -202,7 +202,7 @@ function FieldError({
     return (
       <ul className="ml-4 flex list-disc flex-col gap-1">
         {uniqueErrors.map(
-          (error) =>
+          (error): React.JSX.Element | false =>
             error?.message != null && <li key={error.message}>{error.message}</li>
         )}
       </ul>

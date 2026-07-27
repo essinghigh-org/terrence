@@ -2,7 +2,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Loader2Icon } from "lucide-react"
 
-function Spinner({ className, ...props }: React.ComponentProps<"svg">): React.JSX.Element {
+function Spinner({ className, ...props }: Readonly<React.ComponentProps<"svg">>): React.JSX.Element {
   const isAccessible = props["aria-label"] != null || props["aria-labelledby"] != null || props.role != null
   return (
     <Loader2Icon
