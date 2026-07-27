@@ -39,3 +39,7 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   return readResponseBody(response);
 }
+
+export function removeAuthToken() {
+  localStorage.removeItem("tfe_token");
+}
