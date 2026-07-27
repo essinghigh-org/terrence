@@ -2,7 +2,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { stateVersions, workspaces, organizations, logs } from "../db/schema";
-import { eq, and, desc, asc, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, inArray, count } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
 import { checkOrgPermission, findAuthorizedWorkspace, pageRequest, pagination, decodeStatePayload, parseStatePayload } from "../lib/utils";
@@ -101,7 +101,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const statePayload = payload?.data?.attributes?.state;
     const runId = payload?.data?.relationships?.run?.data?.id ?? null;
     if (typeof serial !== "number" || !statePayload) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Serial and state are required" }] };
+      set.status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: state" }] };
     }
     await db.update(stateVersions).set({ status: "backing_data_soft_deleted" }).where(and(eq(stateVersions.workspaceId, workspace_id), eq(stateVersions.status, "finalized")));
     const id = crypto.randomUUID();

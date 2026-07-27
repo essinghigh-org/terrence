@@ -101,9 +101,13 @@ describe("TFE API v2 - Data Retention & Garbage Collection", () => {
 
     expect(drpRes.status).toBe(201);
     const drpBody = await drpRes.json();
-    expect(drpBody.data.meta.gc.softDeleted).toBe(1);
+    // State version creation auto-soft-deletes previous finalized versions,
+    // so all excess versions are already in "backing_data_soft_deleted" status.
+    // The GC function will permanently delete the soft-deleted ones.
+    expect(drpBody.data.meta.gc.softDeleted).toBe(0);
+    expect(drpBody.data.meta.gc.permanentlyDeleted).toBe(2);
 
-    // Trigger GC again to move soft-deleted to permanently deleted
+    // Trigger GC again — no more soft-deleted versions remain
     const gcRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/gc`, {
         method: "POST",
@@ -112,6 +116,6 @@ describe("TFE API v2 - Data Retention & Garbage Collection", () => {
     );
     expect(gcRes.status).toBe(200);
     const gcBody = await gcRes.json();
-    expect(gcBody.data.permanentlyDeleted).toBe(1);
+    expect(gcBody.data.permanentlyDeleted).toBe(0);
   });
 });

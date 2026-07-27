@@ -1,11 +1,14 @@
-
 import { app } from "./src/app";
+import { startWorkerQueue } from "./src/worker";
 
 const rawPort = process.env.PORT;
 const port = rawPort !== undefined && rawPort !== "" ? Number(rawPort) : 3000;
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`Invalid PORT configuration: "${process.env.PORT}". PORT must be a valid integer between 1 and 65535.`);
 }
+
+// Start background worker queue only when the server is actually running
+startWorkerQueue();
 
 app
   .listen(port);

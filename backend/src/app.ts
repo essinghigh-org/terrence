@@ -7,9 +7,6 @@ import { oauthPlugin } from "./oauth";
 import { startWorkerQueue } from "./worker";
 import { log } from "./lib/log";
 
-// Initialize persistent worker queue loop
-startWorkerQueue();
-
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const serveFrontend = () => Bun.file(FRONTEND_INDEX);
 

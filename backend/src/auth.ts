@@ -12,7 +12,7 @@ export const authPlugin = new Elysia({ name: 'auth' })
   .derive({ as: 'global' }, async ({ request }) => {
     const authHeader = request.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return { user: null, token: null, orgId: null, teamId: null };
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
     }
 
     const tokenString = authHeader.substring(7);
@@ -37,12 +37,12 @@ export const authPlugin = new Elysia({ name: 'auth' })
     }
 
     if (!token) {
-      return { user: null, token: null, orgId: null, teamId: null };
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" };
     }
 
     const now = Date.now();
     if (token.expiresAt !== null && token.expiresAt <= now) {
-      return { user: null, token: null, orgId: null, teamId: null };
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired" };
     }
 
     if (!token.lastUsedAt || now - token.lastUsedAt > 60000) {

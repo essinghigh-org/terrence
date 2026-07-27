@@ -117,7 +117,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
   })
   .use(authPlugin)
-  .get("/api/v2/account/details", async ({ user, orgId, set }) => {
+  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }) => {
+    // Return 401 for invalid or expired tokens (distinct from "no auth" → 404)
+    if (tokenError) {
+      set.status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: tokenError === "expired" ? "Token expired" : "Invalid token" }] };
+    }
     if (user) return { data: userResource(user) };
 
     const org = orgId

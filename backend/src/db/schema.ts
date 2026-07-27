@@ -107,6 +107,7 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
 export const remoteStateConsumers = sqliteTable("remote_state_consumers", {
@@ -238,6 +239,7 @@ export const stateVersions = sqliteTable("state_versions", {
   vcsCommitSha: text("vcs_commit_sha"),
   vcsCommitUrl: text("vcs_commit_url"),
   runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
 ]);

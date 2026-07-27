@@ -1,8 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users } from "../db/schema";
+import { authPlugin } from "../auth";
 
 export const healthRoutes = new Elysia({ name: "health" })
+  .use(authPlugin)
   .get("/.well-known/terraform.json", () => ({
     "login.v1": {
       client: "terraform-cli",
@@ -34,7 +36,13 @@ export const healthRoutes = new Elysia({ name: "health" })
       return "not ready";
     }
   })
-  .get("/api/v1/ping", () => "pong")
+  .get("/api/v1/ping", ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
+    return "pong";
+  })
   .get("/api/v1/readiness", async ({ set }) => {
     try {
       await db.query.users.findFirst();

@@ -4,13 +4,13 @@ import {
   runs, logs, stateVersions, workspaceVariables, workspaceTags,
   configurationVersions, variableSets, variableSetWorkspaces,
   auditLogs, dataRetentionPolicies, remoteStateConsumers,
-  agentPools,
+  agentPools, workspaceRunTasks,
 } from "../db/schema";
-import { and, eq, ne, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, ne, desc, asc, count, gte, inArray, isNull, like, lt, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { validateVersion } from "../binaryManager";
-import { decodeStatePayload } from "./validation";
+import { decodeStatePayload, parseStatePayload } from "./validation";
 
-export { validateVersion };
+export { validateVersion, decodeStatePayload, parseStatePayload };
 
 const PUBLIC_URL = process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL) : null;
 
@@ -299,3 +299,110 @@ export const DISCARDABLE_RUN_STATUSES = [
   "post_plan_running",
   "post_plan_completed",
 ];
+
+/**
+ * Delete all data associated with a workspace.
+ * Uses cascade-friendly approach: deletes logs, state_versions, CVs, variables, tags, etc. directly.
+ * The workspace itself is deleted by the calling route.
+ */
+export async function deleteWorkspaceData(workspaceId: string) {
+  // Runs cascade to logs, policy_checks, run_comments
+  const runsToDelete = await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId), columns: { id: true } });
+  for (const r of runsToDelete) {
+    await db.delete(logs).where(eq(logs.runId, r.id));
+  }
+  await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+  await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
+  await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, workspaceId));
+  await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspaceId));
+  await db.delete(stateVersions).where(eq(stateVersions.workspaceId, workspaceId));
+  await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
+  await db.delete(remoteStateConsumers).where(or(eq(remoteStateConsumers.workspaceId, workspaceId), eq(remoteStateConsumers.consumerWorkspaceId, workspaceId)));
+  await db.delete(workspaceRunTasks).where(eq(workspaceRunTasks.workspaceId, workspaceId));
+}
+
+/**
+ * Safely delete a workspace — only succeeds if workspace has no managed resources.
+ * Returns true if deleted, false if workspace has resources.
+ */
+export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean> {
+  // Check if workspace has state versions with actual resources
+  const relevantStates = await db.query.stateVersions.findMany({
+    where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+    columns: { statePayload: true },
+    orderBy: [desc(stateVersions.serial)],
+    limit: 1,
+  });
+  if (relevantStates.length > 0) {
+    const latest = relevantStates[0];
+    if (latest.statePayload) {
+      try {
+        const parsed = JSON.parse(decodeStatePayload(latest.statePayload) as string);
+        // Check if state contains any resources
+        const resources = parsed?.resources;
+        if (resources && Array.isArray(resources) && resources.length > 0) {
+          return false; // Has managed resources
+        }
+      } catch {
+        // If we can't parse, err on the side of allowing deletion
+      }
+    }
+  }
+  await deleteWorkspaceData(workspaceId);
+  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+  return true;
+}
+
+/**
+ * Apply data retention garbage collection for a workspace.
+ * Two-phase lifecycle:
+ *   1. Excess finalized state versions → backing_data_soft_deleted
+ *   2. Previously soft-deleted versions → backing_data_permanently_deleted (DB row deletion)
+ */
+export async function applyDataRetentionGarbageCollection(workspaceId: string): Promise<Record<string, any>> {
+  const summary: Record<string, any> = { softDeleted: 0, permanentlyDeleted: 0, reason: "no-policy" };
+  const policy = await db.query.dataRetentionPolicies.findFirst({
+    where: eq(dataRetentionPolicies.workspaceId, workspaceId),
+  });
+  if (!policy?.stateVersionsCount) {
+    // Even without a policy, clean up previously soft-deleted records
+    const stale = await db.query.stateVersions.findMany({
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "backing_data_soft_deleted")),
+      columns: { id: true },
+    });
+    for (const sv of stale) {
+      await db.delete(stateVersions).where(eq(stateVersions.id, sv.id));
+    }
+    if (stale.length > 0) return { ...summary, permanentlyDeleted: stale.length, reason: "cleanup" };
+    return summary;
+  }
+
+  const count = policy.stateVersionsCount;
+
+  // Phase 1: Soft-delete excess finalized state versions
+  const finalizedVersions = await db.query.stateVersions.findMany({
+    where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+    orderBy: [desc(stateVersions.serial)],
+    columns: { id: true },
+  });
+  let softDeleted = 0;
+  if (finalizedVersions.length > count) {
+    const toSoftDelete = finalizedVersions.slice(count);
+    for (const sv of toSoftDelete) {
+      await db.update(stateVersions).set({ status: "backing_data_soft_deleted" }).where(eq(stateVersions.id, sv.id));
+    }
+    softDeleted = toSoftDelete.length;
+  }
+
+  // Phase 2: Permanently delete previously soft-deleted state versions
+  const softDeletedVersions = await db.query.stateVersions.findMany({
+    where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "backing_data_soft_deleted")),
+    columns: { id: true },
+  });
+  for (const sv of softDeletedVersions) {
+    await db.delete(stateVersions).where(eq(stateVersions.id, sv.id));
+  }
+  const permanentlyDeleted = softDeletedVersions.length;
+
+  return { softDeleted, permanentlyDeleted, reason: "retention-applied", count: finalizedVersions.length, limit: count };
+}

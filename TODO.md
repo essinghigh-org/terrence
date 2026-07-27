@@ -465,9 +465,14 @@
 ### 8.4 CV Lifecycle
 - [x] Upload → extracted → archived flow
 - [x] Path traversal protection on tar extraction
-- [ ] `backing_data_soft_deleted` / `backing_data_permanently_deleted` states (not implemented — no GC lifecycle)
+- [x] `backing_data_soft_deleted` state transition on new state version creation (state version route)
+- [x] `backing_data_permanently_deleted` state via `applyDataRetentionGarbageCollection` function
+- [x] `backing_data_soft_deleted` → `backing_data_permanently_deleted` two-phase GC lifecycle
 - [x] Re-fetch from VCS for VCS-linked workspaces
 - [ ] GC (garbage collection) for old CV archives and backing data
+  - [x] State version GC via `applyDataRetentionGarbageCollection` (retention-policy-driven)
+  - [ ] CV archive cleanup
+  - [ ] Run log archival
 
 ---
 
@@ -626,6 +631,8 @@
 - [x] Log streaming APIs
 - [x] `GET /runs/:run_id/logs` — structured JSON logs endpoint
 - [ ] Log retention and GC
+  - [x] State version GC via retention policy (`applyDataRetentionGarbageCollection`)
+  - [ ] Log record archival/cleanup
 - [ ] Chunked/streamed log delivery (for large runs)
 
 ### 10.2 Run Comments
@@ -980,6 +987,10 @@
 - [x] `backing_data_soft_deleted` state for state versions and CVs
 - [x] `backing_data_permanently_deleted` state
 - [x] GC scheduler / maintenance trigger
+  - [x] `applyDataRetentionGarbageCollection` function implemented with two-phase lifecycle
+  - [x] Phase 1: finalized → `backing_data_soft_deleted` for excess state versions
+  - [x] Phase 2: `backing_data_soft_deleted` → permanently deleted (row removal)
+  - [x] Integration with workspace data retention policy POST and GC action endpoints
 - [ ] Data restoration before permanent deletion
 
 ### 21.2 Retention Policy API

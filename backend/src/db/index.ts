@@ -57,6 +57,20 @@ for (const [col, def] of svAdditions) {
   }
 }
 
+// Check workspaces for created_at column
+const wsTableInfo = await sqlite.execute("PRAGMA table_info(workspaces)");
+const existingWsCols = new Set(wsTableInfo.rows.map((r: any) => r.name));
+if (!existingWsCols.has("created_at")) {
+  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
+}
+
+// Check state_versions for created_at column
+const svCreatedAtInfo = await sqlite.execute("PRAGMA table_info(state_versions)");
+const existingSvCreatedAtCols = new Set(svCreatedAtInfo.rows.map((r: any) => r.name));
+if (!existingSvCreatedAtCols.has("created_at")) {
+  await sqlite.execute("ALTER TABLE state_versions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
+}
+
 // Check policy_sets for missing columns
 const psTableInfo = await sqlite.execute("PRAGMA table_info(policy_sets)");
 const existingPsCols = new Set(psTableInfo.rows.map((r: any) => r.name));
