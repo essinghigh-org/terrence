@@ -18,9 +18,11 @@ await sqlite.executeMultiple(`
 
 type TableInfoRow = { name: string };
 
-function getColumnNames(info: Awaited<ReturnType<typeof sqlite.execute>>): Set<string> {
-  return new Set(info.rows.map((r: unknown) => (r as TableInfoRow).name));
+function getColumnNames(info: { readonly rows: readonly unknown[] }): Set<string> {
+  return new Set(info.rows.map((r: unknown): string => (r as TableInfoRow).name));
 }
+
+
 
 export const db = drizzle(sqlite, { schema });
 await migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });

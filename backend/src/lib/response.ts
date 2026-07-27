@@ -1,19 +1,32 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any */
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import type {
   workspaces, stateVersions, apiTokens, organizations, variableSets, workspaceVariables,
-  projects, runs} from "../db/schema";
-import { workspaceTags, users,
-  organizationMemberships, variableSetWorkspaces,
-  variableSetProjects, variableSetVariables, configurationVersions, logs, agentPools,
+  projects, runs
+} from "../db/schema";
+import { workspaceTags, variableSetWorkspaces,
+  variableSetProjects, variableSetVariables
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
 import { apiURL } from "./utils";
-import { parseStatePayload, decodeStatePayload } from "./validation";
+import { parseStatePayload } from "./validation";
 
-export function userResource(user: { id: string; username: string; email?: string | null }, authenticatedResource = { id: user.id, type: "users" }) {
-  const avatarUrl = user.email
+type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | boolean | number | string | null | undefined
+  ? T
+  : T extends readonly (infer R)[]
+    ? readonly DeepReadonly<R>[]
+    : T extends (infer R)[]
+      ? readonly DeepReadonly<R>[]
+      : { readonly [K in keyof T]: DeepReadonly<T[K]> };
+
+type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean }>;
+type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
+
+export function userResource(
+  user: UserParam,
+  authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
+): Record<string, unknown> {
+  const avatarUrl = typeof user.email === "string" && user.email !== ""
     ? `https://www.gravatar.com/avatar/${Bun.hash(user.email)}?d=identicon`
     : `https://www.gravatar.com/avatar/${user.id}?d=identicon`;
 
@@ -27,7 +40,7 @@ export function userResource(user: { id: string; username: string; email?: strin
       "auth-method": "local",
       "avatar-url": avatarUrl,
       "v2-only": false,
-      "is-site-admin": (user as any).isSiteAdmin === true,
+      "is-site-admin": user.isSiteAdmin === true,
       permissions: {
         "can-create-organizations": authenticatedResource.type === "users",
         "can-change-email": authenticatedResource.type === "users",
@@ -47,37 +60,42 @@ export function userResource(user: { id: string; username: string; email?: strin
   };
 }
 
+type OrgMemParam = DeepReadonly<{ id: string; userId: string; orgId: string; role: string; status?: string | null }>;
+
 export function orgMembershipResource(
-  mem: { id: string; userId: string; orgId: string; role: string; status?: string | null },
-  userObj?: { id: string; username: string; email?: string | null } | null,
-  teamIds: string[] = []
-) {
+  mem: OrgMemParam,
+  userObj?: UserParam | null,
+  teamIds: readonly string[] = []
+): Record<string, unknown> {
   return {
     id: mem.id,
     type: "organization-memberships",
     attributes: {
-      status: mem.status || "active",
+      status: typeof mem.status === "string" && mem.status !== "" ? mem.status : "active",
       email: userObj?.email ?? null,
       role: mem.role,
     },
     relationships: {
       user: {
-        data: userObj ? { id: userObj.id, type: "users" } : null,
-        links: userObj ? { related: `/api/v2/users/${userObj.id}` } : undefined,
+        data: userObj !== null && userObj !== undefined ? { id: userObj.id, type: "users" } : null,
+        links: userObj !== null && userObj !== undefined ? { related: `/api/v2/users/${userObj.id}` } : undefined,
       },
       organization: {
         data: { id: mem.orgId, type: "organizations" },
       },
       teams: {
-        data: teamIds.map(id => ({ id, type: "teams" })),
+        data: teamIds.map((id: string): { id: string; type: string } => ({ id, type: "teams" })),
       },
     },
     links: { self: `/api/v2/organization-memberships/${mem.id}` },
   };
 }
 
-export function tokenResource(token: typeof apiTokens.$inferSelect & { _rawToken?: string }, includeSecret = false) {
-  const iso = (value: number | null) => value === null ? null : new Date(value).toISOString();
+type ApiTokenWithRaw = DeepReadonly<typeof apiTokens.$inferSelect & Partial<Record<"_rawToken", string>>>;
+
+export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
+  const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
+  const rawToken = (token as Record<string, unknown>)["_rawToken"];
 
   return {
     id: token.id,
@@ -86,18 +104,20 @@ export function tokenResource(token: typeof apiTokens.$inferSelect & { _rawToken
       "created-at": iso(token.createdAt),
       "last-used-at": iso(token.lastUsedAt),
       description: token.description,
-      token: includeSecret ? (token._rawToken || null) : null,
+      token: includeSecret && typeof rawToken === "string" ? rawToken : null,
       "expired-at": iso(token.expiresAt),
     },
     relationships: {
       "created-by": {
-        data: token.userId ? { id: token.userId, type: "users" } : null,
+        data: token.userId !== null ? { id: token.userId, type: "users" } : null,
       },
     },
   };
 }
 
-export function organizationResource(org: typeof organizations.$inferSelect) {
+type OrganizationParam = DeepReadonly<typeof organizations.$inferSelect>;
+
+export function organizationResource(org: OrganizationParam): Record<string, unknown> {
   const name = encodeURIComponent(org.name);
   return {
     id: org.id,
@@ -130,15 +150,19 @@ export function organizationResource(org: typeof organizations.$inferSelect) {
   };
 }
 
+type WorkspaceParam = DeepReadonly<typeof workspaces.$inferSelect>;
+
 export async function workspaceResource(
-  workspace: typeof workspaces.$inferSelect,
+  workspace: WorkspaceParam,
   defaultIacBinary: string | null | undefined,
   canRun: boolean,
-) {
+): Promise<Record<string, unknown>> {
   const tags = await db.query.workspaceTags.findMany({
     where: eq(workspaceTags.workspaceId, workspace.id),
     orderBy: [asc(workspaceTags.key)],
   });
+
+  const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "tofu";
 
   return {
     id: workspace.id,
@@ -148,18 +172,18 @@ export async function workspaceResource(
       "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
       name: workspace.name,
       description: workspace.description,
-      "auto-apply": workspace.autoApply,
-      "auto-apply-run-trigger": Boolean(workspace.autoApplyRunTrigger),
+      "auto-apply": workspace.autoApply === true,
+      "auto-apply-run-trigger": workspace.autoApplyRunTrigger === true,
       "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
       "trigger-prefixes": workspace.triggerPrefixes ?? [],
       "trigger-patterns": workspace.triggerPatterns ?? [],
       "vcs-repo": workspace.vcsRepo ?? null,
       "queue-all-runs": workspace.queueAllRuns ?? true,
       "speculative-enabled": workspace.speculativeEnabled ?? true,
-      "global-remote-state": Boolean(workspace.globalRemoteState),
-      "project-remote-state": Boolean(workspace.projectRemoteState),
+      "global-remote-state": workspace.globalRemoteState === true,
+      "project-remote-state": workspace.projectRemoteState === true,
       "agent-pool-id": workspace.agentPoolId ?? null,
-      "assessments-enabled": Boolean(workspace.assessmentsEnabled),
+      "assessments-enabled": workspace.assessmentsEnabled === true,
       "auto-destroy-at": workspace.autoDestroyAt ?? null,
       "auto-destroy-activity-duration": workspace.autoDestroyActivityDuration ?? null,
       "setting-overwrites": workspace.settingOverwrites ?? null,
@@ -167,11 +191,11 @@ export async function workspaceResource(
       "working-directory": workspace.workingDirectory,
       "source-name": workspace.sourceName,
       "source-url": workspace.sourceUrl,
-      "tag-names": tags.map(tag => tag.key),
-      "iac-binary": workspace.iacBinary || defaultIacBinary || "tofu",
+      "tag-names": tags.map((tag: DeepReadonly<typeof workspaceTags.$inferSelect>): string => tag.key),
+      "iac-binary": iacBinary,
       "execution-mode": "remote",
-      locked: workspace.locked,
-      "locked-reason": workspace.lockedReason ?? (workspace.locked ? "Locked manually" : null),
+      locked: workspace.locked === true,
+      "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
       operations: true,
       permissions: {
         "can-destroy": canRun,
@@ -197,10 +221,10 @@ export async function workspaceResource(
         data: { id: workspace.orgId, type: "organizations" },
       },
       project: {
-        data: workspace.projectId ? { id: workspace.projectId, type: "projects" } : null,
+        data: workspace.projectId !== null ? { id: workspace.projectId, type: "projects" } : null,
       },
       "ssh-key": {
-        data: workspace.sshKeyId ? { id: workspace.sshKeyId, type: "ssh-keys" } : null,
+        data: workspace.sshKeyId !== null ? { id: workspace.sshKeyId, type: "ssh-keys" } : null,
       },
       "tag-bindings": {
         links: { related: `/api/v2/workspaces/${workspace.id}/tag-bindings` },
@@ -219,7 +243,9 @@ export async function workspaceResource(
   };
 }
 
-export function projectResource(project: typeof projects.$inferSelect) {
+type ProjectParam = DeepReadonly<typeof projects.$inferSelect>;
+
+export function projectResource(project: ProjectParam): Record<string, unknown> {
   return {
     id: project.id,
     type: "projects",
@@ -246,15 +272,19 @@ export function projectResource(project: typeof projects.$inferSelect) {
   };
 }
 
-export function tagBindingResource(tag: typeof workspaceTags.$inferSelect, effective = false) {
+type TagParam = DeepReadonly<typeof workspaceTags.$inferSelect>;
+
+export function tagBindingResource(tag: TagParam, effective = false): Record<string, unknown> {
   return {
     id: tag.id,
     type: effective ? "effective-tag-bindings" : "tag-bindings",
-    attributes: { key: tag.key, value: tag.value || "" },
+    attributes: { key: tag.key, value: tag.value ?? "" },
   };
 }
 
-export function projectTagBindingResource(pt: { id: string; projectId: string; key: string; value?: string | null }) {
+type ProjectTagParam = DeepReadonly<{ id: string; projectId: string; key: string; value?: string | null }>;
+
+export function projectTagBindingResource(pt: ProjectTagParam): Record<string, unknown> {
   return {
     id: pt.id,
     type: "tag-bindings",
@@ -271,15 +301,17 @@ export function projectTagBindingResource(pt: { id: string; projectId: string; k
   };
 }
 
-export function variableSetVariableResource(variable: typeof variableSetVariables.$inferSelect) {
+type VarSetVariableParam = DeepReadonly<typeof variableSetVariables.$inferSelect>;
+
+export function variableSetVariableResource(variable: VarSetVariableParam): Record<string, unknown> {
   return {
     id: variable.id,
     type: "vars",
     attributes: {
       key: variable.key,
-      value: variable.sensitive ? null : variable.value,
+      value: variable.sensitive === true ? null : variable.value,
       category: variable.category,
-      sensitive: variable.sensitive,
+      sensitive: variable.sensitive === true,
       hcl: false,
       description: variable.description,
     },
@@ -289,22 +321,32 @@ export function variableSetVariableResource(variable: typeof variableSetVariable
   };
 }
 
+type VarAttrsParam = DeepReadonly<{
+  key?: string;
+  value?: string;
+  category?: string;
+  sensitive?: boolean;
+  description?: string;
+}>;
+
 export function variableSetVariableUpdate(
-  variable: typeof variableSetVariables.$inferSelect,
-  attributes: any,
-) {
-  let sensitive = attributes.sensitive === undefined ? variable.sensitive : attributes.sensitive;
-  if (variable.sensitive && sensitive === false && attributes.value === undefined) sensitive = true;
+  variable: VarSetVariableParam,
+  attributes: VarAttrsParam,
+): Record<string, unknown> {
+  let sensitive = attributes.sensitive ?? variable.sensitive === true;
+  if (variable.sensitive === true && !sensitive && attributes.value === undefined) sensitive = true;
   return {
-    key: attributes.key === undefined ? variable.key : attributes.key,
-    value: attributes.value === undefined ? variable.value : attributes.value,
-    category: attributes.category === undefined ? variable.category : attributes.category,
+    key: attributes.key ?? variable.key,
+    value: attributes.value ?? variable.value,
+    category: attributes.category ?? variable.category,
     sensitive,
-    description: attributes.description === undefined ? variable.description : attributes.description,
+    description: attributes.description ?? variable.description,
   };
 }
 
-export async function variableSetResource(variableSet: typeof variableSets.$inferSelect) {
+type VarSetParam = DeepReadonly<typeof variableSets.$inferSelect>;
+
+export async function variableSetResource(variableSet: VarSetParam): Promise<Record<string, unknown>> {
   const [workspaceLinks, projectLinks, variables] = await Promise.all([
     db.query.variableSetWorkspaces.findMany({
       where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
@@ -322,8 +364,8 @@ export async function variableSetResource(variableSet: typeof variableSets.$infe
     attributes: {
       name: variableSet.name,
       description: variableSet.description,
-      global: variableSet.global,
-      priority: Boolean(variableSet.priority),
+      global: variableSet.global === true,
+      priority: variableSet.priority === true,
       "var-count": variables.length,
       "workspace-count": workspaceLinks.length,
       "project-count": projectLinks.length,
@@ -332,35 +374,39 @@ export async function variableSetResource(variableSet: typeof variableSets.$infe
       organization: { data: { id: variableSet.orgId, type: "organizations" } },
       parent: { data: { id: variableSet.orgId, type: "organizations" } },
       workspaces: {
-        data: workspaceLinks.map(link => ({ id: link.workspaceId, type: "workspaces" })),
+        data: workspaceLinks.map((link: DeepReadonly<typeof variableSetWorkspaces.$inferSelect>): { id: string; type: string } => ({ id: link.workspaceId, type: "workspaces" })),
       },
       projects: {
-        data: projectLinks.map(link => ({ id: link.projectId, type: "projects" })),
+        data: projectLinks.map((link: DeepReadonly<typeof variableSetProjects.$inferSelect>): { id: string; type: string } => ({ id: link.projectId, type: "projects" })),
       },
       vars: {
-        data: variables.map(variable => ({ id: variable.id, type: "vars" })),
+        data: variables.map((variable: DeepReadonly<typeof variableSetVariables.$inferSelect>): { id: string; type: string } => ({ id: variable.id, type: "vars" })),
       },
     },
     links: { self: `/api/v2/varsets/${variableSet.id}` },
   };
 }
 
-export function workspaceVariableResource(v: typeof workspaceVariables.$inferSelect) {
+type WorkspaceVarParam = DeepReadonly<typeof workspaceVariables.$inferSelect>;
+
+export function workspaceVariableResource(v: WorkspaceVarParam): Record<string, unknown> {
   return {
     id: v.id,
     type: "vars",
     attributes: {
       key: v.key,
-      value: v.sensitive ? null : v.value,
+      value: v.sensitive === true ? null : v.value,
       category: v.category,
-      sensitive: v.sensitive,
+      sensitive: v.sensitive === true,
       description: v.description,
-      hcl: v.hcl,
+      hcl: v.hcl === true,
     },
   };
 }
 
-export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
+type RunParam = DeepReadonly<typeof runs.$inferSelect>;
+
+export function runResource(run: RunParam, canRun: boolean): Record<string, unknown> {
   const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
   const isRunning = ["pending", "planning", "fetching", "fetching_completed", "plan_queued", "queuing", "applying", "apply_queued"].includes(run.status);
   const hasChanges = ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status);
@@ -375,11 +421,11 @@ export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
         "is-discardable": canRun && isPlanned,
         "is-force-cancelable": canRun && isRunning,
       },
-      "allow-empty-apply": run.allowEmptyApply ?? false,
+      "allow-empty-apply": run.allowEmptyApply,
       "auto-apply": run.autoApply,
       "has-changes": hasChanges,
       message: run.message,
-      operation: run.isDestroy
+      operation: run.isDestroy === true
         ? "destroy"
         : run.refreshOnly
           ? "refresh_only"
@@ -390,18 +436,18 @@ export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
       refresh: run.refresh,
       "refresh-only": run.refreshOnly,
       "replace-addrs": run.replaceAddrs,
-      "save-plan": run.savePlan ?? false,
-      "allow-config-generation": run.allowConfigGeneration ?? false,
+      "save-plan": run.savePlan,
+      "allow-config-generation": run.allowConfigGeneration,
       source: "tfe-api",
       status: run.status,
       "status-timestamps": run.statusTimestamps ?? null,
       "target-addrs": run.targetAddrs,
       "terraform-version": run.terraformVersion,
       "debugging-mode": run.debuggingMode,
-      "is-destroy": run.isDestroy,
+      "is-destroy": run.isDestroy === true,
       "created-at": new Date(run.createdAt).toISOString(),
       "trigger-reason": "manual",
-      variables: run.variables || [],
+      variables: run.variables ?? [],
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,
       "resource-destructions": run.planResourceDestructions ?? 0,
@@ -421,10 +467,10 @@ export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
         links: { related: `/api/v2/workspaces/${run.workspaceId}` },
       },
       "configuration-version": {
-        data: run.configurationVersionId
+        data: run.configurationVersionId !== null
           ? { id: run.configurationVersionId, type: "configuration-versions" }
           : null,
-        links: run.configurationVersionId
+        links: run.configurationVersionId !== null
           ? { related: `/api/v2/configuration-versions/${run.configurationVersionId}` }
           : undefined,
       },
@@ -440,7 +486,7 @@ export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
         links: { related: `/api/v2/runs/${run.id}/run-events` },
       },
       "created-by": {
-        data: run.createdBy ? { id: run.createdBy, type: "users" } : null,
+        data: run.createdBy !== null ? { id: run.createdBy, type: "users" } : null,
       },
       "cost-estimate": {
         links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
@@ -461,7 +507,9 @@ export function runResource(run: typeof runs.$inferSelect, canRun: boolean) {
   };
 }
 
-export function planResource(run: typeof runs.$inferSelect, request: Request) {
+type RequestParam = DeepReadonly<Request>;
+
+export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
   const status = run.status === "planning"
     ? "running"
     : run.status === "plan_queued" || run.status === "queuing"
@@ -488,7 +536,7 @@ export function planResource(run: typeof runs.$inferSelect, request: Request) {
       "resource-imports": 0,
       "generated-configuration": false,
       "execution-details": { mode: "remote" },
-      "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
+      "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -499,7 +547,7 @@ export function planResource(run: typeof runs.$inferSelect, request: Request) {
   };
 }
 
-export function applyResource(run: typeof runs.$inferSelect, request: Request) {
+export function applyResource(run: RunParam, request: RequestParam): Record<string, unknown> {
   const status = run.status === "applying"
     ? "running"
     : run.status === "apply_queued"
@@ -523,7 +571,7 @@ export function applyResource(run: typeof runs.$inferSelect, request: Request) {
       "resource-changes": run.applyResourceChanges ?? 0,
       "resource-destructions": run.applyResourceDestructions ?? 0,
       "resource-imports": 0,
-      "log-read-url": run.logToken ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
+      "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
       "status-timestamps": run.statusTimestamps ?? null,
     },
     relationships: {
@@ -534,23 +582,29 @@ export function applyResource(run: typeof runs.$inferSelect, request: Request) {
   };
 }
 
-export function stateOutputResources(state: typeof stateVersions.$inferSelect) {
-  const outputs = parseStatePayload(state.statePayload)?.outputs;
-  if (!outputs || typeof outputs !== "object" || Array.isArray(outputs)) return [];
+type StateParam = DeepReadonly<typeof stateVersions.$inferSelect>;
 
-  return Object.entries(outputs).map(([name, raw]) => {
+export function stateOutputResources(state: StateParam): Record<string, unknown>[] {
+  const parsed = parseStatePayload(state.statePayload);
+  const outputs = parsed?.outputs;
+  if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
+
+  return Object.entries(outputs).map(([name, raw]: readonly [string, unknown]): Record<string, unknown> => {
     const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex").slice(0, 16)}`;
-    const output = raw && typeof raw === "object" ? raw : { value: raw };
+    const output = raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : { value: raw };
     const value = output.value;
-    const detailedType = output.type ?? (
-      Array.isArray(value) ? ["tuple", value.map(item => typeof item)] :
+    const rawType = output.type;
+    const detailedType = rawType ?? (
+      Array.isArray(value) ? ["tuple", value.map((item: unknown): string => typeof item)] :
       value === null ? "null" :
       typeof value === "object" ? "object" :
       typeof value
     );
     const type = typeof detailedType === "string"
       ? detailedType
-      : Array.isArray(value) ? "array" : "object";
+      : (Array.isArray(value) ? "array" : "object");
 
     return {
       id,
@@ -569,37 +623,56 @@ export function stateOutputResources(state: typeof stateVersions.$inferSelect) {
   });
 }
 
+type OutputResourceRef = { id: string; type: string };
+
 export function stateVersionResource(
-  state: typeof stateVersions.$inferSelect,
-  request: Request,
+  state: StateParam,
+  request: RequestParam,
   includeState = false,
-) {
+): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
   const rawResources = Array.isArray(parsed?.resources) ? parsed.resources : [];
   const resources = rawResources
-    .filter(resource => resource && typeof resource.type === "string" && typeof resource.name === "string")
-    .map(resource => ({
-      name: resource.name,
-      type: `${resource.mode === "data" ? "data." : ""}${resource.type}`,
-      count: Array.isArray(resource.instances) ? resource.instances.length : 0,
-      module: typeof resource.module === "string" ? resource.module : "root",
-      provider: typeof resource.provider === "string" ? resource.provider : null,
-    }));
+    .filter((resource: unknown): resource is Record<string, unknown> =>
+      resource !== null && resource !== undefined && typeof resource === "object" &&
+      typeof (resource as Record<string, unknown>).type === "string" &&
+      typeof (resource as Record<string, unknown>).name === "string"
+    )
+    .map((resource: DeepReadonly<Record<string, unknown>>): { name: string; type: string; count: number; module: string; provider: string | null } => {
+      const rType = resource.type as string;
+      const rName = resource.name as string;
+      const rMode = resource.mode;
+      const rInstances = resource.instances;
+      const rModule = resource.module;
+      const rProvider = resource.provider;
+
+      return {
+        name: rName,
+        type: `${rMode === "data" ? "data." : ""}${rType}`,
+        count: Array.isArray(rInstances) ? rInstances.length : 0,
+        module: typeof rModule === "string" ? rModule : "root",
+        provider: typeof rProvider === "string" ? rProvider : null,
+      };
+    });
+
   const modules: Record<string, Record<string, number>> = {};
   const providers: Record<string, Record<string, number>> = {};
 
   for (const resource of resources) {
     const kind = resource.type.replaceAll("_", "-");
-    modules[resource.module] ||= {};
-    modules[resource.module][kind] = (modules[resource.module][kind] || 0) + resource.count;
-    if (resource.provider) {
-      providers[resource.provider] ||= {};
-      providers[resource.provider][kind] = (providers[resource.provider][kind] || 0) + resource.count;
+    const mod = modules[resource.module] ?? {};
+    modules[resource.module] = mod;
+    mod[kind] = (mod[kind] ?? 0) + resource.count;
+
+    if (typeof resource.provider === "string") {
+      const prov = providers[resource.provider] ?? {};
+      providers[resource.provider] = prov;
+      prov[kind] = (prov[kind] ?? 0) + resource.count;
     }
   }
 
   const outputResources = stateOutputResources(state);
-  const payload = state.statePayload || "";
+  const payload = state.statePayload ?? "";
   return {
     id: state.id,
     type: "state-versions",
@@ -613,7 +686,7 @@ export function stateVersionResource(
       resources,
       modules,
       providers,
-      "state-version": Number.isInteger(parsed?.version) ? parsed.version : null,
+      "state-version": parsed !== null && typeof parsed.version === "number" && Number.isInteger(parsed.version) ? parsed.version : null,
       status: state.status ?? "finalized",
       intermediate: false,
       size: Buffer.byteLength(payload),
@@ -621,14 +694,14 @@ export function stateVersionResource(
       "vcs-commit-url": state.vcsCommitUrl,
       "hosted-state-download-url": apiURL(request, `/api/v2/state-versions/${state.id}/download`),
       "hosted-state-upload-url": null,
-      "hosted-json-state-download-url": state.jsonState ? apiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
+      "hosted-json-state-download-url": typeof state.jsonState === "string" && state.jsonState !== "" ? apiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
       "hosted-json-state-upload-url": null,
     },
     relationships: {
       workspace: { data: { id: state.workspaceId, type: "workspaces" } },
-      run: state.runId ? { data: { id: state.runId, type: "runs" } } : { data: null },
+      run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
       outputs: {
-        data: outputResources.map(output => ({ id: output.id, type: output.type })),
+        data: outputResources.map((output: DeepReadonly<Record<string, unknown>>): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
       },
     },
     links: { self: `/api/v2/state-versions/${state.id}` },

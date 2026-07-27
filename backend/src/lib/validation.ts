@@ -1,10 +1,10 @@
 export function validVariableAttributes(attributes: unknown, partial = false): boolean {
-  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
   const fields = Object.keys(attributes);
   const attrs = attributes as Record<string, unknown>;
   const { key, value, category, sensitive, hcl, description } = attrs;
-  return fields.every(field => allowedFields.includes(field))
+  return fields.every((field: string): boolean => allowedFields.includes(field))
     && (!partial || fields.length > 0)
     && (partial || value !== undefined)
     && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
@@ -16,12 +16,12 @@ export function validVariableAttributes(attributes: unknown, partial = false): b
 }
 
 export function validVariableSetVariableAttributes(attributes: unknown, partial = false): boolean {
-  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
   const { key, value, category, sensitive, hcl, description } = attrs;
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
   const fields = Object.keys(attrs);
-  return fields.every(field => allowedFields.includes(field))
+  return fields.every((field: string): boolean => allowedFields.includes(field))
     && (!partial || fields.length > 0)
     && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
     && (value === undefined || typeof value === "string")
@@ -32,13 +32,13 @@ export function validVariableSetVariableAttributes(attributes: unknown, partial 
 }
 
 export function validVariableSetAttributes(attributes: unknown, partial = false): boolean {
-  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
   const { name, description, global, priority } = attrs;
   const fields = Object.keys(attrs);
   return fields.length > 0
-    && fields.every(field => ["name", "description", "global", "priority"].includes(field))
-    && ((partial && name === undefined) || (typeof name === "string" && Boolean(name.trim())))
+    && fields.every((field: string): boolean => ["name", "description", "global", "priority"].includes(field))
+    && ((partial && name === undefined) || (typeof name === "string" && name.trim() !== ""))
     && (description === undefined || description === null || typeof description === "string")
     && (global === undefined || typeof global === "boolean")
     && (priority === undefined || typeof priority === "boolean");
@@ -49,7 +49,7 @@ export function isUniqueConstraintError(error: unknown): boolean {
   return items.some((item: unknown): boolean => {
     const i = item as Record<string, unknown> | undefined;
     return i?.code === "SQLITE_CONSTRAINT_UNIQUE"
-      || (typeof i?.message === "string" && (i.message).includes("UNIQUE constraint failed"));
+      || (typeof i?.message === "string" && i.message.includes("UNIQUE constraint failed"));
   });
 }
 
@@ -77,8 +77,8 @@ export function decodeStatePayload(state: unknown): string {
 
 export function parseStatePayload(payload: string | null): Record<string, unknown> | null {
   try {
-    const state = JSON.parse(payload ?? "{}");
-    return state && typeof state === "object" ? (state as Record<string, unknown>) : null;
+    const state = JSON.parse(payload ?? "{}") as unknown;
+    return state !== null && typeof state === "object" && !Array.isArray(state) ? (state as Record<string, unknown>) : null;
   } catch {
     return null;
   }

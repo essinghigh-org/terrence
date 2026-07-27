@@ -10,7 +10,7 @@ import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type Attrs = Record<string, unknown>;
-type DataPayload = { data?: { attributes?: Attrs; type?: string; id?: string } };
+type DataPayload = { readonly data?: { readonly attributes?: Attrs; readonly type?: string; readonly id?: string } };
 
 function extractAttrs(body: unknown): Attrs | undefined {
   if (body === null || typeof body !== "object") return undefined;
@@ -18,19 +18,34 @@ function extractAttrs(body: unknown): Attrs | undefined {
   return payload.data?.attributes;
 }
 
+type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+
+type ReqCtx = Readonly<{
+  body?: unknown;
+  set: SetObj;
+}>;
+
+type AuthReqCtx = Readonly<{
+  user?: Readonly<typeof users.$inferSelect> | null;
+  orgId?: string | null;
+  tokenError?: string | null;
+  body?: unknown;
+  set: SetObj;
+}>;
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
-  .post("/api/v2/users/login", async ({ body, set }): Promise<unknown> => {
+  .post("/api/v2/users/login", async ({ body, set }: ReqCtx): Promise<unknown> => {
     let payload: DataPayload | undefined;
-    if (typeof body === 'string') {
-        try {
-            payload = JSON.parse(body) as DataPayload;
-        } catch {
-            set.status = 400;
-            return { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] };
-        }
+    if (typeof body === "string") {
+      try {
+        payload = JSON.parse(body) as DataPayload;
+      } catch {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "Invalid JSON string" }] };
+      }
     } else if (body !== null && typeof body === "object") {
-        payload = body;
+      payload = body;
     }
 
     const attrs = payload?.data?.attributes ?? {};
@@ -38,16 +53,16 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const password = typeof attrs.password === "string" ? attrs.password : "";
 
     if (username === "" || password === "") {
-      set.status = 400;
+      (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
     }
 
     const user = await db.query.users.findFirst({
-      where: eq(users.username, username)
+      where: eq(users.username, username),
     });
 
-    if (user === null || user === undefined || !(await bcrypt.compare(password, user.passwordHash))) {
-      set.status = 401;
+    if (user === undefined || !(await bcrypt.compare(password, user.passwordHash))) {
+      (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
 
@@ -68,36 +83,36 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         id: tokenId,
         type: "tokens",
         attributes: {
-          token: tokenStr
-        }
-      }
+          token: tokenStr,
+        },
+      },
     };
   })
-  .post("/api/v2/users", async ({ body, set }): Promise<unknown> => {
+  .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
     const attrs = extractAttrs(body) ?? {};
     const username = typeof attrs.username === "string" ? attrs.username : "";
     const password = typeof attrs.password === "string" ? attrs.password : "";
     const email = attrs.email;
 
     if (username === "" || password === "") {
-      set.status = 400;
+      (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
     }
 
     if (password.length < 10) {
-      set.status = 422;
+      (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Password must be at least 10 characters" }] };
     }
     if (email !== undefined && email !== null && typeof email !== "string") {
-      set.status = 422;
+      (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string" }] };
     }
 
     const existing = await db.query.users.findFirst({
-      where: eq(users.username, username)
+      where: eq(users.username, username),
     });
-    if (existing !== null && existing !== undefined) {
-      set.status = 409;
+    if (existing !== undefined) {
+      (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
 
@@ -106,39 +121,35 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const normalizedEmail = typeof email === "string" && email.trim() !== "" ? email.trim() : null;
 
     try {
-      const isSiteAdmin = await db.transaction(async (tx): Promise<boolean> => {
-        const userCount = (await tx.select({ val: count() }).from(users))[0]?.val ?? 0;
+      const isSiteAdmin = await db.transaction(async (tx: unknown): Promise<boolean> => {
+        const t = tx as typeof db;
+        const userCount = (await t.select({ val: count() }).from(users))[0]?.val ?? 0;
         const admin = userCount === 0;
-        await tx.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: admin });
+        await t.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: admin });
         return admin;
       });
       await auditLog("create", "users", id, null, null, { username });
-      set.status = 201;
+      (set as { status: number }).status = 201;
       return {
         data: {
           id,
           type: "users",
-          attributes: { username, email: normalizedEmail, "is-site-admin": isSiteAdmin }
-        }
+          attributes: { username, email: normalizedEmail, "is-site-admin": isSiteAdmin },
+        },
       };
     } catch (e: unknown) {
-      const err = e as Record<string, unknown>;
-      if (
-        (typeof err.message === "string" && (err.message).includes("UNIQUE")) ||
-        err.code === "SQLITE_CONSTRAINT_UNIQUE" ||
-        (typeof err.message === "string" && (err.message).includes("SQLITE_CONSTRAINT"))
-      ) {
-        set.status = 409;
+      if (isUniqueConstraintError(e)) {
+        (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
       }
       throw e;
     }
   })
   .use(authPlugin)
-  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }): Promise<unknown> => {
+  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }: AuthReqCtx): Promise<unknown> => {
     // Return 401 for invalid or expired tokens (distinct from "no auth" → 404)
     if (tokenError !== null && tokenError !== undefined) {
-      set.status = 401;
+      (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: tokenError === "expired" ? "Token expired" : "Invalid token" }] };
     }
     if (user !== null && user !== undefined) return { data: userResource(user) };
@@ -147,43 +158,43 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       ? await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })
       : null;
     if (org === null || org === undefined) {
-      set.status = 404;
+      (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
     const synthetic = { id: `service-user-${org.id}`, username: `${org.name}-service-user` };
     return { data: userResource(synthetic, { id: org.id, type: "organizations" }) };
   })
-  .patch("/api/v2/account/update", async ({ user, body, set }): Promise<unknown> => {
+  .patch("/api/v2/account/update", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
-      set.status = 404;
+      (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
     const attrs = extractAttrs(body);
     if (attrs === undefined) {
-      set.status = 422;
+      (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
     const changes: { username?: string; email?: string | null } = {};
     if (Object.hasOwn(attrs, "username")) {
-      if (typeof attrs.username !== "string" || (attrs.username).trim() === "") {
-        set.status = 422;
+      if (typeof attrs.username !== "string" || attrs.username.trim() === "") {
+        (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
       }
-      changes.username = (attrs.username).trim();
+      changes.username = attrs.username.trim();
     }
     if (Object.hasOwn(attrs, "email")) {
       const emailVal = attrs.email;
-      if (emailVal !== null && (typeof emailVal !== "string" || (emailVal).trim() === "")) {
-        set.status = 422;
+      if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
+        (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
       }
-      changes.email = emailVal === null ? null : (emailVal).trim();
+      changes.email = emailVal === null ? null : emailVal.trim();
     }
     if (Object.keys(changes).length === 0) {
-      set.status = 422;
+      (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No account fields provided" }] };
     }
 
@@ -191,7 +202,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       await db.update(users).set(changes).where(eq(users.id, user.id));
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
-        set.status = 409;
+        (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "Username is already in use" }] };
       }
       throw error;
@@ -199,9 +210,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     return { data: userResource({ ...user, ...changes }) };
   })
-  .patch("/api/v2/account/password", async ({ user, body, set }): Promise<unknown> => {
+  .patch("/api/v2/account/password", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
-      set.status = 404;
+      (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
@@ -210,11 +221,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const password = typeof attrs.password === "string" ? attrs.password : "";
     const confirmation = typeof attrs.password_confirmation === "string" ? attrs.password_confirmation : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
     if (currentPassword === "" || password === "" || password !== confirmation || password.length < 10) {
-      set.status = 422;
+      (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
     }
     if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
-      set.status = 401;
+      (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
     }
 

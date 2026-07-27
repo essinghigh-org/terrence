@@ -1,43 +1,71 @@
-/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */
-// @ts-nocheck
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { workspaces, workspaceTags, workspaceVariables, organizations, stateVersions, runs, configurationVersions, logs, dataRetentionPolicies, remoteStateConsumers, sshKeys, projects, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, like, ne, notInArray, or, sql, isNull } from "drizzle-orm";
-import { createHash } from "node:crypto";
-import { workspaceResource, workspaceVariableResource, tagBindingResource, projectResource, stateVersionResource, projectTagBindingResource } from "../lib/response";
+import { workspaces, workspaceTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, type users } from "../db/schema";
+import { eq, and, asc, count, inArray, like, notInArray } from "drizzle-orm";
+import { workspaceResource, workspaceVariableResource, tagBindingResource } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
-import { validateVersion, checkOrgPermission, findAuthorizedWorkspace, findWorkspaceByName, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, decodeStatePayload, deleteWorkspaceData, safeDeleteWorkspace } from "../lib/utils";
+import { validateVersion, checkOrgPermission, findAuthorizedWorkspace, findWorkspaceByName, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
+
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
 
+type DeepReadonly<T> = T extends null | undefined
+  ? T
+  : T extends (infer R)[]
+  ? readonly DeepReadonly<R>[]
+  : T extends object
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
+type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+
+type ParamCtx = Readonly<{
+  readonly params: Readonly<Record<string, string>>;
+  readonly query?: Readonly<Record<string, string>>;
+  readonly body?: unknown;
+  readonly user?: DeepReadonly<typeof users.$inferSelect> | null;
+  readonly orgId?: string | null;
+  readonly request: Readonly<{ readonly url: string }>;
+  readonly set: SetObj;
+}>;
+
+type WsItem = DeepReadonly<typeof workspaces.$inferSelect>;
+type TagItem = DeepReadonly<typeof workspaceTags.$inferSelect>;
+type VarItem = DeepReadonly<typeof workspaceVariables.$inferSelect>;
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && err.message.includes("UNIQUE")) || ("code" in err && err.code === "SQLITE_CONSTRAINT_UNIQUE"));
+}
+
 export const workspaceRoutes = new Elysia({ name: "workspaces" })
+
   .use(authPlugin)
   // --- Organization Workspaces ---
-  .get("/api/v2/organizations/:org_name/workspaces", async ({ params: { org_name }, user, orgId: principalOrgId, request, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId))) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  .get("/api/v2/organizations/:org_name/workspaces", async ({ params, user, orgId: principalOrgId, request, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const { number, size } = pageRequest(request);
-    const params = new URL(request.url).searchParams;
-    const csv = (name: string) => [...new Set(params.get(name)?.split(",").filter(Boolean) ?? [])];
-    const conditions: any[] = [eq(workspaces.orgId, org.id)];
-    const search = params.get("search[name]")?.trim() || params.get("q")?.trim();
-    if (search) conditions.push(like(workspaces.name, `%${search}%`));
+    const searchParams = new URL(request.url).searchParams;
+    const csv = (name: string): string[] => [...new Set(searchParams.get(name)?.split(",").filter(Boolean) ?? [])];
+    const conditions: unknown[] = [eq(workspaces.orgId, org.id)];
+    const search = searchParams.get("search[name]")?.trim() ?? searchParams.get("q")?.trim();
+    if (search !== undefined && search !== "") conditions.push(like(workspaces.name, `%${search}%`));
     const tags = csv("search[tags]");
     if (tags.length > 0) {
       const taggedWsIds = (await db.query.workspaceTags.findMany({
         where: and(inArray(workspaceTags.key, tags)),
         columns: { workspaceId: true },
-      })).map(t => t.workspaceId);
+      })).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
       conditions.push(inArray(workspaces.id, [...new Set(taggedWsIds)]));
     }
-    const excludeTags = params.get("search[exclude-tags]")?.trim();
-    if (excludeTags) {
+    const excludeTags = searchParams.get("search[exclude-tags]")?.trim();
+    if (excludeTags !== undefined && excludeTags !== "") {
       const excludedIds = (await db.query.workspaceTags.findMany({
         where: eq(workspaceTags.key, excludeTags),
         columns: { workspaceId: true },
-      })).map(t => t.workspaceId);
+      })).map((t: Readonly<{ workspaceId: string }>): string => t.workspaceId);
       conditions.push(notInArray(workspaces.id, [...new Set(excludedIds)]));
     }
     const projectIds = csv("filter[project][id]");
@@ -47,399 +75,546 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       const matchingWsIds = (await db.query.runs.findMany({
         where: and(inArray(runs.status, currentRunStatuses)),
         columns: { workspaceId: true },
-      })).map(r => r.workspaceId);
+      })).map((r: Readonly<{ workspaceId: string }>): string => r.workspaceId);
       conditions.push(inArray(workspaces.id, [...new Set(matchingWsIds)]));
     }
-    const where = and(...conditions);
-    const [wsList, [{ total }]] = await Promise.all([
+    const where = and(...(conditions as Parameters<typeof and>));
+    const [wsList, countRows] = await Promise.all([
       db.query.workspaces.findMany({ where, orderBy: [asc(workspaces.name)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(workspaces).where(where),
     ]);
-    return { data: await Promise.all(wsList.map(async w => workspaceResource(w, org.defaultIacBinary, Boolean(user)))), ...pagination(request, number, size, total) };
+    const totalCount = countRows[0]?.total ?? 0;
+    const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> => workspaceResource(w, org.defaultIacBinary, Boolean(user))));
+    return { data, ...pagination(request, number, size, totalCount) };
   })
-  .post("/api/v2/organizations/:org_name/workspaces", async ({ params: { org_name }, body, user, orgId: principalOrgId, request, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId))) { set.status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const attributes = (body as any)?.data?.attributes || {};
-    const { name, description, "auto-apply": autoApply, "terraform-version": terraformVersion, "working-directory": workingDirectory, "source-name": sourceName, "source-url": sourceUrl, "iac-binary": iacBinary, "execution-mode": executionMode } = attributes;
-    if (!name || typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name)) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] };
+  .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const name = typeof attributes.name === "string" ? attributes.name : "";
+    const description = attributes.description;
+    const autoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : false;
+    const terraformVersion = attributes["terraform-version"];
+    const workingDirectory = attributes["working-directory"];
+    const sourceName = typeof attributes["source-name"] === "string" ? attributes["source-name"] : null;
+    const sourceUrl = typeof attributes["source-url"] === "string" ? attributes["source-url"] : null;
+    const iacBinary = attributes["iac-binary"];
+    const executionMode = attributes["execution-mode"];
+    if (name === "" || !/^[A-Za-z0-9_-]+$/.test(name)) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] };
     }
-    if (await findWorkspaceByName(org.id, name)) {
-      set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace name already exists in this organization" }] };
+    if ((await findWorkspaceByName(org.id, name)) !== undefined) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace name already exists in this organization" }] };
     }
     if (description !== undefined && description !== null && typeof description !== "string") {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "description must be a string or null" }] };
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "description must be a string or null" }] };
     }
     if (terraformVersion !== undefined && (typeof terraformVersion !== "string" || !validateVersion(terraformVersion))) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid terraformVersion format" }] };
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid terraformVersion format" }] };
     }
     if (executionMode !== undefined && executionMode !== "remote") {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only remote execution mode is supported" }] };
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only remote execution mode is supported" }] };
     }
-    if (iacBinary !== undefined && iacBinary !== null && !["tofu", "terraform"].includes(iacBinary)) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] };
+    if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] };
     }
     let normalizedWorkingDirectory: string | null = null;
-    if (workingDirectory !== undefined && workingDirectory !== null) {
-      try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: any) {
-        set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error.message }] };
+    if (workingDirectory !== undefined && workingDirectory !== null && typeof workingDirectory === "string") {
+      try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : "Invalid working directory";
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
       }
     }
     const id = crypto.randomUUID();
-    const projectRel = (body as any)?.data?.relationships?.project?.data;
-    const projectId = projectRel ? projectRel.id : null;
+    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+    const projRel = typeof rels.project === "object" && rels.project !== null ? (rels.project as Record<string, unknown>) : {};
+    const projData = typeof projRel.data === "object" && projRel.data !== null ? (projRel.data as Record<string, unknown>) : {};
+    const projectId = typeof projData.id === "string" ? projData.id : null;
+    const finalDesc = typeof description === "string" ? description : null;
+    const finalTfVer = typeof terraformVersion === "string" ? terraformVersion : "latest";
+    const finalIac = typeof iacBinary === "string" ? iacBinary : (org.defaultIacBinary ?? null);
     await db.insert(workspaces).values({
-      id, name, orgId: org.id, description: description ?? null, projectId,
-      autoApply: autoApply ?? false, terraformVersion: terraformVersion ?? "latest",
-      workingDirectory: normalizedWorkingDirectory, sourceName: sourceName ?? null,
-      sourceUrl: sourceUrl ?? null, iacBinary: iacBinary ?? org.defaultIacBinary ?? null,
+      id, name, orgId: org.id, description: finalDesc, projectId,
+      autoApply, terraformVersion: finalTfVer,
+      workingDirectory: normalizedWorkingDirectory, sourceName,
+      sourceUrl, iacBinary: finalIac,
       createdAt: Date.now(),
     });
-    const ws = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) }))!;
-    set.status = 201;
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    (set as { status: number }).status = 201;
     return { data: await workspaceResource(ws, org.defaultIacBinary, Boolean(user)) };
   })
-  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params: { org_name, workspace_name }, user, orgId: principalOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspace_name)) });
-    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const workspaceName = params["workspace_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
+    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await workspaceResource(ws, org.defaultIacBinary, Boolean(user)) };
   })
-  .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params: { org_name, workspace_name }, body, user, orgId: principalOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspace_name)) });
-    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const workspaceName = params["workspace_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
+    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return updateWorkspaceResponse(ws, org.defaultIacBinary, Boolean(user), body, set);
   })
-  .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params: { org_name, workspace_name }, user, orgId: principalOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspace_name)) });
-    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const orgName = params["org_name"] ?? "";
+    const workspaceName = params["workspace_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
+    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await deleteWorkspaceData(ws.id);
-    set.status = 204;
-    return;
+    (set as { status: number }).status = 204;
+    return {};
   })
-  .post("/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete", async ({ params: { org_name, workspace_name }, user, orgId: principalOrgId, set }) => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, org_name) });
-    if (!org) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspace_name)) });
-    if (!ws || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .post("/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const workspaceName = params["workspace_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
+    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", principalOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ok = await safeDeleteWorkspace(ws.id);
-    if (!ok) { set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
+    if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
     return { data: { status: "ok" } };
   })
-  .get("/api/v2/workspaces/:workspace_id", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return { data: await workspaceResource(ws, org?.defaultIacBinary, Boolean(user)) };
   })
-  .patch("/api/v2/workspaces/:workspace_id", async ({ params: { workspace_id }, body, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return updateWorkspaceResponse(ws, org?.defaultIacBinary, Boolean(user), body, set);
   })
-  .delete("/api/v2/workspaces/:workspace_id", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await deleteWorkspaceData(ws.id);
-    set.status = 204;
-    return;
+    (set as { status: number }).status = 204;
+    return {};
   })
-  .post("/api/v2/workspaces/:workspace_id/actions/safe-delete", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .post("/api/v2/workspaces/:workspace_id/actions/safe-delete", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ok = await safeDeleteWorkspace(ws.id);
-    if (!ok) { set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
+    if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
     return { data: { status: "ok" } };
   })
   // --- Tags ---
-  .get("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params: { workspace_id }, user, orgId, request, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace_id), orderBy: [asc(workspaceTags.key)] });
-    return { data: tags.map(t => tagBindingResource(t)) };
+  .get("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
+    return { data: tags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
   })
-  .get("/api/v2/workspaces/:workspace_id/effective-tag-bindings", async ({ params: { workspace_id }, user, orgId, request, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace_id), orderBy: [asc(workspaceTags.key)] });
-    return { data: tags.map(t => tagBindingResource(t, true)) };
+  .get("/api/v2/workspaces/:workspace_id/effective-tag-bindings", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
+    return { data: tags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t, true)) };
   })
-  .patch("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params: { workspace_id }, body, user, orgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const data = (body as any)?.data;
-    const tags = Array.isArray(data) ? data : (data ? [data] : []);
-    const entries = tags.map((t: any) => ({ key: t?.attributes?.key, value: t?.attributes?.value ?? null })).filter((e: any) => e.key && typeof e.key === "string");
-    await db.transaction(async tx => {
-      await tx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace_id));
+  .patch("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data;
+    const tags = Array.isArray(data) ? data : (data !== null && data !== undefined ? [data] : []);
+    const entries = tags.map((t: unknown): { key: string; value: string } => {
+      const item = t !== null && typeof t === "object" ? (t as Record<string, unknown>) : {};
+      const attrs = typeof item.attributes === "object" && item.attributes !== null ? (item.attributes as Record<string, unknown>) : {};
+      const key = typeof attrs.key === "string" ? attrs.key : "";
+      const value = typeof attrs.value === "string" ? attrs.value : "";
+      return { key, value };
+    }).filter((e: Readonly<{ readonly key: string; readonly value: string }>): boolean => e.key !== "");
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const dbTx = tx as typeof db;
+      await dbTx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspaceId));
       if (entries.length > 0) {
-        await tx.insert(workspaceTags).values(entries.map((e: any) => ({ id: crypto.randomUUID(), workspaceId: workspace_id, key: e.key, value: e.value ?? "" })));
+        await dbTx.insert(workspaceTags).values(entries.map((e: Readonly<{ readonly key: string; readonly value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId, key: e.key, value: e.value })));
       }
     });
-    const updatedTags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace_id), orderBy: [asc(workspaceTags.key)] });
-    return { data: updatedTags.map(t => tagBindingResource(t)) };
+
+    const updatedTags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
+    return { data: updatedTags.map((t: TagItem): Record<string, unknown> => tagBindingResource(t)) };
   })
-  .get("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace_id) });
-    return { data: tags.map(t => ({ id: t.key, type: "tags" })) };
+  .get("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) });
+    return { data: tags.map((t: TagItem): Record<string, string> => ({ id: t.key, type: "tags" })) };
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params: { workspace_id }, body, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const items = (body as any)?.data;
+  .post("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
     if (Array.isArray(items)) {
       for (const item of items) {
-        const key = item?.attributes?.key ?? item?.id;
-        if (key && typeof key === "string") {
-          await db.insert(workspaceTags).values({ id: crypto.randomUUID(), workspaceId: workspace_id, key, value: item?.attributes?.value ?? "" }).onConflictDoNothing();
+        if (item !== null && typeof item === "object") {
+          const itemObj = item as Record<string, unknown>;
+          const attrs = typeof itemObj.attributes === "object" && itemObj.attributes !== null ? (itemObj.attributes as Record<string, unknown>) : {};
+          const keyVal = attrs.key ?? itemObj.id;
+          const key = typeof keyVal === "string" ? keyVal : "";
+          const value = typeof attrs.value === "string" ? attrs.value : "";
+          if (key !== "") {
+            await db.insert(workspaceTags).values({ id: crypto.randomUUID(), workspaceId, key, value }).onConflictDoNothing();
+          }
         }
       }
     }
-    set.status = 204;
-    return;
+    (set as { status: number }).status = 204;
+    return {};
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params: { workspace_id }, body, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const items = (body as any)?.data;
+  .delete("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
     if (Array.isArray(items)) {
-      const keys = items.map(i => i?.id).filter(Boolean);
-      if (keys.length > 0) await db.delete(workspaceTags).where(and(eq(workspaceTags.workspaceId, workspace_id), inArray(workspaceTags.key, keys)));
+      const keys = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== "");
+      if (keys.length > 0) await db.delete(workspaceTags).where(and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)));
     }
-    set.status = 204;
-    return;
+    (set as { status: number }).status = 204;
+    return {};
   })
   // --- Workspace Variables ---
-  .get("/api/v2/workspaces/:workspace_id/vars", async ({ params: { workspace_id }, user, orgId, request, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get("/api/v2/workspaces/:workspace_id/vars", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
-    const where = eq(workspaceVariables.workspaceId, workspace_id);
-    const [vars, [{ total }]] = await Promise.all([
+    const where = eq(workspaceVariables.workspaceId, workspaceId);
+    const [vars, countRows] = await Promise.all([
       db.query.workspaceVariables.findMany({ where, orderBy: [asc(workspaceVariables.key)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(workspaceVariables).where(where),
     ]);
-    return { data: vars.map(workspaceVariableResource), ...pagination(request, number, size, total) };
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: vars.map((v: VarItem): Record<string, unknown> => workspaceVariableResource(v)), ...pagination(request, number, size, totalCount) };
   })
-  .post("/api/v2/workspaces/:workspace_id/vars", async ({ params: { workspace_id }, body, user, orgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const data = (body as any)?.data;
-    const attributes = data?.attributes;
+  .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     if (data?.type !== "vars" || !validVariableAttributes(attributes)) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
     const varId = `wsvar-${crypto.randomUUID()}`;
-    await db.insert(workspaceVariables).values({
-      id: varId, workspaceId: workspace_id, key: attributes.key, value: attributes.value ?? "",
-      category: attributes.category ?? "terraform", sensitive: attributes.sensitive ?? false,
-      hcl: attributes.hcl ?? false, description: attributes.description ?? null,
-    });
-    set.status = 201;
-    return { data: workspaceVariableResource({ id: varId, workspaceId: workspace_id, key: attributes.key, value: attributes.value ?? "", category: attributes.category ?? "terraform", sensitive: attributes.sensitive ?? false, hcl: attributes.hcl ?? false, description: attributes.description ?? null }) };
+    const key = typeof attributes.key === "string" ? attributes.key : "";
+    const value = typeof attributes.value === "string" ? attributes.value : "";
+    const category = typeof attributes.category === "string" ? attributes.category : "terraform";
+    const sensitive = typeof attributes.sensitive === "boolean" ? attributes.sensitive : false;
+    const hcl = typeof attributes.hcl === "boolean" ? attributes.hcl : false;
+    const description = typeof attributes.description === "string" ? attributes.description : null;
+    await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value, category, sensitive, hcl, description });
+    (set as { status: number }).status = 201;
+    return { data: workspaceVariableResource({ id: varId, workspaceId, key, value, category, sensitive, hcl, description }) };
   })
-  .get("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params: { workspace_id, var_id }, user, orgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, var_id), eq(workspaceVariables.workspaceId, workspace_id)) });
-    if (!variable) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const varId = params["var_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
+    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: workspaceVariableResource(variable) };
   })
-  .patch("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params: { workspace_id, var_id }, body, user, orgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, var_id), eq(workspaceVariables.workspaceId, workspace_id)) });
-    if (!variable) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const data = (body as any)?.data;
-    const attrs = data?.attributes || {};
+  .patch("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const varId = params["var_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
+    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     if (data?.type !== "vars" || !validVariableAttributes(attrs, true)) {
-      set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
-    let sensitive = attrs.sensitive === undefined ? variable.sensitive : attrs.sensitive;
-    if (variable.sensitive && sensitive === false && attrs.value === undefined) sensitive = true;
-    const updated = {
-      key: attrs.key === undefined ? variable.key : attrs.key,
-      value: attrs.value === undefined ? variable.value : attrs.value,
-      category: attrs.category === undefined ? variable.category : attrs.category,
-      sensitive,
-      hcl: attrs.hcl === undefined ? variable.hcl : attrs.hcl,
-      description: attrs.description === undefined ? variable.description : attrs.description,
-    };
-    try { await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, var_id)); } catch (error: any) {
-      if (error.message?.includes("UNIQUE") || error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-        set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this workspace" }] };
+    let sensitive = typeof attrs.sensitive === "boolean" ? attrs.sensitive : (variable.sensitive ?? false);
+    if ((variable.sensitive ?? false) && !sensitive && attrs.value === undefined) sensitive = true;
+    const key = typeof attrs.key === "string" ? attrs.key : variable.key;
+    const value = typeof attrs.value === "string" ? attrs.value : variable.value;
+    const category = typeof attrs.category === "string" ? attrs.category : variable.category;
+    const hcl = typeof attrs.hcl === "boolean" ? attrs.hcl : (variable.hcl ?? false);
+    const description = typeof attrs.description === "string" ? attrs.description : variable.description;
+    const updated = { key, value, category, sensitive, hcl, description };
+    try {
+      await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
+    } catch (error: unknown) {
+      const isUnique: boolean = isUniqueConstraintError(error);
+      if (isUnique) {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this workspace" }] };
       }
       throw error;
     }
     return { data: workspaceVariableResource({ ...variable, ...updated }) };
   })
-  .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params: { workspace_id, var_id }, user, orgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, orgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, var_id), eq(workspaceVariables.workspaceId, workspace_id)) });
-    if (!variable) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(workspaceVariables).where(eq(workspaceVariables.id, var_id));
-    set.status = 204;
+  .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const varId = params["var_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
+    if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
+    (set as { status: number }).status = 204;
+    return {};
   })
   // --- Lock/Unlock ---
-  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ws.locked) { set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
-    await db.update(workspaces).set({ locked: true, lockedReason: null }).where(eq(workspaces.id, workspace_id));
-    await auditLog("lock", "workspaces", workspace_id, user?.id || null, ws.orgId);
+  .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws.locked === true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
+
+    await db.update(workspaces).set({ locked: true, lockedReason: null }).where(eq(workspaces.id, workspaceId));
+    await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return { data: await workspaceResource({ ...ws, locked: true }, org?.defaultIacBinary, Boolean(user)) };
   })
-  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!ws.locked) { set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
-    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspace_id));
+
+  .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
+    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return { data: await workspaceResource({ ...ws, locked: false }, org?.defaultIacBinary, Boolean(user)) };
   })
-  .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params: { workspace_id }, user, orgId: principalOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, principalOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspace_id));
+  .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return { data: await workspaceResource({ ...ws, locked: false }, org?.defaultIacBinary, Boolean(user)) };
   })
   // --- Remote State Consumers ---
-  .get("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspace_id) });
-    return { data: consumers.map(c => ({ id: c.consumerWorkspaceId, type: "workspaces" })) };
+  .get("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspaceId) });
+    return { data: consumers.map((c: Readonly<{ consumerWorkspaceId: string }>): Record<string, string> => ({ id: c.consumerWorkspaceId, type: "workspaces" })) };
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const items = (body as any)?.data;
-    const list = Array.isArray(items) ? items : [items];
-    for (const item of list) { if (item?.id) await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId: workspace_id, consumerWorkspaceId: item.id }).onConflictDoNothing(); }
-    set.status = 204;
+  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
+    for (const item of list) {
+      if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
+        const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
+        await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId }).onConflictDoNothing();
+      }
+    }
+    (set as { status: number }).status = 204;
+    return {};
   })
-  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspace_id));
-    const items = (body as any)?.data;
-    const list = Array.isArray(items) ? items : [items];
-    for (const item of list) { if (item?.id) await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId: workspace_id, consumerWorkspaceId: item.id }).onConflictDoNothing(); }
-    set.status = 204;
+  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspaceId));
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
+    for (const item of list) {
+      if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
+        const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
+        await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId }).onConflictDoNothing();
+      }
+    }
+    (set as { status: number }).status = 204;
+    return {};
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const items = (body as any)?.data;
-    if (Array.isArray(items)) { const ids = items.map(i => i?.id).filter(Boolean); if (ids.length > 0) await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspace_id), inArray(remoteStateConsumers.consumerWorkspaceId, ids))); }
-    set.status = 204;
+  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    if (Array.isArray(items)) {
+      const ids = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== "");
+      if (ids.length > 0) await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspaceId), inArray(remoteStateConsumers.consumerWorkspaceId, ids)));
+    }
+    (set as { status: number }).status = 204;
+    return {};
   })
   // --- Data Retention ---
-  .get("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const policy = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace_id) });
-    if (!policy) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .get("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const policy = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
+    if (policy === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: policy.id, type: "data-retention-policies", attributes: { "state-versions-count": policy.stateVersionsCount, "auto-destroy-at": policy.autoDestroyAt, "auto-destroy-activity-duration": policy.autoDestroyActivityDuration } } };
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const attrs = (body as any)?.data?.attributes || {};
-    const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspace_id) });
-    const pid = existing ? existing.id : `drp-${crypto.randomUUID()}`;
-    const values = { id: pid, workspaceId: workspace_id, stateVersionsCount: attrs["state-versions-count"] ?? null, autoDestroyAt: attrs["auto-destroy-at"] ?? null, autoDestroyActivityDuration: attrs["auto-destroy-activity-duration"] ?? null, createdAt: Date.now() };
-    if (existing) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, pid)); } else { await db.insert(dataRetentionPolicies).values(values); }
-    const gcSummary = await applyDataRetentionGarbageCollection(workspace_id);
-    set.status = 201;
+  .post("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
+    const pid = existing?.id ?? `drp-${crypto.randomUUID()}`;
+    const stateVersionsCount = typeof attrs["state-versions-count"] === "number" ? attrs["state-versions-count"] : null;
+    const autoDestroyAt = typeof attrs["auto-destroy-at"] === "string" ? attrs["auto-destroy-at"] : null;
+    const autoDestroyActivityDuration = typeof attrs["auto-destroy-activity-duration"] === "string" ? attrs["auto-destroy-activity-duration"] : null;
+    const values = { id: pid, workspaceId, stateVersionsCount, autoDestroyAt, autoDestroyActivityDuration, createdAt: Date.now() };
+    if (existing !== undefined) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, pid)); } else { await db.insert(dataRetentionPolicies).values(values); }
+    const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
+    (set as { status: number }).status = 201;
     return { data: { id: pid, type: "data-retention-policies", attributes: { "state-versions-count": values.stateVersionsCount, "auto-destroy-at": values.autoDestroyAt, "auto-destroy-activity-duration": values.autoDestroyActivityDuration }, meta: { gc: gcSummary } } };
   })
-  .post("/api/v2/workspaces/:workspace_id/actions/gc", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const gcSummary = await applyDataRetentionGarbageCollection(workspace_id);
+  .post("/api/v2/workspaces/:workspace_id/actions/gc", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
     return { data: { status: "ok", ...gcSummary } };
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params: { workspace_id }, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspace_id));
-    set.status = 204;
+  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
+    (set as { status: number }).status = 204;
+    return {};
   })
   // --- SSH Key assignment ---
-  .patch("/api/v2/workspaces/:workspace_id/relationships/ssh-key", async ({ params: { workspace_id }, body, user, orgId: tokenOrgId, set }) => {
-    const ws = await findAuthorizedWorkspace(workspace_id, user?.id, tokenOrgId);
-    if (!ws) { set.status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const sshKeyData = (body as any)?.data;
-    const sshKeyId = sshKeyData?.id ?? null;
-    await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspace_id));
-    return { data: { id: workspace_id, type: "workspaces", relationships: { "ssh-key": { data: sshKeyId ? { id: sshKeyId, type: "ssh-keys" } : null } } } };
+  .patch("/api/v2/workspaces/:workspace_id/relationships/ssh-key", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const sshKeyData = payload.data as Record<string, unknown> | undefined;
+    const sshKeyId = typeof sshKeyData?.id === "string" ? sshKeyData.id : null;
+    await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspaceId));
+    return { data: { id: workspaceId, type: "workspaces", relationships: { "ssh-key": { data: sshKeyId !== null ? { id: sshKeyId, type: "ssh-keys" } : null } } } };
   });
 
 async function updateWorkspaceResponse(
-  workspace: typeof workspaces.$inferSelect,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   defaultIacBinary: string | null | undefined,
   canRun: boolean,
   body: unknown,
-  set: any,
-) {
-  const attributes = (body as any)?.data?.attributes || {};
-  const rawTagBindings = (body as any)?.data?.relationships?.["tag-bindings"]?.data;
-  const tagBindings = rawTagBindings === undefined ? undefined : parseTagBindings(rawTagBindings);
-  const { name, description, "auto-apply": autoApply, "terraform-version": terraformVersion, "working-directory": workingDirectory, "source-name": sourceName, "source-url": sourceUrl, "iac-binary": iacBinary, "execution-mode": executionMode } = attributes;
-  if (rawTagBindings !== undefined && tagBindings === undefined) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid tag bindings" }] }; }
-  if (name !== undefined && (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name))) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] }; }
-  if (description !== undefined && description !== null && typeof description !== "string") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "description must be a string or null" }] }; }
-  if ((sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-name and source-url must be strings or null" }] }; }
-  if (terraformVersion !== undefined && (typeof terraformVersion !== "string" || !validateVersion(terraformVersion))) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid terraformVersion format" }] }; }
-  if (executionMode !== undefined && executionMode !== "remote") { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only remote execution mode is supported" }] }; }
-  if (iacBinary !== undefined && iacBinary !== null && !["tofu", "terraform"].includes(iacBinary)) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] }; }
+  set: SetObj,
+): Promise<unknown> {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+  const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+  const rawTagBindings = rels["tag-bindings"] as Record<string, unknown> | undefined;
+  const tagBindingsData = rawTagBindings !== undefined ? rawTagBindings.data : undefined;
+  const tagBindings = tagBindingsData === undefined ? undefined : parseTagBindings(tagBindingsData);
+  const name = typeof attributes.name === "string" ? attributes.name : undefined;
+  const description = attributes.description;
+  const autoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
+  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
+  const workingDirectory = attributes["working-directory"];
+  const sourceName = attributes["source-name"];
+  const sourceUrl = attributes["source-url"];
+  const iacBinary = attributes["iac-binary"];
+  const executionMode = attributes["execution-mode"];
+
+  if (tagBindingsData !== undefined && tagBindings === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid tag bindings" }] }; }
+  if (name !== undefined && !/^[A-Za-z0-9_-]+$/.test(name)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] }; }
+  if (description !== undefined && description !== null && typeof description !== "string") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "description must be a string or null" }] }; }
+  if ((sourceName !== undefined && sourceName !== null && typeof sourceName !== "string") || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== "string")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-name and source-url must be strings or null" }] }; }
+  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid terraformVersion format" }] }; }
+  if (executionMode !== undefined && executionMode !== "remote") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only remote execution mode is supported" }] }; }
+  if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] }; }
+
   let normalizedWorkingDirectory = workspace.workingDirectory;
-  if (workingDirectory !== undefined) { try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: any) { set.status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error.message }] }; } }
-  if (name !== undefined && name !== workspace.name) { const duplicate = await findWorkspaceByName(workspace.orgId, name); if (duplicate && duplicate.id !== workspace.id) { set.status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace name already exists in this organization" }] }; } }
-  const projectRel = (body as any)?.data?.relationships?.project?.data;
+  if (workingDirectory !== undefined && typeof workingDirectory === "string") {
+    try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Invalid working directory";
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
+    }
+  }
+
+  if (name !== undefined && name !== workspace.name) {
+    const duplicate = await findWorkspaceByName(workspace.orgId, name);
+    if (duplicate !== undefined && duplicate.id !== workspace.id) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace name already exists in this organization" }] }; }
+  }
+
+  const projectRel = rels.project as Record<string, unknown> | undefined;
   let newProjectId = workspace.projectId;
-  if (projectRel !== undefined) newProjectId = projectRel ? projectRel.id : null;
+  if (projectRel !== undefined) {
+    const projData = typeof projectRel.data === "object" && projectRel.data !== null ? (projectRel.data as Record<string, unknown>) : null;
+    newProjectId = typeof projData?.id === "string" ? projData.id : null;
+  }
+
   const updated: Partial<typeof workspaces.$inferInsert> = {
-    name: name ?? workspace.name, description: description !== undefined ? description : workspace.description, projectId: newProjectId,
-    autoApply: autoApply !== undefined ? Boolean(autoApply) : workspace.autoApply,
-    autoApplyRunTrigger: attributes["auto-apply-run-trigger"] !== undefined ? Boolean(attributes["auto-apply-run-trigger"]) : workspace.autoApplyRunTrigger,
-    fileTriggersEnabled: attributes["file-triggers-enabled"] !== undefined ? Boolean(attributes["file-triggers-enabled"]) : workspace.fileTriggersEnabled,
-    triggerPrefixes: attributes["trigger-prefixes"] !== undefined ? attributes["trigger-prefixes"] : workspace.triggerPrefixes,
-    triggerPatterns: attributes["trigger-patterns"] !== undefined ? attributes["trigger-patterns"] : workspace.triggerPatterns,
-    vcsRepo: attributes["vcs-repo"] !== undefined ? attributes["vcs-repo"] : workspace.vcsRepo,
-    queueAllRuns: attributes["queue-all-runs"] !== undefined ? Boolean(attributes["queue-all-runs"]) : workspace.queueAllRuns,
-    speculativeEnabled: attributes["speculative-enabled"] !== undefined ? Boolean(attributes["speculative-enabled"]) : workspace.speculativeEnabled,
-    allowDestroyPlan: attributes["allow-destroy-plan"] !== undefined ? Boolean(attributes["allow-destroy-plan"]) : workspace.allowDestroyPlan,
-    globalRemoteState: attributes["global-remote-state"] !== undefined ? Boolean(attributes["global-remote-state"]) : workspace.globalRemoteState,
-    projectRemoteState: attributes["project-remote-state"] !== undefined ? Boolean(attributes["project-remote-state"]) : workspace.projectRemoteState,
-    agentPoolId: attributes["agent-pool-id"] !== undefined ? attributes["agent-pool-id"] : workspace.agentPoolId,
-    assessmentsEnabled: attributes["assessments-enabled"] !== undefined ? Boolean(attributes["assessments-enabled"]) : workspace.assessmentsEnabled,
-    autoDestroyAt: attributes["auto-destroy-at"] !== undefined ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
-    autoDestroyActivityDuration: attributes["auto-destroy-activity-duration"] !== undefined ? attributes["auto-destroy-activity-duration"] : workspace.autoDestroyActivityDuration,
-    settingOverwrites: attributes["setting-overwrites"] !== undefined ? attributes["setting-overwrites"] : workspace.settingOverwrites,
-    terraformVersion: terraformVersion ?? workspace.terraformVersion, workingDirectory: normalizedWorkingDirectory,
-    sourceName: sourceName !== undefined ? sourceName : workspace.sourceName, sourceUrl: sourceUrl !== undefined ? sourceUrl : workspace.sourceUrl,
-    iacBinary: iacBinary !== undefined ? iacBinary : workspace.iacBinary,
+    name: name ?? workspace.name,
+    description: typeof description === "string" ? description : (description === null ? null : workspace.description),
+    projectId: newProjectId,
+    autoApply: autoApply ?? workspace.autoApply,
+    autoApplyRunTrigger: typeof attributes["auto-apply-run-trigger"] === "boolean" ? attributes["auto-apply-run-trigger"] : workspace.autoApplyRunTrigger,
+    fileTriggersEnabled: typeof attributes["file-triggers-enabled"] === "boolean" ? attributes["file-triggers-enabled"] : workspace.fileTriggersEnabled,
+    triggerPrefixes: Array.isArray(attributes["trigger-prefixes"]) ? (attributes["trigger-prefixes"] as string[]) : workspace.triggerPrefixes,
+    triggerPatterns: Array.isArray(attributes["trigger-patterns"]) ? (attributes["trigger-patterns"] as string[]) : workspace.triggerPatterns,
+    vcsRepo: typeof attributes["vcs-repo"] === "string" ? attributes["vcs-repo"] : workspace.vcsRepo,
+    queueAllRuns: typeof attributes["queue-all-runs"] === "boolean" ? attributes["queue-all-runs"] : workspace.queueAllRuns,
+    speculativeEnabled: typeof attributes["speculative-enabled"] === "boolean" ? attributes["speculative-enabled"] : workspace.speculativeEnabled,
+    allowDestroyPlan: typeof attributes["allow-destroy-plan"] === "boolean" ? attributes["allow-destroy-plan"] : workspace.allowDestroyPlan,
+    globalRemoteState: typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState,
+    projectRemoteState: typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState,
+    agentPoolId: typeof attributes["agent-pool-id"] === "string" ? attributes["agent-pool-id"] : workspace.agentPoolId,
+    assessmentsEnabled: typeof attributes["assessments-enabled"] === "boolean" ? attributes["assessments-enabled"] : workspace.assessmentsEnabled,
+    autoDestroyAt: typeof attributes["auto-destroy-at"] === "string" ? attributes["auto-destroy-at"] : workspace.autoDestroyAt,
+    autoDestroyActivityDuration: typeof attributes["auto-destroy-activity-duration"] === "string" ? attributes["auto-destroy-activity-duration"] : workspace.autoDestroyActivityDuration,
+    settingOverwrites: typeof attributes["setting-overwrites"] === "object" && attributes["setting-overwrites"] !== null ? (attributes["setting-overwrites"] as Record<string, unknown>) : workspace.settingOverwrites,
+    terraformVersion: terraformVersion ?? workspace.terraformVersion,
+    workingDirectory: normalizedWorkingDirectory,
+    sourceName: typeof sourceName === "string" ? sourceName : (sourceName === null ? null : workspace.sourceName),
+    sourceUrl: typeof sourceUrl === "string" ? sourceUrl : (sourceUrl === null ? null : workspace.sourceUrl),
+    iacBinary: typeof iacBinary === "string" ? iacBinary : (iacBinary === null ? null : workspace.iacBinary),
   };
+
   await db.update(workspaces).set(updated).where(eq(workspaces.id, workspace.id));
-  if (tagBindings) {
-    await db.transaction(async tx => {
-      await tx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace.id));
-      if (tagBindings.length > 0) await tx.insert(workspaceTags).values(tagBindings.map(b => ({ id: crypto.randomUUID(), workspaceId: workspace.id, ...b })));
+  if (tagBindings !== undefined) {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const dbTx = tx as typeof db;
+      await dbTx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace.id));
+      if (tagBindings.length > 0) {
+        await dbTx.insert(workspaceTags).values(tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: workspace.id, ...b })));
+      }
     });
   }
   return { data: await workspaceResource({ ...workspace, ...updated }, defaultIacBinary, canRun) };

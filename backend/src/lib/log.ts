@@ -7,7 +7,7 @@ function isLogLevelEnabled(level: LogLevel): boolean {
   return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
 }
 
-function structuredLog(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
+function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
   if (!isLogLevelEnabled(level)) return;
   const entry: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
@@ -26,16 +26,17 @@ function structuredLog(level: LogLevel, message: string, meta?: Record<string, u
 }
 
 export const log = {
-  error: (msg: string, meta?: Record<string, unknown>): void => {
+  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
     structuredLog("error", msg, meta);
   },
-  warn: (msg: string, meta?: Record<string, unknown>): void => {
+  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
     structuredLog("warn", msg, meta);
   },
-  info: (msg: string, meta?: Record<string, unknown>): void => {
+  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
     structuredLog("info", msg, meta);
   },
-  debug: (msg: string, meta?: Record<string, unknown>): void => {
+  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
     structuredLog("debug", msg, meta);
   },
 };
+

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { JSX, ReactElement } from "react";
 import { Link, useLocation, useParams, useNavigate } from "react-router-dom";
 import {
   Building2,
@@ -28,22 +28,35 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { removeAuthToken } from "../lib/api";
 
-export function Layout({ children }: { children: ReactNode }) {
+type DeepReadonly<T> = T extends null | undefined
+  ? T
+  : T extends (infer R)[]
+  ? readonly DeepReadonly<R>[]
+  : T extends object
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
+type ChildNode = DeepReadonly<ReactElement> | string | number | null | undefined;
+
+export function Layout({ children }: Readonly<{ readonly children?: ChildNode }>): JSX.Element {
   const { orgName } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isRouteActive = (path: string, exact = false) => {
+  const isRouteActive = (path: string, exact = false): boolean => {
     if (exact) {
       return location.pathname === path;
     }
     return location.pathname.startsWith(path);
   };
 
-  const handleLogout = () => {
+  const handleLogout = (): void => {
     removeAuthToken();
-    navigate("/login");
+    void navigate("/login");
   };
+
+  const currentOrgName = orgName ?? "Choose an organization";
+  const hasOrg = orgName !== undefined && orgName !== "";
 
   return (
     <div className="flex h-screen w-full flex-col font-sans">
@@ -64,7 +77,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
           <button className="flex items-center gap-2 rounded border border-white/20 bg-transparent px-3 py-1.5 text-sm font-medium hover:bg-white/10 transition-colors h-8 ml-2">
             <Building2 className="h-4 w-4 opacity-70" />
-            <span>{orgName || "Choose an organization"}</span>
+            <span>{currentOrgName}</span>
             <ChevronDown className="h-3.5 w-3.5 opacity-70 ml-1" />
           </button>
         </div>
@@ -86,9 +99,9 @@ export function Layout({ children }: { children: ReactNode }) {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>My Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer" onClick={async () => navigate("/app/account")}>User Settings</DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer" onClick={async () => navigate("/app/account")}>Tokens</DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer font-medium text-blue-600" onClick={async () => navigate("/app/admin")}>Site Administration</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={(): void => { void navigate("/app/account"); }}>User Settings</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={(): void => { void navigate("/app/account"); }}>Tokens</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer font-medium text-blue-600" onClick={(): void => { void navigate("/app/admin"); }}>Site Administration</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-red-600 cursor-pointer">
                 <LogOut className="mr-2 h-4 w-4" />
@@ -104,7 +117,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Sidebar */}
         <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 bg-[#f9fafb] overflow-y-auto pb-4 flex flex-col">
           <nav className="flex flex-col gap-0.5 p-3">
-            {orgName ? (
+            {hasOrg ? (
               <>
                 <div className="px-3 pb-2 pt-3 text-xs font-semibold text-gray-500">Manage</div>
 
@@ -166,8 +179,8 @@ export function Layout({ children }: { children: ReactNode }) {
               </>
             ) : (
               <>
-                <Link to={`/app`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${isRouteActive(`/app`, true) ? 'bg-[#e0eaff] text-blue-700' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <Building2 className={`h-[18px] w-[18px] ${isRouteActive(`/app`, true) ? 'text-blue-700' : 'text-blue-600'}`} />
+                <Link to="/app" className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${isRouteActive("/app", true) ? 'bg-[#e0eaff] text-blue-700' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
+                  <Building2 className={`h-[18px] w-[18px] ${isRouteActive("/app", true) ? 'text-blue-700' : 'text-blue-600'}`} />
                   Organizations
                 </Link>
               </>
@@ -187,7 +200,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex-1 px-8 py-8 w-full">
-            {children}
+            {children as React.ReactNode}
           </div>
         </main>
       </div>

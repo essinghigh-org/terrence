@@ -1,3 +1,4 @@
+import type { JSX, ReactElement } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Register } from "./views/Register";
@@ -15,14 +16,26 @@ import { AdminDashboard } from "./views/AdminDashboard";
 import { getAuthToken } from "./lib/api";
 import { Layout } from "./components/Layout";
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  if (!getAuthToken()) {
+type DeepReadonly<T> = T extends null | undefined
+  ? T
+  : T extends (infer R)[]
+  ? readonly DeepReadonly<R>[]
+  : T extends object
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
+type ChildNode = DeepReadonly<ReactElement> | string | number | null | undefined;
+
+function ProtectedRoute({ children }: Readonly<{ readonly children?: ChildNode }>): JSX.Element {
+  const token = getAuthToken();
+  if (token === null || token === "") {
     return <Navigate to="/login" replace />;
   }
   return <Layout>{children}</Layout>;
+
 }
 
-function App() {
+function App(): JSX.Element {
   return (
     <BrowserRouter>
       <Routes>

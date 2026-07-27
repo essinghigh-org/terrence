@@ -18,8 +18,11 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export const authPlugin = new Elysia({ name: 'auth' })
-  .derive({ as: 'global' }, async ({ request }): Promise<{
+type HeaderGetter = { readonly get: (name: string) => string | null };
+type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
+
+export const authPlugin = new Elysia({ name: "auth" })
+  .derive({ as: "global" }, async ({ request }: DeriveContext): Promise<{
     user: typeof users.$inferSelect | null;
     token: AuthToken | null;
     orgId: string | null;
@@ -27,7 +30,7 @@ export const authPlugin = new Elysia({ name: 'auth' })
     tokenError: string | null;
   }> => {
     const authHeader = request.headers.get("authorization");
-    if (authHeader === null || authHeader === undefined || !authHeader.startsWith("Bearer ")) {
+    if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
     }
 
@@ -35,16 +38,16 @@ export const authPlugin = new Elysia({ name: 'auth' })
     const tokenHash = hashToken(tokenString);
 
     // Lookup by hash
-    let token: AuthToken | null | undefined = await db.query.apiTokens.findFirst({
-        where: eq(apiTokens.token, tokenHash)
+    let token: AuthToken | undefined = await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.token, tokenHash),
     });
 
     // Legacy fallback: re-hash plaintext token on successful use
-    if (token === null || token === undefined) {
+    if (token === undefined) {
       const legacyToken = await db.query.apiTokens.findFirst({
-        where: eq(apiTokens.token, tokenString)
+        where: eq(apiTokens.token, tokenString),
       });
-      if (legacyToken !== null && legacyToken !== undefined) {
+      if (legacyToken !== undefined) {
         await db.update(apiTokens)
           .set({ token: tokenHash })
           .where(eq(apiTokens.id, legacyToken.id));
@@ -52,7 +55,7 @@ export const authPlugin = new Elysia({ name: 'auth' })
       }
     }
 
-    if (token === null || token === undefined) {
+    if (token === undefined) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" };
     }
 
@@ -61,7 +64,7 @@ export const authPlugin = new Elysia({ name: 'auth' })
       return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired" };
     }
 
-    if (token.lastUsedAt === null || token.lastUsedAt === undefined || now - token.lastUsedAt > 60000) {
+    if (token.lastUsedAt === null || now - token.lastUsedAt > 60000) {
       void db.update(apiTokens)
         .set({ lastUsedAt: now })
         .where(eq(apiTokens.id, token.id));
@@ -70,40 +73,35 @@ export const authPlugin = new Elysia({ name: 'auth' })
 
     if (token.userId !== null) {
       const user = await db.query.users.findFirst({
-          where: eq(users.id, token.userId)
+        where: eq(users.id, token.userId),
       });
-      return { user: user ?? null, token: usedToken, orgId: null, teamId: null };
+      return { user: user ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null };
     }
 
     if (token.teamId !== null) {
       const team = await db.query.teams.findFirst({
-        where: eq(teams.id, token.teamId)
+        where: eq(teams.id, token.teamId),
       });
-      return { user: null, token: usedToken, orgId: team?.orgId ?? token.orgId, teamId: token.teamId };
+      return { user: null, token: usedToken, orgId: team?.orgId ?? token.orgId, teamId: token.teamId, tokenError: null };
     }
 
     if (token.orgId !== null) {
-      return { user: null, token: usedToken, orgId: token.orgId, teamId: null };
+      return { user: null, token: usedToken, orgId: token.orgId, teamId: null, tokenError: null };
     }
 
-    return { user: null, token: null, orgId: null, teamId: null };
+    return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
   })
   .macro({
     isAuth(value: boolean): Record<string, unknown> {
       return {
-        beforeHandle({ user, token, set }: { user: unknown; token: unknown; set: { status: number } }): Record<string, { status: string; title: string }> | undefined {
+        beforeHandle({ user: _, token, set }: { readonly user?: unknown; readonly token?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
+
           if (!value) return;
-          if (!token) {
-              set.status = 401;
-              return { errors: [{ status: "401", title: "Unauthorized" }] };
+          if (token === null || token === undefined) {
+            set.status = 401;
+            return { errors: [{ status: "401", title: "Unauthorized" }] };
           }
-        }
+        },
       };
-    }
-  });
-              return { errors: [{ status: "401", title: "Unauthorized" }] };
-          }
-        }
-      };
-    }
+    },
   });

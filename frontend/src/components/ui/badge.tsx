@@ -1,10 +1,18 @@
-import * as React from "react";
+import type { JSX, HTMLAttributes } from "react";
 
-export type BadgeProps = {
-  variant?: "default" | "secondary" | "destructive" | "outline";
-} & React.HTMLAttributes<HTMLDivElement>
+type DeepReadonly<T> = T extends null | undefined
+  ? T
+  : T extends (infer R)[]
+  ? readonly DeepReadonly<R>[]
+  : T extends object
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
 
-export function Badge({ className = "", variant = "default", ...props }: BadgeProps) {
+export type BadgeProps = Readonly<{
+  readonly variant?: "default" | "secondary" | "destructive" | "outline";
+}> & DeepReadonly<HTMLAttributes<HTMLDivElement>>;
+
+export function Badge({ className = "", variant = "default", ...props }: BadgeProps): JSX.Element {
   const baseStyle = "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
   const variantStyles = {
     default: "bg-blue-600 text-white hover:bg-blue-700",
@@ -13,7 +21,9 @@ export function Badge({ className = "", variant = "default", ...props }: BadgePr
     outline: "text-gray-900 border border-gray-200",
   };
 
+  const styleClass = variantStyles[variant];
+
   return (
-    <div className={`${baseStyle} ${variantStyles[variant] || variantStyles.default} ${className}`} {...props} />
+    <div className={`${baseStyle} ${styleClass} ${className}`} {...(props as HTMLAttributes<HTMLDivElement>)} />
   );
 }

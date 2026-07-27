@@ -352,7 +352,8 @@ export const policyChecks = sqliteTable("policy_checks", {
   policyId: text("policy_id").references(() => policies.id, { onDelete: "set null" }),
   policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "set null" }),
   status: text("status").notNull().default("pending"), // 'pending', 'passed', 'soft_failed', 'failed', 'overridden', 'unreachable', 'errored'
-  result: text("result", { mode: "json" }).$type<Record<string, any>>(),
+  result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 

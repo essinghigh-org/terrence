@@ -77,18 +77,19 @@ function parseAuthorizationRequest(input: unknown): AuthorizationRequest | null 
   return request;
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, character => ({
+function escapeHtml(value: string): string {
+  const charMap: Record<string, string> = {
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#39;",
-  })[character]!);
+  };
+  return value.replace(/[&<>"']/g, (character: string): string => charMap[character] ?? character);
 }
 
-function loginPage(request: AuthorizationRequest | null, error = "", username = "") {
-  const hidden = request
+function loginPage(request: Readonly<AuthorizationRequest> | null, error = "", username = ""): string {
+  const hidden = request !== null
     ? [
         ["client_id", request.clientId],
         ["code_challenge", request.codeChallenge],
@@ -96,7 +97,7 @@ function loginPage(request: AuthorizationRequest | null, error = "", username = 
         ["redirect_uri", request.redirectUri],
         ["response_type", request.responseType],
         ["state", request.state],
-      ].map(([name, value]) =>
+      ].map(([name, value]: readonly [string, string]): string =>
         `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`
       ).join("")
     : "";
@@ -111,8 +112,8 @@ function loginPage(request: AuthorizationRequest | null, error = "", username = 
 <body>
   <main>
     <h1>Terraform Login</h1>
-    ${request ? `<p>Sign in to authorize Terraform CLI.</p>
-    ${error ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}
+    ${request !== null ? `<p>Sign in to authorize Terraform CLI.</p>
+    ${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}
     <form method="post" action="/oauth/authorization">
       ${hidden}
       <p>
@@ -121,7 +122,7 @@ function loginPage(request: AuthorizationRequest | null, error = "", username = 
       </p>
       <p>
         <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required${error ? ' aria-describedby="login-error"' : ""}>
+        <input id="password" name="password" type="password" autocomplete="current-password" required${error !== "" ? ' aria-describedby="login-error"' : ""}>
       </p>
       <button type="submit">Sign in</button>
     </form>` : `<p role="alert">Invalid authorization request.</p>`}
@@ -143,19 +144,24 @@ function htmlResponse(body: string, status = 200): Response {
   });
 }
 
-function oauthError(set: { headers: Record<string, string | number>; status?: number | string }, error: string): { error: string } {
-  set.status = 400;
-  set.headers["Cache-Control"] = "no-store";
-  set.headers.Pragma = "no-cache";
+type SetObj = Readonly<{ headers: Readonly<Record<string, string | number>>; status?: number | string }>;
+
+function oauthError(set: SetObj, error: string): { error: string } {
+  const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
+  mutableSet.status = 400;
+  mutableSet.headers["Cache-Control"] = "no-store";
+  mutableSet.headers["Pragma"] = "no-cache";
   return { error };
 }
 
-function tokenClientId(body: unknown, request: Request): string {
+type RequestWithHeaders = Readonly<{ readonly headers: { readonly get: (name: string) => string | null } }>;
+
+function tokenClientId(body: unknown, request: RequestWithHeaders): string {
   const bodyClientId = field(body, "client_id");
   if (bodyClientId !== "") return bodyClientId;
 
   const authorization = request.headers.get("authorization");
-  if (!authorization?.startsWith("Basic ")) return "";
+  if (typeof authorization !== "string" || !authorization.startsWith("Basic ")) return "";
 
   try {
     return Buffer.from(authorization.slice(6), "base64").toString("utf8") === `${CLIENT_ID}:`
@@ -171,12 +177,20 @@ async function s256(value: string): Promise<string> {
   return Buffer.from(digest).toString("base64url");
 }
 
+type QueryCtx = { readonly query: Readonly<Record<string, unknown>> };
+type BodyCtx = { readonly body: unknown };
+type TokenCtx = {
+  readonly body: unknown;
+  readonly request: RequestWithHeaders;
+  readonly set: SetObj;
+};
+
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
-  .get("/oauth/authorization", ({ query }): Response => {
+  .get("/oauth/authorization", ({ query }: QueryCtx): Response => {
     const request = parseAuthorizationRequest(query);
     return htmlResponse(loginPage(request), request !== null ? 200 : 400);
   })
-  .post("/oauth/authorization", async ({ body }): Promise<Response> => {
+  .post("/oauth/authorization", async ({ body }: BodyCtx): Promise<Response> => {
     const authorization = parseAuthorizationRequest(body);
     if (authorization === null) return htmlResponse(loginPage(null), 400);
 
@@ -214,7 +228,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       },
     });
   })
-  .post("/oauth/token", async ({ body, request, set }): Promise<{ access_token: string; token_type: string } | { error: string }> => {
+  .post("/oauth/token", async ({ body, request, set }: TokenCtx): Promise<Record<string, string>> => {
     if (
       field(body, "grant_type") !== "authorization_code"
       || tokenClientId(body, request) !== CLIENT_ID
@@ -238,10 +252,13 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     const user = await db.query.users.findFirst({ where: eq(users.id, entry.userId) });
-    if (user === null || user === undefined) return oauthError(set, "invalid_grant");
+    if (user === undefined) return oauthError(set, "invalid_grant");
+
 
     const accessToken = `user-${crypto.randomUUID()}`;
-    const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS ?? 30 * 24 * 60 * 60 * 1000);
+    const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS);
+
+
     if (!Number.isFinite(cliTokenTtlMs) || cliTokenTtlMs <= 0) {
       // Fall back to 30-day default when parse produces NaN, infinity, zero, or negative
       const defaultTtl = 30 * 24 * 60 * 60 * 1000;
@@ -264,7 +281,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       });
     }
 
-    set.headers["Cache-Control"] = "no-store";
-    set.headers.Pragma = "no-cache";
+    const mutableSet = set as { headers: Record<string, string | number> };
+    mutableSet.headers["Cache-Control"] = "no-store";
+    mutableSet.headers["Pragma"] = "no-cache";
     return { access_token: accessToken, token_type: "bearer" };
   });
