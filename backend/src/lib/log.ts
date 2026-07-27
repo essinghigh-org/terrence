@@ -1,0 +1,33 @@
+// Initialize log level
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
+type LogLevel = typeof LOG_LEVELS[number];
+
+function isLogLevelEnabled(level: LogLevel): boolean {
+  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
+}
+
+function structuredLog(level: LogLevel, message: string, meta?: Record<string, any>) {
+  if (!isLogLevelEnabled(level)) return;
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...(meta ? { ...meta } : {}),
+  };
+  const output = JSON.stringify(entry);
+  if (level === "error") {
+    console.error(output);
+  } else if (level === "warn") {
+    console.warn(output);
+  } else {
+    console.log(output);
+  }
+}
+
+export const log = {
+  error: (msg: string, meta?: Record<string, any>) => structuredLog("error", msg, meta),
+  warn: (msg: string, meta?: Record<string, any>) => structuredLog("warn", msg, meta),
+  info: (msg: string, meta?: Record<string, any>) => structuredLog("info", msg, meta),
+  debug: (msg: string, meta?: Record<string, any>) => structuredLog("debug", msg, meta),
+};
