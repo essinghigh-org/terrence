@@ -103,11 +103,6 @@ export function OrganizationSettings() {
     return <div className="p-8 text-center text-gray-500">Loading organization settings...</div>;
   }
 
-  const tabs = [
-    { id: "general", label: "General", icon: <Settings className="w-4 h-4 mr-2" /> },
-    { id: "teams", label: "Teams", icon: <Users className="w-4 h-4 mr-2" /> }
-  ];
-
   return (
     <div className="max-w-4xl w-full">
       {/* Breadcrumb */}
@@ -126,20 +121,44 @@ export function OrganizationSettings() {
       <div className="flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-56 flex-shrink-0">
           <nav className="flex flex-col gap-1">
-             {tabs.map(tab => (
-               <button
-                 key={tab.id}
-                 onClick={() => setActiveTab(tab.id)}
-                 className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                   activeTab === tab.id
-                     ? "bg-[#e0eaff] text-blue-700"
-                     : "text-gray-700 hover:bg-gray-100"
-                 }`}
-               >
-                 {tab.icon}
-                 {tab.label}
-               </button>
-             ))}
+            <button
+              onClick={() => setActiveTab("general")}
+              className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "general" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              <Settings className="w-4 h-4 mr-2" /> General
+            </button>
+
+            <button
+              onClick={() => setActiveTab("teams")}
+              className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "teams" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              <Users className="w-4 h-4 mr-2" /> Teams
+            </button>
+
+            <Link
+              to={`/app/${orgName}/variable-sets`}
+              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              Variable Sets
+            </Link>
+
+            <Link
+              to={`/app/${orgName}/settings/vcs`}
+              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              VCS Providers
+            </Link>
+
+            <Link
+              to={`/app/${orgName}/settings/agents`}
+              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              Agent Pools
+            </Link>
           </nav>
         </aside>
 

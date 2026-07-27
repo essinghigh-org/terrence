@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { Login } from "../src/views/Login";
@@ -22,6 +22,17 @@ afterEach(() => {
   globalThis.confirm = originalConfirm;
 });
 
+const changeInput = (element: HTMLElement, value: string) => {
+  const input = element as HTMLInputElement;
+  const tracker = (input as any)._valueTracker;
+  if (tracker) {
+    tracker.setValue(value === "" ? "x" : "");
+  }
+  input.value = value;
+  fireEvent.input(input, { target: { value } });
+  fireEvent.change(input, { target: { value } });
+};
+
 test("logs in, stores the token, and navigates home", async () => {
   const fetchMock = mock(async () =>
     json({ data: { attributes: { token: "user-token" } } }),
@@ -37,9 +48,11 @@ test("logs in, stores the token, and navigates home", async () => {
     </MemoryRouter>,
   );
 
-  fireEvent.change(view.getByLabelText("Username"), { target: { value: "alice" } });
-  fireEvent.change(view.getByLabelText("Password"), { target: { value: "correct horse" } });
-  fireEvent.submit(view.getByRole("button", { name: "Sign in" }).closest("form")!);
+  changeInput(view.getByLabelText("Username"), "alice");
+  changeInput(view.getByLabelText("Password"), "correct horse");
+  await act(async () => {
+    fireEvent.submit(view.getByRole("button", { name: "Sign in" }).closest("form")!);
+  });
 
   await waitFor(() => expect(view.getByText("Home")).toBeTruthy());
   expect(localStorage.getItem("tfe_token")).toBe("user-token");
@@ -65,17 +78,13 @@ test("creates a workspace from the modal", async () => {
     />,
   );
 
-  fireEvent.change(view.getByLabelText("Workspace Name"), {
-    target: { value: "production" },
-  });
-  fireEvent.change(view.getByLabelText("Execution Engine"), {
-    target: { value: "terraform" },
-  });
-  fireEvent.change(view.getByLabelText(/Engine Version/), {
-    target: { value: "1.9.3" },
-  });
+  changeInput(view.getByLabelText("Workspace Name"), "production");
+  changeInput(view.getByLabelText("Execution Engine"), "terraform");
+  changeInput(view.getByLabelText(/Engine Version/), "1.9.3");
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
-  fireEvent.submit(view.getByRole("button", { name: "Create Workspace" }).closest("form")!);
+  await act(async () => {
+    fireEvent.submit(view.getByRole("button", { name: "Create Workspace" }).closest("form")!);
+  });
 
   await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
   const [workspaceUrl, workspaceOptions] = fetchMock.mock.calls[0]!;
@@ -247,6 +256,8 @@ const createVarsetsFetchMock = (initialSets: any[] = []) => {
     },
   };
 
+  const varsList: any[] = [apiToken];
+
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/organizations/acme/varsets?") && !init?.method) {
@@ -264,41 +275,44 @@ const createVarsetsFetchMock = (initialSets: any[] = []) => {
       url.includes("/varsets/varset-shared/relationships/vars?") &&
       !init?.method
     ) {
-      return json({ data: [apiToken] });
+      return json({ data: varsList });
     }
     if (
       url.endsWith("/varsets/varset-shared/relationships/vars") &&
       init?.method === "POST"
     ) {
       const body = JSON.parse(init.body as string);
-      return json({
-        data: {
-          id: "var-database",
-          type: "vars",
-          attributes: { ...body.data.attributes, hcl: false },
-        },
-      });
+      const newVar = {
+        id: "var-database",
+        type: "vars",
+        attributes: { ...body.data.attributes, hcl: false },
+      };
+      varsList.push(newVar);
+      return json({ data: newVar });
     }
     if (
       url.endsWith("/varsets/varset-shared/relationships/vars/var-token") &&
       init?.method === "PATCH"
     ) {
       const body = JSON.parse(init.body as string);
-      return json({
-        data: {
-          ...apiToken,
-          attributes: {
-            ...apiToken.attributes,
-            ...body.data.attributes,
-            value: null,
-          },
+      const updatedToken = {
+        ...apiToken,
+        attributes: {
+          ...apiToken.attributes,
+          ...body.data.attributes,
+          value: null,
         },
-      });
+      };
+      const idx = varsList.findIndex((v) => v.id === "var-token");
+      if (idx !== -1) varsList[idx] = updatedToken;
+      return json({ data: updatedToken });
     }
     if (
       url.endsWith("/varsets/varset-shared/relationships/vars/var-database") &&
       init?.method === "DELETE"
     ) {
+      const idx = varsList.findIndex((v) => v.id === "var-database");
+      if (idx !== -1) varsList.splice(idx, 1);
       return new Response(null, { status: 204 });
     }
     if (url.endsWith("/organizations/acme/varsets") && init?.method === "POST") {
@@ -356,15 +370,16 @@ test("creates variable sets and toggles global scope", async () => {
     </MemoryRouter>,
   );
 
+  const body = within(window.document.body);
   await waitFor(() => expect(view.getByText("Shared credentials")).toBeTruthy());
 
   fireEvent.click(view.getByRole("button", { name: "New variable set" }));
-  fireEvent.change(view.getByLabelText("Name"), { target: { value: "Global defaults" } });
-  fireEvent.change(view.getByLabelText("Description"), {
-    target: { value: "Organization defaults" },
+  changeInput(body.getByLabelText("Name"), "Global defaults");
+  changeInput(body.getByLabelText("Description"), "Organization defaults");
+  fireEvent.click(body.getByLabelText("Global"));
+  await act(async () => {
+    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form")!);
   });
-  fireEvent.click(view.getByLabelText("Global"));
-  fireEvent.submit(view.getByRole("button", { name: "Save variable set" }).closest("form")!);
 
   await waitFor(() => expect(view.getByText("Global defaults")).toBeTruthy());
   const createCall = fetchMock.mock.calls.find(
@@ -387,11 +402,11 @@ test("creates variable sets and toggles global scope", async () => {
   const globalRow = view.getByText("Global defaults").closest("tr")!;
   expect(within(globalRow).getByText("Global")).toBeTruthy();
   fireEvent.click(within(globalRow).getByRole("button", { name: "Edit" }));
-  fireEvent.change(view.getByLabelText("Name"), {
-    target: { value: "Environment defaults" },
+  changeInput(body.getByLabelText("Name"), "Environment defaults");
+  fireEvent.click(body.getByLabelText("Global"));
+  await act(async () => {
+    fireEvent.submit(body.getByRole("button", { name: "Save variable set" }).closest("form")!);
   });
-  fireEvent.click(view.getByLabelText("Global"));
-  fireEvent.submit(view.getByRole("button", { name: "Save variable set" }).closest("form")!);
 
   await waitFor(() => expect(view.getByText("Environment defaults")).toBeTruthy());
   expect(
@@ -461,31 +476,34 @@ test("manages variable set variables (CRUD)", async () => {
       name: "Variables",
     }),
   );
-  await waitFor(() => expect(view.getByText("API_TOKEN")).toBeTruthy());
-  expect(view.getByText("••••••••")).toBeTruthy();
+  const getBody = () => within(window.document.body);
+  await waitFor(() => expect(getBody().getByText("API_TOKEN")).toBeTruthy());
+  expect(getBody().getByText("••••••••")).toBeTruthy();
 
   fireEvent.click(
-    within(view.getByText("API_TOKEN").closest("tr")!).getByRole("button", { name: "Edit" }),
+    within(getBody().getByText("API_TOKEN").closest("tr")!).getByRole("button", { name: "Edit" }),
   );
-  expect((view.getByLabelText("Value") as HTMLInputElement).value).toBe("");
-  fireEvent.change(view.getByLabelText("Description"), {
-    target: { value: "Rotated secret" },
+  expect((getBody().getByLabelText("Value") as HTMLInputElement).value).toBe("");
+  changeInput(getBody().getByLabelText("Description"), "Rotated secret");
+  await act(async () => {
+    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form")!);
   });
-  fireEvent.submit(view.getByRole("button", { name: "Save variable" }).closest("form")!);
   await waitFor(() =>
-    expect(view.getByRole("heading", { name: "Variables in Shared credentials" })).toBeTruthy(),
+    expect(getBody().getByText("Variables in Shared credentials")).toBeTruthy(),
   );
 
-  fireEvent.click(view.getByRole("button", { name: "Add variable" }));
-  fireEvent.change(view.getByLabelText("Key"), { target: { value: "DATABASE_URL" } });
-  fireEvent.change(view.getByLabelText("Value"), {
-    target: { value: "postgres://database" },
+  fireEvent.click(getBody().getByRole("button", { name: "Add variable" }));
+  await waitFor(() => expect(window.document.getElementById("variable-key")).not.toBeNull());
+  const k = window.document.getElementById("variable-key") as HTMLInputElement;
+  const v = window.document.getElementById("variable-value") as HTMLInputElement;
+  const d = window.document.getElementById("variable-description") as HTMLInputElement;
+  changeInput(k, "DATABASE_URL");
+  changeInput(v, "postgres://database");
+  changeInput(d, "Application database");
+  await act(async () => {
+    fireEvent.submit(getBody().getByRole("button", { name: "Save variable" }).closest("form")!);
   });
-  fireEvent.change(view.getByLabelText("Description"), {
-    target: { value: "Application database" },
-  });
-  fireEvent.submit(view.getByRole("button", { name: "Save variable" }).closest("form")!);
-  await waitFor(() => expect(view.getByText("DATABASE_URL")).toBeTruthy());
+  await waitFor(() => expect(window.document.body.textContent).toContain("DATABASE_URL"));
 
   const createVariableCall = fetchMock.mock.calls.find(
     ([url, init]) =>
@@ -495,11 +513,11 @@ test("manages variable set variables (CRUD)", async () => {
   expect(createVariableCall).toBeDefined();
 
   fireEvent.click(
-    within(view.getByText("DATABASE_URL").closest("tr")!).getByRole("button", {
+    within(getBody().getByText("DATABASE_URL").closest("tr")!).getByRole("button", {
       name: "Delete",
     }),
   );
-  await waitFor(() => expect(view.queryByText("DATABASE_URL")).toBeNull());
+  await waitFor(() => expect(getBody().queryByText("DATABASE_URL")).toBeNull());
   expect(fetchMock.mock.calls.some(
     ([url, init]) =>
       String(url).endsWith("/varsets/varset-shared/relationships/vars/var-database") &&

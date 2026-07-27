@@ -1181,19 +1181,19 @@
 - [x] Navigation breadcrumbs (Org > Workspace > Runs)
 - [x] Organization settings page
 - [x] Team management UI (create, invite, permissions)
-- [ ] Project management UI (create, workspace assignment)
+- [x] Project management UI (create, workspace assignment)
 - [x] Variable Set CRUD, global scope, and workspace attachment UI
 - [x] Variable Set variable editor UI
-- [ ] VCS integration setup UI
-- [ ] Agent pool management UI
+- [x] VCS integration setup UI
+- [x] Agent pool management UI
 - [x] Workspace lock/unlock UI indicators
 - [x] Run detail with full state machine visualization
 - [ ] Policy check results display
 - [ ] Cost estimate display
-- [ ] User profile / account settings page
+- [x] User profile / account settings page
 - [ ] Admin dashboard (TFE instance management)
 - [x] Search/filter workspaces
-- [ ] Tag display and management in workspace list
+- [x] Tag display and management in workspace list
 
 ### 27.4 Frontend Engineering
 - [x] React Router with proper auth guards

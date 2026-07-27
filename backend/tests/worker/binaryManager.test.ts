@@ -17,7 +17,13 @@ test("downloads a verified binary once and reuses the cached copy", async () => 
       await mkdir(fixtureDir);
       await writeFile(fixturePath, "#!/bin/sh\\nexit 99\\n");
 
-      const zip = Bun.spawn(["zip", "-j", archivePath, fixturePath], {
+      const zip = Bun.spawn([
+        "python3",
+        "-c",
+        "import zipfile, sys; z = zipfile.ZipFile(sys.argv[1], 'w'); z.write(sys.argv[2], 'tofu')",
+        archivePath,
+        fixturePath,
+      ], {
         stdout: "ignore",
         stderr: "pipe",
       });

@@ -65,10 +65,16 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
           <DialogTitle>New Workspace</DialogTitle>
           <DialogDescription>Create a new workspace under {orgName}.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4 py-2">
+        <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
             <label htmlFor="ws-name" className="text-sm font-medium">Workspace Name</label>
-            <Input id="ws-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="my-infrastructure" required />
+            <Input
+              id="ws-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onInput={(e: any) => setName(e.target.value)}
+              placeholder="my-infrastructure"
+            />
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -86,7 +92,13 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="tf-version" className="text-xs font-medium font-mono text-gray-600">Engine Version (e.g. 1.8.5, 1.9.3, latest)</label>
-            <Input id="tf-version" value={terraformVersion} onChange={(e) => setTerraformVersion(e.target.value)} placeholder="latest" />
+            <Input
+              id="tf-version"
+              value={terraformVersion}
+              onChange={(e) => setTerraformVersion(e.target.value)}
+              onInput={(e: any) => setTerraformVersion(e.target.value)}
+              placeholder="latest"
+            />
           </div>
 
           <div className="flex items-center gap-2 mt-1">

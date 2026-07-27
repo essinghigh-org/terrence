@@ -173,13 +173,7 @@ function VariablesDialog({
       return;
     }
 
-    const attributes: {
-      key: string;
-      value?: string;
-      category: VariableCategory;
-      sensitive: boolean;
-      description: string | null;
-    } = {
+    const attributes: Record<string, unknown> = {
       key: key.trim(),
       category,
       sensitive,
@@ -228,7 +222,6 @@ function VariablesDialog({
       setError(messageFrom(caught, "Failed to delete variable"));
     }
   };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
@@ -248,7 +241,7 @@ function VariablesDialog({
         </DialogHeader>
 
         {formOpen ? (
-          <form onSubmit={saveVariable}>
+          <form onSubmit={saveVariable} noValidate>
             <FieldGroup>
               <Field data-invalid={Boolean(error)}>
                 <FieldLabel htmlFor="variable-key">Key</FieldLabel>
@@ -256,7 +249,7 @@ function VariablesDialog({
                   id="variable-key"
                   value={key}
                   onChange={(event) => setKey(event.target.value)}
-                  required
+                  onInput={(event: any) => setKey(event.target.value)}
                   autoFocus
                   aria-invalid={Boolean(error)}
                 />
@@ -268,6 +261,7 @@ function VariablesDialog({
                   type={sensitive ? "password" : "text"}
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
+                  onInput={(event: any) => setValue(event.target.value)}
                 />
                 {editing?.attributes.sensitive && (
                   <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
@@ -291,6 +285,7 @@ function VariablesDialog({
                   id="variable-description"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
+                  onInput={(event: any) => setDescription(event.target.value)}
                 />
               </Field>
               <Field orientation="horizontal">
@@ -722,7 +717,7 @@ export function VariableSets() {
                 : "Create a reusable group of configuration for this organization."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={saveVariableSet}>
+          <form onSubmit={saveVariableSet} noValidate>
             <FieldGroup>
               <Field data-invalid={Boolean(editorError)}>
                 <FieldLabel htmlFor="variable-set-name">Name</FieldLabel>
@@ -730,7 +725,7 @@ export function VariableSets() {
                   id="variable-set-name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  required
+                  onInput={(event: any) => setName(event.target.value)}
                   autoFocus
                   aria-invalid={Boolean(editorError)}
                 />
@@ -741,6 +736,7 @@ export function VariableSets() {
                   id="variable-set-description"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
+                  onInput={(event: any) => setDescription(event.target.value)}
                 />
               </Field>
               <Field orientation="horizontal">
@@ -777,7 +773,7 @@ export function VariableSets() {
               Choose which workspaces use {workspaceSet?.attributes.name}.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={saveWorkspaceRelationships}>
+          <form onSubmit={saveWorkspaceRelationships} noValidate>
             <FieldGroup>
               <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
                 {workspaces.map((workspace) => (

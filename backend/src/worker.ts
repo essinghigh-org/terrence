@@ -355,7 +355,7 @@ export async function executeRun(runId: string) {
       throw new Error(`Unable to resolve CLI binary '${requestedTool}' or no Terraform configuration (.tf) files were found in workspace.`);
     }
 
-    const plannedStatus = run.planOnly || run.refreshOnly
+    const plannedStatus = run.planOnly
       ? "planned_and_finished"
       : run.savePlan
         ? "planned_and_saved"
@@ -375,7 +375,7 @@ export async function executeRun(runId: string) {
     });
     await writeLog(runId, "plan", `[terrence] Run status updated to '${plannedStatus}'.`);
 
-    if (run.planOnly || run.refreshOnly) {
+    if (run.planOnly) {
       keepPlan = false;
     } else {
       // Run policy checks before deciding to apply

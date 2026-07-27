@@ -7,6 +7,10 @@ import { WorkspaceDetail } from "./views/WorkspaceDetail";
 import { RunDetail } from "./views/RunDetail";
 import { VariableSets } from "./views/VariableSets";
 import { OrganizationSettings } from "./views/OrganizationSettings";
+import { AccountSettings } from "./views/AccountSettings";
+import { Projects } from "./views/Projects";
+import { VcsIntegrations } from "./views/VcsIntegrations";
+import { AgentPools } from "./views/AgentPools";
 import { getAuthToken } from "./lib/api";
 import { Layout } from "./components/Layout";
 
@@ -25,11 +29,11 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/" element={<Navigate to="/app" replace />} />
         <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/app/account" element={<ProtectedRoute><AccountSettings /></ProtectedRoute>} />
         <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
-        <Route path="/app/:orgName/projects" element={<ProtectedRoute><div className="text-gray-500">Projects coming soon</div></ProtectedRoute>} />
-        <Route path="/app/:orgName/registry" element={<ProtectedRoute><div className="text-gray-500">Registry coming soon</div></ProtectedRoute>} />
-        <Route path="/app/:orgName/usage" element={<ProtectedRoute><div className="text-gray-500">Usage coming soon</div></ProtectedRoute>} />
-        <Route path="/app/:orgName/explorer" element={<ProtectedRoute><div className="text-gray-500">Explorer coming soon</div></ProtectedRoute>} />
+        <Route path="/app/:orgName/projects" element={<ProtectedRoute><Projects /></ProtectedRoute>} />
+        <Route path="/app/:orgName/settings/vcs" element={<ProtectedRoute><VcsIntegrations /></ProtectedRoute>} />
+        <Route path="/app/:orgName/settings/agents" element={<ProtectedRoute><AgentPools /></ProtectedRoute>} />
         <Route path="/app/:orgName/variable-sets" element={<ProtectedRoute><VariableSets /></ProtectedRoute>} />
         <Route path="/app/:orgName/settings" element={<ProtectedRoute><OrganizationSettings /></ProtectedRoute>} />
         <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><WorkspaceDetail /></ProtectedRoute>} />

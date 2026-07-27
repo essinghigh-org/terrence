@@ -26,9 +26,12 @@ export function Workspaces() {
     }
   }
 
-  const filteredWorkspaces = workspaces.filter((ws) =>
-    ws.attributes.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredWorkspaces = workspaces.filter((ws) => {
+    const nameMatch = ws.attributes.name.toLowerCase().includes(search.toLowerCase());
+    const tags = ws.attributes["tag-names"] || ws.attributes.tags || [];
+    const tagMatch = tags.some((t: string) => t.toLowerCase().includes(search.toLowerCase()));
+    return nameMatch || tagMatch;
+  });
 
   return (
     <div className="max-w-full w-full">
@@ -146,7 +149,17 @@ export function Workspaces() {
                     )}
                   </td>
                   <td className="px-4 py-3 border-r border-gray-200 text-gray-500 text-[13px]">
-                    None
+                    {(ws.attributes["tag-names"] || ws.attributes.tags || []).length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {(ws.attributes["tag-names"] || ws.attributes.tags || []).map((tag: string) => (
+                          <span key={tag} className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 border border-blue-200">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">None</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 border-r border-gray-200 text-gray-600 text-[13px]">
                     <span className="hover:underline cursor-pointer">Default Project</span>

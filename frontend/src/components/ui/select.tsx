@@ -7,6 +7,7 @@ function Select({
   onValueChange,
   defaultValue,
   className,
+  id,
   ...props
 }: Omit<React.ComponentProps<"select">, "value" | "defaultValue" | "onChange"> & {
   value?: string
@@ -17,6 +18,7 @@ function Select({
   return (
     <div className="relative w-full">
       <select
+        id={id}
         data-slot="select"
         value={value}
         defaultValue={defaultValue}
@@ -34,19 +36,19 @@ function Select({
 }
 
 function SelectTrigger({ children }: React.ComponentProps<"div">) {
-  return <>{children}</>;
+  return null;
 }
 
 function SelectValue({ placeholder }: { placeholder?: string }) {
-  return placeholder ? <span className="text-muted-foreground">{placeholder}</span> : null;
+  return null;
 }
 
 function SelectContent({ children }: { children?: React.ReactNode }) {
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 function SelectItem({ value, children }: { value: string; children?: React.ReactNode }) {
-  return <option value={value}>{children}</option>
+  return <option value={value}>{children}</option>;
 }
 
 export {

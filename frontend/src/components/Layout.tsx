@@ -86,8 +86,8 @@ export function Layout({ children }: { children: ReactNode }) {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>My Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer">User Settings</DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer">Tokens</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/app/account")}>User Settings</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/app/account")}>Tokens</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-red-600 cursor-pointer">
                 <LogOut className="mr-2 h-4 w-4" />
