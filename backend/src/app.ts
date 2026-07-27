@@ -13,6 +13,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { validateVersion } from "./binaryManager";
 import { startWorkerQueue, executeRun, executeApply } from "./worker";
 import { normalizeWorkingDirectory } from "./workspace";
+import { handleGithubWebhook, handleGitlabWebhook, handleBitbucketWebhook } from "./webhooks";
 
 // Initialize log level
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
@@ -4361,13 +4362,25 @@ export const app = new Elysia()
 
   // --- WEBHOOK RECEIVERS (GITHUB, GITLAB, BITBUCKET) ---
   // Placeholder: signature verification not yet implemented
-  .post("/api/webhooks/github", async ({ body, set }) => {
+  .post("/api/webhooks/github", async ({ headers, body, set }) => {
+    const event = headers["x-github-event"];
+    if (event) {
+        await handleGithubWebhook(event, body);
+    }
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
-  .post("/api/webhooks/gitlab", async ({ body, set }) => {
+  .post("/api/webhooks/gitlab", async ({ headers, body, set }) => {
+    const event = headers["x-gitlab-event"];
+    if (event) {
+        await handleGitlabWebhook(event, body);
+    }
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
-  .post("/api/webhooks/bitbucket", async ({ body, set }) => {
+  .post("/api/webhooks/bitbucket", async ({ headers, body, set }) => {
+    const event = headers["x-event-key"];
+    if (event) {
+        await handleBitbucketWebhook(event, body);
+    }
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .get("/api/v2/runs/:run_id/comments", async ({ params: { run_id }, user, orgId, set }) => {
