@@ -6,7 +6,6 @@ import {
   apiTokens,
   organizationMemberships,
   organizations,
-  runTriggers,
   runs,
   users,
   workspaces,

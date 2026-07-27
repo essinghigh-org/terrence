@@ -9,47 +9,41 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { FolderKanban, Plus, Pencil, Trash2, Layers } from "lucide-react";
 
-type Project = {
-  id: string;
-  attributes: {
-    name: string;
-    description: string | null;
-    "workspace-count"?: number;
-  };
-}
-
-export function Projects() {
+export function Projects(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   // Create/Edit Dialog State
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [editingProject, setEditingProject] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
   useEffect(() => {
-    if (orgName) loadProjects();
+    if (orgName != null) {
+      loadProjects().catch(() => {});
+    }
   }, [orgName]);
 
-  const loadProjects = async () => {
+  const loadProjects = async (): Promise<void> => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/projects`);
-      setProjects(res.data || []);
-    } catch (err: any) {
-      setError(err.message || "Failed to load projects");
+      const res = await fetchApi(`/organizations/${orgName}/projects`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+      setProjects(res.data ?? []);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load projects";
+      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const openCreateDialog = () => {
+  const openCreateDialog = (): void => {
     setEditingProject(null);
     setName("");
     setDescription("");
@@ -57,194 +51,169 @@ export function Projects() {
     setDialogOpen(true);
   };
 
-  const openEditDialog = (project: Project) => {
+  const openEditDialog = (project: { id: string; attributes: Record<string, unknown> }): void => {
     setEditingProject(project);
-    setName(project.attributes.name || "");
-    setDescription(project.attributes.description || "");
+    setName(project.attributes["name"] as string);
+    setDescription((project.attributes["description"] as string | null) ?? "");
     setFormError("");
     setDialogOpen(true);
   };
 
-  const handleSave = async (e: React.SyntheticEvent) => {
-    e.preventDefault();
-    if (!orgName) return;
+  const handleSave = async (): Promise<void> => {
+    if (name.trim() === "") {
+      setFormError("Name is required");
+      return;
+    }
+
     setSaving(true);
     setFormError("");
     try {
-      if (editingProject) {
-        const res = await fetchApi(`/projects/${editingProject.id}`, {
+      if (editingProject != null) {
+        await fetchApi(`/organizations/${orgName}/projects/${editingProject.id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            data: {
-              type: "projects",
-              attributes: {
-                name: name.trim(),
-                description: description.trim() || null,
-              },
-            },
+            data: { attributes: { name: name.trim(), description: description.trim() !== "" ? description.trim() : null } },
           }),
         });
-        setProjects((prev) => prev.map((p) => (p.id === res.data.id ? res.data : p)));
       } else {
-        const res = await fetchApi(`/organizations/${orgName}/projects`, {
+        await fetchApi(`/organizations/${orgName}/projects`, {
           method: "POST",
           body: JSON.stringify({
-            data: {
-              type: "projects",
-              attributes: {
-                name: name.trim(),
-                description: description.trim() || null,
-              },
-            },
+            data: { type: "projects", attributes: { name: name.trim(), description: description.trim() !== "" ? description.trim() : null } },
           }),
         });
-        setProjects((prev) => [...prev, res.data]);
       }
       setDialogOpen(false);
-    } catch (err: any) {
-      setFormError(err.message || "Failed to save project");
+      await loadProjects();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to save project";
+      setFormError(message);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (project: Project) => {
-    if (!window.confirm(`Delete project "${project.attributes.name}"?`)) return;
-    setError("");
+  const handleDelete = async (projectId: string): Promise<void> => {
     try {
-      await fetchApi(`/projects/${project.id}`, {
-        method: "DELETE",
-      });
-      setProjects((prev) => prev.filter((p) => p.id !== project.id));
-    } catch (err: any) {
-      setError(err.message || "Failed to delete project");
+      await fetchApi(`/organizations/${orgName}/projects/${projectId}`, { method: "DELETE" });
+      await loadProjects();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to delete project";
+      setError(message);
     }
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">{orgName} / Projects</h1>
-          <p className="text-sm text-muted-foreground">Group workspaces into logical projects within this organization.</p>
+          <h1 className="text-2xl font-bold">Projects</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Organize workspaces into projects under <span className="font-medium">{orgName}</span>.
+          </p>
         </div>
         <Button onClick={openCreateDialog}>
-          <Plus className="mr-1.5 size-4" /> New Project
+          <Plus className="w-4 h-4 mr-2" />
+          Create Project
         </Button>
       </div>
 
-      {error && (
-        <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
-          {error}
-        </div>
+      {error !== "" && (
+        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-md text-sm">{error}</div>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Project Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Workspaces</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Spinner className="w-6 h-6" />
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center">
-                    <Spinner className="mx-auto size-6 text-primary" />
-                  </TableCell>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Workspaces</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ) : projects.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
-                    <FolderKanban className="mx-auto mb-2 size-8 text-muted-foreground/60" />
-                    No projects found. Create your first project to organize workspaces.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                projects.map((project) => (
-                  <TableRow key={project.id}>
-                    <TableCell className="font-semibold text-foreground">
-                      <div className="flex items-center gap-2">
-                        <FolderKanban className="size-4 text-primary" />
-                        {project.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-xs truncate text-muted-foreground">
-                      {project.attributes.description || "—"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-                        <Layers className="size-3.5" />
-                        {project.attributes["workspace-count"] ?? 0} Workspaces
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => { openEditDialog(project); }}>
-                          <Pencil className="size-3.5 mr-1" /> Edit
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={async () => handleDelete(project)}>
-                          <Trash2 className="size-3.5 mr-1" /> Delete
-                        </Button>
-                      </div>
+              </TableHeader>
+              <TableBody>
+                {projects.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                      <FolderKanban className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                      No projects yet
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                ) : (
+                  projects.map((project) => (
+                    <TableRow key={project.id}>
+                      <TableCell className="font-medium">{project.attributes["name"] as string}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {(project.attributes["description"] as string | null) ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        <span className="inline-flex items-center gap-1 text-sm">
+                          <Layers className="w-3 h-3" />
+                          {(project.attributes["workspace-count"] as number | undefined) ?? 0}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(): void => openEditDialog(project)}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(): void => { handleDelete(project.id).catch(() => {}); }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Create / Edit Modal */}
+      {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingProject ? "Edit Project" : "New Project"}</DialogTitle>
+            <DialogTitle>{editingProject != null ? "Edit Project" : "Create Project"}</DialogTitle>
             <DialogDescription>
-              {editingProject ? "Update project details." : "Create a new project container for your workspaces."}
+              {editingProject != null ? "Update the project details." : "Add a new project to organize workspaces."}
             </DialogDescription>
           </DialogHeader>
-
-          {formError && (
-            <div className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
-              {formError}
-            </div>
-          )}
-
-          <form onSubmit={handleSave} noValidate className="space-y-4 py-2">
+          <div className="space-y-4 py-2">
+            {formError !== "" && (
+              <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{formError}</div>
+            )}
             <div className="space-y-1.5">
-              <label htmlFor="project-name" className="text-sm font-medium">Project Name</label>
-              <Input
-                id="project-name"
-                value={name}
-                onChange={(e) => { setName(e.target.value); }}
-                onInput={(e: any) => { setName(e.target.value); }}
-                placeholder="e.g. Core Infrastructure"
-                required
-              />
+              <label className="text-sm font-medium">Name</label>
+              <Input value={name} onChange={(e): void => setName(e.target.value)} placeholder="My Project" />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="project-description" className="text-sm font-medium">Description</label>
-              <Input
-                id="project-description"
-                value={description}
-                onChange={(e) => { setDescription(e.target.value); }}
-                onInput={(e: any) => { setDescription(e.target.value); }}
-                placeholder="Optional description"
-              />
+              <label className="text-sm font-medium">Description</label>
+              <Input value={description} onChange={(e): void => setDescription(e.target.value)} placeholder="Optional description" />
             </div>
-
-            <DialogFooter className="pt-4">
-              <Button type="submit" disabled={saving}>
-                {saving ? <Spinner className="size-4" /> : editingProject ? "Save Changes" : "Create Project"}
-              </Button>
-            </DialogFooter>
-          </form>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={(): void => setDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "Saving..." : editingProject != null ? "Save" : "Create"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

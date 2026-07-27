@@ -4,7 +4,6 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
-  oauthClients,
   oauthTokens,
   organizationMemberships,
   organizations,

@@ -7,14 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
 
-export function Register() {
+export function Register(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
-  const handleRegister = async (event: React.SyntheticEvent) => {
+  const handleRegister = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
     setError("");
     setSubmitting(true);
@@ -27,8 +27,9 @@ export function Register() {
             data: { type: "users", attributes: { username, password } },
           }),
         });
-      } catch (signupError: any) {
-        setError(signupError.message || "Failed to create account");
+      } catch (signupError: unknown) {
+        const message = signupError instanceof Error ? signupError.message : "Failed to create account";
+        setError(message);
         return;
       }
 
@@ -36,10 +37,10 @@ export function Register() {
         const login = await fetchApi("/users/login", {
           method: "POST",
           body: JSON.stringify({ data: { attributes: { username, password } } }),
-        });
+        }) as { data: { attributes: { token: string } } };
         setAuthToken(login.data.attributes.token);
-        navigate("/app");
-      } catch (loginError: any) {
+        await navigate("/app");
+      } catch (_loginError: unknown) {
         setError("Account created, but failed to log in automatically. Please sign in.");
       }
     } finally {
@@ -62,7 +63,7 @@ export function Register() {
                 <Input
                   id="register-username"
                   value={username}
-                  onChange={(event) => { setUsername(event.target.value); }}
+                  onChange={(event): void => { setUsername(event.target.value); }}
                   autoComplete="username"
                   aria-invalid={Boolean(error)}
                   required
@@ -75,7 +76,7 @@ export function Register() {
                   id="register-password"
                   type="password"
                   value={password}
-                  onChange={(event) => { setPassword(event.target.value); }}
+                  onChange={(event): void => { setPassword(event.target.value); }}
                   autoComplete="new-password"
                   minLength={10}
                   aria-invalid={Boolean(error)}

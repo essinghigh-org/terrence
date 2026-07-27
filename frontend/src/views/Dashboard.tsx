@@ -4,28 +4,35 @@ import { useNavigate } from "react-router-dom";
 import { Search, Plus, MoreHorizontal } from "lucide-react";
 import { Button } from "../components/ui/button";
 
-export function Dashboard() {
-  const [orgs, setOrgs] = useState<any[]>([]);
+type Organization = {
+  id: string;
+  attributes: {
+    name: string;
+  };
+};
+
+export function Dashboard(): React.JSX.Element {
+  const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
-    loadOrgs();
+    loadOrgs().catch(console.error);
   }, []);
 
-  async function loadOrgs() {
+  async function loadOrgs(): Promise<void> {
     try {
-      const data = await fetchApi("/api/v2/organizations");
-      setOrgs(data.data || []);
-    } catch (err) {
-      console.error(err);
+      const data = await fetchApi("/api/v2/organizations") as { data: Organization[] };
+      setOrgs(data.data ?? []);
+    } catch (_err: unknown) {
+      console.error(_err);
     } finally {
       setLoading(false);
     }
   }
 
-  const filteredOrgs = orgs.filter((org) =>
+  const filteredOrgs = orgs.filter((org: Organization): boolean =>
     org.attributes.name.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -50,7 +57,7 @@ export function Dashboard() {
           type="text"
           placeholder="Search by organization name"
           value={search}
-          onChange={(e) => { setSearch(e.target.value); }}
+          onChange={(e): void => { setSearch(e.currentTarget.value); }}
           className="pl-9 pr-4 py-1.5 w-full border border-gray-300 rounded-[4px] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
         />
       </div>
@@ -78,7 +85,7 @@ export function Dashboard() {
                 </td>
               </tr>
             ) : (
-              filteredOrgs.map((org) => (
+              filteredOrgs.map((org: Organization) => (
                 <tr
                   key={org.id}
                   className="border-b border-gray-200 hover:bg-gray-50 transition-colors group"
@@ -93,7 +100,6 @@ export function Dashboard() {
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-[13px] flex items-center gap-2">
                     <div className="text-purple-600 flex items-center justify-center">
-                      {/* Terraform minimal logo for standalone type */}
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
                         <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
                       </svg>
@@ -139,7 +145,6 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Footer minimal text */}
       <div className="mt-16 flex items-center justify-center gap-4 text-xs text-gray-500 pb-8">
         <a href="#" className="hover:text-gray-700">Support</a>
         <a href="#" className="hover:text-gray-700">Terms</a>

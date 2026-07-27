@@ -14,7 +14,7 @@ function Select({
   defaultValue?: string
   onValueChange?: (value: string) => void
   children?: React.ReactNode
-}) {
+}): React.JSX.Element {
   return (
     <div className="relative w-full">
       <select
@@ -35,19 +35,19 @@ function Select({
   )
 }
 
-function SelectTrigger(_props: React.ComponentProps<"div">) {
+function SelectTrigger(_props: React.ComponentProps<"div">): null {
   return null;
 }
 
-function SelectValue(_props: { placeholder?: string }) {
+function SelectValue(_props: { placeholder?: string }): null {
   return null;
 }
 
-function SelectContent({ children }: { children?: React.ReactNode }) {
+function SelectContent({ children }: { children?: React.ReactNode }): React.JSX.Element {
   return <>{children}</>;
 }
 
-function SelectItem({ value, children }: { value: string; children?: React.ReactNode }) {
+function SelectItem({ value, children }: { value: string; children?: React.ReactNode }): React.JSX.Element {
   return <option value={value}>{children}</option>;
 }
 

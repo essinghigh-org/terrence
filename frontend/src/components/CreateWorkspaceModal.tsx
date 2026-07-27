@@ -16,20 +16,20 @@ type CreateWorkspaceModalProps = {
   orgName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (ws: any) => void;
+  onCreated: (ws: { id: string }) => void;
 }
 
-export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }: CreateWorkspaceModalProps) {
+export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }: CreateWorkspaceModalProps): React.JSX.Element {
   const [name, setName] = useState("");
   const [autoApply, setAutoApply] = useState(false);
   const [iacBinary, setIacBinary] = useState("tofu");
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.SyntheticEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     setLoading(true);
-    const normalizedVersion = terraformVersion.trim() || "latest";
+    const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
       const res = await fetchApi(`/organizations/${orgName}/workspaces`, {
         method: "POST",
@@ -44,15 +44,16 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             type: "workspaces",
           },
         }),
-      });
+      }) as { data: { id: string } };
       onCreated(res.data);
       onOpenChange(false);
       setName("");
       setAutoApply(false);
       setIacBinary("tofu");
       setTerraformVersion("latest");
-    } catch (err: any) {
-      alert(err.message || "Failed to create workspace");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to create workspace";
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -71,8 +72,8 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="ws-name"
               value={name}
-              onChange={(e) => { setName(e.target.value); }}
-              onInput={(e: any) => { setName(e.target.value); }}
+              onChange={(e): void => { setName(e.currentTarget.value); }}
+              onInput={(e): void => { setName(e.currentTarget.value); }}
               placeholder="my-infrastructure"
             />
           </div>
@@ -83,7 +84,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
               id="iac-tool"
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
               value={iacBinary}
-              onChange={(e) => { setIacBinary(e.target.value); }}
+              onChange={(e): void => { setIacBinary(e.target.value); }}
             >
               <option value="tofu">OpenTofu (tofu)</option>
               <option value="terraform">Terraform (terraform)</option>
@@ -95,14 +96,14 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             <Input
               id="tf-version"
               value={terraformVersion}
-              onChange={(e) => { setTerraformVersion(e.target.value); }}
-              onInput={(e: any) => { setTerraformVersion(e.target.value); }}
+              onChange={(e): void => { setTerraformVersion(e.currentTarget.value); }}
+              onInput={(e): void => { setTerraformVersion(e.currentTarget.value); }}
               placeholder="latest"
             />
           </div>
 
           <div className="flex items-center gap-2 mt-1">
-            <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean) => { setAutoApply(c); }} />
+            <Checkbox id="auto-apply" checked={autoApply} onCheckedChange={(c: boolean): void => { setAutoApply(c); }} />
             <label htmlFor="auto-apply" className="text-sm font-medium leading-none cursor-pointer">
               Auto-apply plans upon completion
             </label>

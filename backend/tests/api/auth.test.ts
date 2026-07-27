@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeAll } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizationMemberships } from "../../src/db/schema";
+import { users, apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
@@ -112,7 +112,7 @@ describe("TFE API Authentication (Local Auth MVP)", () => {
 
     // Token is stored hashed in DB; verify lookup works via auth plugin
     const rawToken = data.data.attributes.token;
-    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const tokenHash = createHash("sha256").update(rawToken as string).digest("hex");
     const tokenInDb = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.token, tokenHash),
     });

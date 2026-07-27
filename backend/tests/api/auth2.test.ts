@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, organizations, apiTokens, workspaces } from "../../src/db/schema";
+import { apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
@@ -93,7 +93,7 @@ describe("TFE API Authentication - Tokens", () => {
     expect(data.data.type).toBe("authentication-tokens");
     expect(data.data.attributes.token).toBeDefined();
 
-    const tokenHash = createHash("sha256").update(data.data.attributes.token).digest("hex");
+    const tokenHash = createHash("sha256").update(data.data.attributes.token as string).digest("hex");
     const tokenInDb = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenHash)
     });

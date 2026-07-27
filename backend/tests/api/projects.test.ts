@@ -6,7 +6,6 @@ import {
   apiTokens,
   organizationMemberships,
   organizations,
-  projects,
   users,
 } from "../../src/db/schema";
 

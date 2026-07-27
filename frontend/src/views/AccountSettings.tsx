@@ -7,29 +7,9 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Spinner } from "../components/ui/spinner";
 import { KeyRound, User, Lock, Trash2, Plus, ShieldCheck } from "lucide-react";
 
-type AccountDetails = {
-  id: string;
-  attributes: {
-    username: string;
-    email: string | null;
-    "avatar-url": string | null;
-    "permissions": Record<string, boolean>;
-  };
-}
-
-type UserToken = {
-  id: string;
-  attributes: {
-    description: string;
-    "created-at": string;
-    "expired-at"?: string | null;
-    "last-used-at"?: string | null;
-  };
-}
-
-export function AccountSettings() {
-  const [account, setAccount] = useState<AccountDetails | null>(null);
-  const [tokens, setTokens] = useState<UserToken[]>([]);
+export function AccountSettings(): React.JSX.Element {
+  const [_account, setAccount] = useState<{ id: string; attributes: { username: string; email: string | null } } | null>(null);
+  const [tokens, setTokens] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -48,352 +28,264 @@ export function AccountSettings() {
   // Token Modal / Creation
   const [newTokenDesc, setNewTokenDesc] = useState("");
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
-  const [creatingToken, setCreatingToken] = useState(false);
+  const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
 
+  /* ---- Data Loading ---- */
   useEffect(() => {
-    loadAccountData();
+    loadAccount().catch(() => {});
   }, []);
 
-  const loadAccountData = async () => {
-    setLoading(true);
-    setError("");
+  async function loadAccount(): Promise<void> {
     try {
-      const accRes = await fetchApi("/account/details");
-      setAccount(accRes.data);
-      setUsername(accRes.data.attributes.username || "");
-      setEmail(accRes.data.attributes.email || "");
+      const me = await fetchApi("/users/me") as { id: string; attributes: { username: string; email: string | null } };
+      setAccount(me);
+      setUsername(me.attributes.username);
+      setEmail(me.attributes.email ?? "");
 
-      if (accRes.data.id) {
-        const tokensRes = await fetchApi(`/users/${accRes.data.id}/authentication-tokens`);
-        setTokens(tokensRes.data || []);
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to load account details");
+      const tokensRes = await fetchApi("/users/me/tokens") as { data: { id: string; attributes: Record<string, unknown> }[] };
+      setTokens(tokensRes.data);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load account";
+      setError(message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleUpdateProfile = async (e: React.SyntheticEvent) => {
-    e.preventDefault();
+  /* ---- Profile Update ---- */
+  async function handleProfileSave(): Promise<void> {
     setUpdatingProfile(true);
     setError("");
     setSuccessMsg("");
     try {
-      const res = await fetchApi("/account/update", {
+      const updated = await fetchApi("/users/me", {
         method: "PATCH",
         body: JSON.stringify({
-          data: {
-            attributes: {
-              username: username.trim(),
-              email: email.trim() || null,
-            },
-          },
+          data: { attributes: { username, email: email !== "" ? email : null } },
         }),
-      });
-      setAccount(res.data);
-      setSuccessMsg("Profile details updated successfully.");
-    } catch (err: any) {
-      setError(err.message || "Failed to update profile");
+      }) as { id: string; attributes: { username: string; email: string | null } };
+      setAccount(updated);
+      setSuccessMsg("Profile updated");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to update profile";
+      setError(message);
     } finally {
       setUpdatingProfile(false);
     }
-  };
+  }
 
-  const handleChangePassword = async (e: React.SyntheticEvent) => {
-    e.preventDefault();
+  /* ---- Password Change ---- */
+  async function handlePasswordChange(): Promise<void> {
     if (newPassword !== confirmPassword) {
-      setError("New passwords do not match");
+      setError("Passwords do not match");
       return;
     }
-    if (newPassword.length < 10) {
-      setError("Password must be at least 10 characters");
-      return;
-    }
-
     setUpdatingPassword(true);
     setError("");
     setSuccessMsg("");
     try {
-      await fetchApi("/account/password", {
-        method: "PATCH",
+      await fetchApi("/users/me/change-password", {
+        method: "POST",
         body: JSON.stringify({
-          data: {
-            attributes: {
-              "current-password": currentPassword,
-              "new-password": newPassword,
-            },
-          },
+          data: { attributes: { currentPassword, newPassword } },
         }),
       });
+      setSuccessMsg("Password changed");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setSuccessMsg("Password changed successfully.");
-    } catch (err: any) {
-      setError(err.message || "Failed to change password");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to change password";
+      setError(message);
     } finally {
       setUpdatingPassword(false);
     }
-  };
-
-  const handleCreateToken = async (e: React.SyntheticEvent) => {
-    e.preventDefault();
-    if (!account) return;
-    setCreatingToken(true);
-    setError("");
-    setCreatedTokenSecret(null);
-    try {
-      const res = await fetchApi("/tokens", {
-        method: "POST",
-        body: JSON.stringify({
-          data: {
-            type: "authentication-tokens",
-            attributes: {
-              description: newTokenDesc.trim() || "User API Token",
-            },
-            relationships: {
-              user: {
-                data: {
-                  type: "users",
-                  id: account.id,
-                },
-              },
-            },
-          },
-        }),
-      });
-      setCreatedTokenSecret(res.data.attributes.token || res.data.attributes.secret || "Token generated successfully");
-      setNewTokenDesc("");
-      loadAccountData();
-    } catch (err: any) {
-      setError(err.message || "Failed to create authentication token");
-    } finally {
-      setCreatingToken(false);
-    }
-  };
-
-  const handleDeleteToken = async (tokenId: string) => {
-    if (!window.confirm("Are you sure you want to revoke this API token?")) return;
-    setError("");
-    try {
-      await fetchApi(`/authentication-tokens/${tokenId}`, {
-        method: "DELETE",
-      });
-      setTokens((prev) => prev.filter((t) => t.id !== tokenId));
-      setSuccessMsg("Token revoked successfully.");
-    } catch (err: any) {
-      setError(err.message || "Failed to revoke token");
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Spinner className="size-8 text-primary" />
-      </div>
-    );
   }
 
+  /* ---- Token Create ---- */
+  async function handleCreateToken(): Promise<void> {
+    setError("");
+    setSuccessMsg("");
+    try {
+      const created = await fetchApi("/users/me/tokens", {
+        method: "POST",
+        body: JSON.stringify({
+          data: { attributes: { description: newTokenDesc } },
+        }),
+      }) as { data: { id: string }; attributes: { token: string } };
+      setCreatedTokenSecret(created.attributes.token);
+      setNewTokenDesc("");
+      const tokensRes = await fetchApi("/users/me/tokens") as { data: { id: string; attributes: Record<string, unknown> }[] };
+      setTokens(tokensRes.data);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to create token";
+      setError(message);
+    }
+  }
+
+  /* ---- Token Delete ---- */
+  async function handleDeleteToken(tokenId: string): Promise<void> {
+    setDeletingTokenId(tokenId);
+    setError("");
+    setSuccessMsg("");
+    try {
+      await fetchApi(`/users/me/tokens/${tokenId}`, { method: "DELETE" });
+      setTokens((prev) => prev.filter((t) => t.id !== tokenId));
+      setSuccessMsg("Token deleted");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to delete token";
+      setError(message);
+    } finally {
+      setDeletingTokenId(null);
+    }
+  }
+
+  if (loading) {
+    return <Spinner className="mx-auto mt-16" />;
+  }
+
+  /* ── Render ─────────────────────────────────────── */
   return (
-    <div className="mx-auto max-w-4xl space-y-8 p-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Account Settings</h1>
-        <p className="text-sm text-muted-foreground">Manage your personal profile, credentials, and API access tokens.</p>
-      </div>
-
-      {error && (
-        <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
-          {error}
-        </div>
+    <div className="max-w-3xl mx-auto py-8 space-y-8">
+      {/* Error / Success */}
+      {error !== "" && (
+        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-md text-sm">{error}</div>
+      )}
+      {successMsg !== "" && (
+        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-md text-sm">{successMsg}</div>
       )}
 
-      {successMsg && (
-        <div className="rounded-md bg-emerald-500/15 p-4 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-          {successMsg}
-        </div>
-      )}
-
-      {/* User Profile Card */}
+      {/* ── 1. Profile ── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <User className="size-5 text-primary" />
-            <CardTitle>Profile Details</CardTitle>
-          </div>
-          <CardDescription>Update your display name and email address.</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <User className="w-4 h-4" />
+            Profile
+          </CardTitle>
+          <CardDescription>Your account details.</CardDescription>
         </CardHeader>
-        <form onSubmit={handleUpdateProfile} noValidate>
-          <CardContent className="space-y-4">
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label htmlFor="account-username" className="text-sm font-medium">Username</label>
-              <Input
-                id="account-username"
-                value={username}
-                onChange={(e) => { setUsername(e.target.value); }}
-                required
-              />
+              <label className="text-sm font-medium">Username</label>
+              <Input value={username} onChange={(e): void => setUsername(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="account-email" className="text-sm font-medium">Email Address</label>
-              <Input
-                id="account-email"
-                type="email"
-                value={email}
-                onChange={(e) => { setEmail(e.target.value); }}
-                placeholder="user@example.com"
-              />
+              <label className="text-sm font-medium">Email</label>
+              <Input value={email} onChange={(e): void => setEmail(e.target.value)} placeholder="optional" />
             </div>
-          </CardContent>
-          <CardFooter className="border-t pt-4">
-            <Button type="submit" disabled={updatingProfile}>
-              {updatingProfile && <Spinner className="mr-2 size-4" />}
-              Save Profile
-            </Button>
-          </CardFooter>
-        </form>
+          </div>
+        </CardContent>
+        <CardFooter>
+          <Button onClick={handleProfileSave} disabled={updatingProfile}>
+            {updatingProfile ? "Saving..." : "Save Profile"}
+          </Button>
+        </CardFooter>
       </Card>
 
-      {/* Password Change Card */}
+      {/* ── 2. Password ── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <Lock className="size-5 text-primary" />
-            <CardTitle>Security & Password</CardTitle>
-          </div>
-          <CardDescription>Change your account password.</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Lock className="w-4 h-4" />
+            Change Password
+          </CardTitle>
         </CardHeader>
-        <form onSubmit={handleChangePassword} noValidate>
-          <CardContent className="space-y-4">
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Current password</label>
+            <Input type="password" value={currentPassword} onChange={(e): void => setCurrentPassword(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label htmlFor="current-password" className="text-sm font-medium">Current Password</label>
-              <Input
-                id="current-password"
-                type="password"
-                value={currentPassword}
-                onChange={(e) => { setCurrentPassword(e.target.value); }}
-                required
-              />
+              <label className="text-sm font-medium">New password</label>
+              <Input type="password" value={newPassword} onChange={(e): void => setNewPassword(e.target.value)} />
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label htmlFor="new-password" className="text-sm font-medium">New Password</label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => { setNewPassword(e.target.value); }}
-                  placeholder="At least 10 characters"
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="confirm-password" className="text-sm font-medium">Confirm New Password</label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => { setConfirmPassword(e.target.value); }}
-                  placeholder="Repeat new password"
-                  required
-                />
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Confirm new password</label>
+              <Input type="password" value={confirmPassword} onChange={(e): void => setConfirmPassword(e.target.value)} />
             </div>
-          </CardContent>
-          <CardFooter className="border-t pt-4">
-            <Button type="submit" disabled={updatingPassword}>
-              {updatingPassword && <Spinner className="mr-2 size-4" />}
-              Update Password
-            </Button>
-          </CardFooter>
-        </form>
+          </div>
+        </CardContent>
+        <CardFooter>
+          <Button onClick={handlePasswordChange} disabled={updatingPassword}>
+            {updatingPassword ? "Changing..." : "Change Password"}
+          </Button>
+        </CardFooter>
       </Card>
 
-      {/* API Authentication Tokens Card */}
+      {/* ── 3. Tokens ── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <KeyRound className="size-5 text-primary" />
-            <CardTitle>API Tokens</CardTitle>
-          </div>
-          <CardDescription>Personal API tokens allow CLI tools (`terraform login`) and scripts to authenticate with Terrence.</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <KeyRound className="w-4 h-4" />
+            API Tokens
+          </CardTitle>
+          <CardDescription>Manage your personal API tokens.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Create Token Form */}
-          <form onSubmit={handleCreateToken} noValidate className="flex items-end gap-3 rounded-lg border p-4 bg-muted/30">
-            <div className="flex-1 space-y-1.5">
-              <label htmlFor="token-desc" className="text-sm font-medium">Create New Token</label>
-              <Input
-                id="token-desc"
-                placeholder="Token description (e.g. laptop-cli)"
-                value={newTokenDesc}
-                onChange={(e) => { setNewTokenDesc(e.target.value); }}
-                required
-              />
-            </div>
-            <Button type="submit" disabled={creatingToken}>
-              {creatingToken ? <Spinner className="size-4" /> : <Plus className="size-4 mr-1.5" />}
-              Generate Token
+        <CardContent className="space-y-4">
+          {/* New token form */}
+          <div className="flex gap-2">
+            <Input
+              value={newTokenDesc}
+              onChange={(e): void => setNewTokenDesc(e.target.value)}
+              placeholder="Token description (e.g., CI/CD)"
+              className="flex-1"
+            />
+            <Button onClick={handleCreateToken} disabled={newTokenDesc.trim() === ""}>
+              <Plus className="w-4 h-4 mr-1" />
+              Create
             </Button>
-          </form>
+          </div>
 
-          {createdTokenSecret && (
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 space-y-2">
-              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-semibold text-sm">
-                <ShieldCheck className="size-4" /> Token Generated!
-              </div>
-              <p className="text-xs text-muted-foreground">Make sure to copy your API token now. You won't be able to see it again!</p>
-              <div className="rounded bg-background p-2 font-mono text-xs font-semibold select-all break-all border">
+          {createdTokenSecret != null && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md text-sm space-y-1">
+              <p className="font-semibold flex items-center gap-1">
+                <ShieldCheck className="w-4 h-4" />
+                Token created — copy it now, it won't be shown again.
+              </p>
+              <code className="block bg-blue-100 px-2 py-1 rounded text-xs break-all select-all">
                 {createdTokenSecret}
-              </div>
+              </code>
             </div>
           )}
 
-          {/* Tokens Table */}
-          <div className="rounded-md border">
+          {/* Token list */}
+          {tokens.length > 0 && (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Description</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Last Used</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {tokens.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
-                      No active API tokens found.
+                {tokens.map((token) => (
+                  <TableRow key={token.id}>
+                    <TableCell className="font-medium">{token.attributes["description"] as string}</TableCell>
+                    <TableCell className="text-muted-foreground">{token.attributes["created-at"] as string}</TableCell>
+                    <TableCell className="text-muted-foreground">{(token.attributes["last-used-at"] as string | null) ?? "—"}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={deletingTokenId === token.id}
+                        onClick={(): void => { handleDeleteToken(token.id).catch(() => {}); }}
+                      >
+                        {deletingTokenId === token.id ? (
+                          <Spinner className="w-3 h-3" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
+                        )}
+                      </Button>
                     </TableCell>
                   </TableRow>
-                ) : (
-                  tokens.map((token) => (
-                    <TableRow key={token.id}>
-                      <TableCell className="font-medium">{token.attributes.description || "API Token"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {new Date(token.attributes["created-at"]).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {token.attributes["last-used-at"]
-                          ? new Date(token.attributes["last-used-at"]).toLocaleDateString()
-                          : "Never"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={async () => handleDeleteToken(token.id)}
-                        >
-                          <Trash2 className="size-3.5 mr-1" /> Revoke
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
+                ))}
               </TableBody>
             </Table>
-          </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -2,8 +2,6 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, organizations, organizationMemberships, projects, projectTags, workspaces, workspaceTags, remoteStateConsumers, dataRetentionPolicies, configurationVersions, apiTokens } from "../../src/db/schema";
-import { eq } from "drizzle-orm";
-
 describe("Epic 4 & 5 Projects, Workspaces, Remote State Consumers & Retention Policies", () => {
   let userToken: string;
   let userId: string;

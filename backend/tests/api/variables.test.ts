@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { organizations, users, apiTokens, workspaces, workspaceVariables } from "../../src/db/schema";
+import { users, apiTokens, workspaces, workspaceVariables } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 describe("TFE API v2 - Variables", () => {

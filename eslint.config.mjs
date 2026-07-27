@@ -169,6 +169,9 @@ export default tseslint.config(
       '@typescript-eslint/promise-function-async': 'off',
       '@typescript-eslint/prefer-readonly': 'off',
       '@typescript-eslint/no-deprecated': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
 

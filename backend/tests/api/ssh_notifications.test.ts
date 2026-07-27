@@ -4,10 +4,8 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
-  notificationConfigurations,
   organizationMemberships,
   organizations,
-  sshKeys,
   users,
   workspaces,
 } from "../../src/db/schema";

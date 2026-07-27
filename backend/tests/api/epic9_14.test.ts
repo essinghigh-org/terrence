@@ -2,8 +2,6 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, runComments, runTasks, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
-import { eq } from "drizzle-orm";
-
 describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", () => {
   let userToken: string;
   let userId: string;

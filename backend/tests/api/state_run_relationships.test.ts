@@ -6,7 +6,7 @@ describe("TFE API v2 - State-Run Relationships & Locking", () => {
   const orgName = `st-org-${crypto.randomUUID()}`;
   let workspaceId: string;
   let runId: string;
-  let stateVersionId: string;
+  let _stateVersionId: string;
 
   beforeAll(async () => {
     // Register user & login
@@ -114,7 +114,7 @@ describe("TFE API v2 - State-Run Relationships & Locking", () => {
     const body = await res.json();
     expect(body.data.id).toBeDefined();
     expect(body.data.relationships.run.data.id).toBe(runId);
-    stateVersionId = body.data.id;
+    _stateVersionId = body.data.id;
   });
 
   test("should include input-state-version relationship on run", async () => {

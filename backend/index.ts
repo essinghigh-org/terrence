@@ -8,7 +8,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 // Start background worker queue only when the server is actually running
-void startWorkerQueue();
+startWorkerQueue();
 
 app
   .listen(port);

@@ -1,11 +1,10 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, teams, projects, workspaces, workspaceVariables, variableSets, variableSetProjects, variableSetVariables, configurationVersions, runs, stateVersions, runComments, runTasks, auditLogs } from "../../src/db/schema";
+import { runs, stateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 describe("Comprehensive Terrence End-to-End System Flow Test", () => {
-  const suiteSuffix = crypto.randomUUID();
   // Cleanup only rows created by this suite's fixture suffix
   beforeEach(async () => {
     // Scope deletion to fixtures identified by suite suffix
@@ -48,7 +47,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
     );
     expect(regRes.status).toBe(201);
     const regData = await regRes.json();
-    const userId = regData.data.id;
+    const _userId = regData.data.id;
 
     const loginRes = await app.handle(
       new Request("http://localhost/api/v2/users/login", {
@@ -252,7 +251,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
     const runId = runData.data.id;
 
     // Simulate worker updating run to planned
-    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
+    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId as string));
 
     // Confirm Apply with Comment
     const applyActionRes = await app.handle(
@@ -274,7 +273,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
     expect(commentListData.data[0].attributes.body).toBe("Verified configuration. Proceed with apply.");
 
     // Simulate worker completing apply and writing state
-    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, runId));
+    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, runId as string));
 
     const stateVerId = `sv-${crypto.randomUUID()}`;
     await db.insert(stateVersions).values({
