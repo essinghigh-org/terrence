@@ -322,11 +322,10 @@
 - [x] `GET /workspaces/:workspace_id/runs` — list runs (with pagination)
 - [x] Filters: `filter[operation]`, `filter[status]`, `filter[source]`, `filter[status_group]`
 - [x] Filter: `filter[timeframe]` (supports `year` and specific `YYYY` values)
-- [ ] Filter: `filter[agent_pool_names]` (not implemented)
+- [x] Filter: `filter[agent_pool_names]` (filter by agent pool name)
 - [x] Search: `search[basic]` (run ID and message)
 - [x] Search: `search[user]` (filter by username)
 - [x] Search: `search[commit]` (filter by commit SHA in ingress attributes)
-- [x] Filter: `filter[agent_pool_names]` (filter by agent pool name)
 
 ### 5.10 Workspace Variables (Scoped)
 - [x] `GET /workspaces/:workspace_id/vars` — list workspace variables
@@ -587,6 +586,7 @@
 - [x] Plan `status-timestamps`
 - [x] Plan `log-read-url` / log streaming
 - [x] Plan `state-versions` relationship
+- [x] Plan attributes also returned in run response: `resource-additions`, `resource-changes`, `resource-destructions`
 
 ### 9.8 Applies
 - [x] `GET /applies/:apply_id` — show apply details
@@ -597,6 +597,7 @@
 - [x] Apply `status-timestamps`
 - [x] Apply `log-read-url` / log streaming
 - [x] Apply `state-versions` relationship
+- [x] Apply attributes also returned in run response: `resource-additions`, `resource-changes`, `resource-destructions`
 
 ### 9.9 Run Logs
 - [x] `GET /runs/:run_id/plan/log` — plain-text plan log
@@ -619,8 +620,8 @@
 ### 9.11 Apply Queue
 - [x] Apply must wait for plan to complete
 - [x] Auto-apply vs manual apply
-- [ ] Policy check must pass before apply (if policy enforcement enabled)
-- [ ] Cost estimation must complete before apply (if enabled)
+- [x] Policy check must pass before apply (if policy enforcement enabled) — wired into worker pipeline
+- [ ] Cost estimation must complete before apply (if enabled) — not wired into worker pipeline
 
 ---
 
@@ -775,8 +776,8 @@
 - [x] Event metadata: branch, commit SHA, commit message, sender, clone URL
 
 ### 13.6 Private VCS via Agent
-- [x] Agent-based private VCS connectivity
-- [x] (Low priority — requires agent functionality)
+- [ ] Agent-based private VCS connectivity
+- [ ] (Low priority — requires agent functionality)
 
 ---
 
@@ -818,14 +819,14 @@
 - [x] (Low priority for homelab)
 
 ### 15.3 Project Notification Configurations
-- [x] Project-level notification configurations
-- [x] (Low priority for homelab)
+- [ ] Project-level notification configurations (schema exists, no API routes)
+- [ ] (Low priority for homelab)
 
 ### 15.4 Notification Delivery
-- [x] HTTP POST delivery with standardized payload
-- [x] Payload versioning
-- [x] Retry logic
-- [x] (Low priority for homelab)
+- [ ] HTTP POST delivery with standardized payload (only CRUD + stub verify endpoint exist; no actual delivery code)
+- [ ] Payload versioning
+- [ ] Retry logic
+- [ ] (Low priority for homelab)
 
 ---
 
@@ -862,13 +863,13 @@
 - [x] Agent <> run association
 
 ### 16.4 Agent Execution Mode
-- [x] Workspace execution-mode: `agent`
+- [x] Workspace execution-mode: `agent` (schema + route support)
 - [x] Agent pool assignment on workspace
-- [x] Run dispatch to agent pool
-- [x] Agent-poll-based job retrieval
-- [x] Agent hooks (pre-plan, post-plan, pre-apply, post-apply)
-- [x] Agent-based policy evaluation
-- [x] (Very low priority for homelab — local execution mode is primary)
+- [ ] Run dispatch to agent pool (worker always executes locally; agent route dispatching not implemented)
+- [ ] Agent-poll-based job retrieval
+- [ ] Agent hooks (pre-plan, post-plan, pre-apply, post-apply)
+- [ ] Agent-based policy evaluation
+- [ ] (Very low priority for homelab — local execution mode is primary)
 
 ---
 
@@ -1016,7 +1017,7 @@
 - [ ] Reserved tag key management
 - [x] Tag-based workspace organization
 - [x] Filter workspaces by included/excluded tag keys (`search[tags]`, `search[exclude-tags]`)
-- [x] Filter workspaces by exact key-value tag bindings (`filter[tagged]`)
+- [ ] Filter workspaces by exact key-value tag bindings (`filter[tagged]`) — only flat string tag search (`search[tags]`) is implemented
 
 ---
 
@@ -1106,7 +1107,7 @@
 - [x] `GET /organizations/:org_name/audit-logs` — list audit log entries for an org (owner)
 - [x] `GET /api/v2/audit-trails` — audit trail endpoint (returns empty data array)
 - [x] `GET /api/v2/organization-audit-trailers` — org audit trail endpoint (returns empty data array)
-- [x] Audit log entries created automatically on user/org/workspace creation, run actions (apply, cancel, discard, force-cancel)
+- [x] Audit log entries created automatically on user/org/workspace creation, run actions (apply, cancel, discard, force-cancel) via `auditLog()` utility function
 
 ### 24.12 Support Bundles
 - [ ] `POST /api/v1/support-bundle-requests` — generate support bundle
@@ -1162,16 +1163,16 @@
 ### 27.2 Workspace Detail Tabs
 - [x] Overview tab (metadata cards)
 - [x] Runs tab (run list with trigger button)
-- [x] Variables tab
+- [ ] Variables tab (placeholder only — no actual variable editor UI in workspace detail)
 - [x] State Versions tab
-- [x] Settings tab (auto-apply, engine, version)
-- [x] Team Access tab
-- [x] Notification Configurations tab
-- [x] Policy Sets tab
-- [x] SSH Key tab
-- [x] VCS tab (connected repo info)
-- [x] Health Assessments tab
-- [x] Run Triggers tab
+- [ ] Settings tab (placeholder only — no actual settings form in workspace detail)
+- [ ] Team Access tab (not implemented in frontend)
+- [ ] Notification Configurations tab (not implemented in frontend)
+- [ ] Policy Sets tab (not implemented in frontend)
+- [ ] SSH Key tab (not implemented in frontend)
+- [ ] VCS tab (not implemented in frontend)
+- [ ] Health Assessments tab (not implemented in frontend)
+- [ ] Run Triggers tab (not implemented in frontend)
 - [x] Organization settings page (general settings, team list, delete)
 
 ### 27.3 TFE UI Mirroring
@@ -1189,8 +1190,8 @@
 - [x] Agent pool management UI
 - [x] Workspace lock/unlock UI indicators
 - [x] Run detail with full state machine visualization
-- [x] Policy check results display
-- [x] Cost estimate display
+- [ ] Policy check results display (backend API exists, no frontend UI)
+- [ ] Cost estimate display (backend stub exists, no frontend UI)
 - [x] User profile / account settings page
 - [x] Admin dashboard (TFE instance management)
 - [x] Search/filter workspaces
