@@ -4,32 +4,49 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Search, MoreHorizontal, Filter, AlertCircle, XCircle, Clock, PauseCircle, CheckCircle2 } from "lucide-react";
 
-export function Workspaces() {
-  const { orgName } = useParams();
+type WorkspaceAttrs = {
+  name: string;
+  locked?: boolean;
+  description?: string | null;
+  "terraform-version"?: string;
+  "auto-apply"?: boolean;
+  "tag-names"?: string[];
+  tags?: string[];
+  "vcs-repo"?: { identifier: string };
+  [key: string]: unknown;
+}
+
+type WorkspaceItem = {
+  id: string;
+  attributes: WorkspaceAttrs;
+}
+
+export function Workspaces(): React.JSX.Element {
+  const { orgName } = useParams<{ orgName: string }>();
   const navigate = useNavigate();
-  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  useEffect(() => {
-    loadWorkspaces();
+  useEffect((): void => {
+    void loadWorkspaces();
   }, [orgName]);
 
-  async function loadWorkspaces() {
+  async function loadWorkspaces(): Promise<void> {
     try {
-      const data = await fetchApi(`/api/v2/organizations/${orgName}/workspaces`);
-      setWorkspaces(data.data || []);
-    } catch (err) {
-      console.error(err);
+      const data = await fetchApi(`/api/v2/organizations/${orgName ?? ""}/workspaces`) as { data: WorkspaceItem[] };
+      setWorkspaces(data.data);
+    } catch {
+      console.error("Failed to load workspaces");
     } finally {
       setLoading(false);
     }
   }
 
-  const filteredWorkspaces = workspaces.filter((ws) => {
+  const filteredWorkspaces = workspaces.filter((ws: WorkspaceItem): boolean => {
     const nameMatch = ws.attributes.name.toLowerCase().includes(search.toLowerCase());
-    const tags = ws.attributes["tag-names"] || ws.attributes.tags || [];
-    const tagMatch = tags.some((t: string) => t.toLowerCase().includes(search.toLowerCase()));
+    const tags = (ws.attributes["tag-names"] ?? ws.attributes.tags ?? []) as string[];
+    const tagMatch = tags.some((t: string): boolean => t.toLowerCase().includes(search.toLowerCase()));
     return nameMatch || tagMatch;
   });
 
@@ -61,7 +78,7 @@ export function Workspaces() {
             type="text"
             placeholder="Search by workspace name"
             value={search}
-            onChange={(e) => { setSearch(e.target.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
             className="pl-9 pr-4 py-1.5 h-9 w-full border border-gray-300 rounded-[4px] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
           />
         </div>
@@ -89,7 +106,7 @@ export function Workspaces() {
       </div>
 
       <div className="text-xs text-gray-500 mb-3 flex items-center gap-1">
-        No filters applied <HelpCircleIcon className="h-3.5 w-3.5" />
+        No filters applied <HelpCircleIcon />
       </div>
 
       <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
@@ -123,7 +140,7 @@ export function Workspaces() {
                 </td>
               </tr>
             ) : (
-              filteredWorkspaces.map((ws) => (
+              filteredWorkspaces.map((ws: WorkspaceItem): React.JSX.Element => (
                 <tr key={ws.id} className="border-b border-gray-200 hover:bg-gray-50 group">
                   <td className="px-4 py-3 border-r border-gray-200">
                     <div className="flex items-start gap-2">
@@ -132,7 +149,7 @@ export function Workspaces() {
                       </div>
                       <div>
                         <button
-                          onClick={async () => navigate(`/app/${orgName}/workspaces/${ws.attributes.name}`)}
+                          onClick={(): void => { void navigate(`/app/${orgName ?? ""}/workspaces/${ws.attributes.name}`); }}
                           className="text-gray-900 font-medium hover:underline text-[13px] text-left break-all"
                         >
                           {ws.attributes.name}
@@ -142,16 +159,16 @@ export function Workspaces() {
                     </div>
                   </td>
                   <td className="px-4 py-3 border-r border-gray-200 text-gray-600 text-[13px]">
-                    {ws.attributes["vcs-repo"] ? (
+                    {ws.attributes["vcs-repo"] != null ? (
                       <span className="hover:underline cursor-pointer">{ws.attributes["vcs-repo"].identifier}</span>
                     ) : (
                       <span className="text-gray-400">None</span>
                     )}
                   </td>
                   <td className="px-4 py-3 border-r border-gray-200 text-gray-500 text-[13px]">
-                    {(ws.attributes["tag-names"] || ws.attributes.tags || []).length > 0 ? (
+                    {(ws.attributes["tag-names"] ?? ws.attributes.tags ?? []).length > 0 ? (
                       <div className="flex flex-wrap gap-1">
-                        {(ws.attributes["tag-names"] || ws.attributes.tags || []).map((tag: string) => (
+                        {(ws.attributes["tag-names"] ?? ws.attributes.tags ?? []).map((tag: string): React.JSX.Element => (
                           <span key={tag} className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 border border-blue-200">
                             {tag}
                           </span>
@@ -222,16 +239,14 @@ export function Workspaces() {
   );
 }
 
-
-
-function SortIcon() {
+function SortIcon(): React.JSX.Element {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>
   );
 }
 
-function HelpCircleIcon(props: any) {
+function HelpCircleIcon(): React.JSX.Element {
   return (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
   );
 }

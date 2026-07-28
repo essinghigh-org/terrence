@@ -6,43 +6,57 @@ import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2 } from "lucide-react";
 
-export function WorkspaceDetail() {
-  const { orgName, workspaceName } = useParams();
+type Workspace = {
+  id: string;
+  attributes: {
+    name: string;
+    locked?: boolean;
+    description?: string | null;
+    "terraform-version"?: string;
+    "auto-apply"?: boolean;
+    "created-at"?: string;
+    [key: string]: unknown;
+  };
+}
 
-  const [workspace, setWorkspace] = useState<any>(null);
+export function WorkspaceDetail(): React.JSX.Element {
+  const { orgName, workspaceName } = useParams<{ orgName: string; workspaceName: string }>();
+
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
 
-  useEffect(() => {
-    loadWorkspace();
+  useEffect((): void => {
+    void loadWorkspace();
   }, [orgName, workspaceName]);
 
-  async function loadWorkspace() {
+  async function loadWorkspace(): Promise<void> {
     try {
-      const data = await fetchApi(`/api/v2/organizations/${orgName}/workspaces/${workspaceName}`);
+      const data = await fetchApi(`/api/v2/organizations/${orgName ?? ""}/workspaces/${workspaceName ?? ""}`) as { data: Workspace };
       setWorkspace(data.data);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      console.error("Failed to load workspace");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleLock() {
+  async function handleLock(): Promise<void> {
+    if (workspace == null) return;
     try {
-      if (workspace.attributes.locked) {
+      if (workspace.attributes.locked === true) {
         await fetchApi(`/api/v2/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
       } else {
         await fetchApi(`/api/v2/workspaces/${workspace.id}/actions/lock`, { method: "POST" });
       }
-      loadWorkspace();
-    } catch (err) {
+      void loadWorkspace();
+    } catch {
       alert("Failed to toggle lock");
     }
   }
 
   if (loading) return <div className="p-8 text-gray-500">Loading workspace...</div>;
-  if (!workspace) return <div className="p-8 text-gray-500">Workspace not found</div>;
+  if (workspace == null) return <div className="p-8 text-gray-500">Workspace not found</div>;
 
   const tabs = [
     { id: "overview", label: "Overview" },
@@ -56,7 +70,7 @@ export function WorkspaceDetail() {
     <div className="max-w-full w-full">
       {/* Breadcrumbs */}
       <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
-        <Link to={`/app/${orgName}`} className="hover:underline">{orgName}</Link>
+        <Link to={`/app/${orgName ?? ""}`} className="hover:underline">{orgName}</Link>
         <span className="text-gray-300">/</span>
         <span className="text-gray-900">{workspace.attributes.name}</span>
       </div>
@@ -66,14 +80,14 @@ export function WorkspaceDetail() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{workspace.attributes.name}</h1>
-            {workspace.attributes.locked && (
+            {workspace.attributes.locked === true && (
               <span className="flex items-center text-xs font-medium bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
                 <Lock className="w-3 h-3 mr-1" /> Locked
               </span>
             )}
           </div>
           <p className="text-gray-600 text-[15px]">
-            {workspace.attributes.description || "No description provided."}
+            {workspace.attributes.description ?? "No description provided."}
           </p>
         </div>
 
@@ -83,7 +97,7 @@ export function WorkspaceDetail() {
             onClick={handleLock}
             className="h-9 px-3 text-sm text-gray-700 font-medium rounded-[4px] border-gray-300 shadow-sm bg-white hover:bg-gray-50"
           >
-            {workspace.attributes.locked ? (
+            {workspace.attributes.locked === true ? (
               <><LockOpen className="w-4 h-4 mr-2" /> Unlock</>
             ) : (
               <><Lock className="w-4 h-4 mr-2" /> Lock</>
@@ -103,10 +117,10 @@ export function WorkspaceDetail() {
       {/* Navigation Tabs */}
       <div className="border-b border-gray-200 mb-6">
         <nav className="flex gap-6">
-          {tabs.map(tab => (
+          {tabs.map((tab: { id: string; label: string }): React.JSX.Element => (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); }}
+              onClick={(): void => { setActiveTab(tab.id); }}
               aria-label={tab.label.toLowerCase()}
               className={`pb-3 text-[14px] font-medium border-b-2 transition-colors ${
                 activeTab === tab.id
@@ -166,20 +180,20 @@ export function WorkspaceDetail() {
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Terraform version</div>
                     <div className="text-[13px] text-gray-900 flex items-center gap-1.5">
-                       {workspace.attributes["terraform-version"]}
+                       {workspace.attributes["terraform-version"] ?? "latest"}
                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">Latest</span>
                     </div>
                   </div>
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Auto-apply</div>
                     <div className="text-[13px] text-gray-900">
-                       {workspace.attributes["auto-apply"] ? "Enabled" : "Disabled"}
+                       {workspace.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Created</div>
                     <div className="text-[13px] text-gray-900">
-                       {new Date(workspace.attributes["created-at"]).toLocaleDateString()}
+                       {new Date(workspace.attributes["created-at"] ?? "").toLocaleDateString()}
                     </div>
                   </div>
                 </div>

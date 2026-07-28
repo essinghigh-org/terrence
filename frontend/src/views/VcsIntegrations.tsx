@@ -21,7 +21,7 @@ type OAuthClient = {
   };
 }
 
-export function VcsIntegrations() {
+export function VcsIntegrations(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,26 +38,27 @@ export function VcsIntegrations() {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
 
-  useEffect(() => {
-    if (orgName) loadOAuthClients();
+  useEffect((): void => {
+    if (orgName != null) void loadOAuthClients();
   }, [orgName]);
 
-  const loadOAuthClients = async () => {
+  const loadOAuthClients = async (): Promise<void> => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/oauth-clients`);
-      setClients(res.data || []);
-    } catch (err: any) {
-      setError(err.message || "Failed to load VCS OAuth Clients");
+      const res = await fetchApi(`/organizations/${orgName ?? ""}/oauth-clients`) as { data: OAuthClient[] };
+      setClients(res.data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load VCS OAuth Clients";
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreate = async (e: React.SyntheticEvent) => {
+  const handleCreate = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (!orgName) return;
+    if (orgName == null) return;
     setCreating(true);
     setFormError("");
     try {
@@ -67,7 +68,7 @@ export function VcsIntegrations() {
           data: {
             type: "oauth-clients",
             attributes: {
-              name: name.trim() || `${serviceProvider.toUpperCase()} Provider`,
+              name: name.trim() !== "" ? name.trim() : `${serviceProvider.toUpperCase()} Provider`,
               "service-provider": serviceProvider,
               "http-url": httpUrl.trim(),
               "api-url": apiUrl.trim(),
@@ -76,27 +77,29 @@ export function VcsIntegrations() {
             },
           },
         }),
-      });
-      setClients((prev) => [...prev, res.data]);
+      }) as { data: OAuthClient };
+      setClients((prev: OAuthClient[]): OAuthClient[] => [...prev, res.data]);
       setDialogOpen(false);
       setName("");
       setKey("");
       setSecret("");
-    } catch (err: any) {
-      setFormError(err.message || "Failed to create VCS OAuth client");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create VCS OAuth client";
+      setFormError(msg);
     } finally {
       setCreating(false);
     }
   };
 
-  const handleDelete = async (client: OAuthClient) => {
+  const handleDelete = async (client: OAuthClient): Promise<void> => {
     if (!window.confirm(`Delete VCS OAuth client "${client.attributes.name}"?`)) return;
     setError("");
     try {
       await fetchApi(`/oauth-clients/${client.id}`, { method: "DELETE" });
-      setClients((prev) => prev.filter((c) => c.id !== client.id));
-    } catch (err: any) {
-      setError(err.message || "Failed to delete OAuth Client");
+      setClients((prev: OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete OAuth Client";
+      setError(msg);
     }
   };
 
@@ -107,12 +110,12 @@ export function VcsIntegrations() {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / VCS Integrations</h1>
           <p className="text-sm text-muted-foreground">Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs.</p>
         </div>
-        <Button onClick={() => { setDialogOpen(true); }}>
+        <Button onClick={(): void => { setDialogOpen(true); }}>
           <Plus className="mr-1.5 size-4" /> Add VCS Provider
         </Button>
       </div>
 
-      {error && (
+      {error !== "" && (
         <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
           {error}
         </div>
@@ -145,7 +148,7 @@ export function VcsIntegrations() {
                   </TableCell>
                 </TableRow>
               ) : (
-                clients.map((client) => (
+                clients.map((client: OAuthClient): React.JSX.Element => (
                   <TableRow key={client.id}>
                     <TableCell className="font-semibold">
                       <div className="flex items-center gap-2">
@@ -159,7 +162,7 @@ export function VcsIntegrations() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground font-mono">
-                      {client.attributes["http-url"] || "https://github.com"}
+                      {client.attributes["http-url"] ?? "https://github.com"}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
@@ -167,7 +170,7 @@ export function VcsIntegrations() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="destructive" onClick={async () => handleDelete(client)}>
+                      <Button size="sm" variant="destructive" onClick={(): void => { void handleDelete(client); }}>
                         <Trash2 className="size-3.5 mr-1" /> Delete
                       </Button>
                     </TableCell>
@@ -189,7 +192,7 @@ export function VcsIntegrations() {
             </DialogDescription>
           </DialogHeader>
 
-          {formError && (
+          {formError !== "" && (
             <div className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
               {formError}
             </div>
@@ -201,8 +204,7 @@ export function VcsIntegrations() {
               <Input
                 id="vcs-name"
                 value={name}
-                onChange={(e) => { setName(e.target.value); }}
-                onInput={(e: any) => { setName(e.target.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                 placeholder="GitHub Commercial"
                 required
               />
@@ -214,9 +216,9 @@ export function VcsIntegrations() {
                 id="vcs-provider"
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
                 value={serviceProvider}
-                onChange={(e) => {
-                  setServiceProvider(e.target.value);
-                  if (e.target.value === "gitlab") {
+                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+                  setServiceProvider(event.target.value);
+                  if (event.target.value === "gitlab") {
                     setHttpUrl("https://gitlab.com");
                     setApiUrl("https://gitlab.com/api/v4");
                   } else {
@@ -238,8 +240,7 @@ export function VcsIntegrations() {
                 <Input
                   id="vcs-http-url"
                   value={httpUrl}
-                  onChange={(e) => { setHttpUrl(e.target.value); }}
-                  onInput={(e: any) => { setHttpUrl(e.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setHttpUrl(event.target.value); }}
                   placeholder="https://github.com"
                 />
               </div>
@@ -248,8 +249,7 @@ export function VcsIntegrations() {
                 <Input
                   id="vcs-api-url"
                   value={apiUrl}
-                  onChange={(e) => { setApiUrl(e.target.value); }}
-                  onInput={(e: any) => { setApiUrl(e.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setApiUrl(event.target.value); }}
                   placeholder="https://api.github.com"
                 />
               </div>
@@ -260,8 +260,7 @@ export function VcsIntegrations() {
               <Input
                 id="vcs-key"
                 value={key}
-                onChange={(e) => { setKey(e.target.value); }}
-                onInput={(e: any) => { setKey(e.target.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
                 placeholder="Client ID or Application ID"
                 required
               />
@@ -273,8 +272,7 @@ export function VcsIntegrations() {
                 id="vcs-secret"
                 type="password"
                 value={secret}
-                onChange={(e) => { setSecret(e.target.value); }}
-                onInput={(e: any) => { setSecret(e.target.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSecret(event.target.value); }}
                 placeholder="Client Secret"
                 required
               />
