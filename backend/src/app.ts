@@ -38,6 +38,13 @@ import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
 import { assessmentRoutes } from "./routes/assessments";
 import { changeRequestRoutes } from "./routes/change-requests";
+import { workspaceTransferRoutes } from "./routes/workspace-transfers";
+import { planExportRoutes } from "./routes/plan-exports";
+import { cidrRangeRoutes } from "./routes/cidr-ranges";
+import { queryRoutes } from "./routes/queries";
+import { scimRoutes } from "./routes/scim";
+import { explorerRoutes } from "./routes/explorer";
+import { teamProjectRoutes } from "./routes/team-projects";
 
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
@@ -322,4 +329,11 @@ export const app = new Elysia()
   .use(githubAppInstallationRoutes)
   .use(miscRoutes)
   .use(assessmentRoutes)
-  .use(changeRequestRoutes);
+  .use(changeRequestRoutes)
+  .use(workspaceTransferRoutes)
+  .use(planExportRoutes)
+  .use(cidrRangeRoutes)
+  .use(queryRoutes)
+  .use(scimRoutes)
+  .use(explorerRoutes)
+  .use(teamProjectRoutes);

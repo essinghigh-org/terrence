@@ -954,7 +954,7 @@ export async function executeRun(runId: string): Promise<void> {
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
-      } else if (run.autoApply || (workspace.autoApply === true)) {
+      } else if (run.autoApply) {
         await writeLog(runId, "plan", `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`);
         keepPlan = true;
         await executeApply(runId);

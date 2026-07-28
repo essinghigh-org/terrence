@@ -2117,4 +2117,86 @@ export const registryRoutes = new Elysia({ name: "registry" })
     await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, versionId));
     (set as { status: number }).status = 200;
     return { data: { id: versionId, type: "registry-module-versions", attributes: { status: "ok" } } };
+  })
+  .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const versionId = params.version_id ?? "";
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+
+    let newStatus = ver.status;
+    if (attributes.deprecated === true) newStatus = "deprecated";
+    if (attributes.deprecated === false && ver.status === "deprecated") newStatus = "ok";
+
+    await db.update(registryModuleVersions).set({ status: newStatus }).where(eq(registryModuleVersions.id, versionId));
+    return {
+      data: {
+        id: versionId,
+        type: "registry-module-versions",
+        attributes: {
+          version: ver.version,
+          status: newStatus,
+          deprecated: newStatus === "deprecated" || newStatus === "revoked",
+          revoked: newStatus === "revoked",
+        },
+      },
+    };
+  })
+  .delete("/api/v2/registry-module-versions/:version_id/actions/revert-deprecation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const versionId = params.version_id ?? "";
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+
+    await db.update(registryModuleVersions).set({ status: "ok" }).where(eq(registryModuleVersions.id, versionId));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .post("/api/v2/registry-module-versions/:version_id/actions/revoke", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const versionId = params.version_id ?? "";
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+
+    await db.update(registryModuleVersions).set({ status: "revoked" }).where(eq(registryModuleVersions.id, versionId));
+    return {
+      data: {
+        id: versionId,
+        type: "registry-module-versions",
+        attributes: {
+          version: ver.version,
+          status: "revoked",
+          deprecated: true,
+          revoked: true,
+        },
+      },
+    };
+  })
+  .post("/api/v2/registry-module-versions/:version_id/actions/revert-revocation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const versionId = params.version_id ?? "";
+    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+
+    await db.update(registryModuleVersions).set({ status: "deprecated" }).where(eq(registryModuleVersions.id, versionId));
+    return {
+      data: {
+        id: versionId,
+        type: "registry-module-versions",
+        attributes: {
+          version: ver.version,
+          status: "deprecated",
+          deprecated: true,
+          revoked: false,
+        },
+      },
+    };
   });

@@ -227,7 +227,28 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   // --- Entitlements ---
   .get("/api/v2/entitlements", (): unknown => ({
-    data: { id: "entitlements", type: "entitlements", attributes: { agents: true, audit_logging: true, sentinel: true, state_storage: true, teams: true, vcs_integrations: true, run_tasks: true } },
+    data: {
+      id: "entitlements",
+      type: "entitlements",
+      attributes: {
+        agents: true,
+        audit_logging: true,
+        sentinel: true,
+        state_storage: true,
+        teams: true,
+        vcs_integrations: true,
+        run_tasks: true,
+        configuration_designer: true,
+        module_tests_generation: true,
+        module_deprecations: true,
+        module_revocations: true,
+        private_policy_agents: true,
+        private_run_tasks: true,
+        private_vcs: true,
+        global_run_tasks: true,
+        groups: false,
+      },
+    },
   }))
   // --- Deprecated Global Vars API ---
   .get("/api/v2/vars", async ({ user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {

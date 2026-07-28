@@ -8,6 +8,8 @@ export const users = sqliteTable("users", {
   email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
   isSiteAdmin: integer("is_site_admin", { mode: "boolean" }).default(false),
+  isSiteAuditor: integer("is_site_auditor", { mode: "boolean" }).default(false),
+  isSuspended: integer("is_suspended", { mode: "boolean" }).default(false),
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
 });
 
@@ -125,6 +127,7 @@ export const teams = sqliteTable("teams", {
   visibility: text("visibility").notNull().default("organization"), // 'organization' or 'secret'
   ssoTeamId: text("sso_team_id"),
   organizationAccess: text("organization_access", { mode: "json" }).$type<Record<string, boolean>>().notNull().default({}),
+  allowMemberTokenManagement: integer("allow_member_token_management", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("teams_org_name_idx").on(table.orgId, table.name),
@@ -480,6 +483,7 @@ export const oauthClients = sqliteTable("oauth_clients", {
   key: text("key"),
   secret: text("secret"),
   rsaPublicKey: text("rsa_public_key"),
+  organizationScoped: integer("organization_scoped", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -889,4 +893,89 @@ export const githubWebhookDeliveries = sqliteTable("github_webhook_deliveries", 
   status: text("status").notNull().default("processing"),
   receivedAt: integer("received_at").notNull().$defaultFn(() => Date.now()),
   processedAt: integer("processed_at"),
+});
+
+export const workspaceTransfers = sqliteTable("workspace_transfers", {
+  id: text("id").primaryKey(),
+  sourceWorkspaceId: text("source_workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
+  destinationOrgId: text("destination_org_id").references(() => organizations.id, { onDelete: "set null" }),
+  destinationProjectId: text("destination_project_id").references(() => projects.id, { onDelete: "set null" }),
+  approvalMode: text("approval_mode").notNull().default("auto"),
+  cleanupOnFailure: integer("cleanup_on_failure", { mode: "boolean" }).default(true),
+  historyCutoff: text("history_cutoff"),
+  policySetMode: text("policy_set_mode").notNull().default("move"),
+  variableMode: text("variable_mode").notNull().default("move"),
+  workspacePrefix: text("workspace_prefix"),
+  workspaceSuffix: text("workspace_suffix"),
+  status: text("status").notNull().default("pending"),
+  pauseReason: text("pause_reason"),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const planExports = sqliteTable("plan_exports", {
+  id: text("id").primaryKey(),
+  planId: text("plan_id").notNull(),
+  dataType: text("data_type").notNull().default("sentinel-mock-bundle-v0"),
+  status: text("status").notNull().default("queued"),
+  downloadUrl: text("download_url"),
+  expiresAt: integer("expires_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const cidrRangeLists = sqliteTable("cidr_range_lists", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  enforcementScope: text("enforcement_scope").notNull().default("organization"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const cidrRanges = sqliteTable("cidr_ranges", {
+  id: text("id").primaryKey(),
+  cidrRangeListId: text("cidr_range_list_id").notNull().references(() => cidrRangeLists.id, { onDelete: "cascade" }),
+  value: text("value").notNull(),
+  description: text("description"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const queryRuns = sqliteTable("query_runs", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  source: text("source").notNull().default("tfe-api"),
+  variables: text("variables", { mode: "json" }).$type<Record<string, unknown>>(),
+  status: text("status").notNull().default("pending"),
+  logReadUrl: text("log_read_url"),
+  statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  canceledBy: text("canceled_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const teamProjects = sqliteTable("team_projects", {
+  id: text("id").primaryKey(),
+  teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  access: text("access").notNull().default("read"),
+  projectAccess: text("project_access", { mode: "json" }).$type<Record<string, string>>(),
+  workspaceAccess: text("workspace_access", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("team_projects_team_project_idx").on(table.teamId, table.projectId),
+]);
+
+export const adminGeneralSettings = sqliteTable("admin_general_settings", {
+  id: text("id").primaryKey(),
+  limitUserOrganizationCreation: integer("limit_user_organization_creation", { mode: "boolean" }).notNull().default(true),
+  apiRateLimitingEnabled: integer("api_rate_limiting_enabled", { mode: "boolean" }).notNull().default(true),
+  apiRateLimit: integer("api_rate_limit").notNull().default(30),
+  planTimeout: text("plan_timeout").notNull().default("2h"),
+  applyTimeout: text("apply_timeout").notNull().default("24h"),
+  sendPassingStatusesForUntriggeredSpeculativePlans: integer("send_passing_statuses", { mode: "boolean" }).notNull().default(false),
+  allowSpeculativePlansOnPullRequestsFromForks: integer("allow_speculative_plans_forks", { mode: "boolean" }).notNull().default(false),
+  defaultRemoteStateAccess: integer("default_remote_state_access", { mode: "boolean" }).notNull().default(true),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });

@@ -448,4 +448,65 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     });
     (set as { status: number }).status = 204;
     return {};
+  })
+  .get("/api/v2/organizations/:org_name/tags", async ({ params, user, request, orgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const wsList = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } });
+    const wsIds = wsList.map((w) => w.id);
+    if (wsIds.length === 0) return { data: [] };
+
+    const tags = await db.query.workspaceTags.findMany({ where: inArray(workspaceTags.workspaceId, wsIds) });
+    const tagCounts = new Map<string, number>();
+    for (const t of tags) {
+      tagCounts.set(t.key, (tagCounts.get(t.key) ?? 0) + 1);
+    }
+
+    const query = new URL(request.url).searchParams.get("q")?.toLocaleLowerCase() ?? "";
+    let items = [...tagCounts.entries()].map(([name, countVal]) => ({
+      id: `tag-${org.name}-${name}`,
+      type: "tags",
+      attributes: {
+        name,
+        "created-at": new Date().toISOString(),
+        "instance-count": countVal,
+      },
+      relationships: {
+        organization: { data: { id: org.id, type: "organizations" } },
+      },
+    }));
+
+    if (query !== "") {
+      items = items.filter((i) => i.attributes.name.toLocaleLowerCase().includes(query));
+    }
+
+    const { number, size } = pageRequest(request);
+    const total = items.length;
+    const paginated = items.slice((number - 1) * size, number * size);
+    return { data: paginated, ...pagination(request, number, size, total) };
+  })
+  .delete("/api/v2/organizations/:org_name/tags", async ({ params, user, body, orgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const dataList = Array.isArray(payload.data) ? payload.data : [];
+    const tagIds = dataList.map((item) => (item as Record<string, unknown>)?.id).filter((id): id is string => typeof id === "string");
+
+    if (tagIds.length > 0) {
+      const wsList = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } });
+      const wsIds = wsList.map((w) => w.id);
+      if (wsIds.length > 0) {
+        const prefix = `tag-${org.name}-`;
+        const tagKeys = tagIds.map((id) => id.startsWith(prefix) ? id.slice(prefix.length) : id);
+        await db.delete(workspaceTags).where(and(inArray(workspaceTags.workspaceId, wsIds), inArray(workspaceTags.key, tagKeys)));
+      }
+    }
+    (set as { status: number }).status = 204;
+    return {};
   });

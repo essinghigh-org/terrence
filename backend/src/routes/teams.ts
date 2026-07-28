@@ -25,6 +25,7 @@ type TeamItem = Readonly<{
   readonly visibility: string;
   readonly ssoTeamId: string | null;
   readonly organizationAccess: Readonly<Record<string, boolean>>;
+  readonly allowMemberTokenManagement?: boolean | null;
 }>;
 
 type TokItem = Readonly<{
@@ -83,6 +84,7 @@ async function teamResource(team: TeamItem, userCount: number, includeUsersRelat
       visibility: team.visibility,
       "sso-team-id": team.ssoTeamId,
       "organization-access": organizationAccessResource(team.organizationAccess),
+      "allow-member-token-management": team.allowMemberTokenManagement === true,
       "users-count": userCount,
       permissions: { "can-update": true, "can-destroy": true },
       ...(settings?.enabled === true ? {

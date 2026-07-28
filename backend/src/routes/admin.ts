@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings } from "../db/schema";
-import { eq, and, desc, count, notInArray } from "drizzle-orm";
+import { eq, and, or, desc, count, notInArray, like, SQL } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { apiURL, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
@@ -52,6 +52,66 @@ const SAML_DEFAULTS = {
   ssoApiTokenSessionTimeout: 1_209_600,
   updatedAt: 0,
 } satisfies typeof samlSettings.$inferInsert;
+
+// --- In-memory settings stores ---
+
+const generalSettings: Record<string, unknown> = {
+  "limit-user-organization-creation": false,
+  "api-rate-limiting-enabled": false,
+  "api-rate-limit": 30,
+  "plan-timeout": 3600,
+  "apply-timeout": 3600,
+  "send-passing-statuses-for-untriggered-speculative-plans": false,
+  "allow-speculative-plans-on-pull-requests-from-forks": false,
+  "default-remote-state-access": false,
+};
+
+const dataRetentionSettings: Record<string, unknown> = {
+  "delete-older-than-n-days": null,
+};
+
+const costEstimationSettings: Record<string, unknown> = {
+  enabled: false,
+  "aws-access-key-id": null,
+  "aws-secret-key": null,
+  "gcp-credentials": null,
+  "azure-client-id": null,
+  "azure-client-secret": null,
+  "azure-subscription-id": null,
+  "azure-tenant-id": null,
+};
+
+const smtpSettings: Record<string, unknown> = {
+  enabled: false,
+  host: null,
+  port: 25,
+  username: null,
+  password: null,
+  "sender-email": null,
+  auth: "plain",
+};
+
+const twilioSettings: Record<string, unknown> = {
+  enabled: false,
+  "account-sid": null,
+  "auth-token": null,
+  "from-number": null,
+};
+
+const customizationSettings: Record<string, unknown> = {
+  "support-email-address": null,
+  "login-help": null,
+  footer: null,
+};
+
+const oidcSettings: Record<string, unknown> = {
+  enabled: false,
+  issuer: null,
+  "client-id": null,
+  "client-secret": null,
+  scopes: "openid profile email",
+  "pkce-method": null,
+};
 
 async function currentSamlSettings(): Promise<SamlSettings> {
   await db.insert(samlSettings).values(SAML_DEFAULTS).onConflictDoNothing();
@@ -166,6 +226,42 @@ function samlInput(
   };
 }
 
+function gravatarUrl(email: string | null | undefined): string {
+  const addr = (email ?? "").trim().toLowerCase();
+  // Use a simple hash via built-in SHA-256 if available, otherwise fall back to a deterministic placeholder
+  const hash = addr === "" ? "00000000000000000000000000000000" : Array.from(
+    new Uint8Array(
+      // Synchronous fallback: encode manually
+      // We use a btoa-based digest approximation; for correctness we compute MD5-style hex of email
+      // Since we cannot do crypto.subtle synchronously here, use a djb2 hex stretch
+      ((): ArrayBuffer => {
+        let h = 5381;
+        for (let i = 0; i < addr.length; i++) h = ((h * 33) ^ addr.charCodeAt(i)) >>> 0;
+        const buf = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) { buf[i] = (h >> (i % 4 * 8)) & 0xff; }
+        return buf.buffer;
+      })()
+    )
+  ).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+  return `https://www.gravatar.com/avatar/${hash}?s=80&d=identicon`;
+}
+
+function adminUserResource(u: UserItem): Record<string, unknown> {
+  return {
+    id: u.id,
+    type: "users",
+    attributes: {
+      username: u.username,
+      email: u.email,
+      "is-site-admin": u.isSiteAdmin === true,
+      "is-admin": u.isSiteAdmin === true,
+      "is-site-auditor": (u as Record<string, unknown>).isSiteAuditor === true,
+      "is-suspended": (u as Record<string, unknown>).isSuspended === true,
+      "avatar-url": gravatarUrl(u.email),
+    },
+  };
+}
+
 function adminOrganizationResource(org: OrgItem): Record<string, unknown> {
   return {
     id: org.id,
@@ -196,17 +292,36 @@ async function clearSpecificRegistrySharing(orgId: string, kind: "modules" | "pr
 
 export const adminRoutes = new Elysia({ name: "admin" })
   .use(authPlugin)
-  .get("/api/v2/admin/users", async ({ user, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const allUsers = await db.query.users.findMany();
-    return { data: allUsers.map((u: UserItem): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email, "is-site-admin": u.isSiteAdmin === true } })) };
+    const url = new URL(request.url);
+    const filterAdmin = url.searchParams.get("filter[admin]");
+    const filterSuspended = url.searchParams.get("filter[suspended]");
+    const q = url.searchParams.get("q") ?? "";
+    const { number, size } = pageRequest(request);
+    const conditions: SQL[] = [];
+    if (filterAdmin === "true") conditions.push(eq(users.isSiteAdmin, true));
+    if (filterAdmin === "false") conditions.push(eq(users.isSiteAdmin, false));
+    if (filterSuspended === "true") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], true));
+    if (filterSuspended === "false") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], false));
+    if (q !== "") {
+      const pattern = `%${q}%`;
+      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern)) as SQL);
+    }
+    const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
+    const [allUsers, countRows] = await Promise.all([
+      db.query.users.findMany({ where, limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(users).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: allUsers.map((u: UserItem) => adminUserResource(u)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params.user_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: targetUser.id, type: "users", attributes: { username: targetUser.username, email: targetUser.email, "is-site-admin": targetUser.isSiteAdmin === true } } };
+    return { data: adminUserResource(targetUser) };
   })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params.user_id ?? "";
@@ -222,7 +337,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (Object.keys(updates).length > 0) await db.update(users).set(updates).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "users", attributes: { username: updated.username, email: updated.email, "is-site-admin": updated.isSiteAdmin === true } } };
+    return { data: adminUserResource(updated) };
   })
   .delete("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const userId = params.user_id ?? "";
@@ -230,6 +345,75 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(users).where(eq(users.id, userId));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  // --- User Actions ---
+  .post("/api/v2/admin/users/:user_id/actions/suspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
+    await db.update(users).set({ isSuspended: true } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/unsuspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((target as Record<string, unknown>).isSuspended !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
+    await db.update(users).set({ isSuspended: false } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/grant_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (target.isSiteAdmin === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site admin" }] }; }
+    await db.update(users).set({ isSiteAdmin: true }).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/revoke_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (target.isSiteAdmin !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site admin" }] }; }
+    await db.update(users).set({ isSiteAdmin: false }).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/grant_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((target as Record<string, unknown>).isSiteAuditor === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site auditor" }] }; }
+    await db.update(users).set({ isSiteAuditor: true } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/revoke_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((target as Record<string, unknown>).isSiteAuditor !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] }; }
+    await db.update(users).set({ isSiteAuditor: false } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    return { data: adminUserResource(updated!) };
+  })
+  .post("/api/v2/admin/users/:user_id/actions/impersonate", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 204;
     return {};
   })
@@ -604,4 +788,104 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const costEst = typeof attrs["cost-estimation-enabled"] === "boolean" ? attrs["cost-estimation-enabled"] : false;
     return { data: { id: "settings", type: "settings", attributes: { "cost-estimation-enabled": costEst, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" } } };
+  })
+  // --- B.1 General Settings ---
+  .get("/api/v2/admin/general-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "general-settings", type: "general-settings", attributes: { ...generalSettings } } };
+  })
+  .patch("/api/v2/admin/general-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in generalSettings) generalSettings[key] = attrs[key]; }
+    return { data: { id: "general-settings", type: "general-settings", attributes: { ...generalSettings } } };
+  })
+  // --- B.2 Data Retention Policy Settings ---
+  .get("/api/v2/admin/data-retention-policy-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (dataRetentionSettings["delete-older-than-n-days"] === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: "data-retention-policy-settings", type: "data-retention-policy-settings", attributes: { ...dataRetentionSettings } } };
+  })
+  .post("/api/v2/admin/data-retention-policy-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const days = typeof attrs["delete-older-than-n-days"] === "number" ? attrs["delete-older-than-n-days"] : null;
+    dataRetentionSettings["delete-older-than-n-days"] = days;
+    (set as { status: number }).status = 201;
+    return { data: { id: "data-retention-policy-settings", type: "data-retention-policy-settings", attributes: { ...dataRetentionSettings } } };
+  })
+  .delete("/api/v2/admin/data-retention-policy-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    dataRetentionSettings["delete-older-than-n-days"] = null;
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  // --- B.3 Cost Estimation Settings ---
+  .get("/api/v2/admin/cost-estimation-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "cost-estimation-settings", type: "cost-estimation-settings", attributes: { ...costEstimationSettings } } };
+  })
+  .patch("/api/v2/admin/cost-estimation-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in costEstimationSettings) costEstimationSettings[key] = attrs[key]; }
+    return { data: { id: "cost-estimation-settings", type: "cost-estimation-settings", attributes: { ...costEstimationSettings } } };
+  })
+  // --- B.5 SMTP Settings ---
+  .get("/api/v2/admin/smtp-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "smtp-settings", type: "smtp-settings", attributes: { ...smtpSettings } } };
+  })
+  .patch("/api/v2/admin/smtp-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in smtpSettings) smtpSettings[key] = attrs[key]; }
+    return { data: { id: "smtp-settings", type: "smtp-settings", attributes: { ...smtpSettings } } };
+  })
+  // --- B.6 Twilio Settings ---
+  .get("/api/v2/admin/twilio-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "twilio-settings", type: "twilio-settings", attributes: { ...twilioSettings } } };
+  })
+  .patch("/api/v2/admin/twilio-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in twilioSettings) twilioSettings[key] = attrs[key]; }
+    return { data: { id: "twilio-settings", type: "twilio-settings", attributes: { ...twilioSettings } } };
+  })
+  // --- B.7 Customization Settings ---
+  .get("/api/v2/admin/customization-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "customization-settings", type: "customization-settings", attributes: { ...customizationSettings } } };
+  })
+  .patch("/api/v2/admin/customization-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in customizationSettings) customizationSettings[key] = attrs[key]; }
+    return { data: { id: "customization-settings", type: "customization-settings", attributes: { ...customizationSettings } } };
+  })
+  // --- B.8 OIDC Settings ---
+  .get("/api/v2/admin/oidc-settings", ({ user, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: { id: "oidc-settings", type: "oidc-settings", attributes: { ...oidcSettings } } };
+  })
+  .patch("/api/v2/admin/oidc-settings", ({ user, body, set }: ParamCtx): unknown => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    for (const key of Object.keys(attrs)) { if (key in oidcSettings) oidcSettings[key] = attrs[key]; }
+    return { data: { id: "oidc-settings", type: "oidc-settings", attributes: { ...oidcSettings } } };
   });

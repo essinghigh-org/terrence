@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, type users } from "../db/schema";
-import { eq, and, asc, count, inArray, like, notInArray } from "drizzle-orm";
+import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
+import { eq, and, asc, desc, count, inArray, like, notInArray } from "drizzle-orm";
 import { workspaceResource, workspaceVariableResource, tagBindingResource } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspaceIdsForPermission, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
@@ -446,6 +446,62 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     const canPlan = await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "plan");
     return { data: await workspaceResource(ws, org?.defaultIacBinary, canPlan) };
+  })
+  .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const latestState = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.workspaceId, ws.id),
+      orderBy: [desc(stateVersions.createdAt)],
+    });
+
+    const resources: Record<string, unknown>[] = [];
+    if (latestState?.jsonState !== null && latestState?.jsonState !== undefined) {
+      try {
+        const parsed = typeof latestState.jsonState === "string" ? JSON.parse(latestState.jsonState) : latestState.jsonState;
+        const resList = Array.isArray(parsed?.resources) ? parsed.resources : [];
+        const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0];
+
+        for (const r of resList) {
+          if (r !== null && typeof r === "object") {
+            const rObj = r as Record<string, unknown>;
+            const rType = typeof rObj.type === "string" ? rObj.type : "resource";
+            const rName = typeof rObj.name === "string" ? rObj.name : "unnamed";
+            const mod = typeof rObj.module === "string" && rObj.module !== "" ? rObj.module : "root";
+            const address = mod === "root" ? `${rType}.${rName}` : `${mod}.${rType}.${rName}`;
+
+            let provider = "hashicorp/provider";
+            if (typeof rObj.provider === "string") {
+              const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider) || /provider\["([^"]+)"\]/.exec(rObj.provider);
+              if (match?.[1]) provider = match[1];
+            }
+
+            const id = `wsr-${Bun.hash(`${ws.id}:${address}`).toString(36)}`;
+            resources.push({
+              id,
+              type: "resources",
+              attributes: {
+                address,
+                name: rName,
+                "created-at": dateStr,
+                "updated-at": dateStr,
+                module: mod,
+                provider,
+                "provider-type": rType,
+                "modified-by-state-version-id": latestState.id,
+                "name-index": null,
+              },
+            });
+          }
+        }
+      } catch {}
+    }
+
+    const { number, size } = pageRequest(request);
+    const total = resources.length;
+    const paginated = resources.slice((number - 1) * size, number * size);
+    return { data: paginated, ...pagination(request, number, size, total) };
   })
   .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

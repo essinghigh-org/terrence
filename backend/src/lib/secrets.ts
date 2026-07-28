@@ -12,8 +12,14 @@ const KEY_FILE_NAME = ".encryption-key";
 const KEY_LENGTH = 32;
 
 let cachedKey: Buffer | undefined;
+let cachedStorageDir: string | undefined;
 
 async function loadEncryptionKey(): Promise<Buffer> {
+  const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  if (cachedStorageDir !== currentStorageDir) {
+    cachedKey = undefined;
+    cachedStorageDir = currentStorageDir;
+  }
   if (cachedKey !== undefined) return cachedKey;
 
   const password = process.env.ENCRYPTION_PASSWORD;

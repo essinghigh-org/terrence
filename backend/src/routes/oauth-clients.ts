@@ -409,6 +409,7 @@ async function oauthClientResource(oc: OcItem, request: Readonly<{ url: string }
       "api-url": oc.apiUrl,
       "http-url": oc.httpUrl,
       "rsa-public-key": oc.rsaPublicKey,
+      "organization-scoped": oc.organizationScoped === true,
       "callback-url": apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`),
       "connect-path": `/api/v2/oauth-clients/${oc.id}/connect`,
     },
