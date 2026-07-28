@@ -63,7 +63,7 @@ export function OrganizationSettings(): React.JSX.Element {
       }) as { data: { id: string; attributes: Record<string, unknown> } };
       setOrg(res.data);
       if (name !== orgNameParam) {
-        navigate(`/app/${name}/settings`);
+        void navigate(`/app/${name}/settings`);
       }
       alert("Organization settings saved");
     } catch (err: unknown) {
@@ -78,7 +78,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!confirm(`Are you sure you want to delete organization "${orgName ?? ""}"? This will remove all workspaces, runs, and data.`)) return;
     try {
       await fetchApi(`/api/v2/organizations/${orgNameParam}`, { method: "DELETE" });
-      navigate("/app");
+      void navigate("/app");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete organization";
       alert(msg);
@@ -267,13 +267,13 @@ export function OrganizationSettings(): React.JSX.Element {
                          </div>
                         <div>
                           <p className="font-semibold text-[14px] text-blue-700 hover:underline cursor-pointer">
-                            {(team.attributes["name"] as string) ?? ""}
+                            {(team.attributes["name"] as string)}
                           </p>
                           <p className="text-xs text-gray-500 mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
                         </div>
                       </div>
                       <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full border border-gray-200 capitalize font-medium tracking-wide">
-                        {(team.attributes["visibility"] as string) ?? "organization"}
+                        {(team.attributes["visibility"] as string | undefined) ?? "organization"}
                       </span>
                     </div>
                   ))}

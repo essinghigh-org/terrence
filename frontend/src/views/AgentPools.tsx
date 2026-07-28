@@ -87,7 +87,7 @@ export function AgentPools(): React.JSX.Element {
           },
         }),
       }) as { data: AgentPool };
-      setPools((prev) => [...prev, res.data]);
+      setPools((prev: AgentPool[]): AgentPool[] => [...prev, res.data]);
       setPoolDialogOpen(false);
       setPoolName("");
     } catch (err: unknown) {
@@ -103,7 +103,7 @@ export function AgentPools(): React.JSX.Element {
     setError("");
     try {
       await fetchApi(`/agent-pools/${pool.id}`, { method: "DELETE" });
-      setPools((prev) => prev.filter((p) => p.id !== pool.id));
+      setPools((prev: AgentPool[]): AgentPool[] => prev.filter((p: AgentPool): boolean => p.id !== pool.id));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete agent pool";
       setError(msg);
@@ -162,7 +162,7 @@ export function AgentPools(): React.JSX.Element {
     if (!window.confirm("Revoke this agent token?")) return;
     try {
       await fetchApi(`/agent-tokens/${tokenId}`, { method: "DELETE" });
-      setTokens((prev) => prev.filter((t) => t.id !== tokenId));
+      setTokens((prev: AgentToken[]): AgentToken[] => prev.filter((t: AgentToken): boolean => t.id !== tokenId));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to revoke token";
       setError(msg);
@@ -176,12 +176,12 @@ export function AgentPools(): React.JSX.Element {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
           <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>
         </div>
-        <Button onClick={() => { setPoolDialogOpen(true); }}>
+        <Button onClick={(): void => { setPoolDialogOpen(true); }}>
           <Plus className="mr-1.5 size-4" /> Create Agent Pool
         </Button>
       </div>
 
-      {error && (
+      {error !== "" && (
         <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
           {error}
         </div>
@@ -222,7 +222,7 @@ export function AgentPools(): React.JSX.Element {
                       </div>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {pool.attributes.organization ?? orgName}
+                      {pool.attributes.organization}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
@@ -351,7 +351,7 @@ export function AgentPools(): React.JSX.Element {
                   ) : (
                   tokens.map((token): React.JSX.Element => (
                     <TableRow key={token.id}>
-                      <TableCell className="font-medium text-xs">{token.attributes.description ?? "Agent Token"}</TableCell>
+                      <TableCell className="font-medium text-xs">{token.attributes.description}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(token.attributes["created-at"]).toLocaleDateString()}
                       </TableCell>

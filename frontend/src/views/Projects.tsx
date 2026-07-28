@@ -10,7 +10,8 @@ import { Spinner } from "../components/ui/spinner";
 import { FolderKanban, Plus, Pencil, Trash2, Layers } from "lucide-react";
 
 export function Projects(): React.JSX.Element {
-  const { orgName } = useParams<{ orgName: string }>();
+  const { orgName: rawOrgName } = useParams<{ orgName: string }>();
+  const orgName = rawOrgName ?? "";
   const [projects, setProjects] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -23,8 +24,8 @@ export function Projects(): React.JSX.Element {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
-  useEffect(() => {
-    if (orgName != null) {
+  useEffect((): void => {
+    if (orgName !== "") {
       void loadProjects();
     }
   }, [orgName]);
@@ -34,7 +35,7 @@ export function Projects(): React.JSX.Element {
     setError("");
     try {
       const res = await fetchApi(`/organizations/${orgName}/projects`) as { data: { id: string; attributes: Record<string, unknown> }[] };
-      setProjects(res.data ?? []);
+      setProjects(res.data);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load projects";
       setError(message);
@@ -164,7 +165,7 @@ export function Projects(): React.JSX.Element {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={(): void => openEditDialog(project)}
+                            onClick={(): void => { openEditDialog(project); }}
                           >
                             <Pencil className="w-3 h-3" />
                           </Button>
@@ -201,15 +202,15 @@ export function Projects(): React.JSX.Element {
             )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
-              <Input value={name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setName(event.target.value)} placeholder="My Project" />
+              <Input value={name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }} placeholder="My Project" />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Description</label>
-              <Input value={description} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setDescription(event.target.value)} placeholder="Optional description" />
+              <Input value={description} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }} placeholder="Optional description" />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={(): void => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? "Saving..." : editingProject != null ? "Save" : "Create"}
             </Button>

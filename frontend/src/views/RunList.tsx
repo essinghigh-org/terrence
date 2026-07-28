@@ -4,30 +4,40 @@ import { fetchApi } from "../lib/api";
 import { Filter, CheckCircle2, XCircle, Clock, AlertCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
 
-export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: string, orgName?: string, workspaceName?: string }) {
-  const params = useParams();
-  orgName = orgName || params.orgName;
-  workspaceName = workspaceName || params.workspaceName;
+type RunItem = {
+  id: string;
+  attributes: {
+    message?: string | null;
+    status: string;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
+    "created-at"?: string;
+  };
+};
 
-  const [runs, setRuns] = useState<any[]>([]);
+export function RunList({ workspaceId, orgName: propOrgName, workspaceName: propWorkspaceName }: Readonly<{ workspaceId: string; orgName?: string; workspaceName?: string }>): React.JSX.Element {
+  const params = useParams<{ orgName: string; workspaceName: string }>();
+  const orgName = propOrgName ?? params.orgName ?? "";
+  const workspaceName = propWorkspaceName ?? params.workspaceName ?? "";
+
+  const [runs, setRuns] = useState<RunItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadRuns();
+  useEffect((): void => {
+    void loadRuns();
   }, [workspaceId]);
 
-  async function loadRuns() {
+  async function loadRuns(): Promise<void> {
     try {
-      const data = await fetchApi(`/api/v2/workspaces/${workspaceId}/runs`);
-      setRuns(data.data || []);
-    } catch (err) {
+      const data = await fetchApi(`/api/v2/workspaces/${workspaceId}/runs`) as { data: RunItem[] };
+      setRuns(data.data);
+    } catch (err: unknown) {
       console.error(err);
     } finally {
       setLoading(false);
     }
   }
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string): React.JSX.Element => {
     switch(status) {
       case 'applied':
       case 'planned_and_finished':
@@ -46,7 +56,7 @@ export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: 
     }
   };
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: string): string => {
     const map: Record<string, string> = {
       'applied': 'Applied',
       'planned_and_finished': 'Planned and finished',
@@ -59,8 +69,23 @@ export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: 
       'canceled': 'Canceled',
       'discarded': 'Discarded'
     };
-    return map[status] || status;
+    return map[status] ?? status;
   };
+
+  async function handleStartNewRun(): Promise<void> {
+    await fetchApi("/api/v2/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        data: {
+          type: "runs",
+          relationships: {
+            workspace: { data: { type: "workspaces", id: workspaceId } },
+          },
+        },
+      }),
+    });
+    void loadRuns();
+  }
 
   if (loading) return <div className="py-8 text-center text-gray-500">Loading runs...</div>;
 
@@ -79,7 +104,7 @@ export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: 
           <div className="p-12 text-center text-gray-500">
             <h3 className="text-base text-gray-900 font-medium mb-1">No runs yet</h3>
             <p className="text-sm mb-4">There is no run history for this workspace.</p>
-            <Button className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none" onClick={async () => { await fetchApi("/api/v2/runs", { method: "POST", body: JSON.stringify({ data: { type: "runs", relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } } } }) }); loadRuns(); }}>
+            <Button className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none" onClick={(): void => { void handleStartNewRun(); }}>
               Start new run
             </Button>
           </div>
@@ -95,14 +120,14 @@ export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: 
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => (
+              {runs.map((run): React.JSX.Element => (
                 <tr key={run.id} className="border-b border-gray-200 hover:bg-gray-50 group transition-colors">
                   <td className="px-4 py-4 border-r border-gray-200">
                     <Link
                       to={`/app/${orgName}/workspaces/${workspaceName}/runs/${run.id}`}
                       className="text-blue-700 font-medium hover:underline text-[13px] block mb-0.5"
                     >
-                      {run.attributes.message || "Manual run"}
+                      {run.attributes.message ?? "Manual run"}
                     </Link>
                     <div className="text-[11px] text-gray-500 font-mono">
                       {run.id}
@@ -124,7 +149,7 @@ export function RunList({ workspaceId, orgName, workspaceName }: { workspaceId: 
                     </div>
                   </td>
                   <td className="px-4 py-4 text-[13px] text-gray-500">
-                    {new Date(run.attributes["created-at"]).toLocaleString()}
+                    {new Date(run.attributes["created-at"] ?? "").toLocaleString()}
                   </td>
                 </tr>
               ))}

@@ -5,16 +5,19 @@ import { Button } from "../components/ui/button";
 import { CheckCircle2, XCircle, Clock, AlertCircle, ChevronDown, ExternalLink } from "lucide-react";
 
 export function RunDetail(): React.JSX.Element {
-  const { orgName, workspaceName, runId } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
+  const { orgName: rawOrgName, workspaceName: rawWorkspaceName, runId: rawRunId } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
+  const orgName = rawOrgName ?? "";
+  const workspaceName = rawWorkspaceName ?? "";
+  const runId = rawRunId ?? "";
   const [run, setRun] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<string>("");
   const logsRef = useRef<HTMLPreElement>(null);
 
-  useEffect((): (() => void) | void => {
+  useEffect((): (() => void) => {
     void loadRun();
     const interval = window.setInterval((): void => { void loadRun(); }, 3000);
-    return () => { clearInterval(interval); };
+    return (): void => { clearInterval(interval); };
   }, [runId]);
 
   async function loadRun(): Promise<void> {
@@ -23,7 +26,7 @@ export function RunDetail(): React.JSX.Element {
       setRun(data.data);
 
       if (data.data.attributes["status"] !== 'pending') {
-        const logData = await fetchApi(`/api/v2/runs/${runId}/logs`) as { logs?: Array<{ message: string }> };
+        const logData = await fetchApi(`/api/v2/runs/${runId}/logs`) as { logs?: { message: string }[] };
         if (logData.logs != null) {
            setLogs(logData.logs.map((l: { message: string }): string => l.message).join(""));
         }
@@ -35,8 +38,8 @@ export function RunDetail(): React.JSX.Element {
     }
   }
 
-  useEffect(() => {
-    if (logsRef.current) {
+  useEffect((): void => {
+    if (logsRef.current != null) {
       logsRef.current.scrollTop = logsRef.current.scrollHeight;
     }
   }, [logs]);
@@ -45,7 +48,7 @@ export function RunDetail(): React.JSX.Element {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/apply`, { method: "POST" });
       void loadRun();
-    } catch (err: unknown) {
+    } catch (_err: unknown) {
       alert("Failed to apply run");
     }
   }
@@ -54,7 +57,7 @@ export function RunDetail(): React.JSX.Element {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/discard`, { method: "POST" });
       void loadRun();
-    } catch (err: unknown) {
+    } catch (_err: unknown) {
       alert("Failed to discard run");
     }
   }
@@ -68,7 +71,7 @@ export function RunDetail(): React.JSX.Element {
     }
   }
 
-  if (loading === true && run === null) return <div className="p-8 text-gray-500">Loading run...</div>;
+  if (loading && run === null) return <div className="p-8 text-gray-500">Loading run...</div>;
   if (run === null) return <div className="p-8 text-gray-500">Run not found</div>;
 
   const status = run.attributes["status"] as string;
@@ -132,7 +135,7 @@ export function RunDetail(): React.JSX.Element {
                    <div className="flex items-center gap-4">
                       {run.attributes["has-changes"] !== undefined && (
                         <span className="text-sm text-gray-600">
-                           {run.attributes["has-changes"] ? "Changes to apply" : "No changes"}
+                       {(run.attributes["has-changes"] as boolean | undefined) === true ? "Changes to apply" : "No changes"}
                         </span>
                       )}
                       <ChevronDown className="h-4 w-4 text-gray-400" />
@@ -142,7 +145,7 @@ export function RunDetail(): React.JSX.Element {
                 {/* Embedded Terminal for Plan */}
                 {(!isPending) && (
                   <div className="bg-[#111315] p-4 text-gray-300 font-mono text-[13px] leading-relaxed border-t border-gray-200 relative overflow-hidden">
-                     <pre ref={logsRef} className="max-h-[400px] overflow-y-auto whitespace-pre-wrap">{logs || "Initializing..."}</pre>
+                       <pre ref={logsRef} className="max-h-[400px] overflow-y-auto whitespace-pre-wrap">{logs !== "" ? logs : "Initializing..."}</pre>
                      <div className="absolute top-4 right-4 flex gap-2">
                         <button className="bg-white/10 hover:bg-white/20 text-white rounded p-1.5 transition-colors">
                            <ExternalLink className="h-3.5 w-3.5" />
@@ -227,7 +230,7 @@ export function RunDetail(): React.JSX.Element {
               <div>
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Auto-apply</div>
                 <div className="text-[13px] text-gray-900">
-                   {run.attributes["auto-apply"] ? "Enabled" : "Disabled"}
+                   {(run.attributes["auto-apply"] as boolean | undefined) === true ? "Enabled" : "Disabled"}
                 </div>
               </div>
             </div>

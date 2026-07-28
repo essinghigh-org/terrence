@@ -38,18 +38,18 @@ function buildNextPageUrl(current: string, nextPage: number): string {
   return base + "?" + search.toString();
 }
 
-async function fetchAllPages(path: string): Promise<unknown[]> {
-  const results: unknown[] = [];
+async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const results: T[] = [];
   let url: string | null = path;
   let page = 1;
   while (url != null) {
-    const res = await fetchApi(url) as { data?: unknown[]; links?: { next?: string | null }; meta?: { pagination?: Record<string, unknown> } };
+    const res = await fetchApi(url) as { data?: T[]; links?: { next?: string | null }; meta?: { pagination?: Record<string, unknown> } };
     if (res.data != null && Array.isArray(res.data)) {
       for (const item of res.data) results.push(item);
     }
-    const nextLink = res?.links?.next ?? null;
-    const nextPage = res?.meta?.pagination?.["next-page"];
-    const total = res?.meta?.pagination?.["total-pages"];
+    const nextLink = res.links?.next ?? null;
+    const nextPage = res.meta?.pagination?.["next-page"];
+    const total = res.meta?.pagination?.["total-pages"] as number | undefined;
     if (nextLink != null) {
       url = nextLink;
       page++;
@@ -74,7 +74,9 @@ type VariableSet = {
     name: string;
     description: string | null;
     global: boolean;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
     "var-count": number;
+    // eslint-disable-next-line @typescript-eslint/naming-convention
     "workspace-count": number;
   };
   relationships: {
@@ -101,7 +103,7 @@ type VariableSetVariable = {
   };
 }
 
-function messageFrom(error: unknown, fallback: string) {
+function messageFrom(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
@@ -115,7 +117,7 @@ function VariablesDialog({
   variableSet: VariableSet | null;
   onOpenChange: (open: boolean) => void;
   onCountChange: (variableSetId: string, delta: number) => void;
-}) {
+}): React.JSX.Element {
   const [variables, setVariables] = useState<VariableSetVariable[]>([]);
   const [loading, setLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -129,34 +131,34 @@ function VariablesDialog({
   const [error, setError] = useState("");
   const variableSetId = variableSet?.id;
 
-  useEffect(() => {
-    if (!open || !variableSetId) return;
+  useEffect((): (() => void) | undefined => {
+    if (!open || variableSetId === undefined) return;
     let active = true;
     setVariables([]);
     setLoading(true);
     setFormOpen(false);
     setError("");
 
-    fetchAllPages(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
-      .then((data) => {
-        if (active) setVariables(data ?? []);
+    fetchAllPages<VariableSetVariable>(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
+      .then((data: VariableSetVariable[]): void => {
+        if (active) setVariables(data);
       })
-      .catch((caught: unknown) => {
+      .catch((caught: unknown): void => {
         if (active) setError(messageFrom(caught, "Failed to load variables"));
       })
-      .finally(() => {
+      .finally((): void => {
         if (active) setLoading(false);
       });
 
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [open, variableSetId]);
 
-  const openForm = (variable?: VariableSetVariable) => {
+  const openForm = (variable?: VariableSetVariable): void => {
     setEditing(variable ?? null);
     setKey(variable?.attributes.key ?? "");
-    setValue(variable?.attributes.sensitive ? "" : variable?.attributes.value ?? "");
+    setValue(variable?.attributes.sensitive === true ? "" : variable?.attributes.value ?? "");
     setCategory(variable?.attributes.category ?? "terraform");
     setSensitive(variable?.attributes.sensitive ?? false);
     setDescription(variable?.attributes.description ?? "");
@@ -164,10 +166,10 @@ function VariablesDialog({
     setFormOpen(true);
   };
 
-  const saveVariable = async (event: React.SyntheticEvent) => {
+  const saveVariable = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!variableSetId) return;
-    if (editing?.attributes.sensitive && !sensitive && !value) {
+    if (variableSetId == null) return;
+    if (editing?.attributes.sensitive === true && !sensitive && value === "") {
       setError("Enter a new value before making this sensitive variable visible.");
       return;
     }
@@ -176,30 +178,30 @@ function VariablesDialog({
       key: key.trim(),
       category,
       sensitive,
-      description: description.trim() || null,
+      description: description.trim() !== "" ? description.trim() : null,
     };
-    if (!editing?.attributes.sensitive || value) attributes.value = value;
+    if (editing?.attributes.sensitive !== true || value !== "") attributes["value"] = value;
 
     setSaving(true);
     setError("");
     try {
       const response = await fetchApi(
-        `/varsets/${variableSetId}/relationships/vars${editing ? `/${editing.id}` : ""}`,
+        `/varsets/${variableSetId}/relationships/vars${editing != null ? `/${editing.id}` : ""}`,
         {
-          method: editing ? "PATCH" : "POST",
+          method: editing != null ? "PATCH" : "POST",
           body: JSON.stringify({ data: { type: "vars", attributes } }),
         },
-      );
-      const saved = response.data as VariableSetVariable;
-      setVariables((current) => {
-        const next = editing
-          ? current.map((variable) => (variable.id === saved.id ? saved : variable))
+      ) as { data: VariableSetVariable };
+      const saved = response.data;
+      setVariables((current: VariableSetVariable[]): VariableSetVariable[] => {
+        const next = editing != null
+          ? current.map((variable: VariableSetVariable): VariableSetVariable => (variable.id === saved.id ? saved : variable))
           : [...current, saved];
-        return next.sort((left, right) =>
+        return next.sort((left: VariableSetVariable, right: VariableSetVariable): number =>
           left.attributes.key.localeCompare(right.attributes.key),
         );
       });
-      if (!editing) onCountChange(variableSetId, 1);
+      if (editing == null) onCountChange(variableSetId, 1);
       setFormOpen(false);
     } catch (caught: unknown) {
       setError(messageFrom(caught, "Failed to save variable"));
@@ -208,14 +210,14 @@ function VariablesDialog({
     }
   };
 
-  const deleteVariable = async (variable: VariableSetVariable) => {
-    if (!variableSetId || !window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
+  const deleteVariable = async (variable: VariableSetVariable): Promise<void> => {
+    if (variableSetId == null || !window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
     setError("");
     try {
       await fetchApi(`/varsets/${variableSetId}/relationships/vars/${variable.id}`, {
         method: "DELETE",
       });
-      setVariables((current) => current.filter((item) => item.id !== variable.id));
+      setVariables((current: VariableSetVariable[]): VariableSetVariable[] => current.filter((item: VariableSetVariable): boolean => item.id !== variable.id));
       onCountChange(variableSetId, -1);
     } catch (caught: unknown) {
       setError(messageFrom(caught, "Failed to delete variable"));
@@ -227,7 +229,7 @@ function VariablesDialog({
         <DialogHeader>
           <DialogTitle>
             {formOpen
-              ? editing
+              ? editing != null
                 ? "Edit variable"
                 : "Add variable"
               : `Variables in ${variableSet?.attributes.name ?? "variable set"}`}
@@ -247,8 +249,8 @@ function VariablesDialog({
                 <Input
                   id="variable-key"
                   value={key}
-                  onChange={(event) => { setKey(event.target.value); }}
-                  onInput={(event: any) => { setKey(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }}
                   autoFocus
                   aria-invalid={Boolean(error)}
                 />
@@ -259,16 +261,16 @@ function VariablesDialog({
                   id="variable-value"
                   type={sensitive ? "password" : "text"}
                   value={value}
-                  onChange={(event) => { setValue(event.target.value); }}
-                  onInput={(event: any) => { setValue(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setValue(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setValue(event.currentTarget.value); }}
                 />
-                {editing?.attributes.sensitive && (
+                {editing?.attributes.sensitive === true && (
                   <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
                 )}
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                <Select value={category} onValueChange={(val) => { setCategory(val as VariableCategory); }}>
+                <Select value={category} onValueChange={(val: string): void => { setCategory(val as VariableCategory); }}>
                   <SelectTrigger id="variable-category" className="w-full">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
@@ -283,15 +285,15 @@ function VariablesDialog({
                 <Input
                   id="variable-description"
                   value={description}
-                  onChange={(event) => { setDescription(event.target.value); }}
-                  onInput={(event: any) => { setDescription(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
                 />
               </Field>
               <Field orientation="horizontal">
                 <Checkbox
                   id="variable-sensitive"
                   checked={sensitive}
-                  onCheckedChange={(checked) => { setSensitive(checked === true); }}
+                  onCheckedChange={(checked: boolean): void => { setSensitive(checked); }}
                 />
                 <div className="flex flex-col gap-0.5">
                   <FieldLabel htmlFor="variable-sensitive">Sensitive</FieldLabel>
@@ -300,7 +302,7 @@ function VariablesDialog({
               </Field>
               <FieldError>{error}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => { setFormOpen(false); }}>
+                <Button type="button" variant="outline" onClick={(): void => { setFormOpen(false); }}>
                   Back
                 </Button>
                 <Button type="submit" disabled={saving}>
@@ -313,9 +315,9 @@ function VariablesDialog({
         ) : (
           <div className="flex flex-col gap-4">
             <div className="flex justify-end">
-              <Button onClick={() => { openForm(); }}>Add variable</Button>
+              <Button onClick={(): void => { openForm(); }}>Add variable</Button>
             </div>
-            {error && (
+            {error !== "" && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
               </p>
@@ -340,7 +342,7 @@ function VariablesDialog({
                     </TableRow>
                   )}
                   {!loading &&
-                    variables.map((variable) => (
+                    variables.map((variable): React.JSX.Element => (
                       <TableRow key={variable.id}>
                         <TableCell className="font-mono font-medium">
                           {variable.attributes.key}
@@ -348,27 +350,27 @@ function VariablesDialog({
                         <TableCell className="max-w-48 truncate font-mono text-xs">
                           {variable.attributes.sensitive
                             ? "••••••••"
-                            : variable.attributes.value || "—"}
+                            : variable.attributes.value ?? "—"}
                         </TableCell>
                         <TableCell>
                           {variable.attributes.category === "env" ? "Environment" : "Terraform"}
                         </TableCell>
                         <TableCell className="max-w-48 truncate text-muted-foreground">
-                          {variable.attributes.description || "—"}
+                          {variable.attributes.description ?? "—"}
                         </TableCell>
                         <TableCell>
                           <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => { openForm(variable); }}
+                              onClick={(): void => { openForm(variable); }}
                             >
                               Edit
                             </Button>
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={async () => deleteVariable(variable)}
+                              onClick={(): void => { void deleteVariable(variable); }}
                             >
                               Delete
                             </Button>
@@ -393,8 +395,9 @@ function VariablesDialog({
   );
 }
 
-export function VariableSets() {
-  const { orgName } = useParams();
+export function VariableSets(): React.JSX.Element {
+  const { orgName: rawOrgName } = useParams<{ orgName: string }>();
+  const orgName = rawOrgName ?? "";
   const [variableSets, setVariableSets] = useState<VariableSet[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
@@ -416,34 +419,34 @@ export function VariableSets() {
   const [variablesOpen, setVariablesOpen] = useState(false);
   const [variablesSet, setVariablesSet] = useState<VariableSet | null>(null);
 
-  useEffect(() => {
-    if (!orgName) return;
+  useEffect((): (() => void) | undefined => {
+    if (orgName === "") return;
     let active = true;
     setLoading(true);
     setPageError("");
 
     Promise.all([
-      fetchAllPages(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
-      fetchAllPages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
+      fetchAllPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
+      fetchAllPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
     ])
-      .then(([setsData, workspacesData]) => {
+      .then(([setsData, workspacesData]: [VariableSet[], Workspace[]]): void => {
         if (!active) return;
-        setVariableSets(setsData ?? []);
-        setWorkspaces(workspacesData ?? []);
+        setVariableSets(setsData);
+        setWorkspaces(workspacesData);
       })
-      .catch((error: unknown) => {
+      .catch((error: unknown): void => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
       })
-      .finally(() => {
+      .finally((): void => {
         if (active) setLoading(false);
       });
 
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [orgName]);
 
-  const openEditor = (variableSet?: VariableSet) => {
+  const openEditor = (variableSet?: VariableSet): void => {
     setEditing(variableSet ?? null);
     setName(variableSet?.attributes.name ?? "");
     setDescription(variableSet?.attributes.description ?? "");
@@ -452,37 +455,37 @@ export function VariableSets() {
     setEditorOpen(true);
   };
 
-  const saveVariableSet = async (event: React.SyntheticEvent) => {
+  const saveVariableSet = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!orgName) return;
+    if (orgName === "") return;
     setSavingSet(true);
     setEditorError("");
 
     try {
       const response = await fetchApi(
-        editing
+        editing != null
           ? `/varsets/${editing.id}`
           : `/organizations/${encodeURIComponent(orgName)}/varsets`,
         {
-          method: editing ? "PATCH" : "POST",
+          method: editing != null ? "PATCH" : "POST",
           body: JSON.stringify({
             data: {
               type: "varsets",
               attributes: {
                 name: name.trim(),
-                description: description.trim() || null,
+                description: description.trim() !== "" ? description.trim() : null,
                 global,
               },
             },
           }),
         },
-      );
-      const saved = response.data as VariableSet;
-      setVariableSets((current) => {
-        const next = editing
-          ? current.map((item) => (item.id === saved.id ? saved : item))
+      ) as { data: VariableSet };
+      const saved = response.data;
+      setVariableSets((current: VariableSet[]): VariableSet[] => {
+        const next = editing != null
+          ? current.map((item: VariableSet): VariableSet => (item.id === saved.id ? saved : item))
           : [...current, saved];
-        return next.sort((left, right) =>
+        return next.sort((left: VariableSet, right: VariableSet): number =>
           left.attributes.name.localeCompare(right.attributes.name),
         );
       });
@@ -494,34 +497,34 @@ export function VariableSets() {
     }
   };
 
-  const deleteVariableSet = async (variableSet: VariableSet) => {
+  const deleteVariableSet = async (variableSet: VariableSet): Promise<void> => {
     if (!window.confirm(`Delete variable set "${variableSet.attributes.name}"?`)) return;
     setPageError("");
     try {
       await fetchApi(`/varsets/${variableSet.id}`, { method: "DELETE" });
-      setVariableSets((current) => current.filter((item) => item.id !== variableSet.id));
+      setVariableSets((current: VariableSet[]): VariableSet[] => current.filter((item: VariableSet): boolean => item.id !== variableSet.id));
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable set"));
     }
   };
 
-  const openWorkspaceEditor = (variableSet: VariableSet) => {
+  const openWorkspaceEditor = (variableSet: VariableSet): void => {
     setWorkspaceSet(variableSet);
     setSelectedWorkspaceIds(
-      new Set((variableSet.relationships.workspaces?.data ?? []).map((workspace) => workspace.id)),
+      new Set((variableSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id)),
     );
     setWorkspaceError("");
     setWorkspaceOpen(true);
   };
 
-  const openVariables = (variableSet: VariableSet) => {
+  const openVariables = (variableSet: VariableSet): void => {
     setVariablesSet(variableSet);
     setVariablesOpen(true);
   };
 
-  const updateVariableCount = (variableSetId: string, delta: number) => {
-    setVariableSets((current) =>
-      current.map((variableSet) =>
+  const updateVariableCount = (variableSetId: string, delta: number): void => {
+    setVariableSets((current: VariableSet[]): VariableSet[] =>
+      current.map((variableSet: VariableSet): VariableSet =>
         variableSet.id === variableSetId
           ? {
               ...variableSet,
@@ -535,8 +538,8 @@ export function VariableSets() {
     );
   };
 
-  const toggleWorkspace = (workspaceId: string, checked: boolean) => {
-    setSelectedWorkspaceIds((current) => {
+  const toggleWorkspace = (workspaceId: string, checked: boolean): void => {
+    setSelectedWorkspaceIds((current: Set<string>): Set<string> => {
       const next = new Set(current);
       if (checked) next.add(workspaceId);
       else next.delete(workspaceId);
@@ -544,28 +547,28 @@ export function VariableSets() {
     });
   };
 
-  const saveWorkspaceRelationships = async (event: React.SyntheticEvent) => {
+  const saveWorkspaceRelationships = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!workspaceSet) return;
+    if (workspaceSet == null) return;
 
     const currentIds = new Set(
-      (workspaceSet.relationships.workspaces?.data ?? []).map((workspace) => workspace.id),
+      (workspaceSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id),
     );
-    const attached = [...selectedWorkspaceIds].filter((id) => !currentIds.has(id));
-    const detached = [...currentIds].filter((id) => !selectedWorkspaceIds.has(id));
-    const relationshipBody = (ids: string[]) =>
-      JSON.stringify({ data: ids.map((id) => ({ id, type: "workspaces" })) });
+    const attached = [...selectedWorkspaceIds].filter((id: string): boolean => !currentIds.has(id));
+    const detached = [...currentIds].filter((id: string): boolean => !selectedWorkspaceIds.has(id));
+    const relationshipBody = (ids: string[]): string =>
+      JSON.stringify({ data: ids.map((id: string): { id: string; type: string } => ({ id, type: "workspaces" })) });
 
     setSavingWorkspaces(true);
     setWorkspaceError("");
     try {
-      if (attached.length) {
+      if (attached.length > 0) {
         await fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
           method: "POST",
           body: relationshipBody(attached),
         });
       }
-      if (detached.length) {
+      if (detached.length > 0) {
         await fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
           method: "DELETE",
           body: relationshipBody(detached),
@@ -581,22 +584,22 @@ export function VariableSets() {
         relationships: {
           ...workspaceSet.relationships,
           workspaces: {
-            data: [...selectedWorkspaceIds].map((id) => ({ id, type: "workspaces" })),
+            data: [...selectedWorkspaceIds].map((id: string): { id: string; type: string } => ({ id, type: "workspaces" })),
           },
         },
       };
-      setVariableSets((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item)),
+      setVariableSets((current: VariableSet[]): VariableSet[] =>
+        current.map((item: VariableSet): VariableSet => (item.id === updated.id ? updated : item)),
       );
       setWorkspaceSet(updated);
       setWorkspaceOpen(false);
     } catch (error: unknown) {
       try {
-        const fetched = await fetchApi(`/varsets/${workspaceSet.id}`);
-        if (fetched?.data) {
+        const fetched = await fetchApi(`/varsets/${workspaceSet.id}`) as { data?: VariableSet } | undefined;
+        if (fetched?.data != null) {
           const freshSet = fetched.data;
-          setVariableSets((current) =>
-            current.map((item) => (item.id === freshSet.id ? freshSet : item)),
+          setVariableSets((current: VariableSet[]): VariableSet[] =>
+            current.map((item: VariableSet): VariableSet => (item.id === freshSet.id ? freshSet : item)),
           );
           setWorkspaceSet(freshSet);
         }
@@ -620,11 +623,11 @@ export function VariableSets() {
           <Link to={`/app/${orgName}`} className={buttonVariants({ variant: "outline" })}>
             Workspaces
           </Link>
-          <Button onClick={() => { openEditor(); }}>New variable set</Button>
+          <Button onClick={(): void => { openEditor(); }}>New variable set</Button>
         </div>
       </header>
 
-      {pageError && (
+      {pageError !== "" && (
         <p role="alert" className="text-sm text-destructive">
           {pageError}
         </p>
@@ -651,11 +654,11 @@ export function VariableSets() {
               </TableRow>
             )}
             {!loading &&
-              variableSets.map((variableSet) => (
+              variableSets.map((variableSet): React.JSX.Element => (
                 <TableRow key={variableSet.id}>
                   <TableCell className="font-medium">{variableSet.attributes.name}</TableCell>
                   <TableCell className="max-w-72 truncate text-muted-foreground">
-                    {variableSet.attributes.description || "—"}
+                    {variableSet.attributes.description ?? "—"}
                   </TableCell>
                   <TableCell>{variableSet.attributes.global ? "Global" : "Selected"}</TableCell>
                   <TableCell>{variableSet.attributes["var-count"]}</TableCell>
@@ -669,25 +672,25 @@ export function VariableSets() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => { openVariables(variableSet); }}
+                        onClick={(): void => { openVariables(variableSet); }}
                       >
                         Variables
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => { openWorkspaceEditor(variableSet); }}
+                        onClick={(): void => { openWorkspaceEditor(variableSet); }}
                         disabled={variableSet.attributes.global}
                       >
                         Workspaces
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => { openEditor(variableSet); }}>
+                      <Button size="sm" variant="outline" onClick={(): void => { openEditor(variableSet); }}>
                         Edit
                       </Button>
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={async () => deleteVariableSet(variableSet)}
+                        onClick={(): void => { void deleteVariableSet(variableSet); }}
                       >
                         Delete
                       </Button>
@@ -709,9 +712,9 @@ export function VariableSets() {
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editing ? "Edit variable set" : "New variable set"}</DialogTitle>
+            <DialogTitle>{editing != null ? "Edit variable set" : "New variable set"}</DialogTitle>
             <DialogDescription>
-              {editing
+              {editing != null
                 ? "Update this reusable group of configuration."
                 : "Create a reusable group of configuration for this organization."}
             </DialogDescription>
@@ -723,8 +726,8 @@ export function VariableSets() {
                 <Input
                   id="variable-set-name"
                   value={name}
-                  onChange={(event) => { setName(event.target.value); }}
-                  onInput={(event: any) => { setName(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                   autoFocus
                   aria-invalid={Boolean(editorError)}
                 />
@@ -734,15 +737,15 @@ export function VariableSets() {
                 <Input
                   id="variable-set-description"
                   value={description}
-                  onChange={(event) => { setDescription(event.target.value); }}
-                  onInput={(event: any) => { setDescription(event.target.value); }}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
                 />
               </Field>
               <Field orientation="horizontal">
                 <Checkbox
                   id="variable-set-global"
                   checked={global}
-                  onCheckedChange={(checked) => { setGlobal(checked === true); }}
+                  onCheckedChange={(checked: boolean): void => { setGlobal(checked); }}
                 />
                 <div className="flex flex-col gap-0.5">
                   <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
@@ -751,7 +754,7 @@ export function VariableSets() {
               </Field>
               <FieldError>{editorError}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => { setEditorOpen(false); }}>
+                <Button type="button" variant="outline" onClick={(): void => { setEditorOpen(false); }}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={savingSet}>
@@ -775,13 +778,13 @@ export function VariableSets() {
           <form onSubmit={saveWorkspaceRelationships} noValidate>
             <FieldGroup>
               <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
-                {workspaces.map((workspace) => (
+                {workspaces.map((workspace): React.JSX.Element => (
                   <Field key={workspace.id} orientation="horizontal">
                     <Checkbox
                       id={`variable-set-workspace-${workspace.id}`}
                       checked={selectedWorkspaceIds.has(workspace.id)}
-                      onCheckedChange={(checked) =>
-                        { toggleWorkspace(workspace.id, checked === true); }
+                      onCheckedChange={(checked: boolean): void =>
+                        { toggleWorkspace(workspace.id, checked); }
                       }
                     />
                     <FieldLabel htmlFor={`variable-set-workspace-${workspace.id}`}>
@@ -797,7 +800,7 @@ export function VariableSets() {
               </div>
               <FieldError>{workspaceError}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => { setWorkspaceOpen(false); }}>
+                <Button type="button" variant="outline" onClick={(): void => { setWorkspaceOpen(false); }}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={savingWorkspaces}>
