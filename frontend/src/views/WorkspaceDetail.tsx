@@ -205,7 +205,31 @@ export function WorkspaceDetail(): React.JSX.Element {
         {activeTab === "runs" && <RunList workspaceId={workspace.id} />}
         {activeTab === "states" && <StateHistory workspaceId={workspace.id} />}
         {activeTab === "variables" && <div className="text-gray-500">Variables configuration goes here.</div>}
-        {activeTab === "settings" && <div className="text-gray-500">Settings go here.</div>}
+
+{activeTab === "settings" && (
+  <div className="flex flex-col gap-6 max-w-4xl">
+    <div className="bg-white border border-gray-200 rounded-md shadow-sm p-6">
+      <h3 className="text-lg font-semibold mb-4">Version Control</h3>
+      <p className="text-sm text-gray-500 mb-6">Connect this workspace to a VCS repository to automatically trigger runs on push or pull requests.</p>
+
+      {workspace.attributes["vcs-repo"] != null ? (
+        <div className="p-4 bg-gray-50 border border-gray-200 rounded-md">
+          <p className="font-medium">{(workspace.attributes["vcs-repo"] as { identifier?: string }).identifier}</p>
+          <p className="text-sm text-gray-500">Branch: {(workspace.attributes["vcs-repo"] as { branch?: string }).branch ?? "default"}</p>
+          <div className="mt-4">
+            <Button variant="destructive" size="sm" onClick={(): void => { alert("Disconnecting VCS is typically done via the API and a robust settings form."); }}>Disconnect</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-sm text-gray-600">
+          <p>No VCS repository is connected to this workspace.</p>
+          <p className="mt-2">To connect a repository, use the global Create Workspace flow or the API.</p>
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
       </div>
     </div>
   );

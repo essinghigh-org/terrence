@@ -95,7 +95,7 @@ export const workspaces = sqliteTable("workspaces", {
   fileTriggersEnabled: integer("file_triggers_enabled", { mode: "boolean" }).default(true),
   triggerPrefixes: text("trigger_prefixes", { mode: "json" }).$type<string[]>(),
   triggerPatterns: text("trigger_patterns", { mode: "json" }).$type<string[]>(),
-  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
+  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; githubAppInstallationId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
   queueAllRuns: integer("queue_all_runs", { mode: "boolean" }).default(true),
   speculativeEnabled: integer("speculative_enabled", { mode: "boolean" }).default(true),
   allowDestroyPlan: integer("allow_destroy_plan", { mode: "boolean" }).default(true),
@@ -324,7 +324,7 @@ export const policySets = sqliteTable("policy_sets", {
   agentEnabled: integer("agent_enabled", { mode: "boolean" }).default(false),
   policyToolVersion: text("policy_tool_version"),
   policiesPath: text("policies_path"),
-  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
+  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; githubAppInstallationId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -565,5 +565,15 @@ export const adminOpaVersions = sqliteTable("admin_opa_versions", {
   sha: text("sha"),
   deprecated: integer("deprecated", { mode: "boolean" }).default(false),
   isDefault: integer("is_default", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const githubAppInstallations = sqliteTable("github_app_installations", {
+  id: text("id").primaryKey(), // e.g. "ghain-12345"
+  name: text("name").notNull(),
+  installationId: integer("installation_id").notNull(),
+  iconUrl: text("icon_url"),
+  installationType: text("installation_type").default("Organization"), // "User" or "Organization"
+  installationUrl: text("installation_url"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

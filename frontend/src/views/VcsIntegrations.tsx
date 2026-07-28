@@ -21,13 +21,26 @@ type OAuthClient = {
   };
 }
 
+
+type GitHubAppInstallation = {
+  id: string;
+  attributes: {
+    name: string;
+    "installation-id": number;
+    "icon-url": string | null;
+    "installation-type": string | null;
+    "installation-url": string | null;
+  };
+}
+
 export function VcsIntegrations(): React.JSX.Element {
-  const { orgName } = useParams<{ orgName: string }>();
+  const { orgName } = useParams<{ orgName?: string }>();
   const [clients, setClients] = useState<OAuthClient[]>([]);
+  const [ghApps, setGhApps] = useState<GitHubAppInstallation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Create Modal
+  // Create Modal OAuth
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [serviceProvider, setServiceProvider] = useState("github");
@@ -38,6 +51,14 @@ export function VcsIntegrations(): React.JSX.Element {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
 
+  // Create Modal GH App
+  const [ghDialogOpen, setGhDialogOpen] = useState(false);
+  const [ghName, setGhName] = useState("");
+  const [ghInstallationId, setGhInstallationId] = useState("");
+  const [ghCreating, setGhCreating] = useState(false);
+  const [ghFormError, setGhFormError] = useState("");
+
+
   useEffect((): void => {
     if (orgName != null) void loadOAuthClients();
   }, [orgName]);
@@ -46,11 +67,17 @@ export function VcsIntegrations(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+      const ghRes = await fetchApi('/api/v2/github-app/installations') as { data: GitHubAppInstallation[] };
+      setGhApps(ghRes.data);
+    } catch {
+       // Optional silently fail
+    }
+
+    try {
       const res = await fetchApi(`/organizations/${orgName ?? ""}/oauth-clients`) as { data: OAuthClient[] };
       setClients(res.data);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load VCS OAuth Clients";
-      setError(msg);
+    } catch {
+      // Ignore oauth errors for now // Oauth-clients 404s when empty/no org right now, just ignore it and display what we can.
     } finally {
       setLoading(false);
     }
@@ -91,6 +118,37 @@ export function VcsIntegrations(): React.JSX.Element {
     }
   };
 
+
+  const handleCreateGhApp = async (e: React.SyntheticEvent): Promise<void> => {
+    e.preventDefault();
+    setGhCreating(true);
+    setGhFormError("");
+    try {
+      const res = await fetchApi(`/api/v2/admin/github-app/installations`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "github-app-installations",
+            attributes: {
+              name: ghName,
+              "installation-id": parseInt(ghInstallationId, 10),
+            }
+          }
+        })
+      }) as { data: GitHubAppInstallation };
+      setGhApps([...ghApps, res.data]);
+      setGhDialogOpen(false);
+      setGhName("");
+      setGhInstallationId("");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to register GitHub App Installation";
+      setGhFormError(msg);
+    } finally {
+      setGhCreating(false);
+    }
+  };
+
+
   const handleDelete = async (client: OAuthClient): Promise<void> => {
     if (!window.confirm(`Delete VCS OAuth client "${client.attributes.name}"?`)) return;
     setError("");
@@ -120,6 +178,73 @@ export function VcsIntegrations(): React.JSX.Element {
           {error}
         </div>
       )}
+
+
+        {/* GitHub App Installations Section */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold">GitHub App Installations</h2>
+              <p className="text-sm text-muted-foreground">Manage your Terraform Enterprise GitHub App installations.</p>
+            </div>
+            <Button onClick={(): void => { setGhDialogOpen(true); }}>
+              <Plus className="mr-1.5 size-4" /> Register GitHub App
+            </Button>
+          </div>
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Installation ID</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ghApps.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                        No GitHub App installations registered.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
+                      <TableRow key={app.id}>
+                        <TableCell className="font-medium flex items-center gap-2">
+                          {typeof app.attributes["icon-url"] === "string" && app.attributes["icon-url"] !== "" && <img src={app.attributes["icon-url"]} className="w-6 h-6 rounded-full" alt="icon" />}
+                          {app.attributes.name}
+                        </TableCell>
+                        <TableCell>{app.attributes["installation-id"]}</TableCell>
+                        <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
+                        <TableCell className="text-right">
+                           {/* Add delete logic if desired later */}
+                           <Button variant="ghost" size="icon" disabled>
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* OAuth Section (Existing) */}
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold">OAuth Clients (Legacy)</h2>
+              <p className="text-sm text-muted-foreground">Legacy OAuth VCS providers.</p>
+            </div>
+            <Button onClick={(): void => { setDialogOpen(true); }}>
+              <Plus className="mr-1.5 size-4" /> Add VCS Provider
+            </Button>
+          </div>
 
       <Card>
         <CardContent className="p-0">
@@ -181,6 +306,7 @@ export function VcsIntegrations(): React.JSX.Element {
           </Table>
         </CardContent>
       </Card>
+        </div>
 
       {/* Connect VCS Provider Modal */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -281,6 +407,56 @@ export function VcsIntegrations(): React.JSX.Element {
             <DialogFooter className="pt-4">
               <Button type="submit" disabled={creating}>
                 {creating ? <Spinner className="size-4" /> : "Connect VCS Provider"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={ghDialogOpen} onOpenChange={setGhDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <form onSubmit={handleCreateGhApp}>
+            <DialogHeader>
+              <DialogTitle>Register GitHub App Installation</DialogTitle>
+              <DialogDescription>
+                Register an installation ID of the Terraform Enterprise GitHub App.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              {ghFormError !== "" && (
+                <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
+                  {ghFormError}
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                <label htmlFor="gh-name" className="text-sm font-medium">Name (e.g. Org Name)</label>
+                <Input
+                  id="gh-name"
+                  value={ghName}
+                  onChange={(e): void => { setGhName(e.target.value); }}
+                  placeholder="my-github-org"
+                  required
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <label htmlFor="gh-id" className="text-sm font-medium">Installation ID</label>
+                <Input
+                  id="gh-id"
+                  type="number"
+                  value={ghInstallationId}
+                  onChange={(e): void => { setGhInstallationId(e.target.value); }}
+                  placeholder="12345678"
+                  required
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={(): void => { setGhDialogOpen(false); }} disabled={ghCreating}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={ghCreating}>
+                {ghCreating ? <Spinner className="size-4" /> : "Register"}
               </Button>
             </DialogFooter>
           </form>
