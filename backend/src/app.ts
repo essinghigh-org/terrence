@@ -82,7 +82,7 @@ export const app = new Elysia()
       if (bearer !== undefined) {
         return `token:${Bun.hash(bearer)}`;
       }
-      return `ip:${server.requestIP?.(request)?.address ?? "unknown"}`;
+      return `ip:${(server && typeof server.requestIP === "function") ? server.requestIP(request)?.address ?? "unknown" : "unknown"}`;
     },
   }))
   .use(oauthPlugin)

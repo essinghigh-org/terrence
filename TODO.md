@@ -754,21 +754,21 @@
 - [x] `has-ssh-key` flag
 
 ### 13.3 GitHub App Installations
-- [ ] `GET /organizations/:organization_name/github-app-installations` — list installations
-- [ ] GitHub App integration flow
-- [ ] GitHub App installation ID ↔ workspace linking
+- [x] `GET /organizations/:organization_name/github-app-installations` — list installations
+- [x] GitHub App integration flow
+- [x] GitHub App installation ID ↔ workspace linking
 
 ### 13.4 Webhook Handling
 - [x] `POST /api/webhooks/github` — GitHub push/PR event receiver (returns 200 acknowledged)
 - [x] `POST /api/webhooks/gitlab` — GitLab event receiver (returns 200 acknowledged)
 - [x] `POST /api/webhooks/bitbucket` — Bitbucket event receiver (returns 200 acknowledged)
-- [ ] Actual webhook payload parsing and run triggering
-- [ ] Webhook payload parsing and validation
-- [ ] Auto-create configuration version on push
-- [ ] Auto-trigger run on push (if auto-queue enabled)
-- [ ] Speculative plan on PR
-- [ ] Trigger filtering by file paths (trigger-prefixes, trigger-patterns, working-directory)
-- [ ] Commit status reporting (pending, success, failure)
+- [x] Actual webhook payload parsing and run triggering
+- [x] Webhook payload parsing and validation
+- [x] Auto-create configuration version on push
+- [x] Auto-trigger run on push (if auto-queue enabled)
+- [x] Speculative plan on PR
+- [x] Trigger filtering by file paths (trigger-prefixes, trigger-patterns, working-directory)
+- [x] Commit status reporting (pending, success, failure)
 - [ ] `tags-regex` support — trigger runs on Git tags
 
 ### 13.5 VCS Events

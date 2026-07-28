@@ -25,12 +25,20 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
   const [iacBinary, setIacBinary] = useState("tofu");
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(false);
+  const [vcsIdentifier, setVcsIdentifier] = useState("");
+  const [ghAppInstallationId, setGhAppInstallationId] = useState("");
+
 
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
+
+      const vcsRepo = vcsIdentifier.trim() !== "" && ghAppInstallationId.trim() !== ""
+        ? { identifier: vcsIdentifier.trim(), "github-app-installation-id": ghAppInstallationId.trim() }
+        : undefined;
+
       const res = await fetchApi(`/organizations/${orgName}/workspaces`, {
         method: "POST",
         body: JSON.stringify({
@@ -40,6 +48,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
               "auto-apply": autoApply,
               "iac-binary": iacBinary,
               "terraform-version": normalizedVersion,
+              "vcs-repo": vcsRepo,
             },
             type: "workspaces",
           },
@@ -109,6 +118,37 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
             </label>
           </div>
 
+
+          <div className="pt-4 border-t border-gray-200 mt-2">
+              <h4 className="text-sm font-medium mb-3">Version Control (Optional)</h4>
+              <div className="grid gap-4">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    Repository Identifier
+                  </label>
+                  <Input
+                    id="vcs-identifier"
+                    value={vcsIdentifier}
+                    onChange={(e): void => { setVcsIdentifier(e.target.value); }}
+                    placeholder="e.g. hashicorp/terraform"
+                    disabled={loading}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="gh-app-id" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    GitHub App Installation ID
+                  </label>
+                  <Input
+                    id="gh-app-id"
+                    value={ghAppInstallationId}
+                    onChange={(e): void => { setGhAppInstallationId(e.target.value); }}
+                    placeholder="e.g. ghain-xxxxxxxx"
+                    disabled={loading}
+                  />
+                  <p className="text-xs text-gray-500">Provide both Identifier and Installation ID to connect this workspace to GitHub.</p>
+                </div>
+              </div>
+            </div>
           <DialogFooter className="mt-4">
             <Button type="submit" disabled={loading}>
               {loading ? "Creating..." : "Create Workspace"}
