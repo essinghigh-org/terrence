@@ -10,28 +10,28 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { GitBranch, Plus, Trash2, CheckCircle } from "lucide-react";
 
-type OAuthClient = {
-  id: string;
-  attributes: {
-    name: string;
-    "service-provider": string;
-    "http-url"?: string;
-    "api-url"?: string;
-    "oauth-token-ids"?: string[];
-  };
-}
+type OAuthClient = Readonly<{
+  readonly id: string;
+  readonly attributes: Readonly<{
+    readonly name: string;
+    readonly "service-provider": string;
+    readonly "http-url"?: string;
+    readonly "api-url"?: string;
+    readonly "oauth-token-ids"?: readonly string[];
+  }>;
+}>;
 
 
-type GitHubAppInstallation = {
-  id: string;
-  attributes: {
-    name: string;
-    "installation-id": number;
-    "icon-url": string | null;
-    "installation-type": string | null;
-    "installation-url": string | null;
-  };
-}
+type GitHubAppInstallation = Readonly<{
+  readonly id: string;
+  readonly attributes: Readonly<{
+    readonly name: string;
+    readonly "installation-id": number;
+    readonly "icon-url": string | null;
+    readonly "installation-type": string | null;
+    readonly "installation-url": string | null;
+  }>;
+}>;
 
 export function VcsIntegrations(): React.JSX.Element {
   const { orgName } = useParams<{ orgName?: string }>();
@@ -60,17 +60,17 @@ export function VcsIntegrations(): React.JSX.Element {
 
 
   useEffect((): void => {
-    if (orgName != null) void loadOAuthClients();
+    if (orgName != null) void loadIntegrations();
   }, [orgName]);
 
-  const loadOAuthClients = async (): Promise<void> => {
+  const loadIntegrations = async (): Promise<void> => {
     setLoading(true);
     setError("");
     try {
-      const ghRes = await fetchApi('/api/v2/github-app/installations') as { data: GitHubAppInstallation[] };
+      const ghRes = await fetchApi(`/organizations/${orgName ?? ""}/github-app/installations`) as { data: GitHubAppInstallation[] };
       setGhApps(ghRes.data);
     } catch {
-       // Optional silently fail
+      setError("Failed to load GitHub App installations.");
     }
 
     try {
@@ -105,7 +105,7 @@ export function VcsIntegrations(): React.JSX.Element {
           },
         }),
       }) as { data: OAuthClient };
-      setClients((prev: OAuthClient[]): OAuthClient[] => [...prev, res.data]);
+      setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
       setDialogOpen(false);
       setName("");
       setKey("");
@@ -121,22 +121,27 @@ export function VcsIntegrations(): React.JSX.Element {
 
   const handleCreateGhApp = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
+    const installationId = Number(ghInstallationId);
+    if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+      setGhFormError("Installation ID must be a positive integer.");
+      return;
+    }
     setGhCreating(true);
     setGhFormError("");
     try {
-      const res = await fetchApi(`/api/v2/admin/github-app/installations`, {
+      const res = await fetchApi(`/organizations/${orgName ?? ""}/github-app/installations`, {
         method: "POST",
         body: JSON.stringify({
           data: {
             type: "github-app-installations",
             attributes: {
               name: ghName,
-              "installation-id": parseInt(ghInstallationId, 10),
+              "installation-id": installationId,
             }
           }
         })
       }) as { data: GitHubAppInstallation };
-      setGhApps([...ghApps, res.data]);
+      setGhApps((previous: readonly GitHubAppInstallation[]): GitHubAppInstallation[] => [...previous, res.data]);
       setGhDialogOpen(false);
       setGhName("");
       setGhInstallationId("");
@@ -154,7 +159,7 @@ export function VcsIntegrations(): React.JSX.Element {
     setError("");
     try {
       await fetchApi(`/oauth-clients/${client.id}`, { method: "DELETE" });
-      setClients((prev: OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
+      setClients((prev: readonly OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete OAuth Client";
       setError(msg);
@@ -168,9 +173,6 @@ export function VcsIntegrations(): React.JSX.Element {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / VCS Integrations</h1>
           <p className="text-sm text-muted-foreground">Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs.</p>
         </div>
-        <Button onClick={(): void => { setDialogOpen(true); }}>
-          <Plus className="mr-1.5 size-4" /> Add VCS Provider
-        </Button>
       </div>
 
       {error !== "" && (
@@ -200,13 +202,12 @@ export function VcsIntegrations(): React.JSX.Element {
                     <TableHead>Name</TableHead>
                     <TableHead>Installation ID</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {ghApps.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                      <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
                         No GitHub App installations registered.
                       </TableCell>
                     </TableRow>
@@ -219,12 +220,6 @@ export function VcsIntegrations(): React.JSX.Element {
                         </TableCell>
                         <TableCell>{app.attributes["installation-id"]}</TableCell>
                         <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
-                        <TableCell className="text-right">
-                           {/* Add delete logic if desired later */}
-                           <Button variant="ghost" size="icon" disabled>
-                            <Trash2 className="size-4" />
-                          </Button>
-                        </TableCell>
                       </TableRow>
                     ))
                   )}

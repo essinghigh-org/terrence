@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
-import { runTriggers, auditLogs, organizations, workspaces, type users } from "../db/schema";
+import { runTriggers, auditLogs, githubWebhookDeliveries, organizations, workspaces, type users } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkOrgPermission, findAuthorizedRun } from "../lib/utils";
 import { handleGithubWebhook } from "../lib/webhooks";
@@ -16,52 +17,64 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
+async function processGithubDelivery(deliveryId: string | null, eventName: string, payload: Readonly<Record<string, unknown>>): Promise<void> {
+  try {
+    await handleGithubWebhook(eventName, payload);
+    if (deliveryId !== null) {
+      await db.update(githubWebhookDeliveries)
+        .set({ status: "processed", processedAt: Date.now() })
+        .where(eq(githubWebhookDeliveries.id, deliveryId));
+    }
+  } catch (error) {
+    if (deliveryId !== null) await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, deliveryId));
+    console.error(error);
+  }
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    // 1. Validate signature if a secret is configured.
-    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+    const secret = process.env["GITHUB_WEBHOOK_SECRET"];
     const signature = request.headers.get("x-hub-signature-256");
+    const rawBody = typeof body === "string" ? body : "";
     if (typeof secret === "string" && secret.length > 0) {
       if (signature === null) {
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
       }
 
-      const payloadString = typeof body === "string" ? body : JSON.stringify(body ?? {});
-      const encoder = new TextEncoder();
-      const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-      const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(payloadString));
-      const hashArray = Array.from(new Uint8Array(signatureBuffer));
-      const hashHex = hashArray.map((b: number): string => b.toString(16).padStart(2, "0")).join("");
-      const expectedSignature = `sha256=${hashHex}`;
-
-      if (signature !== expectedSignature) {
-        console.warn("[terrence] Webhook signature validation failed");
+      const expectedSignature = Buffer.from(`sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`);
+      const providedSignature = Buffer.from(signature);
+      if (providedSignature.length !== expectedSignature.length || !timingSafeEqual(providedSignature, expectedSignature)) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] };
       }
     }
 
     const eventName = request.headers.get("x-github-event");
-    if (eventName === "push" || eventName === "pull_request") {
-      console.log(`[terrence] Received GitHub ${eventName} event.`);
-
-      const payload = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
-      const repo = payload.repository as Record<string, unknown> | undefined;
-      const repoFullName = typeof repo?.full_name === "string" ? repo.full_name : "";
-
-      let branch = "";
-      if (eventName === "push") {
-        branch = typeof payload.ref === "string" ? payload.ref.replace("refs/heads/", "") : "";
-      } else {
-        const pr = payload.pull_request as Record<string, unknown> | undefined;
-        const head = pr?.head as Record<string, unknown> | undefined;
-        branch = typeof head?.ref === "string" ? head.ref : "";
+    if (eventName !== null) {
+      let payload: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(rawBody);
+        if (parsed !== null && typeof parsed === "object") payload = parsed as Record<string, unknown>;
+      } catch {}
+      const deliveryHeader = request.headers.get("x-github-delivery");
+      const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
+      if (deliveryId !== null) {
+        const claimed = await db.insert(githubWebhookDeliveries)
+          .values({ id: deliveryId, status: "processing", receivedAt: Date.now() })
+          .onConflictDoNothing()
+          .returning({ id: githubWebhookDeliveries.id });
+        if (claimed.length === 0) {
+          return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
+        }
       }
 
-      if (repoFullName !== "" && branch !== "") {
-         void handleGithubWebhook(eventName, payload).catch(console.error);
+      if (eventName === "push" || eventName === "pull_request") {
+        console.log(`[terrence] Received GitHub ${eventName} event.`);
       }
+      void processGithubDelivery(deliveryId, eventName, payload);
     }
 
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };

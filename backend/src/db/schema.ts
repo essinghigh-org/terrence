@@ -570,10 +570,20 @@ export const adminOpaVersions = sqliteTable("admin_opa_versions", {
 
 export const githubAppInstallations = sqliteTable("github_app_installations", {
   id: text("id").primaryKey(), // e.g. "ghain-12345"
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   installationId: integer("installation_id").notNull(),
   iconUrl: text("icon_url"),
   installationType: text("installation_type").default("Organization"), // "User" or "Organization"
   installationUrl: text("installation_url"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("github_app_installations_org_installation_idx").on(table.orgId, table.installationId),
+]);
+
+export const githubWebhookDeliveries = sqliteTable("github_webhook_deliveries", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().default("processing"),
+  receivedAt: integer("received_at").notNull().$defaultFn(() => Date.now()),
+  processedAt: integer("processed_at"),
 });

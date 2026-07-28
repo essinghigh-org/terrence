@@ -4,22 +4,22 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Search, MoreHorizontal, Filter, AlertCircle, XCircle, Clock, PauseCircle, CheckCircle2 } from "lucide-react";
 
-type WorkspaceAttrs = {
-  name: string;
-  locked?: boolean;
-  description?: string | null;
-  "terraform-version"?: string;
-  "auto-apply"?: boolean;
-  "tag-names"?: string[];
-  tags?: string[];
-  "vcs-repo"?: { identifier: string };
-  [key: string]: unknown;
-}
+type WorkspaceAttrs = Readonly<{
+  readonly name: string;
+  readonly locked?: boolean;
+  readonly description?: string | null;
+  readonly "terraform-version"?: string;
+  readonly "auto-apply"?: boolean;
+  readonly "tag-names"?: readonly string[];
+  readonly tags?: readonly string[];
+  readonly "vcs-repo"?: Readonly<{ identifier: string }>;
+  readonly [key: string]: unknown;
+}>;
 
-type WorkspaceItem = {
-  id: string;
-  attributes: WorkspaceAttrs;
-}
+type WorkspaceItem = Readonly<{
+  readonly id: string;
+  readonly attributes: WorkspaceAttrs;
+}>;
 
 export function Workspaces(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
@@ -34,8 +34,8 @@ export function Workspaces(): React.JSX.Element {
 
   async function loadWorkspaces(): Promise<void> {
     try {
-      const data = await fetchApi(`/api/v2/organizations/${orgName ?? ""}/workspaces`) as { data: WorkspaceItem[] };
-      setWorkspaces(data.data);
+      const data = await fetchApi(`/organizations/${orgName ?? ""}/workspaces`) as { data: WorkspaceItem[] };
+      setWorkspaces(Array.isArray(data.data) ? data.data : []);
     } catch {
       console.error("Failed to load workspaces");
     } finally {

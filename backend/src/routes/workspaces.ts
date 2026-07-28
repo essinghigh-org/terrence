@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { workspaces, workspaceTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, type users } from "../db/schema";
+import { workspaces, workspaceTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, type users } from "../db/schema";
 import { eq, and, asc, count, inArray, like, notInArray } from "drizzle-orm";
 import { workspaceResource, workspaceVariableResource, tagBindingResource } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
@@ -104,6 +104,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const sourceUrl = typeof attributes["source-url"] === "string" ? attributes["source-url"] : null;
     const iacBinary = attributes["iac-binary"];
     const executionMode = attributes["execution-mode"];
+    const rawVcsRepo = attributes["vcs-repo"];
     if (name === "" || !/^[A-Za-z0-9_-]+$/.test(name)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] };
     }
@@ -121,6 +122,25 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] };
+    }
+    let vcsRepo: typeof workspaces.$inferInsert.vcsRepo;
+    if (rawVcsRepo !== undefined && rawVcsRepo !== null) {
+      if (typeof rawVcsRepo !== "object") {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo must be an object" }] };
+      }
+      const raw = rawVcsRepo as Record<string, unknown>;
+      const identifier = typeof raw["identifier"] === "string" ? raw["identifier"].trim() : "";
+      const installationId = typeof raw["github-app-installation-id"] === "string" ? raw["github-app-installation-id"].trim() : "";
+      if (identifier === "" || installationId === "") {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Repository identifier and GitHub App installation ID must both be provided" }] };
+      }
+      const installation = await db.query.githubAppInstallations.findFirst({
+        where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, org.id)),
+      });
+      if (installation === undefined) {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "GitHub App installation is not registered in this organization" }] };
+      }
+      vcsRepo = { identifier, githubAppInstallationId: installationId };
     }
     let normalizedWorkingDirectory: string | null = null;
     if (workingDirectory !== undefined && workingDirectory !== null && typeof workingDirectory === "string") {
@@ -141,7 +161,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       id, name, orgId: org.id, description: finalDesc, projectId,
       autoApply, terraformVersion: finalTfVer,
       workingDirectory: normalizedWorkingDirectory, sourceName,
-      sourceUrl, iacBinary: finalIac,
+      sourceUrl, iacBinary: finalIac, vcsRepo,
       createdAt: Date.now(),
     });
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });

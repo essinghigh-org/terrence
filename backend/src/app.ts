@@ -29,6 +29,7 @@ import { runTaskRoutes } from "./routes/run-tasks";
 import { oauthClientRoutes } from "./routes/oauth-clients";
 import { notificationRoutes } from "./routes/notifications";
 import { sshKeyRoutes } from "./routes/ssh-keys";
+import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
 
 // Store request metadata without polluting the set object
@@ -75,14 +76,14 @@ export const app = new Elysia()
   .use(rateLimit({
     max: 30,
     duration: 1000,
-    generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }>): string => {
+    generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }> | null): string => {
 
       const authHeader = request.headers.get("authorization");
       const bearer = authHeader !== null ? authHeader.replace(/^Bearer /, "") : undefined;
       if (bearer !== undefined) {
         return `token:${Bun.hash(bearer)}`;
       }
-      return `ip:${(server && typeof server.requestIP === "function") ? server.requestIP(request)?.address ?? "unknown" : "unknown"}`;
+      return `ip:${typeof server?.requestIP === "function" ? server.requestIP(request)?.address ?? "unknown" : "unknown"}`;
     },
   }))
   .use(oauthPlugin)
@@ -124,7 +125,10 @@ export const app = new Elysia()
     if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
   })
-  .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | null | undefined> => {
+  .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
+    if (new URL(request.url).pathname === "/api/webhooks/github") {
+      return request.text();
+    }
     if (contentType === "application/vnd.api+json") {
       const text = await request.text();
       try {
@@ -185,4 +189,5 @@ export const app = new Elysia()
   .use(oauthClientRoutes)
   .use(notificationRoutes)
   .use(sshKeyRoutes)
+  .use(githubAppInstallationRoutes)
   .use(miscRoutes);

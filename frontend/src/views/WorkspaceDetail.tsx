@@ -58,6 +58,9 @@ export function WorkspaceDetail(): React.JSX.Element {
   if (loading) return <div className="p-8 text-gray-500">Loading workspace...</div>;
   if (workspace == null) return <div className="p-8 text-gray-500">Workspace not found</div>;
 
+  const createdAt = workspace.attributes["created-at"];
+  const vcsRepo = workspace.attributes["vcs-repo"] as { identifier?: string; branch?: string } | null | undefined;
+
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "runs", label: "Runs" },
@@ -117,7 +120,7 @@ export function WorkspaceDetail(): React.JSX.Element {
       {/* Navigation Tabs */}
       <div className="border-b border-gray-200 mb-6">
         <nav className="flex gap-6">
-          {tabs.map((tab: { id: string; label: string }): React.JSX.Element => (
+          {tabs.map((tab: Readonly<{ id: string; label: string }>): React.JSX.Element => (
             <button
               key={tab.id}
               onClick={(): void => { setActiveTab(tab.id); }}
@@ -193,7 +196,7 @@ export function WorkspaceDetail(): React.JSX.Element {
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Created</div>
                     <div className="text-[13px] text-gray-900">
-                       {new Date(workspace.attributes["created-at"] ?? "").toLocaleDateString()}
+                       {typeof createdAt === "string" && createdAt !== "" ? new Date(createdAt).toLocaleDateString() : "—"}
                     </div>
                   </div>
                 </div>
@@ -212,12 +215,12 @@ export function WorkspaceDetail(): React.JSX.Element {
       <h3 className="text-lg font-semibold mb-4">Version Control</h3>
       <p className="text-sm text-gray-500 mb-6">Connect this workspace to a VCS repository to automatically trigger runs on push or pull requests.</p>
 
-      {workspace.attributes["vcs-repo"] != null ? (
+      {vcsRepo != null ? (
         <div className="p-4 bg-gray-50 border border-gray-200 rounded-md">
-          <p className="font-medium">{(workspace.attributes["vcs-repo"] as { identifier?: string }).identifier}</p>
-          <p className="text-sm text-gray-500">Branch: {(workspace.attributes["vcs-repo"] as { branch?: string }).branch ?? "default"}</p>
+          <p className="font-medium">{vcsRepo.identifier}</p>
+          <p className="text-sm text-gray-500">Branch: {vcsRepo.branch ?? "default"}</p>
           <div className="mt-4">
-            <Button variant="destructive" size="sm" onClick={(): void => { alert("Disconnecting VCS is typically done via the API and a robust settings form."); }}>Disconnect</Button>
+            <Button variant="destructive" size="sm" disabled title="Unavailable until the disconnect API is implemented">Disconnect</Button>
           </div>
         </div>
       ) : (

@@ -10,6 +10,7 @@ import { VariableSets } from "../src/views/VariableSets";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
+const originalAlert = globalThis.alert;
 const json = (data: unknown): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -20,6 +21,7 @@ afterEach((): void => {
   if (typeof localStorage !== "undefined") localStorage.clear();
   globalThis.fetch = originalFetch;
   globalThis.confirm = originalConfirm;
+  globalThis.alert = originalAlert;
 });
 
 function getUrlString(input: unknown): string {
@@ -99,6 +101,8 @@ test("creates a workspace from the modal", async () => {
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
   changeInput(asElement(view.getByLabelText("Execution Engine")), "terraform");
   changeInput(asElement(view.getByLabelText(/Engine Version/)), "1.9.3");
+  changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
+  changeInput(asElement(view.getByLabelText("GitHub App Installation ID")), "ghain-123");
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
@@ -115,10 +119,45 @@ test("creates a workspace from the modal", async () => {
         "auto-apply": true,
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
+        "vcs-repo": {
+          identifier: "hashicorp/terraform",
+          "github-app-installation-id": "ghain-123",
+        },
       },
       type: "workspaces",
     },
   });
+  expect(view.getByLabelText("Repository Identifier").value).toBe("");
+  expect(view.getByLabelText("GitHub App Installation ID").value).toBe("");
+});
+
+test("rejects a partially configured workspace VCS connection", async () => {
+  const fetchMock = mock(async (): Promise<Response> => json({ data: { id: "unexpected" } }));
+  const alertMock = mock((): void => {
+    // Intentional alert mock
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.alert = alertMock;
+  const view = render(
+    <CreateWorkspaceModal
+      orgName="acme"
+      open
+      onOpenChange={(): void => {
+        // Intentional noop
+      }}
+      onCreated={(): void => {
+        // Intentional noop
+      }}
+    />,
+  );
+  changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
+  changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(0);
+  expect(alertMock).toHaveBeenCalledTimes(1);
 });
 
 test("creates and deletes a workspace variable", async () => {

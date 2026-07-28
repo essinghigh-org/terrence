@@ -37,7 +37,7 @@ test("migrates a fresh database on startup", async () => {
     }
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
-      tables: expect.arrayContaining(["api_tokens", "organization_memberships", "runs", "variable_sets"]),
+      tables: expect.arrayContaining(["api_tokens", "github_app_installations", "github_webhook_deliveries", "organization_memberships", "runs", "variable_sets"]),
       foreignKeys: 1,
     });
   } finally {

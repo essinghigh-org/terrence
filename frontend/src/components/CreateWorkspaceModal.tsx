@@ -19,7 +19,8 @@ type CreateWorkspaceModalProps = {
   onCreated: (ws: Readonly<{ id: string }>) => void;
 }
 
-export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }: CreateWorkspaceModalProps): React.JSX.Element {
+export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>): React.JSX.Element {
+  const { orgName, open, onOpenChange, onCreated } = props;
   const [name, setName] = useState("");
   const [autoApply, setAutoApply] = useState(false);
   const [iacBinary, setIacBinary] = useState("tofu");
@@ -31,12 +32,18 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
 
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
+    const normalizedVcsIdentifier = vcsIdentifier.trim();
+    const normalizedInstallationId = ghAppInstallationId.trim();
+    if ((normalizedVcsIdentifier === "") !== (normalizedInstallationId === "")) {
+      alert("Provide both a repository identifier and GitHub App installation ID.");
+      return;
+    }
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
 
-      const vcsRepo = vcsIdentifier.trim() !== "" && ghAppInstallationId.trim() !== ""
-        ? { identifier: vcsIdentifier.trim(), "github-app-installation-id": ghAppInstallationId.trim() }
+      const vcsRepo = normalizedVcsIdentifier !== ""
+        ? { identifier: normalizedVcsIdentifier, "github-app-installation-id": normalizedInstallationId }
         : undefined;
 
       const res = await fetchApi(`/organizations/${orgName}/workspaces`, {
@@ -60,6 +67,8 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
       setAutoApply(false);
       setIacBinary("tofu");
       setTerraformVersion("latest");
+      setVcsIdentifier("");
+      setGhAppInstallationId("");
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create workspace";
       alert(errorMessage);
@@ -129,7 +138,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
                   <Input
                     id="vcs-identifier"
                     value={vcsIdentifier}
-                    onChange={(e): void => { setVcsIdentifier(e.target.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
                     placeholder="e.g. hashicorp/terraform"
                     disabled={loading}
                   />
@@ -141,7 +150,7 @@ export function CreateWorkspaceModal({ orgName, open, onOpenChange, onCreated }:
                   <Input
                     id="gh-app-id"
                     value={ghAppInstallationId}
-                    onChange={(e): void => { setGhAppInstallationId(e.target.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setGhAppInstallationId(event.currentTarget.value); }}
                     placeholder="e.g. ghain-xxxxxxxx"
                     disabled={loading}
                   />

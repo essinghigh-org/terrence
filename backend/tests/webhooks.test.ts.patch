@@ -1,6 +1,0 @@
-import { writeFileSync, readFileSync } from "fs";
-let content = readFileSync("backend/tests/webhooks.test.ts", "utf-8");
-content = content.replace(/await db.insert\(organizations\).values\(\{/g, 'await db.delete(organizations).where(eq(organizations.id, orgId));\n    await db.insert(organizations).values({');
-content = content.replace(/await db.insert\(githubAppInstallations\).values\(\{/g, 'await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installationIdStr));\n    await db.insert(githubAppInstallations).values({');
-content = content.replace(/await db.insert\(workspaces\).values\(\{/g, 'await db.delete(workspaces).where(eq(workspaces.id, wsId));\n    await db.insert(workspaces).values({');
-writeFileSync("backend/tests/webhooks.test.ts", content);

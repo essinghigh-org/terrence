@@ -76,7 +76,16 @@ export default tseslint.config(
 
       // ── Readonly discipline ─────────────────────────────────────────────
       '@typescript-eslint/prefer-readonly': 'error',
-      '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+      '@typescript-eslint/prefer-readonly-parameter-types': [
+        'error',
+        {
+          allow: [
+            { from: 'package', name: ['SyntheticEvent', 'ChangeEvent'], package: 'react' },
+            { from: 'lib', name: ['Request'] },
+          ],
+          ignoreInferredTypes: true,
+        },
+      ],
 
       // ── Type / interface discipline ─────────────────────────────────────
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
@@ -97,7 +106,7 @@ export default tseslint.config(
         { selector: 'property', format: ['camelCase'] },
         { selector: 'typeLike', format: ['PascalCase'] },
         { selector: 'enumMember', format: ['PascalCase'] },
-        { selector: 'typeProperty', format: null },
+        { selector: 'typeProperty', modifiers: ['requiresQuotes'], format: null },
         { selector: 'objectLiteralProperty', format: null, leadingUnderscore: 'allow' },
       ],
 
@@ -137,6 +146,14 @@ export default tseslint.config(
           reportUsedIgnorePattern: true,
         },
       ],
+    },
+  },
+
+  // ── UI framework contracts are mutable by design ──────────────────────
+  {
+    files: ['frontend/src/**/*.tsx'],
+    rules: {
+      '@typescript-eslint/prefer-readonly-parameter-types': 'off',
     },
   },
 
