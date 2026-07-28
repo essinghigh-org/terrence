@@ -96,7 +96,7 @@ type ApiTokenWithRaw = DeepReadonly<typeof apiTokens.$inferSelect & Partial<Reco
 
 export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
   const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
-  const rawToken = (token as Record<string, unknown>)["_rawToken"];
+  const rawToken = (token as Record<string, unknown>)._rawToken;
 
   return {
     id: token.id,

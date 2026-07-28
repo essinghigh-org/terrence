@@ -72,9 +72,9 @@ function requiredString(value: unknown): string | undefined {
 }
 
 function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined {
-  if (!Array.isArray(payload["commits"])) return undefined;
+  if (!Array.isArray(payload.commits)) return undefined;
   const files = new Set<string>();
-  for (const value of payload["commits"]) {
+  for (const value of payload.commits) {
     const commit = asRecord(value);
     if (commit === undefined) return undefined;
     for (const key of ["added", "removed", "modified"]) {
@@ -88,19 +88,19 @@ function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined 
 }
 
 function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetails | undefined {
-  const repository = asRecord(payload["repository"]);
-  const sender = asRecord(payload["sender"]);
-  const repoFullName = requiredString(repository?.["full_name"]);
-  const cloneUrl = requiredString(repository?.["clone_url"]);
-  const senderUsername = requiredString(sender?.["login"]);
+  const repository = asRecord(payload.repository);
+  const sender = asRecord(payload.sender);
+  const repoFullName = requiredString(repository?.full_name);
+  const cloneUrl = requiredString(repository?.clone_url);
+  const senderUsername = requiredString(sender?.login);
   if (repoFullName === undefined || cloneUrl === undefined || senderUsername === undefined) return undefined;
 
   if (eventName === "push") {
-    const ref = requiredString(payload["ref"]);
-    const commitSha = requiredString(payload["after"]);
-    const headCommit = asRecord(payload["head_commit"]);
-    const commitMessage = requiredString(headCommit?.["message"]);
-    const commitUrl = requiredString(headCommit?.["url"]);
+    const ref = requiredString(payload.ref);
+    const commitSha = requiredString(payload.after);
+    const headCommit = asRecord(payload.head_commit);
+    const commitMessage = requiredString(headCommit?.message);
+    const commitUrl = requiredString(headCommit?.url);
     const filesChanged = changedFiles(payload);
     if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
@@ -119,14 +119,14 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     };
   }
 
-  if (eventName === "pull_request" && (payload["action"] === "opened" || payload["action"] === "synchronize")) {
-    const pullRequest = asRecord(payload["pull_request"]);
-    const head = asRecord(pullRequest?.["head"]);
-    const branch = requiredString(head?.["ref"]);
-    const commitSha = requiredString(head?.["sha"]);
-    const commitMessage = requiredString(pullRequest?.["title"]);
-    const commitUrl = requiredString(pullRequest?.["html_url"]);
-    const pullRequestNumber = payload["number"];
+  if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) {
+    const pullRequest = asRecord(payload.pull_request);
+    const head = asRecord(pullRequest?.head);
+    const branch = requiredString(head?.ref);
+    const commitSha = requiredString(head?.sha);
+    const commitMessage = requiredString(pullRequest?.title);
+    const commitUrl = requiredString(pullRequest?.html_url);
+    const pullRequestNumber = payload.number;
     if (branch === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
     return { branch, cloneUrl, commitMessage, commitSha, commitUrl, filesChanged: new Set<string>(), pullRequestNumber, repoFullName, senderUsername };
   }
@@ -135,24 +135,24 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
 }
 
 function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProviderWebhook | undefined {
-  const project = asRecord(payload["project"]);
-  const user = asRecord(payload["user"]);
-  const repoFullName = requiredString(project?.["path_with_namespace"]);
-  const cloneUrl = requiredString(project?.["git_http_url"])
-    ?? requiredString(project?.["web_url"]);
-  const senderUsername = requiredString(payload["user_username"])
-    ?? requiredString(user?.["username"])
-    ?? requiredString(payload["user_name"]);
+  const project = asRecord(payload.project);
+  const user = asRecord(payload.user);
+  const repoFullName = requiredString(project?.path_with_namespace);
+  const cloneUrl = requiredString(project?.git_http_url)
+    ?? requiredString(project?.web_url);
+  const senderUsername = requiredString(payload.user_username)
+    ?? requiredString(user?.username)
+    ?? requiredString(payload.user_name);
   if (repoFullName === undefined || cloneUrl === undefined || senderUsername === undefined) return undefined;
 
   if (eventName === "Push Hook" || eventName === "Tag Push Hook") {
-    const ref = requiredString(payload["ref"]);
-    const commitSha = requiredString(payload["checkout_sha"]) ?? requiredString(payload["after"]);
-    const commits = Array.isArray(payload["commits"]) ? payload["commits"] : [];
+    const ref = requiredString(payload.ref);
+    const commitSha = requiredString(payload.checkout_sha) ?? requiredString(payload.after);
+    const commits = Array.isArray(payload.commits) ? payload.commits : [];
     const headCommit = asRecord(commits.at(-1));
-    const commitMessage = requiredString(headCommit?.["message"]) ?? "VCS push";
-    const commitUrl = requiredString(headCommit?.["url"])
-      ?? `${requiredString(project?.["web_url"]) ?? cloneUrl}/-/commit/${commitSha ?? ""}`;
+    const commitMessage = requiredString(headCommit?.message) ?? "VCS push";
+    const commitUrl = requiredString(headCommit?.url)
+      ?? `${requiredString(project?.web_url) ?? cloneUrl}/-/commit/${commitSha ?? ""}`;
     const filesChanged = changedFiles(payload);
     if (ref === undefined || commitSha === undefined || filesChanged === undefined) return undefined;
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
@@ -175,18 +175,18 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
   }
 
   if (eventName === "Merge Request Hook") {
-    const attributes = asRecord(payload["object_attributes"]);
-    const action = attributes?.["action"];
+    const attributes = asRecord(payload.object_attributes);
+    const action = attributes?.action;
     if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
-    const lastCommit = asRecord(attributes?.["last_commit"]);
-    const branch = requiredString(attributes?.["source_branch"]);
-    const commitSha = requiredString(lastCommit?.["id"]);
-    const commitMessage = requiredString(attributes?.["title"])
-      ?? requiredString(lastCommit?.["message"])
+    const lastCommit = asRecord(attributes?.last_commit);
+    const branch = requiredString(attributes?.source_branch);
+    const commitSha = requiredString(lastCommit?.id);
+    const commitMessage = requiredString(attributes?.title)
+      ?? requiredString(lastCommit?.message)
       ?? "Merge request";
-    const commitUrl = requiredString(attributes?.["url"])
-      ?? requiredString(lastCommit?.["url"]);
-    const pullRequestNumber = attributes?.["iid"];
+    const commitUrl = requiredString(attributes?.url)
+      ?? requiredString(lastCommit?.url);
+    const pullRequestNumber = attributes?.iid;
     if (
       branch === undefined
       || commitSha === undefined
@@ -214,40 +214,40 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
 }
 
 function bitbucketCloneUrl(repository: Readonly<Record<string, unknown>>): string | undefined {
-  const links = asRecord(repository["links"]);
-  const cloneLinks = links?.["clone"];
+  const links = asRecord(repository.links);
+  const cloneLinks = links?.clone;
   if (!Array.isArray(cloneLinks)) return undefined;
   for (const value of cloneLinks) {
     const link = asRecord(value);
-    if (link?.["name"] === "https") return requiredString(link["href"]);
+    if (link?.name === "https") return requiredString(link.href);
   }
   return undefined;
 }
 
 function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedProviderWebhook | undefined {
-  const repository = asRecord(payload["repository"]);
-  const actor = asRecord(payload["actor"]);
-  const repoFullName = requiredString(repository?.["full_name"]);
+  const repository = asRecord(payload.repository);
+  const actor = asRecord(payload.actor);
+  const repoFullName = requiredString(repository?.full_name);
   const cloneUrl = repository === undefined ? undefined : bitbucketCloneUrl(repository);
-  const senderUsername = requiredString(actor?.["username"])
-    ?? requiredString(actor?.["nickname"])
-    ?? requiredString(actor?.["display_name"]);
+  const senderUsername = requiredString(actor?.username)
+    ?? requiredString(actor?.nickname)
+    ?? requiredString(actor?.display_name);
   if (repoFullName === undefined || cloneUrl === undefined || senderUsername === undefined) return undefined;
 
   if (eventName === "repo:push") {
-    const push = asRecord(payload["push"]);
-    const changes = push?.["changes"];
+    const push = asRecord(payload.push);
+    const changes = push?.changes;
     if (!Array.isArray(changes) || changes.length !== 1) return undefined;
     const change = asRecord(changes[0]);
-    const reference = asRecord(change?.["new"]);
-    const target = asRecord(reference?.["target"]);
-    const targetLinks = asRecord(target?.["links"]);
-    const html = asRecord(targetLinks?.["html"]);
-    const referenceType = requiredString(reference?.["type"]);
-    const referenceName = requiredString(reference?.["name"]);
-    const commitSha = requiredString(target?.["hash"]);
-    const commitMessage = requiredString(target?.["message"]) ?? "VCS push";
-    const commitUrl = requiredString(html?.["href"]);
+    const reference = asRecord(change?.new);
+    const target = asRecord(reference?.target);
+    const targetLinks = asRecord(target?.links);
+    const html = asRecord(targetLinks?.html);
+    const referenceType = requiredString(reference?.type);
+    const referenceName = requiredString(reference?.name);
+    const commitSha = requiredString(target?.hash);
+    const commitMessage = requiredString(target?.message) ?? "VCS push";
+    const commitUrl = requiredString(html?.href);
     if (
       !["branch", "tag"].includes(referenceType ?? "")
       || referenceName === undefined
@@ -270,19 +270,19 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedPro
   }
 
   if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") {
-    const pullRequest = asRecord(payload["pullrequest"]);
-    const source = asRecord(pullRequest?.["source"]);
-    const branchValue = asRecord(source?.["branch"]);
-    const commit = asRecord(source?.["commit"]);
-    const commitLinks = asRecord(commit?.["links"]);
-    const commitHtml = asRecord(commitLinks?.["html"]);
-    const prLinks = asRecord(pullRequest?.["links"]);
-    const prHtml = asRecord(prLinks?.["html"]);
-    const branch = requiredString(branchValue?.["name"]);
-    const commitSha = requiredString(commit?.["hash"]);
-    const commitMessage = requiredString(pullRequest?.["title"]) ?? "Pull request";
-    const commitUrl = requiredString(prHtml?.["href"]) ?? requiredString(commitHtml?.["href"]);
-    const pullRequestNumber = pullRequest?.["id"];
+    const pullRequest = asRecord(payload.pullrequest);
+    const source = asRecord(pullRequest?.source);
+    const branchValue = asRecord(source?.branch);
+    const commit = asRecord(source?.commit);
+    const commitLinks = asRecord(commit?.links);
+    const commitHtml = asRecord(commitLinks?.html);
+    const prLinks = asRecord(pullRequest?.links);
+    const prHtml = asRecord(prLinks?.html);
+    const branch = requiredString(branchValue?.name);
+    const commitSha = requiredString(commit?.hash);
+    const commitMessage = requiredString(pullRequest?.title) ?? "Pull request";
+    const commitUrl = requiredString(prHtml?.href) ?? requiredString(commitHtml?.href);
+    const pullRequestNumber = pullRequest?.id;
     if (
       branch === undefined
       || commitSha === undefined
@@ -347,8 +347,8 @@ function matchesFileTriggers(workspace: DeepReadonly<typeof workspaces.$inferSel
 }
 
 async function getGitHubAppAccessToken(installationId: number): Promise<string | null> {
-  const appId = process.env["GITHUB_APP_ID"];
-  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
+  const appId = process.env.GITHUB_APP_ID;
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {
     console.error("[terrence] GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY not configured.");
     return null;
@@ -436,7 +436,7 @@ async function githubCredentials(
     });
     if (installation !== undefined) {
       const token = await getGitHubAppAccessToken(installation.installationId);
-      const apiUrl = providerApiUrl(process.env["GITHUB_API_URL"] ?? null, "https://api.github.com");
+      const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
       if (token !== null && apiUrl !== undefined) return { apiUrl, provider: "github", token };
     }
   }
@@ -904,7 +904,7 @@ async function downloadAndSaveTarball(
   url: string,
   headers: Readonly<Record<string, string>>,
 ): Promise<void> {
-  const storageDirectory = resolve(process.env["STORAGE_DIR"] ?? join(process.cwd(), "storage"), "configuration_versions");
+  const storageDirectory = resolve(process.env.STORAGE_DIR ?? join(process.cwd(), "storage"), "configuration_versions");
   const temporaryPath = join(storageDirectory, `.${provider}-${crypto.randomUUID()}.tar.gz`);
   try {
     await mkdir(storageDirectory, { recursive: true });

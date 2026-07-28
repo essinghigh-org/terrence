@@ -155,7 +155,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = process.env["GITHUB_WEBHOOK_SECRET"];
+    const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const signature = request.headers.get("x-hub-signature-256");
     const rawBody = typeof body === "string" ? body : "";
     if (typeof secret === "string" && secret.length > 0) {
@@ -200,7 +200,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .post("/api/webhooks/gitlab", ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): unknown => {
-    const secret = process.env["GITLAB_WEBHOOK_SECRET"];
+    const secret = process.env.GITLAB_WEBHOOK_SECRET;
     if (typeof secret === "string" && secret !== "" && !sameSecret(request.headers.get("x-gitlab-token"), secret)) {
       return webhookUnauthorized(set, "Invalid GitLab webhook token");
     }
@@ -214,7 +214,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .post("/api/webhooks/bitbucket", ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): unknown => {
     const parsed = webhookPayload(body);
     if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
-    const secret = process.env["BITBUCKET_WEBHOOK_SECRET"];
+    const secret = process.env.BITBUCKET_WEBHOOK_SECRET;
     if (typeof secret === "string" && secret !== "") {
       const signature = request.headers.get("x-hub-signature");
       const expected = `sha256=${createHmac("sha256", secret).update(parsed.rawBody).digest("hex")}`;
@@ -310,7 +310,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: globalVariableResource(variable as WorkspaceVariable) };
   })
   .patch("/api/v2/vars/:var_id", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variableId = params["var_id"] ?? "";
+    const variableId = params.var_id ?? "";
     const variable = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, variableId) });
     const workspace = variable === undefined
       ? undefined
@@ -342,7 +342,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: globalVariableResource({ ...variable, ...updates } as WorkspaceVariable) };
   })
   .delete("/api/v2/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variableId = params["var_id"] ?? "";
+    const variableId = params.var_id ?? "";
     const variable = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, variableId) });
     const workspace = variable === undefined
       ? undefined
@@ -362,7 +362,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: logsList.map((al: Readonly<typeof auditLogs.$inferSelect>): Record<string, unknown> => ({ id: al.id, type: "audit-logs", attributes: { action: al.action, "resource-type": al.resourceType, "resource-id": al.resourceId, details: al.details, "created-at": new Date(al.createdAt).toISOString() } })) };
   })
   .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
@@ -378,13 +378,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   // --- Cost Estimation ---
   .get("/api/v2/runs/:run_id/cost-estimate", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: costEstimateResource(authorized.run, await readCostEstimateArtifact(runId)) };
   })
   .get("/api/v2/cost-estimates/:ce_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const ceId = params["ce_id"] ?? "";
+    const ceId = params.ce_id ?? "";
     const runId = ceId.replace(/^ce-/, "");
     if (runId === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
@@ -393,14 +393,14 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   // --- Run Triggers ---
   .get("/api/v2/workspaces/:workspace_id/run-triggers", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId)) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const triggers = await db.query.runTriggers.findMany({ where: eq(runTriggers.workspaceId, workspaceId) });
     return { data: triggers.map((t: Readonly<typeof runTriggers.$inferSelect>): Record<string, unknown> => ({ id: t.id, type: "run-triggers", attributes: { "created-at": new Date(t.createdAt).toISOString() }, relationships: { "sourceable-workspace": { data: { id: t.sourceWorkspaceId, type: "workspaces" } } } })) };
   })
   .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -421,7 +421,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return {};
   })
   .delete("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};

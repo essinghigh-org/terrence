@@ -164,12 +164,12 @@ function teamWorkspaceAllows(
   if (accessLevel === "read") return ["read", "variables-read", "state-outputs", "state-read"].includes(required);
   if (accessLevel !== "custom") return false;
 
-  const runs = typeof permissions["runs"] === "string" ? permissions["runs"] : "read";
+  const runs = typeof permissions.runs === "string" ? permissions.runs : "read";
   if (required === "read") return ["read", "plan", "apply"].includes(runs);
   if (required === "plan") return runs === "plan" || runs === "apply";
   if (required === "apply") return runs === "apply";
   if (required === "lock") return permissions["workspace-locking"] === true;
-  const variableAccess = typeof permissions["variables"] === "string" ? permissions["variables"] : "none";
+  const variableAccess = typeof permissions.variables === "string" ? permissions.variables : "none";
   if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";
   if (required === "variables-write") return variableAccess === "write";
   const stateAccess = typeof permissions["state-versions"] === "string" ? permissions["state-versions"] : "none";
@@ -420,10 +420,10 @@ export function apiURL(request: RequestWithUrl, path: string): string {
   return new URL(path, PUBLIC_URL ?? request.url).toString();
 }
 
-const SIGNED_URL_SECRET = process.env["SIGNED_URL_SECRET"] ?? crypto.randomUUID();
+const SIGNED_URL_SECRET = process.env.SIGNED_URL_SECRET ?? crypto.randomUUID();
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
-  const configuredTtl = ttlSeconds ?? Number(process.env["SIGNED_URL_TTL_SECONDS"] ?? 300);
+  const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);
   const ttl = Number.isSafeInteger(configuredTtl) && configuredTtl > 0 ? configuredTtl : 300;
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET)
@@ -702,7 +702,7 @@ export async function applyDataRetentionGarbageCollection(
   options: Readonly<{ now?: number; gracePeriodMs?: number }> = {},
 ): Promise<Record<string, unknown>> {
   const now = options.now ?? Date.now();
-  const configuredGraceDays = Number(process.env["GC_GRACE_PERIOD_DAYS"] ?? 7);
+  const configuredGraceDays = Number(process.env.GC_GRACE_PERIOD_DAYS ?? 7);
   const defaultGracePeriodMs = Number.isFinite(configuredGraceDays) && configuredGraceDays >= 0
     ? configuredGraceDays * 86_400_000
     : 7 * 86_400_000;

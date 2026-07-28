@@ -54,14 +54,14 @@ function gpgKeyResource(key: GpgKeyItem): Record<string, unknown> {
 
 function gpgKeyInput(body: unknown, requireArmor: boolean): GpgKeyInput | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const rawData = payload["data"];
+  const rawData = payload.data;
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
   const data = rawData as Record<string, unknown>;
-  if (data["type"] !== "gpg-keys") return { error: "data.type must be gpg-keys" };
-  const rawAttributes = data["attributes"];
+  if (data.type !== "gpg-keys") return { error: "data.type must be gpg-keys" };
+  const rawAttributes = data.attributes;
   if (rawAttributes === null || typeof rawAttributes !== "object") return { error: "data.attributes is required" };
   const attributes = rawAttributes as Record<string, unknown>;
-  const namespace = attributes["namespace"];
+  const namespace = attributes.namespace;
   const asciiArmor = attributes["ascii-armor"];
   if (typeof namespace !== "string" || namespace.trim() === "") return { error: "namespace is required" };
   if (requireArmor && (typeof asciiArmor !== "string" || asciiArmor === "")) return { error: "ascii-armor is required" };
@@ -123,7 +123,7 @@ async function gpgKeyInUse(key: GpgKeyItem): Promise<boolean> {
 export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
   .use(authPlugin)
   .get("/api/registry/:registry_name/v2/gpg-keys", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") {
+    if (params.registry_name !== "private") {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
@@ -158,7 +158,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
     };
   })
   .post("/api/registry/:registry_name/v2/gpg-keys", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") {
+    if (params.registry_name !== "private") {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
@@ -203,14 +203,14 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
     return { data: gpgKeyResource(key) };
   })
   .get("/api/registry/:registry_name/v2/gpg-keys/:namespace/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") {
+    if (params.registry_name !== "private") {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
     const key = await db.query.registryGpgKeys.findFirst({
       where: and(
-        eq(registryGpgKeys.namespace, params["namespace"] ?? ""),
-        eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
+        eq(registryGpgKeys.namespace, params.namespace ?? ""),
+        eq(registryGpgKeys.keyId, (params.key_id ?? "").toUpperCase()),
       ),
     });
     if (key === undefined || !(await canReadGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
@@ -220,14 +220,14 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
     return { data: gpgKeyResource(key) };
   })
   .patch("/api/registry/:registry_name/v2/gpg-keys/:namespace/:key_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") {
+    if (params.registry_name !== "private") {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
     const key = await db.query.registryGpgKeys.findFirst({
       where: and(
-        eq(registryGpgKeys.namespace, params["namespace"] ?? ""),
-        eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
+        eq(registryGpgKeys.namespace, params.namespace ?? ""),
+        eq(registryGpgKeys.keyId, (params.key_id ?? "").toUpperCase()),
       ),
     });
     if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
@@ -263,14 +263,14 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
     return { data: gpgKeyResource(updated) };
   })
   .delete("/api/registry/:registry_name/v2/gpg-keys/:namespace/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") {
+    if (params.registry_name !== "private") {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
     const key = await db.query.registryGpgKeys.findFirst({
       where: and(
-        eq(registryGpgKeys.namespace, params["namespace"] ?? ""),
-        eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
+        eq(registryGpgKeys.namespace, params.namespace ?? ""),
+        eq(registryGpgKeys.keyId, (params.key_id ?? "").toUpperCase()),
       ),
     });
     if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {

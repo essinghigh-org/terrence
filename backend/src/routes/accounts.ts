@@ -153,7 +153,7 @@ function refreshUnauthorized(
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
-    const configuredToken = process.env["IACT_TOKEN"];
+    const configuredToken = process.env.IACT_TOKEN;
     const suppliedToken = request === undefined ? null : new URL(request.url).searchParams.get("token");
     const configured = Buffer.from(configuredToken ?? "");
     const supplied = Buffer.from(suppliedToken ?? "");
@@ -169,9 +169,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { status: "error", error: "Not found" };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const username = typeof payload["username"] === "string" ? payload["username"].trim() : "";
-    const email = typeof payload["email"] === "string" ? payload["email"].trim() : "";
-    const password = typeof payload["password"] === "string" ? payload["password"] : "";
+    const username = typeof payload.username === "string" ? payload.username.trim() : "";
+    const email = typeof payload.email === "string" ? payload.email.trim() : "";
+    const password = typeof payload.password === "string" ? payload.password : "";
     if (username === "" || email === "" || password.length < 10) {
       (set as { status: number }).status = 422;
       return { status: "error", error: "Username, email, and a password of at least 10 characters are required" };
@@ -179,7 +179,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     const userId = `user-${crypto.randomUUID()}`;
     const organizationId = `org-${crypto.randomUUID()}`;
-    const configuredOrganizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
+    const configuredOrganizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
     const token = `user-${crypto.randomUUID()}`;
     const passwordHash = await bcrypt.hash(password, 10);
@@ -224,7 +224,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { status: "error", error: "Not found" };
     }
-    delete process.env["IACT_TOKEN"];
+    delete process.env.IACT_TOKEN;
     await auditLog("create", "users", userId, userId, createdOrganizationId, { username, source: "IACT_TOKEN" });
     return { status: "created", token };
   })

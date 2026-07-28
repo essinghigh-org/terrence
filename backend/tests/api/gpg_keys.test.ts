@@ -70,8 +70,8 @@ describe("private registry GPG keys", () => {
       "",
     ].join("\n"));
     await chmod(binary, 0o700);
-    previousBinary = process.env["GPG_BINARY_PATH"];
-    process.env["GPG_BINARY_PATH"] = binary;
+    previousBinary = process.env.GPG_BINARY_PATH;
+    process.env.GPG_BINARY_PATH = binary;
 
     await db.insert(users).values([
       { id: userId, username: userId, passwordHash: "unused" },
@@ -125,8 +125,8 @@ describe("private registry GPG keys", () => {
   });
 
   afterAll(async () => {
-    if (previousBinary === undefined) delete process.env["GPG_BINARY_PATH"];
-    else process.env["GPG_BINARY_PATH"] = previousBinary;
+    if (previousBinary === undefined) delete process.env.GPG_BINARY_PATH;
+    else process.env.GPG_BINARY_PATH = previousBinary;
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(organizations).where(eq(organizations.id, otherOrgId));
     await db.delete(users).where(eq(users.id, userId));

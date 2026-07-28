@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const planJsonDirectory = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
+  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
   "plan-json",
 );
 

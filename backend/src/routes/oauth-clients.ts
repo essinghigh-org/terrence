@@ -224,13 +224,13 @@ async function oauth1TokenRequest(
   });
   if (!response.ok) return null;
   const payload = providerPayload(await response.text());
-  return typeof payload["oauth_token"] === "string"
-    && payload["oauth_token"] !== ""
-    && typeof payload["oauth_token_secret"] === "string"
+  return typeof payload.oauth_token === "string"
+    && payload.oauth_token !== ""
+    && typeof payload.oauth_token_secret === "string"
     ? {
-      token: payload["oauth_token"],
-      tokenSecret: payload["oauth_token_secret"],
-      callbackConfirmed: payload["oauth_callback_confirmed"] === "true",
+      token: payload.oauth_token,
+      tokenSecret: payload.oauth_token_secret,
+      callbackConfirmed: payload.oauth_callback_confirmed === "true",
     }
     : null;
 }
@@ -251,7 +251,7 @@ async function oauth1ProviderUser(
   if (!response.ok) return null;
   const text = (await response.text()).trim();
   const payload = providerPayload(text);
-  const username = [payload["name"], payload["username"], payload["slug"], payload["displayName"]]
+  const username = [payload.name, payload.username, payload.slug, payload.displayName]
     .find((value: unknown): value is string => typeof value === "string" && value !== "");
   return username ?? (text !== "" && !text.startsWith("{") ? text : null);
 }
@@ -470,14 +470,14 @@ async function completeOAuthHandshake(
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
     return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request))) };
   })
   .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -532,13 +532,13 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: await oauthClientResource(created, request) };
   })
   .get("/api/v2/oauth-clients/:oc_id", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await oauthClientResource(oc, request) };
   })
   .patch("/api/v2/oauth-clients/:oc_id", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -571,7 +571,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: await oauthClientResource(updated, request) };
   })
   .post("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
@@ -589,7 +589,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .delete("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
@@ -606,7 +606,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .delete("/api/v2/oauth-clients/:oc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(oauthClients).where(eq(oauthClients.id, ocId));
@@ -614,7 +614,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .get("/api/v2/oauth-clients/:oc_id/connect", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
@@ -687,7 +687,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     pruneOAuthStates();
     const stateId = stringQuery(query, "state");
     const state = oauthHandshakeStates.get(stateId);
-    if (state?.clientId !== (params["oc_id"] ?? "")) {
+    if (state?.clientId !== (params.oc_id ?? "")) {
       return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid");
     }
     oauthHandshakeStates.delete(stateId);
@@ -780,14 +780,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
   })
   .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
+    const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tokenList = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, ocId) });
     return { data: tokenList.map((ot: OtItem): Record<string, unknown> => ({ id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } })) };
   })
   .get("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const otId = params["ot_id"] ?? "";
+    const otId = params.ot_id ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
@@ -795,7 +795,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: { id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } } };
   })
   .delete("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const otId = params["ot_id"] ?? "";
+    const otId = params.ot_id ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });

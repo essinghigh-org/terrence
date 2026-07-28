@@ -5,9 +5,9 @@ import { organizationMemberships, organizations, samlSettings, users } from "../
 import { auditLog } from "./utils";
 
 export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | "skipped"> {
-  const password = process.env["ADMIN_PASSWORD"];
+  const password = process.env.ADMIN_PASSWORD;
   if (password === undefined || password === "") return "disabled";
-  delete process.env["ADMIN_PASSWORD"];
+  delete process.env.ADMIN_PASSWORD;
 
   const userCount = (await db.select({ value: count() }).from(users))[0]?.value ?? 0;
   if (userCount > 0) return "skipped";
@@ -15,11 +15,11 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
     throw new Error("ADMIN_PASSWORD must be at least 10 characters");
   }
 
-  const username = (process.env["ADMIN_USERNAME"] ?? "admin").trim();
+  const username = (process.env.ADMIN_USERNAME ?? "admin").trim();
   if (username === "") throw new Error("ADMIN_USERNAME cannot be empty");
-  const configuredEmail = process.env["ADMIN_EMAIL"]?.trim();
+  const configuredEmail = process.env.ADMIN_EMAIL?.trim();
   const email = configuredEmail === undefined || configuredEmail === "" ? null : configuredEmail;
-  const organizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
+  const organizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
   if (organizationName === "") throw new Error("ADMIN_ORGANIZATION cannot be empty");
   const id = `user-${crypto.randomUUID()}`;
   const organizationId = `org-${crypto.randomUUID()}`;

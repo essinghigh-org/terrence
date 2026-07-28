@@ -36,7 +36,7 @@ type ParsedPolicy = Readonly<{
 }>;
 
 const MAX_POLICY_BYTES = 20 * 1024 * 1024;
-const POLICY_ARCHIVE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
+const POLICY_ARCHIVE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
 
 function within(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
@@ -268,8 +268,8 @@ async function parseManifest(policySet: VcsPolicySet, root: string): Promise<Rea
     const manifestPath = join(policyDirectory, "sentinel.hcl");
     const blocks = hclPolicyBlocks(await readPolicyFile(manifestPath));
     const parsed = await Promise.all(blocks.map(async ({ attributes, name }): Promise<ParsedPolicy> => {
-      const sourcePath = attributes["source"];
-      const enforcementLevel = attributes["enforcement_level"];
+      const sourcePath = attributes.source;
+      const enforcementLevel = attributes.enforcement_level;
       if (sourcePath === undefined || sourcePath === "") throw new Error(`Sentinel policy "${name}" is missing source`);
       if (!["hard-mandatory", "soft-mandatory", "advisory"].includes(enforcementLevel ?? "")) {
         throw new Error(`Sentinel policy "${name}" has an invalid enforcement level`);
@@ -281,7 +281,7 @@ async function parseManifest(policySet: VcsPolicySet, root: string): Promise<Rea
       }
       const source = await readPolicyFile(sourceFile);
       return {
-        description: attributes["description"] ?? null,
+        description: attributes.description ?? null,
         enforcementLevel: enforcementLevel ?? "advisory",
         name,
         query: source,
@@ -307,14 +307,14 @@ async function parseManifest(policySet: VcsPolicySet, root: string): Promise<Rea
   }
   const source = sources.join("\n\n");
   const parsed = blocks.map(({ attributes, name }): ParsedPolicy => {
-    const query = attributes["query"];
-    const rawEnforcement = attributes["enforcement_level"] ?? "advisory";
+    const query = attributes.query;
+    const rawEnforcement = attributes.enforcement_level ?? "advisory";
     if (query === undefined || query === "") throw new Error(`OPA policy "${name}" is missing query`);
     if (!["mandatory", "advisory", "hard-mandatory", "soft-mandatory"].includes(rawEnforcement)) {
       throw new Error(`OPA policy "${name}" has an invalid enforcement level`);
     }
     return {
-      description: attributes["description"] ?? null,
+      description: attributes.description ?? null,
       enforcementLevel: rawEnforcement === "mandatory" ? "hard-mandatory" : rawEnforcement,
       name,
       query,

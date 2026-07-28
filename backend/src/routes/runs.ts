@@ -56,7 +56,7 @@ async function authorizedOrgWorkspaces(
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const canApply = await checkWorkspacePermission(workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
@@ -70,7 +70,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
@@ -89,7 +89,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId))), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
@@ -114,7 +114,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...pagination(request, number, size, queue.length) };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
@@ -178,14 +178,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, softDeletedAt: null, createdAt }, canApply) };
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const canApply = await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
     return { data: runResource(authorized.run, canApply) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(logs).where(eq(logs.runId, runId));
@@ -195,33 +195,33 @@ export const runRoutes = new Elysia({ name: "runs" })
     return {};
   })
   .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
   .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const rawPlanId = params["plan_id"] ?? "";
+    const rawPlanId = params.plan_id ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
   .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const rawApplyId = params["apply_id"] ?? "";
+    const rawApplyId = params.apply_id ?? "";
     const runId = rawApplyId.replace(/^apply-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: applyResource(authorized.run, request) };
   })
   .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: [] };
   })
   .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const currentSV = await db.query.stateVersions.findFirst({
@@ -233,30 +233,30 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: stateVersionResource(currentSV, request) };
   })
   .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const runLogs = await readRunLogs(runId);
     return { data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })) };
   })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const logToken = params["log_token"] ?? "";
+    const runId = params.run_id ?? "";
+    const logToken = params.log_token ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const planLogs = await readRunLogs(runId, "plan");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const logToken = params["log_token"] ?? "";
+    const runId = params.run_id ?? "";
+    const logToken = params.log_token ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const applyLogs = await readRunLogs(runId, "apply");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planLogs = await readRunLogs(runId, "plan");
@@ -264,7 +264,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const applyLogs = await readRunLogs(runId, "apply");
@@ -272,7 +272,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -334,7 +334,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: authorized.run.id, type: "runs", attributes: { status: "applying" } } };
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -351,7 +351,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -368,7 +368,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -384,7 +384,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -397,14 +397,14 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   // --- Comments ---
   .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const commentsList = await db.query.runComments.findMany({ where: eq(runComments.runId, runId) });
     return { data: commentsList.map((c: CommentItem): Record<string, unknown> => ({ id: c.id, type: "comments", attributes: { body: c.body, "created-at": new Date(c.createdAt).toISOString() } })) };
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -419,7 +419,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id, type: "comments", attributes: { body: text, "created-at": new Date().toISOString() } } };
   })
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const commentId = params["comment_id"] ?? "";
+    const commentId = params.comment_id ?? "";
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
@@ -430,7 +430,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   // --- Plan JSON Output ---
   .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const planId = params["plan_id"] ?? "";
+    const planId = params.plan_id ?? "";
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

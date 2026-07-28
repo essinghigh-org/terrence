@@ -75,12 +75,12 @@ function configuredUrl(value: string | undefined, fallback: string): URL | null 
 }
 
 function githubAppConfig(): GitHubAppConfig | null {
-  const appIdText = process.env["GITHUB_APP_ID"]?.trim() ?? "";
+  const appIdText = process.env.GITHUB_APP_ID?.trim() ?? "";
   const appId = positiveInteger(appIdText);
-  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"]?.replaceAll("\\n", "\n").trim() ?? "";
-  const slug = process.env["GITHUB_APP_SLUG"]?.trim() ?? "";
-  const httpUrl = configuredUrl(process.env["GITHUB_APP_HTTP_URL"], "https://github.com");
-  const apiUrl = configuredUrl(process.env["GITHUB_APP_API_URL"], "https://api.github.com");
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n").trim() ?? "";
+  const slug = process.env.GITHUB_APP_SLUG?.trim() ?? "";
+  const httpUrl = configuredUrl(process.env.GITHUB_APP_HTTP_URL, "https://github.com");
+  const apiUrl = configuredUrl(process.env.GITHUB_APP_API_URL, "https://api.github.com");
   if (
     appId === null
     || privateKey === ""
@@ -157,18 +157,18 @@ async function fetchInstallation(
     });
     if (!response.ok) return null;
     const payload = await response.json() as Record<string, unknown>;
-    const account = payload["account"] !== null && typeof payload["account"] === "object"
-      ? payload["account"] as Record<string, unknown>
+    const account = payload.account !== null && typeof payload.account === "object"
+      ? payload.account as Record<string, unknown>
       : {};
-    const returnedId = payload["id"];
-    const returnedAppId = payload["app_id"];
-    const rawName = typeof account["login"] === "string"
-      ? account["login"]
-      : typeof account["name"] === "string"
-        ? account["name"]
+    const returnedId = payload.id;
+    const returnedAppId = payload.app_id;
+    const rawName = typeof account.login === "string"
+      ? account.login
+      : typeof account.name === "string"
+        ? account.name
         : "";
     const name = rawName.trim();
-    const rawType = payload["target_type"] ?? account["type"];
+    const rawType = payload.target_type ?? account.type;
     if (
       returnedId !== installationId
       || returnedAppId !== config.appId
@@ -176,9 +176,9 @@ async function fetchInstallation(
       || (rawType !== "Organization" && rawType !== "User")
     ) return null;
     return {
-      iconUrl: httpUrl(account["avatar_url"]),
+      iconUrl: httpUrl(account.avatar_url),
       installationType: rawType,
-      installationUrl: httpUrl(payload["html_url"]),
+      installationUrl: httpUrl(payload.html_url),
       name: name.slice(0, 255),
     };
   } catch {
@@ -204,7 +204,7 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/github-app/installations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -215,15 +215,15 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return { data: installations.map(installationResource) };
   })
   .post("/api/v2/organizations/:org_name/github-app/installations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
     const installationId = attributes["installation-id"];
     if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
       (set as { status: number }).status = 422;
@@ -248,7 +248,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return { data: installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null }) };
   })
   .get("/api/v2/organizations/:org_name/github-app/installations/setup", async ({ params, request, user, token, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
     if (
       org === undefined
       || request === undefined

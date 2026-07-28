@@ -36,11 +36,11 @@ function validHmacOAuth1Request(
   expected: Readonly<Record<string, string>>,
 ): boolean {
   const parameters = oauthHeaderParameters(header);
-  const signature = parameters["oauth_signature"];
-  delete parameters["oauth_signature"];
+  const signature = parameters.oauth_signature;
+  delete parameters.oauth_signature;
   if (
     signature === undefined
-    || parameters["oauth_signature_method"] !== "HMAC-SHA1"
+    || parameters.oauth_signature_method !== "HMAC-SHA1"
     || Object.entries(expected).some(([key, value]): boolean => parameters[key] !== value)
   ) return false;
 
@@ -107,10 +107,10 @@ describe("VCS OAuth handshakes", () => {
         if (url.pathname === "/plugins/servlet/oauth/request-token") {
           const oauth = oauthHeaderParameters(request.headers.get("authorization"));
           if (
-            oauth["oauth_consumer_key"] !== "bitbucket-dc-key"
-            || typeof oauth["oauth_callback"] !== "string"
+            oauth.oauth_consumer_key !== "bitbucket-dc-key"
+            || typeof oauth.oauth_callback !== "string"
             || !validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "", {
-              oauth_callback: oauth["oauth_callback"],
+              oauth_callback: oauth.oauth_callback,
               oauth_consumer_key: "bitbucket-dc-key",
             })
           ) return new Response("invalid signature", { status: 401 });
@@ -296,10 +296,10 @@ describe("VCS OAuth handshakes", () => {
     const requestTokenCall = providerRequests.findLast((item): boolean =>
       item.path === "/plugins/servlet/oauth/request-token");
     const requestTokenOAuth = oauthHeaderParameters(requestTokenCall?.authorization ?? null);
-    expect(requestTokenOAuth["oauth_signature_method"]).toBe("HMAC-SHA1");
-    expect(requestTokenOAuth["oauth_nonce"]).not.toBeEmpty();
-    expect(requestTokenOAuth["oauth_timestamp"]).toMatch(/^\d+$/);
-    const callbackUrl = requestTokenOAuth["oauth_callback"];
+    expect(requestTokenOAuth.oauth_signature_method).toBe("HMAC-SHA1");
+    expect(requestTokenOAuth.oauth_nonce).not.toBeEmpty();
+    expect(requestTokenOAuth.oauth_timestamp).toMatch(/^\d+$/);
+    const callbackUrl = requestTokenOAuth.oauth_callback;
     if (callbackUrl === undefined) throw new Error("Provider request did not include an OAuth callback");
     const providerCallback = new URL(callbackUrl);
     const state = providerCallback.searchParams.get("state");

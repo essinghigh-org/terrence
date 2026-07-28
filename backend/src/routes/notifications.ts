@@ -31,9 +31,9 @@ type Subscription = Readonly<{ id: string; type: "workspaces" | "projects" | "te
 
 function attributesFrom(body: unknown): Record<string, unknown> {
   if (body === null || typeof body !== "object") return {};
-  const data = (body as Record<string, unknown>)["data"];
+  const data = (body as Record<string, unknown>).data;
   if (data === null || typeof data !== "object") return {};
-  const attributes = (data as Record<string, unknown>)["attributes"];
+  const attributes = (data as Record<string, unknown>).attributes;
   return attributes !== null && typeof attributes === "object"
     ? attributes as Record<string, unknown>
     : {};
@@ -147,8 +147,8 @@ function createValues(
   scope: Readonly<{ workspaceId?: string; projectId?: string }>,
 ): typeof notificationConfigurations.$inferInsert | undefined {
   const attributes = attributesFrom(body);
-  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
-  const url = typeof attributes["url"] === "string" ? attributes["url"] : "";
+  const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+  const url = typeof attributes.url === "string" ? attributes.url : "";
   const destinationType = typeof attributes["destination-type"] === "string"
     ? attributes["destination-type"]
     : "";
@@ -166,11 +166,11 @@ function createValues(
     name,
     destinationType,
     url,
-    triggers: Array.isArray(attributes["triggers"])
-      ? attributes["triggers"].filter((trigger: unknown): trigger is string => typeof trigger === "string")
+    triggers: Array.isArray(attributes.triggers)
+      ? attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string")
       : ["run:created", "run:completed"],
-    enabled: typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : true,
-    token: typeof attributes["token"] === "string" ? attributes["token"] : null,
+    enabled: typeof attributes.enabled === "boolean" ? attributes.enabled : true,
+    token: typeof attributes.token === "string" ? attributes.token : null,
     createdAt: Date.now(),
   };
 }
@@ -183,7 +183,7 @@ function notFound(set: SetObj): { errors: { status: string; title: string }[] } 
 export const notificationRoutes = new Elysia({ name: "notifications" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     if ((await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null)) === undefined) return notFound(set);
     const configurations = await db.query.notificationConfigurations.findMany({
       where: eq(notificationConfigurations.workspaceId, workspaceId),
@@ -191,7 +191,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
   })
   .post("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     if ((await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin")) === undefined) return notFound(set);
     const values = createValues(body, { workspaceId });
     if (values === undefined) {
@@ -206,7 +206,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: notificationResource(created ?? values as NcItem) };
   })
   .get("/api/v2/projects/:project_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) return notFound(set);
     const configurations = await db.query.notificationConfigurations.findMany({
@@ -215,7 +215,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
   })
   .post("/api/v2/projects/:project_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) return notFound(set);
     const values = createValues(body, { projectId });
@@ -231,7 +231,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: notificationResource(created ?? values as NcItem) };
   })
   .get("/api/v2/teams/:team_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params["team_id"] ?? "";
+    const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) return notFound(set);
     const configurations = await db.query.notificationConfigurations.findMany({
@@ -240,27 +240,27 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
   })
   .get("/api/v2/notification-configurations/:nc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
+    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     return configuration === undefined ? notFound(set) : { data: notificationResource(configuration) };
   })
   .patch("/api/v2/notification-configurations/:nc_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params["nc_id"] ?? "";
+    const id = params.nc_id ?? "";
     const configuration = await authorizedConfiguration(id, user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
 
     const attributes = attributesFrom(body);
     const updates: Partial<typeof notificationConfigurations.$inferInsert> = {};
-    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+    if (typeof attributes.name === "string") updates.name = attributes.name;
     if (
       typeof attributes["destination-type"] === "string"
       && ["generic", "slack", "microsoft-teams"].includes(attributes["destination-type"])
     ) updates.destinationType = attributes["destination-type"];
-    if (typeof attributes["url"] === "string" && isWebhookUrl(attributes["url"])) updates.url = attributes["url"];
-    if (Array.isArray(attributes["triggers"])) {
-      updates.triggers = attributes["triggers"].filter((trigger: unknown): trigger is string => typeof trigger === "string");
+    if (typeof attributes.url === "string" && isWebhookUrl(attributes.url)) updates.url = attributes.url;
+    if (Array.isArray(attributes.triggers)) {
+      updates.triggers = attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string");
     }
-    if (typeof attributes["enabled"] === "boolean") updates.enabled = attributes["enabled"];
-    if (attributes["token"] !== undefined) updates.token = typeof attributes["token"] === "string" ? attributes["token"] : null;
+    if (typeof attributes.enabled === "boolean") updates.enabled = attributes.enabled;
+    if (attributes.token !== undefined) updates.token = typeof attributes.token === "string" ? attributes.token : null;
     if (Object.keys(updates).length > 0) {
       await db.update(notificationConfigurations).set(updates).where(eq(notificationConfigurations.id, id));
     }
@@ -270,14 +270,14 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return updated === undefined ? notFound(set) : { data: notificationResource(updated) };
   })
   .delete("/api/v2/notification-configurations/:nc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params["nc_id"] ?? "";
+    const id = params.nc_id ?? "";
     if ((await authorizedConfiguration(id, user?.id, tokenOrgId, tokenTeamId, "manage")) === undefined) return notFound(set);
     await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, id));
     (set as { status: number }).status = 204;
     return {};
   })
   .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
     const delivery = await postNotification(configuration, {
       payload_version: 1,

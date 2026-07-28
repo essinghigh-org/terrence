@@ -60,19 +60,19 @@ function taskResultResource(result: ResultItem): Record<string, unknown> {
 
 export const runTaskRoutes = new Elysia({ name: "runTasks" })
   .patch("/api/v2/task-results/:task_result_id/callback", async ({ params, body, request, set }: CallbackCtx): Promise<unknown> => {
-    const resultId = params["task_result_id"] ?? "";
+    const resultId = params.task_result_id ?? "";
     const path = `/api/v2/task-results/${resultId}/callback`;
     if (!validSignedApiURL(request, path, "PATCH")) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
+    const data = payload.data;
     const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject["attributes"];
+    const attributes = dataObject.attributes;
     const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
-    const status = attrs["status"];
-    if (dataObject["type"] !== "task-results" || !["running", "passed", "failed"].includes(String(status))) {
+    const status = attrs.status;
+    if (dataObject.type !== "task-results" || !["running", "passed", "failed"].includes(String(status))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
@@ -87,36 +87,36 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     }
     await db.update(runTaskResults).set({
       status: String(status),
-      ...(typeof attrs["message"] === "string" ? { message: attrs["message"] } : {}),
-      ...(typeof attrs["url"] === "string" ? { url: attrs["url"] } : {}),
+      ...(typeof attrs.message === "string" ? { message: attrs.message } : {}),
+      ...(typeof attrs.url === "string" ? { url: attrs.url } : {}),
     }).where(eq(runTaskResults.id, resultId));
     (set as { status: number }).status = 200;
     return {};
   })
   .use(authPlugin)
   .get("/api/v2/runs/:run_id/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runId, runId) });
     return { data: results.map(taskResultResource) };
   })
   .get("/api/v2/run-tasks/:task_id/task-results", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params["task_id"] ?? "";
+    const taskId = params.task_id ?? "";
     const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runTaskId, taskId) });
     return { data: results.map(taskResultResource) };
   })
   .get("/api/v2/organizations/:org_name/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
     return { data: tasksList.map((t: TaskItem): Record<string, unknown> => ({ id: t.id, type: "run-tasks", attributes: { name: t.name, description: t.description, url: t.url, category: t.category, enabled: t.enabled } })) };
   })
   .post("/api/v2/organizations/:org_name/run-tasks", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -135,13 +135,13 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     return { data: { id, type: "run-tasks", attributes: { name, description, url, category, enabled } } };
   })
   .get("/api/v2/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params["task_id"] ?? "";
+    const taskId = params.task_id ?? "";
     const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: task.id, type: "run-tasks", attributes: { name: task.name, description: task.description, url: task.url, category: task.category, enabled: task.enabled } } };
   })
   .patch("/api/v2/run-tasks/:task_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params["task_id"] ?? "";
+    const taskId = params.task_id ?? "";
     const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -158,7 +158,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     return { data: { id: updated.id, type: "run-tasks", attributes: { name: updated.name, description: updated.description, url: updated.url, category: updated.category, enabled: updated.enabled } } };
   })
   .delete("/api/v2/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const taskId = params["task_id"] ?? "";
+    const taskId = params.task_id ?? "";
     const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(runTasks).where(eq(runTasks.id, taskId));
@@ -167,14 +167,14 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
   })
   // --- Workspace Run Tasks ---
   .get("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspaceId) });
     return { data: bindings.map((b: BindingItem): Record<string, unknown> => ({ id: b.id, type: "workspace-run-tasks", attributes: { stage: b.stage, "enforcement-level": b.enforcementLevel }, relationships: { "run-task": { data: { id: b.runTaskId, type: "run-tasks" } } } })) };
   })
   .post("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -199,8 +199,8 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     return { data: { id, type: "workspace-run-tasks", attributes: { stage, "enforcement-level": enforcementLevel } } };
   })
   .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const taskId = params["task_id"] ?? "";
+    const workspaceId = params.workspace_id ?? "";
+    const taskId = params.task_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)));

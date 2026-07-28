@@ -292,7 +292,7 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
       ["canceled", "canceled"],
     ] as const) {
       const state = costEstimateResource({ id: runId, status: runStatus, statusTimestamps: null });
-      expect((state["attributes"] as Record<string, unknown>)["status"]).toBe(expectedStatus);
+      expect((state.attributes as Record<string, unknown>).status).toBe(expectedStatus);
     }
 
     const finished = costEstimateResource({
@@ -303,8 +303,8 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
         "cost-estimated-at": "2026-01-01T00:00:01.000Z",
       },
     });
-    const finishedAttributes = finished["attributes"] as Record<string, unknown>;
-    expect(finishedAttributes["status"]).toBe("finished");
+    const finishedAttributes = finished.attributes as Record<string, unknown>;
+    expect(finishedAttributes.status).toBe("finished");
     expect((finishedAttributes["status-timestamps"] as Record<string, unknown>)["finished-at"]).toBe("2026-01-01T00:00:01.000Z");
   });
 

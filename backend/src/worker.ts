@@ -189,23 +189,23 @@ function checkStatus(value: unknown): "passed" | "failed" | "errored" | "unknown
 }
 
 function checkAddress(check: JsonObject, index: number): { address: string; kind: string } {
-  const address = asObject(check["address"]);
-  const kind = typeof address?.["kind"] === "string" ? address["kind"] : "check";
-  if (typeof address?.["to_display"] === "string") return { address: address["to_display"], kind };
-  const parts = [address?.["type"], address?.["name"]].filter((part: unknown): part is string =>
+  const address = asObject(check.address);
+  const kind = typeof address?.kind === "string" ? address.kind : "check";
+  if (typeof address?.to_display === "string") return { address: address.to_display, kind };
+  const parts = [address?.type, address?.name].filter((part: unknown): part is string =>
     typeof part === "string" && part !== "");
   return { address: parts.length > 0 ? `${kind}.${parts.join(".")}` : `check.${String(index + 1)}`, kind };
 }
 
 function checkMessage(check: JsonObject): string | null {
-  const messages = (Array.isArray(check["instances"]) ? check["instances"] : [])
+  const messages = (Array.isArray(check.instances) ? check.instances : [])
     .flatMap((instance: unknown): unknown[] => {
       const value = asObject(instance);
-      return Array.isArray(value?.["problems"]) ? value["problems"] : [];
+      return Array.isArray(value?.problems) ? value.problems : [];
     })
     .map((problem: unknown): string | undefined => {
       const value = asObject(problem);
-      return typeof value?.["message"] === "string" ? value["message"] : undefined;
+      return typeof value?.message === "string" ? value.message : undefined;
     })
     .filter((message: string | undefined): message is string => message !== undefined);
   return messages.length === 0 ? null : messages.join("\n");
@@ -216,7 +216,7 @@ async function storePlanCheckResults(
   planJson: JsonObject,
   association: Readonly<{ assessmentResultId?: string; runId?: string }>,
 ): Promise<StoredCheckSummary> {
-  const rawChecks = Array.isArray(planJson["checks"]) ? planJson["checks"] : [];
+  const rawChecks = Array.isArray(planJson.checks) ? planJson.checks : [];
   if (association.runId !== undefined) {
     await db.delete(assessmentCheckResults).where(eq(assessmentCheckResults.runId, association.runId));
   } else if (association.assessmentResultId !== undefined) {
@@ -228,7 +228,7 @@ async function storePlanCheckResults(
   for (const [index, rawCheck] of rawChecks.entries()) {
     const check = asObject(rawCheck);
     if (check === undefined) continue;
-    const normalizedStatus = checkStatus(check["status"]);
+    const normalizedStatus = checkStatus(check.status);
     summary[normalizedStatus] += 1;
     const address = checkAddress(check, index);
     await db.insert(assessmentCheckResults).values({
@@ -366,14 +366,14 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
 }
 
 function assessmentResourceCounts(planJson: JsonObject): { drifted: number; undrifted: number } {
-  const resourceChanges = Array.isArray(planJson["resource_changes"]) ? planJson["resource_changes"] : [];
+  const resourceChanges = Array.isArray(planJson.resource_changes) ? planJson.resource_changes : [];
   let drifted = 0;
   let undrifted = 0;
   for (const rawChange of resourceChanges) {
     const change = asObject(rawChange);
-    if (change?.["mode"] === "data") continue;
-    const detail = asObject(change?.["change"]);
-    const actions = Array.isArray(detail?.["actions"]) ? detail["actions"] : [];
+    if (change?.mode === "data") continue;
+    const detail = asObject(change?.change);
+    const actions = Array.isArray(detail?.actions) ? detail.actions : [];
     if (actions.length === 0 || actions.every((action: unknown): boolean => action === "no-op" || action === "read")) {
       undrifted += 1;
     } else {
@@ -572,7 +572,7 @@ async function executeRunTasks(
   const tasksById = new Map(configuredTasks.map((task: Readonly<typeof runTasks.$inferSelect>): readonly [string, Readonly<typeof runTasks.$inferSelect>] => [task.id, task]));
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   let proceed = true;
-  const configuredTimeout = Number(process.env["RUN_TASK_TIMEOUT_MS"] ?? 3_600_000);
+  const configuredTimeout = Number(process.env.RUN_TASK_TIMEOUT_MS ?? 3_600_000);
   const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
 
   for (const binding of bindings) {
@@ -587,8 +587,8 @@ async function executeRunTasks(
       status: "pending",
       createdAt: Date.now(),
     });
-    const port = process.env["PORT"] ?? "3000";
-    const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
+    const port = process.env.PORT ?? "3000";
+    const callbackBase = process.env.PUBLIC_URL ?? `http://localhost:${port}`;
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
     const callbackUrl = signedApiURL(
       { url: callbackBase },
@@ -635,17 +635,17 @@ async function executeRunTasks(
       if (responseText !== "") {
         try {
           const parsed = JSON.parse(responseText) as Record<string, unknown>;
-          const rawData = parsed["data"];
+          const rawData = parsed.data;
           const data = rawData !== null && typeof rawData === "object"
             ? rawData as Record<string, unknown>
             : parsed;
-          const rawAttributes = data["attributes"];
+          const rawAttributes = data.attributes;
           const attributes = rawAttributes !== null && typeof rawAttributes === "object"
             ? rawAttributes as Record<string, unknown>
             : data;
-          if (["running", "passed", "failed"].includes(String(attributes["status"]))) status = String(attributes["status"]);
-          if (typeof attributes["message"] === "string") message = attributes["message"];
-          if (typeof attributes["url"] === "string") resultUrl = attributes["url"];
+          if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
+          if (typeof attributes.message === "string") message = attributes.message;
+          if (typeof attributes.url === "string") resultUrl = attributes.url;
         } catch {}
       }
     } catch (error: unknown) {
@@ -805,7 +805,7 @@ export async function executeRun(runId: string): Promise<void> {
     );
 
     const envVars = buildSanitizedEnv(vars);
-    if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
+    if (run.debuggingMode) envVars.TF_LOG = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
       .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
@@ -820,7 +820,7 @@ export async function executeRun(runId: string): Promise<void> {
 
     const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = process.env["SIMULATED_RUNS"] === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -892,7 +892,7 @@ export async function executeRun(runId: string): Promise<void> {
     }
 
     const planJson = isSimulatedAllowed
-      ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
+      ? parseJsonObject(process.env.SIMULATED_PLAN_JSON ?? "{}")
       : await readPlanJson(executionDir, resolved?.binaryPath);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
@@ -954,7 +954,7 @@ export async function executeRun(runId: string): Promise<void> {
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
-      } else if (workspace.autoApply === true || run.autoApply || run.allowEmptyApply) {
+      } else if (run.autoApply || (workspace.autoApply === true)) {
         await writeLog(runId, "plan", `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`);
         keepPlan = true;
         await executeApply(runId);
@@ -1087,14 +1087,14 @@ export async function executeApply(runId: string): Promise<void> {
 
     const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = process.env["SIMULATED_RUNS"] === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
       const binary = resolved.binaryPath;
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const envVars = buildSanitizedEnv(vars);
-      if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
+      if (run.debuggingMode) envVars.TF_LOG = "TRACE";
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
       const hasPlanFile = await exists(join(executionDir, "tfplan"));
@@ -1279,7 +1279,7 @@ async function runPolicyChecks(
           : "data";
         const opaProc = spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuery], {
           cwd: workDir,
-          env: { PATH: process.env["PATH"] ?? "" },
+          env: { PATH: process.env.PATH ?? "" },
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -1290,10 +1290,10 @@ async function runPolicyChecks(
         ]);
         if (opaExit === 0) {
           checkResult = JSON.parse(opaStdout !== "" ? opaStdout : "{}") as Record<string, unknown>;
-          const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
-          const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
-          const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
-          const violated = valObj?.["violations"];
+          const resultList = checkResult.result as Record<string, unknown>[] | undefined;
+          const exprList = resultList?.[0]?.expressions as Record<string, unknown>[] | undefined;
+          const valObj = exprList?.[0]?.value as Record<string, unknown> | undefined;
+          const violated = valObj?.violations;
           if (violated !== undefined && Array.isArray(violated) && violated.length > 0) {
             checkStatus = "failed";
           } else {
@@ -1312,7 +1312,7 @@ async function runPolicyChecks(
         const policyPath = join(workDir, "policy.sentinel");
         await writeFile(policyPath, policySource, { mode: 0o600 });
         const args = [
-          process.env["SENTINEL_BINARY_PATH"] ?? "sentinel",
+          process.env.SENTINEL_BINARY_PATH ?? "sentinel",
           "apply",
           "-json",
           "-timeout=30s",
@@ -1328,7 +1328,7 @@ async function runPolicyChecks(
         args.push(policyPath);
         const sentinelProc = spawn(args, {
           cwd: workDir,
-          env: { PATH: process.env["PATH"] ?? "" },
+          env: { PATH: process.env.PATH ?? "" },
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -1346,7 +1346,7 @@ async function runPolicyChecks(
         } catch {
           sentinel = { output: sentinelStdout };
         }
-        if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
+        if (sentinelStderr !== "") sentinel.stderr = sentinelStderr;
         if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
           const passed = sentinelExit === 0;
           checkStatus = passed ? "passed" : "failed";
@@ -1357,7 +1357,7 @@ async function runPolicyChecks(
             "hard-failed": !passed && policy.enforcementLevel === "hard-mandatory" ? 1 : 0,
             "soft-failed": !passed && policy.enforcementLevel === "soft-mandatory" ? 1 : 0,
             "advisory-failed": !passed && policy.enforcementLevel === "advisory" ? 1 : 0,
-            "duration-ms": typeof sentinel["duration"] === "number" ? sentinel["duration"] : 0,
+            "duration-ms": typeof sentinel.duration === "number" ? sentinel.duration : 0,
             sentinel,
           };
         } else {
@@ -1444,7 +1444,7 @@ async function captureProcess(
 }
 
 function assessmentIntervalMs(): number {
-  const configured = Number(process.env["HEALTH_ASSESSMENT_INTERVAL_MS"] ?? 86_400_000);
+  const configured = Number(process.env.HEALTH_ASSESSMENT_INTERVAL_MS ?? 86_400_000);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 86_400_000;
 }
 
@@ -1538,42 +1538,62 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
     ] => [organization.id, organization]),
   );
   const cutoff = now - assessmentIntervalMs();
+
+  // Filter candidate workspaces first
+  const candidateWorkspaces = allWorkspaces.filter((workspace): boolean => {
+    const organization = organizationsById.get(workspace.orgId);
+    return workspace.assessmentsEnabled === true || organization?.assessmentsEnforced === true;
+  });
+  if (candidateWorkspaces.length === 0) return [];
+
+  const candidateIds = candidateWorkspaces.map((ws): string => ws.id);
+
+  // Batch fetch only the latest + active assessment results and runs, capped
+  const batchLimit = Math.max(candidateIds.length * 5, 20);
+  const [allAssessments, allRuns] = await Promise.all([
+    db.query.assessmentResults.findMany({
+      where: inArray(assessmentResults.workspaceId, candidateIds),
+      orderBy: [desc(assessmentResults.createdAt)],
+      limit: batchLimit,
+    }),
+    db.query.runs.findMany({
+      where: inArray(runs.workspaceId, candidateIds),
+      orderBy: [desc(runs.createdAt)],
+      limit: batchLimit,
+    }),
+  ]);
+
+  // Group by workspace ID
+  const assessmentsByWorkspace = new Map<string, typeof allAssessments>();
+  const runsByWorkspace = new Map<string, typeof allRuns>();
+  for (const a of allAssessments) {
+    const list = assessmentsByWorkspace.get(a.workspaceId);
+    if (list === undefined) assessmentsByWorkspace.set(a.workspaceId, [a]);
+    else list.push(a);
+  }
+  for (const r of allRuns) {
+    const list = runsByWorkspace.get(r.workspaceId);
+    if (list === undefined) runsByWorkspace.set(r.workspaceId, [r]);
+    else list.push(r);
+  }
+
   const enqueued: string[] = [];
 
-  for (const workspace of allWorkspaces) {
-    const organization = organizationsById.get(workspace.orgId);
-    if (workspace.assessmentsEnabled !== true && organization?.assessmentsEnforced !== true) continue;
+  for (const workspace of candidateWorkspaces) {
+    const wsAssessments = assessmentsByWorkspace.get(workspace.id) ?? [];
+    const wsRuns = runsByWorkspace.get(workspace.id) ?? [];
 
-    const [latestResult, activeResult, latestRun, latestAppliedRun, activeRun] = await Promise.all([
-      db.query.assessmentResults.findFirst({
-        where: eq(assessmentResults.workspaceId, workspace.id),
-        orderBy: [desc(assessmentResults.createdAt)],
-      }),
-      db.query.assessmentResults.findFirst({
-        where: and(
-          eq(assessmentResults.workspaceId, workspace.id),
-          inArray(assessmentResults.status, ["pending", "running"]),
-        ),
-      }),
-      db.query.runs.findFirst({
-        where: eq(runs.workspaceId, workspace.id),
-        orderBy: [desc(runs.createdAt)],
-      }),
-      db.query.runs.findFirst({
-        where: and(
-          eq(runs.workspaceId, workspace.id),
-          eq(runs.status, "applied"),
-          isNotNull(runs.configurationVersionId),
-        ),
-        orderBy: [desc(runs.createdAt)],
-      }),
-      db.query.runs.findFirst({
-        where: and(
-          eq(runs.workspaceId, workspace.id),
-          notInArray(runs.status, FINAL_RUN_STATUSES),
-        ),
-      }),
-    ]);
+    // latestResult is the first assessment (sorted desc)
+    const latestResult = wsAssessments.length > 0 ? wsAssessments[0] : undefined;
+    // activeResult is any pending/running
+    const activeResult = wsAssessments.find((a): boolean => ["pending", "running"].includes(a.status));
+    // latestRun is the first run (sorted desc)
+    const latestRun = wsRuns.length > 0 ? wsRuns[0] : undefined;
+    // latestAppliedRun is the first applied run with CV
+    const latestAppliedRun = wsRuns.find((r): boolean => r.status === "applied" && r.configurationVersionId !== null);
+    // activeRun is any run not in final statuses
+    const activeRun = wsRuns.find((r): boolean => !FINAL_RUN_STATUSES.includes(r.status));
+
     if (
       activeResult !== undefined
       || activeRun !== undefined
@@ -1636,13 +1656,13 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = process.env["SIMULATED_RUNS"] === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
     if (simulated) {
-      planJson = parseJsonObject(process.env["SIMULATED_ASSESSMENT_JSON"] ?? '{"resource_changes":[],"checks":[]}');
-      providerSchema = parseJsonObject(process.env["SIMULATED_ASSESSMENT_SCHEMA"] ?? "{}");
+      planJson = parseJsonObject(process.env.SIMULATED_ASSESSMENT_JSON ?? '{"resource_changes":[],"checks":[]}');
+      providerSchema = parseJsonObject(process.env.SIMULATED_ASSESSMENT_SCHEMA ?? "{}");
       appendOutput("[terrence] Simulated health assessment completed.");
     } else {
       const configuration = await db.query.configurationVersions.findFirst({
@@ -1807,7 +1827,7 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
 }
 
 export async function pollAssessmentQueue(): Promise<string[]> {
-  const configured = Number(process.env["HEALTH_ASSESSMENT_CONCURRENCY"] ?? 2);
+  const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
@@ -1851,13 +1871,21 @@ export async function pollWorkerQueue(): Promise<string[]> {
   const claimedRunIds: string[] = [];
   const claimedWorkspaceIds = new Set<string>();
 
+  // Pre-fetch workspaces to avoid N+1 inside the loop
+  const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
+  const workspacesById = workspaceIds.length === 0
+    ? new Map<string, typeof workspaces.$inferSelect>()
+    : new Map(
+        (await db.query.workspaces.findMany({
+          where: inArray(workspaces.id, workspaceIds),
+        })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
+      );
+
   for (const run of pendingRuns) {
     if (claimedRunIds.length === 5) break;
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
-    const workspace = await db.query.workspaces.findFirst({
-      where: eq(workspaces.id, run.workspaceId),
-    });
+    const workspace = workspacesById.get(run.workspaceId);
     if (workspace === undefined || workspace.locked === true) continue;
 
     // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,

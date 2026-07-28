@@ -7,7 +7,7 @@ import { logs } from "../db/schema";
 
 export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">>;
 
-const storageDirectory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "run-logs");
+const storageDirectory = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "run-logs");
 
 export function runLogArchivePath(runId: string): string {
   return join(storageDirectory, `${runId}.json.gz`);

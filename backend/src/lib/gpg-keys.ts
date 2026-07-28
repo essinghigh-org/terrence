@@ -17,7 +17,7 @@ export async function inspectGpgPublicKey(asciiArmor: string): Promise<Inspected
 
   const home = await mkdtemp(join(tmpdir(), "terrence-gpg-"));
   try {
-    const binary = process.env["GPG_BINARY_PATH"] ?? "gpg";
+    const binary = process.env.GPG_BINARY_PATH ?? "gpg";
     const processHandle = Bun.spawn([
       binary,
       "--batch",

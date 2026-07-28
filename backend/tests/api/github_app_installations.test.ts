@@ -73,11 +73,11 @@ beforeAll(async () => {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   publicKey = keys.publicKey;
-  process.env["GITHUB_APP_ID"] = "12345";
-  process.env["GITHUB_APP_PRIVATE_KEY"] = keys.privateKey;
-  process.env["GITHUB_APP_SLUG"] = "terrence-test";
-  delete process.env["GITHUB_APP_API_URL"];
-  delete process.env["GITHUB_APP_HTTP_URL"];
+  process.env.GITHUB_APP_ID = "12345";
+  process.env.GITHUB_APP_PRIVATE_KEY = keys.privateKey;
+  process.env.GITHUB_APP_SLUG = "terrence-test";
+  delete process.env.GITHUB_APP_API_URL;
+  delete process.env.GITHUB_APP_HTTP_URL;
 
   const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : input.toString();
@@ -143,7 +143,7 @@ beforeEach(async () => {
   providerMode = "valid";
   providerName = "octo-organization";
   providerRequests.length = 0;
-  process.env["GITHUB_APP_SLUG"] = "terrence-test";
+  process.env.GITHUB_APP_SLUG = "terrence-test";
   await db.insert(organizationMemberships).values({
     id: `mem-github-app-${suffix}`,
     orgId,
@@ -182,9 +182,9 @@ describe("GitHub App installation setup", () => {
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, null)).status).toBe(404);
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, outsiderToken)).status).toBe(404);
 
-    delete process.env["GITHUB_APP_SLUG"];
+    delete process.env.GITHUB_APP_SLUG;
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`)).status).toBe(422);
-    process.env["GITHUB_APP_SLUG"] = "terrence-test";
+    process.env.GITHUB_APP_SLUG = "terrence-test";
 
     const { response, state } = await startSetup();
     expect(response.status).toBe(302);

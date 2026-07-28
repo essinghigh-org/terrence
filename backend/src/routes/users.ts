@@ -34,7 +34,7 @@ export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    const filterParam = query["filter[username]"] ?? query["q"];
+    const filterParam = query["filter[username]"] ?? query.q;
     const usernameFilter = typeof filterParam === "string" ? filterParam.trim() : "";
     let allUsers: Readonly<typeof users.$inferSelect>[];
     if (user.isSiteAdmin === true) {
@@ -70,7 +70,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: allUsers.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u)) };
   })
   .get("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || user === null || user === undefined) {
       (set as { status: number }).status = 404;
@@ -94,7 +94,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: userResource(targetUser) };
   })
   .patch("/api/v2/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -114,7 +114,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: userResource(updated) };
   })
   .delete("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -126,7 +126,7 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   // --- Org Memberships ---
   .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -189,7 +189,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: orgMembershipResource(mem, targetUser, teamIds) };
   })
   .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -198,7 +198,7 @@ export const userRoutes = new Elysia({ name: "users" })
     const userIds = mems.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
     const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
-    const includeQuery = query["include"];
+    const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
     const data = mems.map((m: Readonly<typeof organizationMemberships.$inferSelect>): Record<string, unknown> => orgMembershipResource(m, userMap.get(m.userId) ?? null));
     const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[] } = { data };
@@ -208,13 +208,13 @@ export const userRoutes = new Elysia({ name: "users" })
     return result;
   })
   .get("/api/v2/organization-memberships/:id", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const memId = params["id"] ?? "";
+    const memId = params.id ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined || !(await checkOrgPermission(user?.id, mem.orgId, "member", tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, mem.userId) });
-    const includeQuery = query["include"];
+    const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
     const result: { data: Record<string, unknown>; included?: Record<string, unknown>[] } = { data: orgMembershipResource(mem, targetUser) };
     if (includeUsers && targetUser !== undefined) {
@@ -223,7 +223,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return result;
   })
   .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const memId = params["id"] ?? "";
+    const memId = params.id ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -234,7 +234,7 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   // --- Auth Tokens ---
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params, user, request, set }: ParamCtx): Promise<unknown> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -250,7 +250,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokens.map((token: Readonly<typeof apiTokens.$inferSelect>): Record<string, unknown> => tokenResource(token)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tokenId = params["token_id"] ?? "";
+    const tokenId = params.token_id ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       return { data: tokenResource(token) };
@@ -283,7 +283,7 @@ export const userRoutes = new Elysia({ name: "users" })
     };
   })
   .delete("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const tokenId = params["token_id"] ?? "";
+    const tokenId = params.token_id ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
@@ -354,7 +354,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/organizations/:org_name/authentication-token", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
@@ -368,7 +368,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource(token) };
   })
   .post("/api/v2/organizations/:org_name/authentication-token", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
@@ -402,7 +402,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;

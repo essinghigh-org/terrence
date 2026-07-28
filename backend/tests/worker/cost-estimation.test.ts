@@ -161,20 +161,20 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
     }));
   `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
 
-  expect(result["status"]).toBe("planned_and_finished");
-  expect(result["capturedPlan"]).toEqual(result["persistedPlan"]);
-  expect(result["args"]).toContain("breakdown");
-  expect(result["args"]).toContain("--format json");
-  expect(result["statusKeys"]).toContain("cost-estimated-at");
-  const estimate = result["estimate"] as Record<string, unknown>;
-  expect(estimate["status"]).toBe("finished");
+  expect(result.status).toBe("planned_and_finished");
+  expect(result.capturedPlan).toEqual(result.persistedPlan);
+  expect(result.args).toContain("breakdown");
+  expect(result.args).toContain("--format json");
+  expect(result.statusKeys).toContain("cost-estimated-at");
+  const estimate = result.estimate as Record<string, unknown>;
+  expect(estimate.status).toBe("finished");
   expect(estimate["prior-monthly-cost"]).toBe("10.00");
   expect(estimate["proposed-monthly-cost"]).toBe("25.50");
   expect(estimate["delta-monthly-cost"]).toBe("15.50");
   expect(estimate["resources-count"]).toBe(2);
   expect(estimate["matched-resources-count"]).toBe(1);
   expect(estimate["unmatched-resources-count"]).toBe(1);
-  const resources = estimate["resources"] as { projects: { diff: { resources: { action: string }[] } }[] };
+  const resources = estimate.resources as { projects: { diff: { resources: { action: string }[] } }[] };
   expect(resources.projects[0]?.diff.resources[0]?.action).toBe("modify");
 });
 
@@ -228,12 +228,12 @@ test("records missing and failed Infracost tooling as errored estimates while ru
     }));
   `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
 
-  expect(result["missingStatus"]).toBe("planned_and_finished");
-  expect(result["failedStatus"]).toBe("planned_and_finished");
-  const missingEstimate = result["missingEstimate"] as Record<string, unknown>;
-  const failedEstimate = result["failedEstimate"] as Record<string, unknown>;
-  expect(missingEstimate["status"]).toBe("errored");
+  expect(result.missingStatus).toBe("planned_and_finished");
+  expect(result.failedStatus).toBe("planned_and_finished");
+  const missingEstimate = result.missingEstimate as Record<string, unknown>;
+  const failedEstimate = result.failedEstimate as Record<string, unknown>;
+  expect(missingEstimate.status).toBe("errored");
   expect(String(missingEstimate["error-message"])).toContain("does-not-exist");
-  expect(failedEstimate["status"]).toBe("errored");
+  expect(failedEstimate.status).toBe("errored");
   expect(failedEstimate["error-message"]).toBe("Infracost exited with code 23: pricing unavailable");
 });

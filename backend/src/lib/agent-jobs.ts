@@ -216,7 +216,7 @@ function agentPolicyResults(
     if (typeof rawCheck !== "object" || rawCheck === null || Array.isArray(rawCheck)) continue;
     const check = rawCheck as Record<string, unknown>;
     const policyId = check["policy-id"];
-    const status = check["status"];
+    const status = check.status;
     if (
       typeof policyId !== "string"
       || !["passed", "failed", "errored", "unreachable"].includes(
@@ -229,7 +229,7 @@ function agentPolicyResults(
       continue;
     }
     if (duplicates.has(policyId)) continue;
-    const checkResult = check["result"];
+    const checkResult = check.result;
     reported.set(policyId, {
       status: status as string,
       result: typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)
@@ -285,7 +285,7 @@ async function recordAgentPolicyChecks(
 
 export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]> {
   const configuredTimeout = Number(
-    process.env["AGENT_HEARTBEAT_TIMEOUT_MS"] ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
   );
   const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
     ? configuredTimeout
@@ -324,10 +324,20 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
     });
     const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
 
+    // Pre-fetch all affected runs in a single query to avoid N+1
+    const staleRunIds = [...new Set(staleJobs.map((job): string => job.runId))];
+    const staleRuns = staleRunIds.length === 0
+      ? new Map<string, typeof runs.$inferSelect>()
+      : new Map(
+          (await tx.query.runs.findMany({
+            where: inArray(runs.id, staleRunIds),
+          })).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
+        );
+
     for (const job of staleJobs) {
       const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
       const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
-      const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+      const run = staleRuns.get(job.runId);
       const updatedRuns = run === undefined
         ? []
         : await tx.update(runs).set({

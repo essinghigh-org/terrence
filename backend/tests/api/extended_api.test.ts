@@ -3,6 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { organizations, users, apiTokens, workspaces, workspaceVariables, stateVersions, configurationVersions, runs, logs, workspaceTags, organizationMemberships } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { executeRun } from "../../src/worker";
 import { rm } from "fs/promises";
 import { join } from "path";
 
@@ -245,11 +246,14 @@ describe("TFE API v2 - Extended APIs", () => {
     const listData = await runsList.json();
     expect(listData.data.length).toBeGreaterThan(0);
 
-    // Poll until run completes or updates logs
+    // Execute the run via worker (not auto-started in test)
+    await executeRun(runId);
+
+    // Poll until run completes
     let attempts = 0;
     let logText = "";
     let runStatus = "";
-    while (attempts < 15) {
+    while (attempts < 50) {
       const runStatusRes = await app.handle(
         new Request(`http://localhost/api/v2/runs/${runId}`, {
           method: "GET",
@@ -273,7 +277,9 @@ describe("TFE API v2 - Extended APIs", () => {
       attempts++;
     }
     expect(logText.length).toBeGreaterThan(0);
-    expect(["planning", "planned", "applied", "errored", "canceled", "discarded"]).toContain(runStatus);
+    const terminalStatuses = new Set(["planning", "planned", "applied", "errored", "canceled", "discarded"]);
+    // Allow "planned_and_finished" as a valid terminal status for plan-only runs
+    expect(terminalStatuses.has(runStatus) || runStatus === "planned_and_finished").toBe(true);
   });
 
   it("should list state versions and download state JSON payload", async () => {

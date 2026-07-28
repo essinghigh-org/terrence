@@ -28,14 +28,14 @@ type ParamCtx = Readonly<{
 export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/ssh-keys", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const keyList = await db.query.sshKeys.findMany({ where: eq(sshKeys.orgId, org.id) });
     return { data: keyList.map((k: { readonly id: string; readonly name: string }): Record<string, unknown> => ({ id: k.id, type: "ssh-keys", attributes: { name: k.name } })) };
   })
   .post("/api/v2/organizations/:org_name/ssh-keys", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
@@ -48,13 +48,13 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     return { data: { id, type: "ssh-keys", attributes: { name } } };
   })
   .get("/api/v2/ssh-keys/:ssh_key_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const sshKeyId = params["ssh_key_id"] ?? "";
+    const sshKeyId = params.ssh_key_id ?? "";
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: key.id, type: "ssh-keys", attributes: { name: key.name } } };
   })
   .patch("/api/v2/ssh-keys/:ssh_key_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const sshKeyId = params["ssh_key_id"] ?? "";
+    const sshKeyId = params.ssh_key_id ?? "";
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
@@ -66,7 +66,7 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     return { data: { id: updated?.id ?? "unknown", type: "ssh-keys", attributes: { name: updated?.name ?? "" } } };
   })
   .delete("/api/v2/ssh-keys/:ssh_key_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const sshKeyId = params["ssh_key_id"] ?? "";
+    const sshKeyId = params.ssh_key_id ?? "";
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(sshKeys).where(eq(sshKeys.id, sshKeyId));

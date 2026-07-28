@@ -4,6 +4,7 @@ import { authPlugin } from "../auth";
 import { db } from "../db";
 import { changeRequests, organizations, type users, workspaces } from "../db/schema";
 import { checkOrganizationPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import { queueChangeRequestNotification } from "../lib/notifications";
 
 type SetObject = Readonly<{
   status?: number | string;
@@ -106,14 +107,14 @@ function queryWorkspaceIds(
 ): string[] | undefined {
   if (query === null || typeof query !== "object") return undefined;
   const value = query as Record<string, unknown>;
-  if (value["type"] !== "workspaces") return undefined;
-  if (value["filter"] === undefined) return candidates.map((workspace): string => workspace.id);
-  if (!Array.isArray(value["filter"])) return undefined;
+  if (value.type !== "workspaces") return undefined;
+  if (value.filter === undefined) return candidates.map((workspace): string => workspace.id);
+  if (!Array.isArray(value.filter)) return undefined;
 
   let matches = [...candidates];
-  for (const filter of value["filter"]) {
+  for (const filter of value.filter) {
     if (filter === null || typeof filter !== "object") return undefined;
-    const nameFilter = (filter as Record<string, unknown>)["workspace_name"];
+    const nameFilter = (filter as Record<string, unknown>).workspace_name;
     if (nameFilter === null || typeof nameFilter !== "object") return undefined;
     const entries = Object.entries(nameFilter as Record<string, unknown>);
     if (entries.length !== 1) return undefined;
@@ -188,7 +189,7 @@ async function resolveChangeRequest(
 export const changeRequestRoutes = new Elysia({ name: "change-requests" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/change-requests", async ({ params, user, orgId, teamId, request, set }: Context): Promise<unknown> => {
-    const workspace = await authorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null);
+    const workspace = await authorizedWorkspace(params.workspace_id ?? "", user?.id, orgId ?? null, teamId ?? null);
     if (workspace === undefined) return errorResponse(set, 404, "Not Found");
     const { number, size } = pageRequest(request);
     const [rows, counts] = await Promise.all([
@@ -206,28 +207,29 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     };
   })
   .post("/api/v2/workspaces/:workspace_id/change-requests", async ({ params, body, user, orgId, teamId, set }: Context): Promise<unknown> => {
-    const workspace = await authorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "admin");
+    const workspace = await authorizedWorkspace(params.workspace_id ?? "", user?.id, orgId ?? null, teamId ?? null, "admin");
     if (workspace === undefined) return errorResponse(set, 404, "Not Found");
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
+    const data = payload.data;
     const attributes = data !== null && typeof data === "object"
-      && (data as Record<string, unknown>)["attributes"] !== null
-      && typeof (data as Record<string, unknown>)["attributes"] === "object"
-      ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
+      && (data as Record<string, unknown>).attributes !== null
+      && typeof (data as Record<string, unknown>).attributes === "object"
+      ? (data as Record<string, unknown>).attributes as Record<string, unknown>
       : {};
-    const subject = typeof attributes["subject"] === "string" ? attributes["subject"].trim() : "";
-    const message = typeof attributes["message"] === "string" ? attributes["message"].trim() : "";
+    const subject = typeof attributes.subject === "string" ? attributes.subject.trim() : "";
+    const message = typeof attributes.message === "string" ? attributes.message.trim() : "";
     if (subject === "" || message === "") {
       return errorResponse(set, 422, "Unprocessable Entity", "Subject and message are required");
     }
     const changeRequest = changeRequestValues(workspace.id, subject, message, user?.id ?? null, Date.now());
     await db.insert(changeRequests).values(changeRequest);
+    queueChangeRequestNotification(changeRequest.id);
     (set as { status: number }).status = 201;
     return { data: resource(changeRequest, true) };
   })
   .post("/api/v2/organizations/:org_name/explorer/bulk-actions", async ({ params, body, user, orgId, teamId, set }: Context): Promise<unknown> => {
     const organization = await db.query.organizations.findFirst({
-      where: eq(organizations.name, params["org_name"] ?? ""),
+      where: eq(organizations.name, params.org_name ?? ""),
     });
     if (
       organization === undefined
@@ -235,21 +237,21 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     ) return errorResponse(set, 404, "Not Found");
 
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload["data"];
+    const data = payload.data;
     const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
-      ? dataObject["attributes"] as Record<string, unknown>
+    const attributes = dataObject.attributes !== null && typeof dataObject.attributes === "object"
+      ? dataObject.attributes as Record<string, unknown>
       : {};
-    const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
-      ? attributes["action_inputs"] as Record<string, unknown>
+    const inputs = attributes.action_inputs !== null && typeof attributes.action_inputs === "object"
+      ? attributes.action_inputs as Record<string, unknown>
       : {};
-    const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
-    const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
-    const actionType = attributes["action_type"];
-    const targetIds = attributes["target_ids"];
-    const query = attributes["query"];
+    const subject = typeof inputs.subject === "string" ? inputs.subject.trim() : "";
+    const message = typeof inputs.message === "string" ? inputs.message.trim() : "";
+    const actionType = attributes.action_type;
+    const targetIds = attributes.target_ids;
+    const query = attributes.query;
     if (
-      dataObject["type"] !== "bulk_actions"
+      dataObject.type !== "bulk_actions"
       || (actionType !== "change_request" && actionType !== "change_requests")
       || subject === ""
       || message === ""
@@ -276,6 +278,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     const records = selectedIds.map((workspaceId): ChangeRequest =>
       changeRequestValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.insert(changeRequests).values(records);
+    for (const record of records) queueChangeRequestNotification(record.id);
     (set as { status: number }).status = 201;
     return {
       data: {
@@ -291,16 +294,16 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     };
   })
   .get("/api/v2/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> => {
-    const changeRequest = await authorizedChangeRequest(params["change_request_id"] ?? "", user?.id, orgId ?? null, teamId ?? null);
+    const changeRequest = await authorizedChangeRequest(params.change_request_id ?? "", user?.id, orgId ?? null, teamId ?? null);
     return changeRequest === undefined ? errorResponse(set, 404, "Not Found") : { data: resource(changeRequest) };
   })
   .get("/api/v2/workspaces/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> => {
-    const changeRequest = await authorizedChangeRequest(params["change_request_id"] ?? "", user?.id, orgId ?? null, teamId ?? null);
+    const changeRequest = await authorizedChangeRequest(params.change_request_id ?? "", user?.id, orgId ?? null, teamId ?? null);
     return changeRequest === undefined ? errorResponse(set, 404, "Not Found") : { data: resource(changeRequest) };
   })
   .post("/api/v2/change-requests/:change_request_id/actions/approve", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> =>
-    resolveChangeRequest(params["change_request_id"] ?? "", "approved", user?.id, orgId ?? null, teamId ?? null, set))
+    resolveChangeRequest(params.change_request_id ?? "", "approved", user?.id, orgId ?? null, teamId ?? null, set))
   .post("/api/v2/change-requests/:change_request_id/actions/discard", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> =>
-    resolveChangeRequest(params["change_request_id"] ?? "", "discarded", user?.id, orgId ?? null, teamId ?? null, set))
+    resolveChangeRequest(params.change_request_id ?? "", "discarded", user?.id, orgId ?? null, teamId ?? null, set))
   .patch("/api/v2/workspaces/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> =>
-    resolveChangeRequest(params["change_request_id"] ?? "", "archived", user?.id, orgId ?? null, teamId ?? null, set, "apply", false));
+    resolveChangeRequest(params.change_request_id ?? "", "archived", user?.id, orgId ?? null, teamId ?? null, set, "apply", false));

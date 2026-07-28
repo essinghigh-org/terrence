@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const MODULE_TEST_DIR = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
+  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
   "module-tests",
 );
 
@@ -37,19 +37,19 @@ function safeRelativePath(value: string): boolean {
 
 export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration | Readonly<{ error: string }> {
   const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-  const rawData = payload["data"];
+  const rawData = payload.data;
   const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
-  if (data["type"] !== undefined && data["type"] !== "module-tests" && data["type"] !== "test-runs") {
+  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
     return { error: "data.type must be module-tests or test-runs" };
   }
-  const rawAttributes = data["attributes"];
+  const rawAttributes = data.attributes;
   const attributes = rawAttributes !== null && typeof rawAttributes === "object"
     ? rawAttributes as Record<string, unknown>
     : {};
-  const verbose = attributes["verbose"] ?? false;
-  const rawFilters = attributes["filters"] ?? [];
+  const verbose = attributes.verbose ?? false;
+  const rawFilters = attributes.filters ?? [];
   const testDirectory = attributes["test-directory"] ?? "tests";
-  const rawVariables = attributes["variables"] ?? [];
+  const rawVariables = attributes.variables ?? [];
   if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
   if (
     !Array.isArray(rawFilters)
@@ -66,8 +66,8 @@ export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration
   for (const rawVariable of rawVariables) {
     if (rawVariable === null || typeof rawVariable !== "object") return { error: "variables entries must be objects" };
     const variable = rawVariable as Record<string, unknown>;
-    const key = variable["key"];
-    const rawValue = variable["value"];
+    const key = variable.key;
+    const rawValue = variable.value;
     if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       return { error: "variable keys must be valid Terraform identifiers" };
     }
@@ -126,13 +126,13 @@ function summary(output: string): Readonly<{ passed: number; failed: number; err
   for (const line of output.split("\n")) {
     try {
       const event = JSON.parse(line) as Record<string, unknown>;
-      const rawSummary = event["test_summary"];
+      const rawSummary = event.test_summary;
       if (rawSummary !== null && typeof rawSummary === "object") {
         const testSummary = rawSummary as Record<string, unknown>;
-        passed = typeof testSummary["passed"] === "number" ? testSummary["passed"] : passed;
-        failed = typeof testSummary["failed"] === "number" ? testSummary["failed"] : failed;
-        errored = typeof testSummary["errored"] === "number" ? testSummary["errored"] : errored;
-        skipped = typeof testSummary["skipped"] === "number" ? testSummary["skipped"] : skipped;
+        passed = typeof testSummary.passed === "number" ? testSummary.passed : passed;
+        failed = typeof testSummary.failed === "number" ? testSummary.failed : failed;
+        errored = typeof testSummary.errored === "number" ? testSummary.errored : errored;
+        skipped = typeof testSummary.skipped === "number" ? testSummary.skipped : skipped;
       }
     } catch {
       // Non-JSON stderr and older CLI output are parsed below.
@@ -182,7 +182,7 @@ export async function runModuleTest(
     if (!(await extractArchive(archivePath, staging))) throw new Error("The module archive is invalid");
     const root = await moduleRoot(staging);
     if (root === undefined) throw new Error("The module archive does not contain a Terraform module");
-    const binary = process.env["TERRAFORM_TEST_BINARY_PATH"] ?? "terraform";
+    const binary = process.env.TERRAFORM_TEST_BINARY_PATH ?? "terraform";
     const args = [
       binary,
       "test",

@@ -27,7 +27,7 @@ export function authenticatedRateLimitKey(request: object): string | undefined {
   return rateLimitPrincipals.get(request);
 }
 
-function rememberRateLimitPrincipal(request: object, token: Readonly<AuthToken>): void {
+export function rememberRateLimitPrincipal(request: object, token: Readonly<AuthToken>): void {
   const principal = token.userId !== null
     ? `user:${token.userId}`
     : token.teamId !== null

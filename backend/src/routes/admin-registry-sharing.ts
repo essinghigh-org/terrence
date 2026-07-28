@@ -30,12 +30,12 @@ function error(set: ParamCtx["set"], status: number, title: string, detail?: str
 
 function dataObject(body: unknown): Record<string, unknown> {
   if (body === null || typeof body !== "object") return {};
-  const data = (body as Record<string, unknown>)["data"];
+  const data = (body as Record<string, unknown>).data;
   return data !== null && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
 }
 
 function attributes(body: unknown): Record<string, unknown> {
-  const value = dataObject(body)["attributes"];
+  const value = dataObject(body).attributes;
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
@@ -161,14 +161,14 @@ async function consumerResources(producerId: string, kind: "modules" | "provider
 
 function relationshipIdentifiers(body: unknown): string[] | null {
   if (body === null || typeof body !== "object") return null;
-  const data = (body as Record<string, unknown>)["data"];
+  const data = (body as Record<string, unknown>).data;
   if (!Array.isArray(data)) return null;
   const identifiers: string[] = [];
   for (const item of data) {
     if (item === null || typeof item !== "object") return null;
     const resource = item as Record<string, unknown>;
-    if (resource["type"] !== "organizations" || typeof resource["id"] !== "string" || resource["id"] === "") return null;
-    identifiers.push(resource["id"]);
+    if (resource.type !== "organizations" || typeof resource.id !== "string" || resource.id === "") return null;
+    identifiers.push(resource.id);
   }
   return [...new Set(identifiers)];
 }
@@ -176,15 +176,15 @@ function relationshipIdentifiers(body: unknown): string[] | null {
 function explicitSharingIdentifiers(body: unknown): Readonly<{ producer: string; consumer: string }> | null {
   const attrs = attributes(body);
   const data = dataObject(body);
-  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object"
-    ? data["relationships"] as Record<string, unknown>
+  const relationships = data.relationships !== null && typeof data.relationships === "object"
+    ? data.relationships as Record<string, unknown>
     : {};
   const relationshipId = (name: string): string | undefined => {
     const relationship = relationships[name];
     if (relationship === null || typeof relationship !== "object") return undefined;
-    const resource = (relationship as Record<string, unknown>)["data"];
+    const resource = (relationship as Record<string, unknown>).data;
     if (resource === null || typeof resource !== "object") return undefined;
-    const id = (resource as Record<string, unknown>)["id"];
+    const id = (resource as Record<string, unknown>).id;
     return typeof id === "string" ? id : undefined;
   };
   const producer = attrs["producing-organization-id"] ?? attrs["producer-organization-id"] ?? relationshipId("producer");
@@ -239,7 +239,7 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
   })
   .delete("/api/v2/admin/module-sharing/:id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return error(set, 403, "Forbidden");
-    const partnership = await db.query.registryPartnerships.findFirst({ where: eq(registryPartnerships.id, params["id"] ?? "") });
+    const partnership = await db.query.registryPartnerships.findFirst({ where: eq(registryPartnerships.id, params.id ?? "") });
     if (partnership === undefined) return error(set, 404, "Not Found");
     if (!partnership.modules) return error(set, 404, "Not Found");
     if (partnership.providers) {
@@ -252,15 +252,15 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
   })
   .get("/api/v2/admin/organizations/:org_name/relationships/:kind", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
-    const kind = params["kind"];
+    const kind = params.kind;
     if (kind !== "module-consumers" && kind !== "provider-consumers") return error(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
+    const producer = await findOrganizationByName(params.org_name ?? "");
     if (producer === undefined) return error(set, 404, "Not Found");
     return { data: await consumerResources(producer.id, kind === "module-consumers" ? "modules" : "providers") };
   })
   .patch("/api/v2/admin/organizations/:org_name/relationships/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
+    const producer = await findOrganizationByName(params.org_name ?? "");
     const identifiers = relationshipIdentifiers(body);
     if (producer === undefined) return error(set, 404, "Not Found");
     if (identifiers === null) return error(set, 422, "Unprocessable Entity", "data must contain organization resource identifiers");
@@ -274,11 +274,11 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
   })
   .patch("/api/v2/admin/organizations/:org_name/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
+    const producer = await findOrganizationByName(params.org_name ?? "");
     const attrs = attributes(body);
     const identifiers = stringArray(attrs["module-consuming-organization-ids"]);
     if (producer === undefined) return error(set, 404, "Not Found");
-    if (dataObject(body)["type"] !== "module-partnerships" || identifiers === null) {
+    if (dataObject(body).type !== "module-partnerships" || identifiers === null) {
       return error(set, 422, "Unprocessable Entity", "A module-partnerships payload with consumer IDs is required");
     }
     const consumers = await resolveOrganizations(identifiers);
@@ -299,12 +299,12 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
   })
   .put("/api/v2/admin/organizations/:org_name/registry-partnerships", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
+    const producer = await findOrganizationByName(params.org_name ?? "");
     const attrs = attributes(body);
-    const moduleIdentifiers = stringArray(attrs["module-consumers"] ?? attrs["module_consumers"]);
-    const providerIdentifiers = stringArray(attrs["provider-consumers"] ?? attrs["provider_consumers"]);
+    const moduleIdentifiers = stringArray(attrs["module-consumers"] ?? attrs.module_consumers);
+    const providerIdentifiers = stringArray(attrs["provider-consumers"] ?? attrs.provider_consumers);
     if (producer === undefined) return error(set, 404, "Not Found");
-    if (dataObject(body)["type"] !== "registry-partnerships" || moduleIdentifiers === null || providerIdentifiers === null) {
+    if (dataObject(body).type !== "registry-partnerships" || moduleIdentifiers === null || providerIdentifiers === null) {
       return error(set, 422, "Unprocessable Entity", "A registry-partnerships payload with module and provider consumers is required");
     }
     const [moduleConsumers, providerConsumers] = await Promise.all([

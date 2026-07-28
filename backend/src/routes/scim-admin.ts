@@ -146,13 +146,21 @@ async function reconcileTeam(team: MappedTeam, groupId: string, transaction: unk
   const userIds = [...new Set(identities.map((identity): string => identity.userId))];
 
   await tx.delete(teamMemberships).where(eq(teamMemberships.teamId, team.id));
+
+  // Pre-fetch all org memberships to avoid N+1
+  const existingMemberships = userIds.length === 0
+    ? new Map<string, typeof organizationMemberships.$inferSelect>()
+    : new Map(
+        (await tx.query.organizationMemberships.findMany({
+          where: and(
+            inArray(organizationMemberships.userId, userIds),
+            eq(organizationMemberships.orgId, team.orgId),
+          ),
+        })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.userId, m]),
+      );
+
   for (const userId of userIds) {
-    const membership = await tx.query.organizationMemberships.findFirst({
-      where: and(
-        eq(organizationMemberships.userId, userId),
-        eq(organizationMemberships.orgId, team.orgId),
-      ),
-    });
+    const membership = existingMemberships.get(userId);
     if (membership === undefined) {
       await tx.insert(organizationMemberships).values({
         id: `orgmem-${crypto.randomUUID()}`,

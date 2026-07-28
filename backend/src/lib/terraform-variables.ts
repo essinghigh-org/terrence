@@ -179,7 +179,7 @@ function jsonType(value: unknown): string {
 export function parseTerraformVariablesJson(source: string): readonly TerraformVariableMetadata[] {
   const parsed: unknown = JSON.parse(source);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return [];
-  const rawVariables = (parsed as Record<string, unknown>)["variable"];
+  const rawVariables = (parsed as Record<string, unknown>).variable;
   if (rawVariables === null || typeof rawVariables !== "object" || Array.isArray(rawVariables)) return [];
   return Object.entries(rawVariables as Record<string, unknown>)
     .flatMap(([name, rawConfig]): TerraformVariableMetadata[] => {
@@ -187,12 +187,12 @@ export function parseTerraformVariablesJson(source: string): readonly TerraformV
       const config = rawConfig as Record<string, unknown>;
       return [{
         name,
-        type: config["type"] === undefined ? "any" : jsonType(config["type"]),
-        description: typeof config["description"] === "string" ? config["description"] : null,
+        type: config.type === undefined ? "any" : jsonType(config.type),
+        description: typeof config.description === "string" ? config.description : null,
         hasDefault: Object.hasOwn(config, "default"),
-        ...(Object.hasOwn(config, "default") ? { defaultValue: config["default"] } : {}),
-        sensitive: config["sensitive"] === true,
-        nullable: config["nullable"] !== false,
+        ...(Object.hasOwn(config, "default") ? { defaultValue: config.default } : {}),
+        sensitive: config.sensitive === true,
+        nullable: config.nullable !== false,
       }];
     })
     .sort((left, right): number => left.name.localeCompare(right.name));

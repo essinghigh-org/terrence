@@ -71,7 +71,7 @@ const SUPPORT_BUNDLE_COMPATIBILITY_PATH = "/api/v1/support-bundle-requests";
 let diagnosticsRunning = false;
 
 function storageDirectory(): string {
-  return resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
+  return resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
 }
 
 function supportBundleDirectory(): string {
@@ -202,7 +202,7 @@ async function createUsageBundle(): Promise<Record<string, unknown>> {
         mode: "write",
       },
     },
-    product_version: process.env["BUILD_VERSION"] ?? "dev",
+    product_version: process.env.BUILD_VERSION ?? "dev",
     license_id: "unlicensed",
     metadata: {},
   };
@@ -220,17 +220,17 @@ async function createUsageBundle(): Promise<Record<string, unknown>> {
 function isBundleRecord(value: unknown): value is BundleRecord {
   if (value === null || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const nodes = record["nodes"];
-  return typeof record["id"] === "string"
-    && BUNDLE_ID_PATTERN.test(record["id"])
-    && ["generating", "finished", "errored", "deleted"].includes(String(record["status"]))
-    && typeof record["createdAt"] === "string"
+  const nodes = record.nodes;
+  return typeof record.id === "string"
+    && BUNDLE_ID_PATTERN.test(record.id)
+    && ["generating", "finished", "errored", "deleted"].includes(String(record.status))
+    && typeof record.createdAt === "string"
     && Array.isArray(nodes)
     && nodes.every((node): boolean => node !== null
       && typeof node === "object"
-      && typeof (node as Record<string, unknown>)["node"] === "string"
+      && typeof (node as Record<string, unknown>).node === "string"
       && ["generating", "finished", "errored", "deleted"].includes(
-        String((node as Record<string, unknown>)["status"]),
+        String((node as Record<string, unknown>).status),
       ));
 }
 
@@ -312,8 +312,8 @@ async function generateSupportBundle(record: BundleRecord): Promise<void> {
       [`${prefix}/diagnostics.json`]: `${JSON.stringify([diagnosticResource(diagnostics)], null, 2)}\n`,
       [`${prefix}/usage.json`]: `${JSON.stringify(usage, null, 2)}\n`,
       [`${prefix}/instance.json`]: `${JSON.stringify({
-        version: process.env["BUILD_VERSION"] ?? "dev",
-        build: process.env["BUILD_SHA"] ?? "unknown",
+        version: process.env.BUILD_VERSION ?? "dev",
+        build: process.env.BUILD_SHA ?? "unknown",
         node,
         created_at: record.createdAt,
       }, null, 2)}\n`,
@@ -361,7 +361,7 @@ async function createSupportBundle({ body, set, user }: SystemContext): Promise<
   const forbidden = requireSiteAdmin(user, set);
   if (forbidden !== undefined) return forbidden;
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const suppliedNodes = payload["nodes"];
+  const suppliedNodes = payload.nodes;
   if (suppliedNodes !== undefined && (!Array.isArray(suppliedNodes)
     || suppliedNodes.length === 0
     || suppliedNodes.some((node): boolean => typeof node !== "string" || node === ""))) {
@@ -438,7 +438,7 @@ async function listSupportBundles({ request, set, user }: SystemContext): Promis
 async function downloadSupportBundle({ params, request, set, user }: SystemContext): Promise<unknown> {
   const forbidden = requireSiteAdmin(user, set);
   if (forbidden !== undefined) return forbidden;
-  const id = params["id"] ?? "";
+  const id = params.id ?? "";
   const record = await loadBundle(id);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
@@ -458,7 +458,7 @@ async function downloadSupportBundle({ params, request, set, user }: SystemConte
 async function getSupportBundle({ params, set, user }: SystemContext): Promise<unknown> {
   const forbidden = requireSiteAdmin(user, set);
   if (forbidden !== undefined) return forbidden;
-  const record = await loadBundle(params["id"] ?? "");
+  const record = await loadBundle(params.id ?? "");
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   return { data: bundleResource(record) };
@@ -467,7 +467,7 @@ async function getSupportBundle({ params, set, user }: SystemContext): Promise<u
 async function deleteSupportBundle({ params, set, user }: SystemContext): Promise<unknown> {
   const forbidden = requireSiteAdmin(user, set);
   if (forbidden !== undefined) return forbidden;
-  const record = await loadBundle(params["id"] ?? "");
+  const record = await loadBundle(params.id ?? "");
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   if (record.status === "generating") return errorResponse(set, 409, "Conflict", "Support bundle is still generating");

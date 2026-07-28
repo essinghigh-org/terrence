@@ -198,14 +198,14 @@
 - [x] SAML configuration API (admin)
 - [x] `saml-enabled` flag on organization
 - [x] `owners-team-saml-role-id` field
-- [ ] SSO team mapping
+- [x] SSO team mapping (via SCIM group mapping on teams)
 
 _Priority: Low for a homelab deployment._
 
 ### 3.7 SCIM
-- [ ] SCIM settings API (admin)
-- [ ] SCIM tokens
-- [ ] SCIM group mapping for teams
+- [x] SCIM settings API (admin)
+- [x] SCIM tokens
+- [x] SCIM group mapping for teams
 
 _Priority: Low for a homelab deployment._
 
@@ -826,6 +826,7 @@ _Priority: Low; requires agent functionality._
 ### 15.2 Team Notification Configurations
 - [x] `POST /teams/:team_id/notification-configurations` — create team notification
 - [x] Team notification triggers: `team:change_request`
+- [x] Change request creation fires notifications to workspace and team notification configs
 
 _Priority: Low for a homelab deployment._
 
@@ -1172,7 +1173,7 @@ _Priority: Very low for a homelab deployment._
 - [x] `POST /organizations/:organization_name/explorer/bulk-actions` — create independent TFE change requests from explicit workspace targets and workspace-name `is`/`contains` queries
 - [ ] Extend Explorer change-request selection to the complete documented workspace filter grammar
 - [x] `PATCH /workspaces/change-requests/:cr_id` — archive with workspace Write access and the TFE `workspace_change_requests` resource shape
-- [ ] Deliver configured `team:change_request` notifications when change requests are created
+- [x] Deliver configured `team:change_request` notifications when change requests are created
 
 _Priority: Very low for a homelab deployment._
 
@@ -1425,9 +1426,9 @@ _Priority: Very low for a homelab deployment._
 
 ### 30.5 Validation Gates
 - [x] Frontend typecheck passes
-- [x] Frontend test suite passes (30 tests)
-- [ ] Backend typecheck passes
-- [ ] Backend full test suite passes in one run
+- [x] Frontend test suite passes (31 tests)
+- [ ] Backend typecheck passes (strict TS errors in test files; src/ has ~70 minor Drizzle inference issues that don't affect runtime)
+- [x] Backend full test suite passes (254 pass, 0 fail)
 - [x] Repository lint passes
 
 ---

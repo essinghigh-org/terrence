@@ -16,13 +16,13 @@ let cachedKey: Buffer | undefined;
 async function loadEncryptionKey(): Promise<Buffer> {
   if (cachedKey !== undefined) return cachedKey;
 
-  const password = process.env["ENCRYPTION_PASSWORD"];
+  const password = process.env.ENCRYPTION_PASSWORD;
   if (password !== undefined && password !== "") {
     cachedKey = scryptSync(password, "terrence:secrets:v1", KEY_LENGTH);
     return cachedKey;
   }
 
-  const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
+  const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
   const keyPath = join(storageDir, KEY_FILE_NAME);
   await mkdir(storageDir, { recursive: true });
 

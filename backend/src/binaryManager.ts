@@ -91,7 +91,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       });
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
-        const tagName = data["tag_name"];
+        const tagName = data.tag_name;
         const tag = typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
         if (tag !== undefined && validateVersion(tag)) return tag;
       }
@@ -103,7 +103,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       });
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
-        const currentVersion = data["current_version"];
+        const currentVersion = data.current_version;
         if (typeof currentVersion === "string" && validateVersion(currentVersion)) return currentVersion;
       }
       return "1.9.3";
@@ -142,7 +142,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
         if (!Array.isArray(data) || data.length === 0) break;
         versions.push(...data
           .map((r: Readonly<Record<string, unknown>>): string | undefined => {
-            const tagName = r["tag_name"];
+            const tagName = r.tag_name;
             return typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
           })
           .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));

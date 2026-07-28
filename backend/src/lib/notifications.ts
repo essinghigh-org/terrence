@@ -3,9 +3,11 @@ import { and, desc, eq, lt, or } from "drizzle-orm";
 import { db } from "../db";
 import {
   assessmentResults,
+  changeRequests,
   notificationConfigurations,
   organizations,
   runs,
+  teamWorkspaces,
   users,
   workspaces,
 } from "../db/schema";
@@ -123,7 +125,7 @@ export async function deliverRunNotifications(
 
   const matching = configurations.filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
-  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
   const runUrl = new URL(
     `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
     baseUrl,
@@ -216,7 +218,7 @@ export async function deliverAssessmentNotifications(
 
   const matching = configurations.filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
-  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
   const messages = {
     "assessment:drifted": "Drift Detected",
     "assessment:check_failure": "Continuous Validation Check Failed",
@@ -250,5 +252,75 @@ export function queueAssessmentNotification(
 ): void {
   void deliverAssessmentNotifications(assessmentResultId, trigger).catch((error: unknown): void => {
     console.error(`[terrence] Failed to deliver ${trigger} notification for assessment ${assessmentResultId}:`, error);
+  });
+}
+
+export async function deliverChangeRequestNotifications(
+  changeRequestId: string,
+): Promise<NotificationDelivery[]> {
+  const changeRequest = await db.query.changeRequests.findFirst({
+    where: eq(changeRequests.id, changeRequestId),
+  });
+  if (changeRequest === undefined) return [];
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, changeRequest.workspaceId),
+  });
+  if (workspace === undefined) return [];
+
+  const [organization, configurations] = await Promise.all([
+    db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
+    db.query.notificationConfigurations.findMany({
+      where: or(
+        eq(notificationConfigurations.workspaceId, workspace.id),
+        eq(notificationConfigurations.projectId, workspace.projectId ?? ""),
+      ),
+    }),
+  ]);
+
+  // Also find team-scoped notification configurations for teams associated with this workspace
+  const workspaceTeams = await db.query.teamWorkspaces.findMany({
+    where: eq(teamWorkspaces.workspaceId, workspace.id),
+  });
+  const teamIds = workspaceTeams.map((tw: Readonly<{ teamId: string }>) => tw.teamId);
+  const teamConfigurations = teamIds.length > 0
+    ? await db.query.notificationConfigurations.findMany({
+        where: or(...teamIds.map((id: string) => eq(notificationConfigurations.teamId, id))),
+      })
+    : [];
+
+  const allConfigurations = [...configurations, ...teamConfigurations];
+
+  const matching = allConfigurations.filter((configuration: NotificationConfiguration): boolean =>
+    configuration.enabled === true && configuration.triggers.includes("team:change_request"));
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  const changeRequestUrl = new URL(
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}/change-requests/${encodeURIComponent(changeRequest.id)}`,
+    baseUrl,
+  ).toString();
+
+  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
+    postNotification(configuration, {
+      payload_version: 1,
+      notification_configuration_id: configuration.id,
+      change_request_id: changeRequest.id,
+      change_request_subject: changeRequest.subject,
+      change_request_message: changeRequest.message,
+      change_request_status: changeRequest.status,
+      change_request_url: changeRequestUrl,
+      workspace_id: workspace.id,
+      workspace_name: workspace.name,
+      organization_name: organization?.name ?? workspace.orgId,
+      notifications: [{
+        message: "Change Request Created",
+        trigger: "team:change_request",
+        change_request_subject: changeRequest.subject,
+        change_request_status: changeRequest.status,
+      }],
+    })));
+}
+
+export function queueChangeRequestNotification(changeRequestId: string): void {
+  void deliverChangeRequestNotifications(changeRequestId).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to deliver team:change_request notification for change request ${changeRequestId}:`, error);
   });
 }

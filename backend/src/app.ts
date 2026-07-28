@@ -1,4 +1,5 @@
-import { Elysia, type BunFile } from "elysia";
+import { Elysia } from "elysia";
+import type { BunFile } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";

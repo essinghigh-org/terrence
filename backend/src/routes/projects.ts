@@ -195,7 +195,7 @@ export async function ensureDefaultProject(orgId: string): Promise<typeof projec
 export const projectRoutes = new Elysia({ name: "projects" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/projects", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await ensureDefaultProject(org.id);
@@ -203,7 +203,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: projList.map((project): Record<string, unknown> => projectResource(project)) };
   })
   .post("/api/v2/organizations/:org_name/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -234,13 +234,13 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: projectResource(created) };
   })
   .get("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: projectResource(project) };
   })
   .patch("/api/v2/projects/:project_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -283,7 +283,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: projectResource(updated) };
   })
   .delete("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (project.isDefault) {
@@ -301,21 +301,21 @@ export const projectRoutes = new Elysia({ name: "projects" })
   })
   // --- Project Tag Bindings ---
   .get("/api/v2/projects/:project_id/tag-bindings", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, projectId) });
     return { data: tags.map((t: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(t)) };
   })
   .get("/api/v2/projects/:project_id/effective-tag-bindings", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, projectId) });
     return { data: tags.map((t: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(t)) };
   })
   .post("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -352,7 +352,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: created.length === 1 ? created[0] : created };
   })
   .delete("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const projectId = params["project_id"] ?? "";
+    const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};

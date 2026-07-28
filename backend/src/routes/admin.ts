@@ -202,14 +202,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: allUsers.map((u: UserItem): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email, "is-site-admin": u.isSiteAdmin === true } })) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: targetUser.id, type: "users", attributes: { username: targetUser.username, email: targetUser.email, "is-site-admin": targetUser.isSiteAdmin === true } } };
   })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -225,7 +225,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id: updated.id, type: "users", attributes: { username: updated.username, email: updated.email, "is-site-admin": updated.isSiteAdmin === true } } };
   })
   .delete("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const userId = params["user_id"] ?? "";
+    const userId = params.user_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -239,14 +239,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: allOrgs.map(adminOrganizationResource) };
   })
   .get("/api/v2/admin/organizations/:org_name", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: adminOrganizationResource(org) };
   })
   .patch("/api/v2/admin/organizations/:org_name", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -281,7 +281,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: adminOrganizationResource(updated) };
   })
   .delete("/api/v2/admin/organizations/:org_name", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params["org_name"] ?? "";
+    const orgName = params.org_name ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -295,14 +295,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: allWs.map((w: WsItem): Record<string, unknown> => ({ id: w.id, type: "workspaces", attributes: { name: w.name, "terraform-version": w.terraformVersion, locked: w.locked } })) };
   })
   .get("/api/v2/admin/workspaces/:ws_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params["ws_id"] ?? "";
+    const wsId = params.ws_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: ws.id, type: "workspaces", attributes: { name: ws.name, "terraform-version": ws.terraformVersion, locked: ws.locked } } };
   })
   .patch("/api/v2/admin/workspaces/:ws_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params["ws_id"] ?? "";
+    const wsId = params.ws_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -319,7 +319,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id: updated.id, type: "workspaces", attributes: { name: updated.name, "terraform-version": updated.terraformVersion, locked: updated.locked } } };
   })
   .delete("/api/v2/admin/workspaces/:ws_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const wsId = params["ws_id"] ?? "";
+    const wsId = params.ws_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -333,14 +333,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: allRuns.map((r: RunItem): Record<string, unknown> => ({ id: r.id, type: "runs", attributes: { status: r.status, "created-at": new Date(r.createdAt).toISOString() } })) };
   })
   .get("/api/v2/admin/runs/:run_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: runResource(run, true) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -349,7 +349,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: runResource(updated[0], true) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/force-cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
+    const runId = params.run_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -385,14 +385,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id, type: "terraform-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
   })
   .get("/api/v2/admin/terraform-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: v.id, type: "terraform-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
   })
   .patch("/api/v2/admin/terraform-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -411,7 +411,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id: updated.id, type: "terraform-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
   })
   .delete("/api/v2/admin/terraform-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -447,14 +447,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id, type: "sentinel-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
   })
   .get("/api/v2/admin/sentinel-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: v.id, type: "sentinel-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
   })
   .patch("/api/v2/admin/sentinel-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -473,7 +473,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id: updated.id, type: "sentinel-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
   })
   .delete("/api/v2/admin/sentinel-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -509,14 +509,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id, type: "opa-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
   })
   .get("/api/v2/admin/opa-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: v.id, type: "opa-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
   })
   .patch("/api/v2/admin/opa-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -535,7 +535,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: { id: updated.id, type: "opa-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
   })
   .delete("/api/v2/admin/opa-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
+    const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

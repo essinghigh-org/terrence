@@ -150,7 +150,7 @@ function oauthError(set: SetObj, error: string): { error: string } {
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   mutableSet.status = 400;
   mutableSet.headers["Cache-Control"] = "no-store";
-  mutableSet.headers["Pragma"] = "no-cache";
+  mutableSet.headers.Pragma = "no-cache";
   return { error };
 }
 
@@ -283,6 +283,6 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     const mutableSet = set as { headers: Record<string, string | number> };
     mutableSet.headers["Cache-Control"] = "no-store";
-    mutableSet.headers["Pragma"] = "no-cache";
+    mutableSet.headers.Pragma = "no-cache";
     return { access_token: accessToken, token_type: "bearer" };
   });

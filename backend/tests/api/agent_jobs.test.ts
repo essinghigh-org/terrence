@@ -382,8 +382,8 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     finalAgentStatuses: [["agent-a", "idle"], ["agent-b", "idle"]],
     runRelationshipPool: "pool",
   });
-  expect(["agent-a", "agent-b"]).toContain(result["finalRunAgentId"] as string);
-  expect(result["runRelationshipAgent"]).toBe(result["finalRunAgentId"]);
+  expect(["agent-a", "agent-b"]).toContain(result.finalRunAgentId as string);
+  expect(result.runRelationshipAgent).toBe(result.finalRunAgentId);
 }, 30_000);
 
 test("requeues a claimed job when its agent heartbeat expires", async () => {

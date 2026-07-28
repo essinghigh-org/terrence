@@ -23,9 +23,9 @@ const crossOrgId = "org-webhook-cross-tenant";
 const userId = "usr-webhook-test";
 const authToken = "webhook-test-token";
 const installationId = "ghain-webhook-test";
-const originalSecret = process.env["GITHUB_WEBHOOK_SECRET"];
-const originalAppId = process.env["GITHUB_APP_ID"];
-const originalPrivateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
+const originalSecret = process.env.GITHUB_WEBHOOK_SECRET;
+const originalAppId = process.env.GITHUB_APP_ID;
+const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
 const commitStatuses: Record<string, unknown>[] = [];
@@ -116,9 +116,9 @@ async function waitForCommitStatus(): Promise<Record<string, unknown> | undefine
 
 describe("GitHub Webhooks", () => {
   beforeAll(async () => {
-    process.env["GITHUB_WEBHOOK_SECRET"] = "test-secret";
-    process.env["GITHUB_APP_ID"] = "12345";
-    process.env["GITHUB_APP_PRIVATE_KEY"] = generateKeyPairSync("rsa", {
+    process.env.GITHUB_WEBHOOK_SECRET = "test-secret";
+    process.env.GITHUB_APP_ID = "12345";
+    process.env.GITHUB_APP_PRIVATE_KEY = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       privateKeyEncoding: { type: "pkcs8", format: "pem" },
       publicKeyEncoding: { type: "spki", format: "pem" },
@@ -193,9 +193,9 @@ describe("GitHub Webhooks", () => {
 
   afterAll(async () => {
     globalThis.fetch = originalFetch;
-    process.env["GITHUB_WEBHOOK_SECRET"] = originalSecret;
-    process.env["GITHUB_APP_ID"] = originalAppId;
-    process.env["GITHUB_APP_PRIVATE_KEY"] = originalPrivateKey;
+    process.env.GITHUB_WEBHOOK_SECRET = originalSecret;
+    process.env.GITHUB_APP_ID = originalAppId;
+    process.env.GITHUB_APP_PRIVATE_KEY = originalPrivateKey;
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
     await db.delete(organizations).where(eq(organizations.id, crossOrgId));
@@ -395,8 +395,8 @@ describe("GitHub Webhooks", () => {
   });
 
   test("missing token leaves the run and marks its configuration version errored", async () => {
-    const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
-    process.env["GITHUB_APP_PRIVATE_KEY"] = "";
+    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+    process.env.GITHUB_APP_PRIVATE_KEY = "";
     try {
       const deliveryId = crypto.randomUUID();
       await sendWebhook("push", pushPayload, deliveryId);
@@ -409,7 +409,7 @@ describe("GitHub Webhooks", () => {
       expect(configurationVersion?.status).toBe("errored");
       expect(tarballFetches).toBe(0);
     } finally {
-      process.env["GITHUB_APP_PRIVATE_KEY"] = privateKey;
+      process.env.GITHUB_APP_PRIVATE_KEY = privateKey;
     }
   });
 
