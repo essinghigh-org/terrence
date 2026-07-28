@@ -90,14 +90,14 @@ function escapeHtml(value: string): string {
 
 function loginPage(request: Readonly<AuthorizationRequest> | null, error = "", username = ""): string {
   const hidden = request !== null
-    ? [
+    ? ([
         ["client_id", request.clientId],
         ["code_challenge", request.codeChallenge],
         ["code_challenge_method", "S256"],
         ["redirect_uri", request.redirectUri],
         ["response_type", request.responseType],
         ["state", request.state],
-      ].map(([name, value]: readonly [string, string]): string =>
+      ] as const).map(([name, value]): string =>
         `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`
       ).join("")
     : "";

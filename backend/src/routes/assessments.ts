@@ -1,16 +1,14 @@
 import { Elysia } from "elysia";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
   assessmentCheckResults,
   assessmentResults,
-  teamMemberships,
-  teamWorkspaces,
   workspaces,
   type users,
 } from "../db/schema";
-import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
+import { checkWorkspacePermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
 
 type SetObject = Readonly<{
   status?: number | string;
@@ -81,12 +79,13 @@ async function findAuthorizedAssessment(
   id: string,
   userId: string | undefined,
   orgId: string | null,
+  teamId: string | null,
 ): Promise<Assessment | undefined> {
   const result = await db.query.assessmentResults.findFirst({
     where: eq(assessmentResults.id, id),
   });
   if (result === undefined) return undefined;
-  return (await findAuthorizedWorkspace(result.workspaceId, userId, orgId)) === undefined
+  return (await findAuthorizedWorkspace(result.workspaceId, userId, orgId, teamId)) === undefined
     ? undefined
     : result;
 }
@@ -100,24 +99,7 @@ async function canReadArtifacts(
     where: eq(workspaces.id, result.workspaceId),
   });
   if (workspace === undefined) return false;
-  if (userId !== undefined) {
-    if (await checkOrgPermission(userId, workspace.orgId, "owner")) return true;
-    const memberships = await db.query.teamMemberships.findMany({
-      where: eq(teamMemberships.userId, userId),
-    });
-    if (memberships.length === 0) return false;
-    const membershipTeamIds = new Set(memberships.map((membership: Readonly<{ teamId: string }>): string => membership.teamId));
-    const accesses = await db.query.teamWorkspaces.findMany({
-      where: eq(teamWorkspaces.workspaceId, workspace.id),
-    });
-    return accesses.some((access: Readonly<{ teamId: string; access: string }>): boolean =>
-      membershipTeamIds.has(access.teamId) && access.access === "admin");
-  }
-  if (teamId === null) return false;
-  const access = await db.query.teamWorkspaces.findFirst({
-    where: and(eq(teamWorkspaces.teamId, teamId), eq(teamWorkspaces.workspaceId, workspace.id)),
-  });
-  return access?.access === "admin";
+  return checkWorkspacePermission(workspace, userId, null, teamId, "admin");
 }
 
 async function artifactResponse(
@@ -125,7 +107,7 @@ async function artifactResponse(
   kind: "jsonOutput" | "jsonSchema" | "logOutput",
   context: ParamContext,
 ): Promise<unknown> {
-  const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null);
+  const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);
   if (result === undefined) return notFound(context.set);
   if (!(await canReadArtifacts(result, context.user?.id, context.teamId ?? null))) return forbidden(context.set);
   if (kind === "logOutput") {
@@ -140,12 +122,12 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
   .use(authPlugin)
   .get("/api/v2/assessment-results/:assessment_result_id", async (context: ParamContext): Promise<unknown> => {
     const id = context.params["assessment_result_id"] ?? "";
-    const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null);
+    const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);
     return result === undefined ? notFound(context.set) : { data: assessmentResource(result) };
   })
   .get("/api/v2/assessment-results/:assessment_result_id/check-results", async (context: ParamContext): Promise<unknown> => {
     const id = context.params["assessment_result_id"] ?? "";
-    const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null);
+    const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);
     if (result === undefined) return notFound(context.set);
     const checks = await db.query.assessmentCheckResults.findMany({
       where: eq(assessmentCheckResults.assessmentResultId, id),
@@ -167,7 +149,7 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
   })
   .get("/api/v2/runs/:run_id/check-results", async (context: ParamContext): Promise<unknown> => {
     const runId = context.params["run_id"] ?? "";
-    if ((await findAuthorizedRun(runId, context.user?.id, context.orgId ?? null)) === undefined) return notFound(context.set);
+    if ((await findAuthorizedRun(runId, context.user?.id, context.orgId ?? null, context.teamId ?? null)) === undefined) return notFound(context.set);
     const checks = await db.query.assessmentCheckResults.findMany({
       where: eq(assessmentCheckResults.runId, runId),
     });

@@ -5,6 +5,8 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
+  assessmentResults,
+  changeRequests,
   organizations,
   runs,
   teams,
@@ -18,8 +20,13 @@ describe("team token workspace authorization", () => {
   const orgId = `org-team-auth-${suffix}`;
   const orgName = `team-auth-${suffix}`;
   const workspaceId = `ws-team-auth-${suffix}`;
+  const workspaceName = `assigned-${suffix}`;
   const unassignedWorkspaceId = `ws-team-unassigned-${suffix}`;
   const createdWorkspaceName = `managed-${suffix}`;
+  const assessmentIds = {
+    assigned: `asmtres-assigned-${suffix}`,
+    unassigned: `asmtres-unassigned-${suffix}`,
+  };
   const teamIds = {
     read: `team-read-${suffix}`,
     plan: `team-plan-${suffix}`,
@@ -78,7 +85,7 @@ describe("team token workspace authorization", () => {
   beforeAll(async () => {
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(workspaces).values([
-      { id: workspaceId, name: `assigned-${suffix}`, orgId, autoApply: true },
+      { id: workspaceId, name: workspaceName, orgId, autoApply: true },
       { id: unassignedWorkspaceId, name: `unassigned-${suffix}`, orgId },
     ]);
     await db.insert(teams).values([
@@ -130,6 +137,22 @@ describe("team token workspace authorization", () => {
       status: "planned",
       createdAt: Date.now() + index,
     })));
+    await db.insert(assessmentResults).values([
+      {
+        id: assessmentIds.assigned,
+        workspaceId,
+        status: "completed",
+        succeeded: true,
+        jsonOutput: { workspace: "assigned" },
+      },
+      {
+        id: assessmentIds.unassigned,
+        workspaceId: unassignedWorkspaceId,
+        status: "completed",
+        succeeded: true,
+        jsonOutput: { workspace: "unassigned" },
+      },
+    ]);
   });
 
   afterAll(async () => {
@@ -221,6 +244,45 @@ describe("team token workspace authorization", () => {
     await db.insert(runs).values({ id: forceRunId, workspaceId, status: "applying", createdAt: Date.now() });
     expect((await request(`/api/v2/runs/${forceRunId}/actions/force-cancel`, tokens.write, "POST")).status).toBe(403);
     expect((await request(`/api/v2/runs/${forceRunId}/actions/force-cancel`, tokens.admin, "POST")).status).toBe(200);
+  });
+
+  it("propagates team workspace access through assessment and change request APIs", async () => {
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}`, tokens.read)).status).toBe(200);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/check-results`, tokens.read)).status).toBe(200);
+    expect((await request(`/api/v2/runs/${applyRunIds.plan}/check-results`, tokens.read)).status).toBe(200);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.unassigned}`, tokens.read)).status).toBe(404);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.read)).status).toBe(403);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, tokens.admin)).status).toBe(200);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.unassigned}/json-output`, tokens.manager)).status).toBe(200);
+    expect((await request(`/api/v2/assessment-results/${assessmentIds.assigned}/json-output`, orgToken)).status).toBe(403);
+
+    const body = {
+      data: {
+        type: "workspace-change-requests",
+        attributes: { subject: "Rotate credentials", message: "Use short-lived credentials." },
+      },
+    };
+    expect((await request(`/api/v2/workspaces/${workspaceId}/change-requests`, tokens.read, "POST", body)).status).toBe(404);
+    const createdResponse = await request(`/api/v2/workspaces/${workspaceId}/change-requests`, tokens.admin, "POST", body);
+    expect(createdResponse.status).toBe(201);
+    const created = await responseData<{ id: string }>(createdResponse);
+
+    expect((await request(`/api/v2/workspaces/${workspaceName}/change-requests`, tokens.read)).status).toBe(200);
+    expect((await request(`/api/v2/workspaces/${unassignedWorkspaceId}/change-requests`, tokens.read)).status).toBe(404);
+    expect((await request(`/api/v2/change-requests/${created.id}`, tokens.read)).status).toBe(200);
+    expect((await request(`/api/v2/change-requests/${created.id}/actions/approve`, tokens.read, "POST")).status).toBe(200);
+    expect((await db.query.changeRequests.findFirst({ where: eq(changeRequests.id, created.id) }))?.status).toBe("approved");
+
+    const archiveResponse = await request(`/api/v2/workspaces/${workspaceId}/change-requests`, tokens.admin, "POST", {
+      data: {
+        type: "workspace-change-requests",
+        attributes: { subject: "Archive credentials request", message: "The credential work is complete." },
+      },
+    });
+    const archiveId = (await responseData<{ id: string }>(archiveResponse)).id;
+    expect((await request(`/api/v2/workspaces/change-requests/${archiveId}`, tokens.read, "PATCH")).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/change-requests/${archiveId}`, tokens.plan, "PATCH")).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/change-requests/${archiveId}`, tokens.write, "PATCH")).status).toBe(200);
   });
 
   it("honors manage-workspaces organization access as workspace admin access", async () => {

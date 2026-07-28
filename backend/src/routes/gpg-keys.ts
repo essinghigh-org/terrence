@@ -138,7 +138,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
 
     const authorized = await Promise.all(namespaces.map(async (namespace): Promise<string | undefined> => {
       const org = await db.query.organizations.findFirst({ where: eq(organizations.name, namespace) });
-      return org !== undefined && await canReadGpgKeys(org.id, user?.id, tokenOrgId, teamId ?? null)
+      return org !== undefined && await canReadGpgKeys(org.id, user?.id, tokenOrgId ?? null, teamId ?? null)
         ? namespace
         : undefined;
     }));
@@ -168,7 +168,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "error" in input ? input.error : "ascii-armor is required" }] };
     }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, input.namespace) });
-    if (org === undefined || !(await canManageGpgKeys(org.id, user?.id, tokenOrgId, teamId ?? null))) {
+    if (org === undefined || !(await canManageGpgKeys(org.id, user?.id, tokenOrgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -213,7 +213,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
         eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
       ),
     });
-    if (key === undefined || !(await canReadGpgKeys(key.orgId, user?.id, tokenOrgId, teamId ?? null))) {
+    if (key === undefined || !(await canReadGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -230,7 +230,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
         eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
       ),
     });
-    if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId, teamId ?? null))) {
+    if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -240,7 +240,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
     const targetOrg = await db.query.organizations.findFirst({ where: eq(organizations.name, input.namespace) });
-    if (targetOrg === undefined || !(await canManageGpgKeys(targetOrg.id, user?.id, tokenOrgId, teamId ?? null))) {
+    if (targetOrg === undefined || !(await canManageGpgKeys(targetOrg.id, user?.id, tokenOrgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -273,7 +273,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
         eq(registryGpgKeys.keyId, (params["key_id"] ?? "").toUpperCase()),
       ),
     });
-    if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId, teamId ?? null))) {
+    if (key === undefined || !(await canManageGpgKeys(key.orgId, user?.id, tokenOrgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

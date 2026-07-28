@@ -11,7 +11,7 @@ import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 
-type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
 type ParamCtx = Readonly<{
   readonly params: Readonly<Record<string, string>>;

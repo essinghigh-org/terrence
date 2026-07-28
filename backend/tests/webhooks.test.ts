@@ -145,7 +145,7 @@ describe("GitHub Webhooks", () => {
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(users).values({ id: userId, username: `webhook-user-${Date.now()}`, passwordHash: "unused" });
-    await db.insert(organizationMemberships).values({ id: "orgmem-webhook-test", userId, orgId, role: "member" });
+    await db.insert(organizationMemberships).values({ id: "orgmem-webhook-test", userId, orgId, role: "owner" });
     await db.insert(apiTokens).values({
       id: "token-webhook-test",
       token: createHash("sha256").update(authToken).digest("hex"),
@@ -204,7 +204,7 @@ describe("GitHub Webhooks", () => {
     await db.delete(users).where(eq(users.id, userId));
   });
 
-  test("organization members can register and use a scoped installation", async () => {
+  test("organization owners can register and use a scoped installation", async () => {
     const registerResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/organizations/${orgName}/github-app/installations`, {
       method: "POST",
       headers: {

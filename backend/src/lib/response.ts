@@ -540,7 +540,7 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
   };
 }
 
-type RequestParam = DeepReadonly<Request>;
+type RequestParam = Readonly<{ readonly url: string }>;
 
 export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
   const status = run.status === "planning"
@@ -675,7 +675,7 @@ export function stateVersionResource(
       typeof (resource as Record<string, unknown>).type === "string" &&
       typeof (resource as Record<string, unknown>).name === "string"
     )
-    .map((resource: DeepReadonly<Record<string, unknown>>): { name: string; type: string; count: number; module: string; provider: string | null } => {
+    .map((resource): { name: string; type: string; count: number; module: string; provider: string | null } => {
       const rType = resource.type as string;
       const rName = resource.name as string;
       const rMode = resource.mode;
@@ -752,7 +752,7 @@ export function stateVersionResource(
       workspace: { data: { id: state.workspaceId, type: "workspaces" } },
       run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
       outputs: {
-        data: outputResources.map((output: DeepReadonly<Record<string, unknown>>): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
+        data: outputResources.map((output): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
       },
     },
     links: { self: `/api/v2/state-versions/${state.id}` },

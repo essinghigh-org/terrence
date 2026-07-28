@@ -385,3 +385,339 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
   expect(["agent-a", "agent-b"]).toContain(result["finalRunAgentId"] as string);
   expect(result["runRelationshipAgent"]).toBe(result["finalRunAgentId"]);
 }, 30_000);
+
+test("requeues a claimed job when its agent heartbeat expires", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const {
+      agentJobs,
+      agentPools,
+      agents,
+      organizations,
+      runs,
+      workspaces,
+    } = await import("./src/db/schema.ts");
+    const { claimAgentJob } = await import("./src/lib/agent-jobs.ts");
+    const { pollWorkerQueue } = await import("./src/worker.ts");
+
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS = "1000";
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({
+      id: "pool",
+      orgId: "org",
+      name: "pool",
+      organizationScoped: true,
+    });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      orgId: "org",
+      name: "workspace",
+      executionMode: "agent",
+      agentPoolId: "pool",
+    });
+    await db.insert(agents).values([
+      {
+        id: "stale-agent",
+        agentPoolId: "pool",
+        name: "stale",
+        status: "busy",
+        lastPingAt: now - 2000,
+      },
+      {
+        id: "replacement-agent",
+        agentPoolId: "pool",
+        name: "replacement",
+        status: "idle",
+        lastPingAt: now,
+      },
+    ]);
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      agentPoolId: "pool",
+      agentId: "stale-agent",
+      status: "planning",
+      createdAt: now,
+    });
+    await db.insert(agentJobs).values({
+      id: "job",
+      runId: "run",
+      agentPoolId: "pool",
+      agentId: "stale-agent",
+      phase: "plan",
+      status: "claimed",
+      claimedAt: now - 2000,
+      createdAt: now - 2000,
+    });
+
+    await pollWorkerQueue();
+    const [staleAgent, recoveredJob, recoveredRun, replacementAgent] = await Promise.all([
+      db.query.agents.findFirst({ where: eq(agents.id, "stale-agent") }),
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") }),
+      db.query.runs.findFirst({ where: eq(runs.id, "run") }),
+      db.query.agents.findFirst({ where: eq(agents.id, "replacement-agent") }),
+    ]);
+    const claimed = await claimAgentJob(replacementAgent);
+    const [reclaimedJob, reclaimedRun] = await Promise.all([
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") }),
+      db.query.runs.findFirst({ where: eq(runs.id, "run") }),
+    ]);
+
+    console.log(JSON.stringify({
+      staleStatus: staleAgent?.status,
+      recoveredJob: [
+        recoveredJob?.status,
+        recoveredJob?.agentId,
+        recoveredJob?.claimedAt,
+      ],
+      recoveredRun: [recoveredRun?.status, recoveredRun?.agentId],
+      claimedJobId: claimed?.job.id,
+      reclaimedJob: [reclaimedJob?.status, reclaimedJob?.agentId],
+      reclaimedRun: [reclaimedRun?.status, reclaimedRun?.agentId],
+    }));
+    process.exit(0);
+  `);
+
+  expect(result).toEqual({
+    staleStatus: "unknown",
+    recoveredJob: ["queued", null, null],
+    recoveredRun: ["plan_queued", null],
+    claimedJobId: "job",
+    reclaimedJob: ["claimed", "replacement-agent"],
+    reclaimedRun: ["planning", "replacement-agent"],
+  });
+}, 30_000);
+
+test("evaluates agent-enabled Sentinel policies in the claimed plan job", async () => {
+  const result = await runAgentProtocolScript(`
+    const { createHash } = await import("node:crypto");
+    const { asc, eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const {
+      agentJobs,
+      agentPoolTokens,
+      agentPools,
+      agents,
+      organizations,
+      policies,
+      policyChecks,
+      policySetParameters,
+      policySets,
+      policySetWorkspaces,
+      runs,
+      workspaces,
+    } = await import("./src/db/schema.ts");
+
+    const token = "agent-policy-token";
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({
+      id: "pool",
+      orgId: "org",
+      name: "pool",
+      organizationScoped: true,
+    });
+    await db.insert(agentPoolTokens).values({
+      id: "token",
+      agentPoolId: "pool",
+      token: createHash("sha256").update(token).digest("hex"),
+    });
+    await db.insert(agents).values({
+      id: "agent",
+      agentPoolId: "pool",
+      name: "agent",
+      status: "idle",
+    });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      orgId: "org",
+      name: "workspace",
+      executionMode: "agent",
+      agentPoolId: "pool",
+    });
+    await db.insert(policySets).values([
+      {
+        id: "agent-set",
+        orgId: "org",
+        name: "agent policies",
+        kind: "sentinel",
+        agentEnabled: true,
+        policyToolVersion: "0.40.0",
+        overridable: true,
+      },
+      {
+        id: "platform-set",
+        orgId: "org",
+        name: "platform policies",
+        kind: "sentinel",
+        agentEnabled: false,
+      },
+    ]);
+    await db.insert(policySetWorkspaces).values([
+      {
+        id: "agent-link",
+        policySetId: "agent-set",
+        workspaceId: "workspace",
+      },
+      {
+        id: "platform-link",
+        policySetId: "platform-set",
+        workspaceId: "workspace",
+      },
+    ]);
+    await db.insert(policies).values([
+      {
+        id: "hard-policy",
+        policySetId: "agent-set",
+        name: "hard policy",
+        enforcementLevel: "hard-mandatory",
+        source: "main = rule { false }",
+        createdAt: 1,
+      },
+      {
+        id: "soft-policy",
+        policySetId: "agent-set",
+        name: "soft policy",
+        enforcementLevel: "soft-mandatory",
+        source: "main = rule { true }",
+        createdAt: 2,
+      },
+      {
+        id: "platform-policy",
+        policySetId: "platform-set",
+        name: "platform policy",
+        enforcementLevel: "hard-mandatory",
+        source: "main = rule { false }",
+        createdAt: 3,
+      },
+    ]);
+    await db.insert(policySetParameters).values({
+      id: "parameter",
+      policySetId: "agent-set",
+      key: "environment",
+      value: "production",
+      sensitive: true,
+      hcl: false,
+    });
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      agentPoolId: "pool",
+      status: "plan_queued",
+      autoApply: true,
+      createdAt: 1,
+    });
+    await db.insert(agentJobs).values({
+      id: "job",
+      runId: "run",
+      agentPoolId: "pool",
+      phase: "plan",
+      status: "queued",
+      createdAt: 1,
+    });
+
+    const request = (path, body) => app.handle(new Request(
+      "http://terrence.test/api/v2/agents/agent" + path,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+    ));
+    const claimResponse = await request("/jobs/poll");
+    const claim = (await claimResponse.json()).data;
+    const policyEvaluation = claim.attributes["policy-evaluation"];
+    const claimedRun = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+
+    const completionResponse = await request("/jobs/job/complete", {
+      data: {
+        type: "agent-jobs",
+        attributes: {
+          status: "completed",
+          "resource-additions": 1,
+          "resource-changes": 0,
+          "resource-destructions": 0,
+          result: {
+            "plan-handle": "saved-plan",
+            "policy-checks": [{
+              "policy-id": "hard-policy",
+              status: "failed",
+              result: { passed: false, reason: "denied by agent" },
+            }, {
+              "policy-id": "soft-policy",
+              status: "passed",
+              result: { passed: true },
+            }],
+          },
+        },
+      },
+    });
+    const [completedRun, completedJobs, checks, completedAgent] = await Promise.all([
+      db.query.runs.findFirst({ where: eq(runs.id, "run") }),
+      db.query.agentJobs.findMany({
+        where: eq(agentJobs.runId, "run"),
+        orderBy: [asc(agentJobs.createdAt)],
+      }),
+      db.query.policyChecks.findMany({
+        where: eq(policyChecks.runId, "run"),
+        orderBy: [asc(policyChecks.policyId)],
+      }),
+      db.query.agents.findFirst({ where: eq(agents.id, "agent") }),
+    ]);
+
+    console.log(JSON.stringify({
+      claimStatus: claimResponse.status,
+      claimedRun: [claimedRun?.status, claimedRun?.agentId],
+      policySetIds: policyEvaluation["policy-sets"].map(policySet => policySet.id),
+      policyToolVersion: policyEvaluation["policy-sets"][0]["policy-tool-version"],
+      policyIds: policyEvaluation["policy-sets"][0].policies.map(policy => policy.id),
+      policyLevels: policyEvaluation["policy-sets"][0].policies.map(
+        policy => policy["enforcement-level"],
+      ),
+      parameters: policyEvaluation["policy-sets"][0].parameters,
+      containsCostData: JSON.stringify(policyEvaluation).includes("cost-estimate"),
+      completionStatus: completionResponse.status,
+      completedRunStatus: completedRun?.status,
+      statusKeys: Object.keys(completedRun?.statusTimestamps ?? {}),
+      completedJobs: completedJobs.map(job => [job.phase, job.status]),
+      checks: checks.map(check => [check.policyId, check.status, check.result]),
+      completedAgentStatus: completedAgent?.status,
+    }));
+    process.exit(0);
+  `);
+
+  expect(result).toEqual({
+    claimStatus: 200,
+    claimedRun: ["planning", "agent"],
+    policySetIds: ["agent-set"],
+    policyToolVersion: "0.40.0",
+    policyIds: ["hard-policy", "soft-policy"],
+    policyLevels: ["mandatory", "mandatory"],
+    parameters: [{
+      key: "environment",
+      value: "production",
+      sensitive: true,
+      hcl: false,
+    }],
+    containsCostData: false,
+    completionStatus: 200,
+    completedRunStatus: "policy_soft_failed",
+    statusKeys: [
+      "planning-at",
+      "policy-checking-at",
+      "policy-override-at",
+      "policy-soft-failed-at",
+    ],
+    completedJobs: [["plan", "completed"]],
+    checks: [
+      ["hard-policy", "soft_failed", { passed: false, reason: "denied by agent" }],
+      ["soft-policy", "passed", { passed: true }],
+    ],
+    completedAgentStatus: "idle",
+  });
+}, 30_000);

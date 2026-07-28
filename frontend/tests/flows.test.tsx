@@ -180,6 +180,28 @@ test("rejects a partially configured workspace VCS connection", async () => {
   });
 });
 
+test("does not report a successful latest run for a workspace with no runs", async () => {
+  globalThis.fetch = mock(async (input: unknown): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: { id: "ws-1", attributes: { name: "production" } } });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
+    return json({ data: [] });
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("No runs yet")).toBeTruthy(); });
+  expect(view.queryByText("Latest run finished")).toBeNull();
+});
+
 test("creates, edits, and deletes a workspace variable", async () => {
   const variables: {
     id: string;

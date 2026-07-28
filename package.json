@@ -8,7 +8,7 @@
     "test:backend": "cd backend && bun test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "bun --cwd backend run typecheck && bun --cwd frontend run typecheck"
+    "typecheck": "bun run --cwd backend typecheck && bun run --cwd frontend typecheck"
   },
   "workspaces": [
     "backend",

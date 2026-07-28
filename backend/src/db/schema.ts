@@ -39,6 +39,54 @@ export const samlSettings = sqliteTable("saml_settings", {
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
 
+export const scimGroups = sqliteTable("scim_groups", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  externalId: text("external_id"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("scim_groups_name_idx").on(table.name),
+  uniqueIndex("scim_groups_external_id_idx").on(table.externalId),
+]);
+
+export const scimUserIdentities = sqliteTable("scim_user_identities", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  username: text("username").notNull(),
+  externalId: text("external_id"),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("scim_user_identities_user_idx").on(table.userId),
+  uniqueIndex("scim_user_identities_username_idx").on(table.username),
+  uniqueIndex("scim_user_identities_external_id_idx").on(table.externalId),
+]);
+
+export const scimGroupMemberships = sqliteTable("scim_group_memberships", {
+  id: text("id").primaryKey(),
+  groupId: text("group_id").notNull().references(() => scimGroups.id, { onDelete: "cascade" }),
+  scimUserId: text("scim_user_id").notNull().references(() => scimUserIdentities.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("scim_group_memberships_group_user_idx").on(table.groupId, table.scimUserId),
+]);
+
+export const scimSettings = sqliteTable("scim_settings", {
+  id: text("id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => scimGroups.id, { onDelete: "set null" }),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const scimTokens = sqliteTable("scim_tokens", {
+  id: text("id").primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(),
+  description: text("description"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  expiresAt: integer("expires_at").notNull(),
+  lastUsedAt: integer("last_used_at"),
+});
+
 export const registryPartnerships = sqliteTable("registry_partnerships", {
   id: text("id").primaryKey(),
   producerOrgId: text("producer_org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -89,6 +137,15 @@ export const teamMemberships = sqliteTable("team_memberships", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
+]);
+
+export const teamScimGroupMappings = sqliteTable("team_scim_group_mappings", {
+  teamId: text("team_id").primaryKey().references(() => teams.id, { onDelete: "cascade" }),
+  scimGroupId: text("scim_group_id").notNull().references(() => scimGroups.id, { onDelete: "cascade" }),
+  syncPaused: integer("sync_paused", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("team_scim_group_mappings_group_idx").on(table.scimGroupId),
 ]);
 
 export const projects = sqliteTable("projects", {

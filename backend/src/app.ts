@@ -24,6 +24,7 @@ import { projectRoutes } from "./routes/projects";
 import { gpgKeyRoutes } from "./routes/gpg-keys";
 import { registryRoutes } from "./routes/registry";
 import { adminRoutes } from "./routes/admin";
+import { scimAdminRoutes } from "./routes/scim-admin";
 import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
 import { systemAdminRoutes } from "./routes/system-admin";
 import { policyRoutes } from "./routes/policies";
@@ -308,6 +309,7 @@ export const app = new Elysia()
   .use(gpgKeyRoutes)
   .use(registryRoutes)
   .use(adminRoutes)
+  .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)
   .use(systemAdminRoutes)
   .use(policyRoutes)

@@ -135,6 +135,26 @@ await sqlite.executeMultiple(`
     last_ping_at INTEGER,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS github_app_installations (
+    id TEXT PRIMARY KEY NOT NULL,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    installation_id INTEGER NOT NULL,
+    icon_url TEXT,
+    installation_type TEXT DEFAULT 'Organization',
+    installation_url TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS github_app_installations_org_installation_idx
+    ON github_app_installations (org_id, installation_id);
+  CREATE INDEX IF NOT EXISTS workspaces_vcs_repo_identifier_idx
+    ON workspaces (json_extract(vcs_repo, '$.identifier'));
+  CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
+    id TEXT PRIMARY KEY NOT NULL,
+    status TEXT DEFAULT 'processing' NOT NULL,
+    received_at INTEGER NOT NULL,
+    processed_at INTEGER
+  );
 `);
 
 // Check notification_configurations for missing columns

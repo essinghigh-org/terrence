@@ -18,6 +18,8 @@ describe("change request API", () => {
   const orgId = `change-org-${suffix}`;
   const workspaceId = `change-workspace-${suffix}`;
   const workspaceName = `change-workspace-name-${suffix}`;
+  const queryWorkspaceId = `change-query-workspace-${suffix}`;
+  const queryWorkspaceName = `query-target-${suffix}`;
   const ownerToken = `change-owner-token-${suffix}`;
   const outsiderToken = `change-outsider-token-${suffix}`;
 
@@ -28,7 +30,7 @@ describe("change request API", () => {
         Authorization: `Bearer ${token}`,
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }));
 
   beforeAll(async () => {
@@ -42,12 +44,15 @@ describe("change request API", () => {
       { id: crypto.randomUUID(), token: ownerToken, userId: ownerId },
       { id: crypto.randomUUID(), token: outsiderToken, userId: outsiderId },
     ]);
-    await db.insert(workspaces).values({ id: workspaceId, name: workspaceName, orgId });
+    await db.insert(workspaces).values([
+      { id: workspaceId, name: workspaceName, orgId },
+      { id: queryWorkspaceId, name: queryWorkspaceName, orgId },
+    ]);
   });
 
   afterAll(async () => {
     await db.delete(changeRequests).where(eq(changeRequests.workspaceId, workspaceId));
-    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(workspaces).where(eq(workspaces.orgId, orgId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, ownerId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, outsiderId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
@@ -78,8 +83,24 @@ describe("change request API", () => {
     const listedBody = await listed.json();
     expect(listedBody.data.map((item: { id: string }): string => item.id)).toContain(id);
     expect(listedBody.meta.pagination["total-count"]).toBe(1);
+    const listedResource = listedBody.data.find((item: { id: string }): boolean => item.id === id);
+    expect(listedResource).toEqual({
+      id,
+      type: "workspace_change_requests",
+      attributes: {
+        subject: "Rotate credentials",
+        message: "Move this workspace to short-lived credentials.",
+        "archived-by": null,
+        "archived-at": null,
+        "created-at": expect.any(String),
+        "updated-at": expect.any(String),
+      },
+      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+    });
 
-    expect((await request(`/api/v2/change-requests/${id}`)).status).toBe(200);
+    const shown = await request(`/api/v2/change-requests/${id}`);
+    expect(shown.status).toBe(200);
+    expect((await shown.json()).data.type).toBe("workspace_change_requests");
     expect((await request(`/api/v2/workspaces/change-requests/${id}`)).status).toBe(200);
     expect((await request(`/api/v2/change-requests/${id}`, "GET", undefined, outsiderToken)).status).toBe(404);
   });
@@ -104,5 +125,90 @@ describe("change request API", () => {
     const discarded = await request(`/api/v2/change-requests/${discardedId}/actions/discard`, "POST");
     expect(discarded.status).toBe(200);
     expect((await discarded.json()).data.attributes.status).toBe("discarded");
+  });
+
+  it("creates independent change requests through Explorer selections and queries", async () => {
+    const subject = `Bulk targets ${suffix}`;
+    const targetPayload = {
+      data: {
+        type: "bulk_actions",
+        attributes: {
+          action_type: "change_request",
+          action_inputs: { subject, message: "Update every selected workspace." },
+          target_ids: [workspaceId, queryWorkspaceId],
+        },
+      },
+    };
+    const path = `/api/v2/organizations/${orgId}/explorer/bulk-actions`;
+    expect((await request(path, "POST", targetPayload, outsiderToken)).status).toBe(404);
+
+    const response = await request(path, "POST", targetPayload);
+    expect(response.status).toBe(201);
+    expect((await response.json()).data).toEqual({
+      id: expect.stringMatching(/^eba-/),
+      type: "explorer_bulk_actions",
+      attributes: {
+        organization_id: orgId,
+        action_type: "change_requests",
+        action_inputs: { subject, message: "Update every selected workspace." },
+        created_by: { id: ownerId, type: "users" },
+      },
+    });
+    const targetRows = await db.query.changeRequests.findMany({ where: eq(changeRequests.subject, subject) });
+    expect(targetRows.map((row): string => row.workspaceId).sort()).toEqual([queryWorkspaceId, workspaceId].sort());
+
+    const querySubject = `Query target ${suffix}`;
+    const queryResponse = await request(path, "POST", {
+      data: {
+        type: "bulk_actions",
+        attributes: {
+          action_type: "change_requests",
+          action_inputs: { subject: querySubject, message: "Only the query match." },
+          query: {
+            type: "workspaces",
+            filter: [{ workspace_name: { contains: ["query-target-"] } }],
+          },
+        },
+      },
+    });
+    expect(queryResponse.status).toBe(201);
+    const queryRows = await db.query.changeRequests.findMany({ where: eq(changeRequests.subject, querySubject) });
+    expect(queryRows.map((row): string => row.workspaceId)).toEqual([queryWorkspaceId]);
+
+    expect((await request(path, "POST", {
+      data: {
+        type: "bulk_actions",
+        attributes: {
+          action_type: "change_requests",
+          action_inputs: { subject: "Missing targets", message: "No selector." },
+        },
+      },
+    })).status).toBe(422);
+  });
+
+  it("archives a change request through the documented workspace endpoint", async () => {
+    const created = await request(`/api/v2/workspaces/${workspaceId}/change-requests`, "POST", {
+      data: { attributes: { subject: "Archive request", message: "This work is complete." } },
+    });
+    const id = (await created.json()).data.id as string;
+    expect((await request(`/api/v2/workspaces/change-requests/${id}`, "PATCH", undefined, outsiderToken)).status).toBe(404);
+
+    const archived = await request(`/api/v2/workspaces/change-requests/${id}`, "PATCH");
+    expect(archived.status).toBe(200);
+    expect((await archived.json()).data).toEqual({
+      id,
+      type: "workspace_change_requests",
+      attributes: {
+        subject: "Archive request",
+        message: "This work is complete.",
+        "archived-by": ownerId,
+        "archived-at": expect.any(String),
+        "created-at": expect.any(String),
+        "updated-at": expect.any(String),
+      },
+      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+    });
+    expect((await db.query.changeRequests.findFirst({ where: eq(changeRequests.id, id) }))?.status).toBe("archived");
+    expect((await request(`/api/v2/workspaces/change-requests/${id}`, "PATCH")).status).toBe(409);
   });
 });

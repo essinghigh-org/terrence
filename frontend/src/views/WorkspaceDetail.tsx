@@ -35,10 +35,18 @@ type Workspace = {
   };
 }
 
+type RunSummary = {
+  attributes: {
+    message?: string | null;
+    status: string;
+  };
+}
+
 export function WorkspaceDetail(): React.JSX.Element {
   const { orgName, workspaceName } = useParams<{ orgName: string; workspaceName: string }>();
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -49,6 +57,12 @@ export function WorkspaceDetail(): React.JSX.Element {
         `/organizations/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}`,
       ) as { data: Workspace };
       setWorkspace(data.data);
+      try {
+        const runs = await fetchApi(`/api/v2/workspaces/${data.data.id}/runs?page[size]=1`) as { data: unknown };
+        setLatestRun(Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null);
+      } catch {
+        setLatestRun(null);
+      }
     } catch {
       console.error("Failed to load workspace");
     } finally {
@@ -79,6 +93,8 @@ export function WorkspaceDetail(): React.JSX.Element {
   if (workspace == null) return <div className="p-8 text-gray-500">Workspace not found</div>;
 
   const createdAt = workspace.attributes["created-at"];
+  const latestRunStatus = latestRun?.attributes.status.replace(/_/g, " ");
+  const latestRunSucceeded = latestRunStatus === "applied" || latestRunStatus === "planned and finished";
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "runs", label: "Runs" },
@@ -170,9 +186,17 @@ export function WorkspaceDetail(): React.JSX.Element {
               {/* Latest Run Card */}
               <div className="bg-white border border-gray-200 rounded-md shadow-sm overflow-hidden flex flex-col h-64 relative">
                  <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-gray-50/50">
-                    <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-4" />
-                    <h3 className="text-lg font-semibold text-gray-900 mb-1">Latest run finished</h3>
-                    <p className="text-sm text-gray-500 max-w-md">The last run applied successfully and the workspace is currently idle. You can trigger a new run to apply further changes.</p>
+                    {latestRunSucceeded
+                      ? <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-4" />
+                      : <Info className="h-10 w-10 text-blue-500 mb-4" />}
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                      {latestRun === null ? "No runs yet" : `Latest run: ${latestRunStatus}`}
+                    </h3>
+                    <p className="text-sm text-gray-500 max-w-md">
+                      {latestRun === null
+                        ? "Start a run to plan your infrastructure changes."
+                        : latestRun.attributes.message ?? "Open the Runs tab to view details and take the next action."}
+                    </p>
                  </div>
               </div>
 

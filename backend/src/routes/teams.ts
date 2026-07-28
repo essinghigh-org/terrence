@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, organizations, notificationConfigurations } from "../db/schema";
+import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, organizations, notificationConfigurations, scimGroups, scimSettings, teamScimGroupMappings } from "../db/schema";
 import { eq, and, count, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission } from "../lib/utils";
@@ -66,6 +66,45 @@ function organizationAccessResource(access: Readonly<Record<string, boolean>>): 
   };
 }
 
+async function teamResource(team: TeamItem, userCount: number, includeUsersRelationship = false): Promise<Record<string, unknown>> {
+  const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
+  const mapping = settings?.enabled === true
+    ? await db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, team.id) })
+    : undefined;
+  const group = mapping === undefined
+    ? undefined
+    : await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, mapping.scimGroupId) });
+  return {
+    id: team.id,
+    type: "teams",
+    attributes: {
+      name: team.name,
+      description: team.description,
+      visibility: team.visibility,
+      "sso-team-id": team.ssoTeamId,
+      "organization-access": organizationAccessResource(team.organizationAccess),
+      "users-count": userCount,
+      permissions: { "can-update": true, "can-destroy": true },
+      ...(settings?.enabled === true ? {
+        "scim-linked": mapping !== undefined,
+        "scim-group-name": group?.name ?? null,
+        "scim-updated-at": mapping === undefined ? null : new Date(mapping.updatedAt).toISOString(),
+        "scim-sync-paused": mapping?.syncPaused ?? false,
+      } : {}),
+    },
+    ...(includeUsersRelationship ? {
+      relationships: { users: { links: { related: `/api/v2/teams/${team.id}/relationships/users` } } },
+    } : {}),
+  };
+}
+
+async function scimLinked(teamId: string): Promise<boolean> {
+  return (await db.query.teamScimGroupMappings.findFirst({
+    where: eq(teamScimGroupMappings.teamId, teamId),
+    columns: { teamId: true },
+  })) !== undefined;
+}
+
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/teams", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -75,7 +114,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamList = await db.query.teams.findMany({ where: eq(teams.orgId, org.id) });
     const data = await Promise.all(teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
       const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, t.id)))[0]?.val ?? 0;
-      return { id: t.id, type: "teams", attributes: { name: t.name, description: t.description, visibility: t.visibility, "sso-team-id": t.ssoTeamId, "organization-access": organizationAccessResource(t.organizationAccess), "users-count": userCount, permissions: { "can-update": true, "can-destroy": true } }, relationships: { users: { links: { related: `/api/v2/teams/${t.id}/relationships/users` } } } };
+      return teamResource(t, userCount, true);
     }));
     return { data };
   })
@@ -103,7 +142,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const newTeam = { id, orgId: org.id, name, description, visibility, ssoTeamId, organizationAccess: organizationAccess.value, createdAt: Date.now() };
     await db.insert(teams).values(newTeam);
     (set as { status: number }).status = 201;
-    return { data: { id, type: "teams", attributes: { name: newTeam.name, description: newTeam.description, visibility: newTeam.visibility, "sso-team-id": newTeam.ssoTeamId, "organization-access": organizationAccessResource(newTeam.organizationAccess), "users-count": 0, permissions: { "can-update": true, "can-destroy": true } } } };
+    return { data: await teamResource(newTeam, 0) };
   })
   .get("/api/v2/teams/:team_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, query, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
@@ -118,7 +157,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const userIds = members.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
       if (userIds.length > 0) { const uList = await db.query.users.findMany({ where: inArray(users.id, userIds) }); included = uList.map((u: Readonly<{ readonly id: string; readonly username: string; readonly email: string | null }>): Record<string, unknown> => ({ id: u.id, type: "users", attributes: { username: u.username, email: u.email } })); }
     }
-    return { data: { id: team.id, type: "teams", attributes: { name: team.name, description: team.description, visibility: team.visibility, "sso-team-id": team.ssoTeamId, "organization-access": organizationAccessResource(team.organizationAccess), "users-count": userCount, permissions: { "can-update": true, "can-destroy": true } } }, ...(included.length > 0 ? { included } : {}) };
+    return { data: await teamResource(team, userCount), ...(included.length > 0 ? { included } : {}) };
   })
   .patch("/api/v2/teams/:team_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params["team_id"] ?? "";
@@ -128,10 +167,15 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const updates: Partial<typeof teams.$inferInsert> = {};
+    const linked = await scimLinked(teamId);
+    if (linked && attributes["name"] !== undefined) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SCIM-linked teams cannot be renamed" }] };
+    }
     if (typeof attributes.name === "string") updates.name = attributes.name;
     if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
     if (typeof attributes.visibility === "string") updates.visibility = attributes.visibility;
-    if (attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
+    if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
     if (attributes["organization-access"] !== undefined) {
       if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
         (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -144,12 +188,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, teamId)))[0]?.val ?? 0;
-    return { data: { id: updated.id, type: "teams", attributes: { name: updated.name, description: updated.description, visibility: updated.visibility, "sso-team-id": updated.ssoTeamId, "organization-access": organizationAccessResource(updated.organizationAccess), "users-count": userCount, permissions: { "can-update": true, "can-destroy": true } } } };
+    return { data: await teamResource(updated, userCount) };
   })
   .delete("/api/v2/teams/:team_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await scimLinked(teamId)) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(apiTokens).where(eq(apiTokens.teamId, teamId));
     await db.delete(teamMemberships).where(eq(teamMemberships.teamId, teamId));
     await db.delete(teamWorkspaces).where(eq(teamWorkspaces.teamId, teamId));
@@ -161,6 +206,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const userItems = payload.data;
     if (Array.isArray(userItems)) {
@@ -182,6 +228,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const userItems = payload.data;
     if (Array.isArray(userItems)) { const uIds = userItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== ""); if (uIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, uIds))); }
@@ -192,6 +239,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     if (Array.isArray(items)) { for (const item of items) { if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") { const memId = (item as Record<string, unknown>).id as string; const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) }); if (mem?.orgId === team.orgId) await db.insert(teamMemberships).values({ id: `tm-${crypto.randomUUID()}`, teamId, userId: mem.userId, createdAt: Date.now() }).onConflictDoNothing(); } } }

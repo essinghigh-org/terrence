@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   agentJobs,
@@ -7,6 +7,13 @@ import {
   agents,
   configurationVersions,
   logs,
+  policies,
+  policyChecks,
+  policySetExclusions,
+  policySetParameters,
+  policySetProjects,
+  policySets,
+  policySetWorkspaces,
   runs,
   stateVersions,
   workspaces,
@@ -36,14 +43,52 @@ type DeepReadonly<T> = T extends readonly (infer Value)[]
 
 type Agent = DeepReadonly<typeof agents.$inferSelect>;
 type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
+type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
+type Database = Readonly<typeof db>;
+
+const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
+
+export type AgentPolicyEvaluation = Readonly<{
+  policySets: readonly Readonly<{
+    id: string;
+    name: string;
+    description: string | null;
+    kind: string;
+    policyToolVersion: string;
+    overridable: boolean;
+    policies: readonly Readonly<{
+      id: string;
+      name: string;
+      description: string | null;
+      enforcementLevel: string;
+      query: string | null;
+      source: string | null;
+    }>[];
+    parameters: readonly Readonly<{
+      key: string;
+      value: string;
+      sensitive: boolean;
+      hcl: boolean;
+    }>[];
+  }>[];
+}>;
+type AgentPolicy = AgentPolicyEvaluation["policySets"][number]["policies"][number];
+type AgentPolicyParameter = AgentPolicyEvaluation["policySets"][number]["parameters"][number];
 
 export type ClaimedAgentJob = Readonly<{
   job: AgentJob;
   run: Readonly<typeof runs.$inferSelect>;
-  workspace: Readonly<typeof workspaces.$inferSelect>;
+  workspace: Workspace;
   configuration: Readonly<typeof configurationVersions.$inferSelect> | null;
   inputState: Readonly<typeof stateVersions.$inferSelect> | null;
   planResult: Readonly<Record<string, unknown>> | null;
+  policyEvaluation: AgentPolicyEvaluation | null;
+}>;
+
+type AgentPolicyOutcome = Readonly<{
+  evaluated: boolean;
+  hardFailed: boolean;
+  softFailed: boolean;
 }>;
 
 function timestampsWithStatus(
@@ -65,11 +110,273 @@ function notifyRunStatus(runId: string, status: string): void {
         ? "run:completed"
         : status === "errored"
           ? "run:errored"
-          : ["planned", "planned_and_saved"].includes(status)
+          : ["planned", "planned_and_saved", "policy_soft_failed"].includes(status)
             ? "run:needs_attention"
             : undefined;
   if (trigger !== undefined) queueRunNotification(runId, trigger, status);
   void reportRunVcsStatus(runId, status);
+}
+
+async function getAgentPolicyEvaluation(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  workspace: Workspace,
+): Promise<AgentPolicyEvaluation | null> {
+  const [attached, projectAttached, globalSets, exclusions] = await Promise.all([
+    database.query.policySetWorkspaces.findMany({
+      where: eq(policySetWorkspaces.workspaceId, workspace.id),
+    }),
+    workspace.projectId === null
+      ? Promise.resolve([])
+      : database.query.policySetProjects.findMany({
+          where: eq(policySetProjects.projectId, workspace.projectId),
+        }),
+    database.query.policySets.findMany({
+      where: and(
+        eq(policySets.orgId, workspace.orgId),
+        eq(policySets.global, true),
+      ),
+    }),
+    database.query.policySetExclusions.findMany({
+      where: eq(policySetExclusions.workspaceId, workspace.id),
+    }),
+  ]);
+  const excludedIds = new Set(exclusions.map((exclusion): string => exclusion.policySetId));
+  const attachedIds = [...new Set([
+    ...attached.map((link): string => link.policySetId),
+    ...projectAttached.map((link): string => link.policySetId),
+    ...globalSets.map((policySet): string => policySet.id),
+  ])].filter((policySetId): boolean => !excludedIds.has(policySetId));
+  if (attachedIds.length === 0) return null;
+
+  const effectiveSets = await database.query.policySets.findMany({
+    where: and(
+      inArray(policySets.id, attachedIds),
+      eq(policySets.orgId, workspace.orgId),
+      eq(policySets.kind, "sentinel"),
+      eq(policySets.agentEnabled, true),
+    ),
+    orderBy: [asc(policySets.createdAt), asc(policySets.id)],
+  });
+  const effectiveIds = effectiveSets.map((policySet): string => policySet.id);
+  if (effectiveIds.length === 0) return null;
+
+  const [effectivePolicies, parameters] = await Promise.all([
+    database.query.policies.findMany({
+      where: inArray(policies.policySetId, effectiveIds),
+      orderBy: [asc(policies.createdAt), asc(policies.id)],
+    }),
+    database.query.policySetParameters.findMany({
+      where: inArray(policySetParameters.policySetId, effectiveIds),
+      orderBy: [asc(policySetParameters.key), asc(policySetParameters.id)],
+    }),
+  ]);
+  const policySetsWithPolicies = effectiveSets.flatMap((policySet): AgentPolicyEvaluation["policySets"] => {
+    const setPolicies = effectivePolicies
+      .filter((policy): boolean => policy.policySetId === policySet.id)
+      .map((policy): AgentPolicy => ({
+        id: policy.id,
+        name: policy.name,
+        description: policy.description,
+        enforcementLevel: policy.enforcementLevel === "advisory" ? "advisory" : "mandatory",
+        query: policy.query,
+        source: policy.source,
+      }));
+    if (setPolicies.length === 0) return [];
+    return [{
+      id: policySet.id,
+      name: policySet.name,
+      description: policySet.description,
+      kind: policySet.kind,
+      policyToolVersion: policySet.policyToolVersion ?? "latest",
+      overridable: policySet.overridable !== false,
+      policies: setPolicies,
+      parameters: parameters
+        .filter((parameter): boolean => parameter.policySetId === policySet.id)
+        .map((parameter): AgentPolicyParameter => ({
+          key: parameter.key,
+          value: parameter.value,
+          sensitive: parameter.sensitive === true,
+          hcl: parameter.hcl === true,
+        })),
+    }];
+  });
+  return policySetsWithPolicies.length === 0 ? null : { policySets: policySetsWithPolicies };
+}
+
+function agentPolicyResults(
+  result: Readonly<Record<string, unknown>>,
+): ReadonlyMap<string, Readonly<{ status: string; result: Record<string, unknown> }>> {
+  const rawChecks = result["policy-checks"];
+  if (!Array.isArray(rawChecks)) return new Map();
+  const reported = new Map<string, Readonly<{ status: string; result: Record<string, unknown> }>>();
+  const duplicates = new Set<string>();
+  for (const rawCheck of rawChecks) {
+    if (typeof rawCheck !== "object" || rawCheck === null || Array.isArray(rawCheck)) continue;
+    const check = rawCheck as Record<string, unknown>;
+    const policyId = check["policy-id"];
+    const status = check["status"];
+    if (
+      typeof policyId !== "string"
+      || !["passed", "failed", "errored", "unreachable"].includes(
+        typeof status === "string" ? status : "",
+      )
+    ) continue;
+    if (reported.has(policyId)) {
+      duplicates.add(policyId);
+      reported.delete(policyId);
+      continue;
+    }
+    if (duplicates.has(policyId)) continue;
+    const checkResult = check["result"];
+    reported.set(policyId, {
+      status: status as string,
+      result: typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)
+        ? checkResult as Record<string, unknown>
+        : {},
+    });
+  }
+  return reported;
+}
+
+async function recordAgentPolicyChecks(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  workspace: Workspace,
+  runId: string,
+  result: Readonly<Record<string, unknown>>,
+  now: number,
+): Promise<AgentPolicyOutcome> {
+  const evaluation = await getAgentPolicyEvaluation(database, workspace);
+  if (evaluation === null) {
+    return { evaluated: false, hardFailed: false, softFailed: false };
+  }
+
+  const reported = agentPolicyResults(result);
+  let hardFailed = false;
+  let softFailed = false;
+  for (const policySet of evaluation.policySets) {
+    for (const policy of policySet.policies) {
+      const outcome = reported.get(policy.id);
+      const checkStatus = outcome?.status ?? "errored";
+      const storedStatus = checkStatus === "failed"
+        && policy.enforcementLevel === "mandatory"
+        && policySet.overridable
+        ? "soft_failed"
+        : checkStatus;
+      await database.insert(policyChecks).values({
+        id: `pchk-${crypto.randomUUID()}`,
+        runId,
+        policyId: policy.id,
+        policySetId: policySet.id,
+        status: storedStatus,
+        result: outcome?.result ?? { error: "Agent did not return a policy outcome" },
+        createdAt: now,
+      });
+      if (checkStatus === "passed" || policy.enforcementLevel === "advisory") continue;
+      if (checkStatus === "failed" && policySet.overridable) softFailed = true;
+      else hardFailed = true;
+    }
+  }
+  return { evaluated: true, hardFailed, softFailed };
+}
+
+export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]> {
+  const configuredTimeout = Number(
+    process.env["AGENT_HEARTBEAT_TIMEOUT_MS"] ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
+  );
+  const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+    ? configuredTimeout
+    : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+  const cutoff = now - timeout;
+  const recovered = await db.transaction(async (transaction): Promise<
+    readonly Readonly<{ jobId: string; runId: string; runStatus: string }>[]
+  > => {
+    const tx = transaction as unknown as typeof db;
+    // ponytail: global sweep is fine for homelab; add heartbeat indexes only if agent volume makes it measurable.
+    const unavailableAgents = await tx.select({ id: agents.id })
+      .from(agents)
+      .where(or(
+        lt(agents.lastPingAt, cutoff),
+        inArray(agents.status, ["unknown", "exited", "errored"]),
+      ));
+    const unavailableAgentIds = unavailableAgents.map((agent): string => agent.id);
+
+    if (unavailableAgentIds.length > 0) {
+      await tx.update(agents).set({ status: "unknown" }).where(and(
+        inArray(agents.id, unavailableAgentIds),
+        inArray(agents.status, ["idle", "busy"]),
+        lt(agents.lastPingAt, cutoff),
+      ));
+    }
+
+    const unavailableClaim = unavailableAgentIds.length === 0
+      ? isNull(agentJobs.agentId)
+      : or(
+          isNull(agentJobs.agentId),
+          inArray(agentJobs.agentId, unavailableAgentIds),
+        );
+    const staleJobs = await tx.query.agentJobs.findMany({
+      where: and(eq(agentJobs.status, "claimed"), unavailableClaim),
+      orderBy: [asc(agentJobs.claimedAt)],
+    });
+    const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
+
+    for (const job of staleJobs) {
+      const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
+      const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
+      const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+      const updatedRuns = run === undefined
+        ? []
+        : await tx.update(runs).set({
+            agentId: null,
+            status: queuedRunStatus,
+            statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
+          }).where(and(
+            eq(runs.id, job.runId),
+            eq(runs.status, expectedRunStatus),
+          )).returning({ id: runs.id });
+      const owner = job.agentId === null
+        ? isNull(agentJobs.agentId)
+        : eq(agentJobs.agentId, job.agentId);
+
+      if (updatedRuns.length === 0) {
+        await tx.update(agentJobs).set({
+          status: "canceled",
+          completedAt: now,
+          errorMessage: "Run is no longer waiting for this job",
+        }).where(and(
+          eq(agentJobs.id, job.id),
+          eq(agentJobs.status, "claimed"),
+          owner,
+        ));
+        continue;
+      }
+
+      const updatedJobs = await tx.update(agentJobs).set({
+        agentId: null,
+        status: "queued",
+        claimedAt: null,
+        completedAt: null,
+        errorMessage: null,
+      }).where(and(
+        eq(agentJobs.id, job.id),
+        eq(agentJobs.status, "claimed"),
+        owner,
+      )).returning({ id: agentJobs.id });
+      if (updatedJobs.length === 0) {
+        throw new Error("Agent job changed while its stale claim was recovered");
+      }
+      recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
+    }
+
+    return recoveredJobs;
+  });
+
+  for (const item of recovered) void reportRunVcsStatus(item.runId, item.runStatus);
+  return recovered.map((item): string => item.jobId);
 }
 
 export async function authenticateAgent(
@@ -88,11 +395,14 @@ export async function authenticateAgent(
   });
   if (token === undefined) return undefined;
   const now = Date.now();
-  await Promise.all([
+  const [, refreshedAgents] = await Promise.all([
     db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id)),
-    db.update(agents).set({ lastPingAt: now }).where(eq(agents.id, agent.id)),
+    db.update(agents).set({
+      lastPingAt: now,
+      status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
+    }).where(eq(agents.id, agent.id)).returning(),
   ]);
-  return agent;
+  return refreshedAgents[0] ?? agent;
 }
 
 async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undefined> {
@@ -120,6 +430,9 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
       : Promise.resolve(undefined),
   ]);
   if (workspace === undefined) return undefined;
+  const policyEvaluation = job.phase === "plan"
+    ? await getAgentPolicyEvaluation(db, workspace)
+    : null;
   return {
     job,
     run,
@@ -127,6 +440,7 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
     configuration: configuration ?? null,
     inputState: inputState ?? null,
     planResult: planJob?.result ?? null,
+    policyEvaluation,
   };
 }
 
@@ -307,22 +621,51 @@ export async function completeAgentJob(
     const updatedJob = updatedJobs[0];
     if (updatedJob === undefined) return undefined;
 
+    let policyOutcome: AgentPolicyOutcome = {
+      evaluated: false,
+      hardFailed: false,
+      softFailed: false,
+    };
     let runStatus = "errored";
     if (completion.status === "completed" && job.phase === "plan") {
-      runStatus = run.planOnly
-        ? "planned_and_finished"
-        : run.savePlan
-          ? "planned_and_saved"
-          : run.autoApply || run.allowEmptyApply
-            ? "apply_queued"
-            : "planned";
+      const workspace = await tx.query.workspaces.findFirst({
+        where: eq(workspaces.id, run.workspaceId),
+      });
+      if (workspace === undefined) throw new Error("Agent workspace disappeared during completion");
+      policyOutcome = await recordAgentPolicyChecks(
+        tx,
+        workspace,
+        run.id,
+        completion.result,
+        now,
+      );
+      runStatus = policyOutcome.hardFailed
+        ? "errored"
+        : policyOutcome.softFailed
+          ? "policy_soft_failed"
+          : run.planOnly
+            ? "planned_and_finished"
+            : run.savePlan
+              ? "planned_and_saved"
+              : run.autoApply || run.allowEmptyApply
+                ? "apply_queued"
+                : "planned";
     } else if (completion.status === "completed") {
       runStatus = "applied";
     }
 
+    let statusTimestamps = run.statusTimestamps;
+    if (policyOutcome.evaluated) {
+      statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checking");
+      if (policyOutcome.softFailed && !policyOutcome.hardFailed) {
+        statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_override");
+      } else if (!policyOutcome.hardFailed) {
+        statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checked");
+      }
+    }
     const updatedRuns = await tx.update(runs).set({
       status: runStatus,
-      statusTimestamps: timestampsWithStatus(run.statusTimestamps, runStatus),
+      statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
       ...(job.phase === "plan"
         ? {
             planResourceAdditions: completion.resourceAdditions,

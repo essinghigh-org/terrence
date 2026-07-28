@@ -144,7 +144,15 @@ type DeepReadonly<T> = T extends readonly (infer Value)[]
     : T;
 
 function agentJobResource(details: DeepReadonly<ClaimedAgentJob>): Record<string, unknown> {
-  const { job, run, workspace, configuration, inputState, planResult } = details;
+  const {
+    job,
+    run,
+    workspace,
+    configuration,
+    inputState,
+    planResult,
+    policyEvaluation,
+  } = details;
   const basePath = `/api/v2/agents/${job.agentId ?? ""}/jobs/${job.id}`;
   return {
     id: job.id,
@@ -187,6 +195,27 @@ function agentJobResource(details: DeepReadonly<ClaimedAgentJob>): Record<string
             "download-url": `${basePath}/state`,
           },
       "plan-result": planResult,
+      "policy-evaluation": policyEvaluation === null
+        ? null
+        : {
+            "policy-sets": policyEvaluation.policySets.map((policySet): Record<string, unknown> => ({
+              id: policySet.id,
+              name: policySet.name,
+              description: policySet.description,
+              kind: policySet.kind,
+              "policy-tool-version": policySet.policyToolVersion,
+              overridable: policySet.overridable,
+              policies: policySet.policies.map((policy): Record<string, unknown> => ({
+                id: policy.id,
+                name: policy.name,
+                description: policy.description,
+                "enforcement-level": policy.enforcementLevel,
+                query: policy.query,
+                source: policy.source,
+              })),
+              parameters: policySet.parameters,
+            })),
+          },
     },
     relationships: {
       run: { data: { id: run.id, type: "runs" } },

@@ -280,7 +280,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       : {};
     const workspaceId = typeof workspaceData.id === "string" ? workspaceData.id : "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "variables-write");
-    const normalizedAttributes = {
+    const normalizedAttributes: Record<string, unknown> & { value: string } = {
       ...attributes,
       value: typeof attributes.value === "string" ? attributes.value : "",
     };

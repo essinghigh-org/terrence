@@ -49,6 +49,7 @@ import {
 import { readPlanJsonArtifact, writePlanJsonArtifact } from "./lib/plan-json";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
+import { recoverStaleAgentJobs } from "./lib/agent-jobs";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;
@@ -953,7 +954,7 @@ export async function executeRun(runId: string): Promise<void> {
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
-      } else if (run.autoApply || run.allowEmptyApply) {
+      } else if (workspace.autoApply === true || run.autoApply || run.allowEmptyApply) {
         await writeLog(runId, "plan", `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`);
         keepPlan = true;
         await executeApply(runId);
@@ -1840,6 +1841,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
 let isWorkerLoopRunning = false;
 
 export async function pollWorkerQueue(): Promise<string[]> {
+  await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
   const pendingRuns = await db.query.runs.findMany({
     where: eq(runs.status, "pending"),

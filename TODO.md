@@ -98,7 +98,7 @@
 - [x] Organization-level permission checks (manage-workspaces, manage-vcs-settings, etc.)
   - [x] Enforce every granular team organization-access permission across its management routes
 - [x] Workspace-level permission checks (read, plan, apply, lock/unlock, admin)
-  - [ ] Propagate team-token workspace authorization through assessment and change-request APIs
+  - [x] Propagate team-token workspace authorization through assessment and change-request APIs
 - [x] Owner role auto-assignment on org creation
 
 ---
@@ -199,13 +199,15 @@
 - [x] `saml-enabled` flag on organization
 - [x] `owners-team-saml-role-id` field
 - [ ] SSO team mapping
-- [ ] (Low priority for homelab — omit unless needed)
+
+_Priority: Low for a homelab deployment._
 
 ### 3.7 SCIM
 - [ ] SCIM settings API (admin)
 - [ ] SCIM tokens
 - [ ] SCIM group mapping for teams
-- [ ] (Low priority for homelab — omit unless needed)
+
+_Priority: Low for a homelab deployment._
 
 ---
 
@@ -784,7 +786,8 @@
 
 ### 13.6 Private VCS via Agent
 - [ ] Agent-based private VCS connectivity
-- [ ] (Low priority — requires agent functionality)
+
+_Priority: Low; requires agent functionality._
 
 ---
 
@@ -823,17 +826,20 @@
 ### 15.2 Team Notification Configurations
 - [x] `POST /teams/:team_id/notification-configurations` — create team notification
 - [x] Team notification triggers: `team:change_request`
-- [x] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ### 15.3 Project Notification Configurations
 - [x] Project-level notification configurations
-- [ ] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ### 15.4 Notification Delivery
 - [x] HTTP POST delivery with standardized payload
 - [x] Payload versioning
 - [x] Retry logic
-- [ ] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ---
 
@@ -874,10 +880,11 @@
 - [x] Agent pool assignment on workspace
 - [x] Run dispatch to agent pool
 - [x] Agent-poll-based job retrieval
-- [ ] Agent heartbeat timeout and stale claimed-job recovery
+- [x] Agent heartbeat timeout and stale claimed-job recovery
 - [ ] Agent hooks (pre-plan, post-plan, pre-apply, post-apply)
 - [ ] Agent-based policy evaluation
-- [ ] (Very low priority for homelab — local execution mode is primary)
+
+_Priority: Very low for a homelab deployment; local execution mode is primary._
 
 ---
 
@@ -900,7 +907,8 @@
 - [x] Pre-plan and post-plan stages
 - [x] HMAC-signed payloads for task callback verification
 - [x] Asynchronous run-task result callback protocol with signed callback URLs and progressive `running` updates
-- [x] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ---
 
@@ -928,13 +936,15 @@
 
 ### 18.3 Module GPG Keys
 - [x] GPG key management for module signing
-- [x] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ### 18.4 Module Tests
 - [x] `POST /registry-modules/:module_id/versions/:version/test` — trigger module test
 - [x] `GET /registry-modules/:module_id/versions/:version/test` — get test results
 - [x] Module test configuration
-- [ ] (Low priority for homelab)
+
+_Priority: Low for a homelab deployment._
 
 ---
 
@@ -977,12 +987,14 @@
 - [x] `assessment:check_failure` notification trigger
 - [x] `assessment:failed` notification trigger
 - [x] Health assessment results storage and API
-- [ ] (Low priority for homelab MVP)
+
+_Priority: Low for a homelab MVP._
 
 ### 20.2 Continuous Validation
 - [x] Pre-apply check evaluation
 - [x] Check result storage
-- [ ] (Low priority for homelab MVP)
+
+_Priority: Low for a homelab MVP._
 
 ---
 
@@ -1043,7 +1055,8 @@
 - [x] Persist module configuration versions and execute the selected module configuration
 - [x] Scan module variable declarations and defaults for no-code input metadata beyond configured option sets
 - [x] Implement no-code workspace upgrade plan, status, and confirmation APIs
-- [ ] (Very low priority for homelab)
+
+_Priority: Very low for a homelab deployment._
 
 ---
 
@@ -1102,16 +1115,14 @@
 - [x] `PATCH /api/v2/admin/settings` — update settings (stub)
 - [x] Settings: cost-estimation enabled, sentinel enabled, etc.
 
-### 24.9 Admin Module Registry Sharing
-- [x] `POST /api/v2/admin/module-sharing` — share modules across orgs
-- [x] `DELETE /api/v2/admin/module-sharing/:id` — stop sharing
-- [x] `GET /api/v2/admin/module-sharing` — list sharing configs
+### 24.9 Admin Registry Sharing
+- [x] `GET`/`PATCH /api/v2/admin/organizations/:name/relationships/module-consumers` — inspect and replace module consumers
+- [x] `PATCH /api/v2/admin/organizations/:name/module-consumers` — legacy module consumer management
+- [x] `PUT /api/v2/admin/organizations/:name/registry-partnerships` — replace module and provider consumers
+- [x] Global module/provider sharing flags on admin organization updates
+- [x] `/api/v2/admin/module-sharing` compatibility CRUD aliases
 
-### 24.10 Admin Registry Sharing
-- [ ] Registry mirror/proxy settings
-- [ ] (Low priority)
-
-### 24.11 Initial Admin User
+### 24.10 Initial Admin User
 - [x] First-run setup / initial admin creation (browser flow, environment bootstrap, and IACT-compatible API)
 - [x] Bootstrap process for fresh TFE instance
 - [x] Browser first-run flow for local user registration and organization creation
@@ -1146,9 +1157,7 @@
 ## Epic 25: Stacks (HCP Terraform Only)
 
 ### 25.1 Stacks
-- [ ] Stack CRUD API
-- [ ] Stack deployments
-- [ ] (TFE does NOT support Stacks — skip entirely)
+- [x] Intentionally omitted — Terraform Enterprise does not support HCP Terraform Stacks
 
 ---
 
@@ -1156,11 +1165,16 @@
 
 ### 26.1 Change Requests
 - [x] `GET /workspaces/:ws_id/change-requests` — list change requests
-- [x] `POST /workspaces/:ws_id/change-requests` — create change request
+- [x] `POST /workspaces/:ws_id/change-requests` — Terrence compatibility endpoint for creating a change request
 - [x] `GET /change-requests/:cr_id` — show change request
-- [x] `POST /change-requests/:cr_id/actions/approve` — approve
-- [x] `POST /change-requests/:cr_id/actions/discard` — discard
-- [ ] (Very low priority for homelab)
+- [x] `POST /change-requests/:cr_id/actions/approve` — Terrence compatibility endpoint for approval
+- [x] `POST /change-requests/:cr_id/actions/discard` — Terrence compatibility endpoint for discard
+- [x] `POST /organizations/:organization_name/explorer/bulk-actions` — create independent TFE change requests from explicit workspace targets and workspace-name `is`/`contains` queries
+- [ ] Extend Explorer change-request selection to the complete documented workspace filter grammar
+- [x] `PATCH /workspaces/change-requests/:cr_id` — archive with workspace Write access and the TFE `workspace_change_requests` resource shape
+- [ ] Deliver configured `team:change_request` notifications when change requests are created
+
+_Priority: Very low for a homelab deployment._
 
 ---
 
@@ -1169,7 +1183,7 @@
 ### 27.1 Core Views
 - [x] Login view with username/password authentication
 - [x] Organization dashboard with org listing
-- [x] Workspace list with table (name, version, auto-apply, locked)
+- [x] Workspace list with repository, tags, project, status, and management controls
 - [x] Workspace creation modal with engine selection
 - [x] Workspace detail view with tabs
 - [x] Variables management (add, delete, category, sensitive)
@@ -1195,7 +1209,7 @@
 ### 27.3 TFE UI Mirroring
 - [x] Run timeline/progress indicator (state visualization)
 - [x] Real-time log viewer (dark terminal output)
-- [x] Consistent color scheme, typography, spacing
+- [x] Shared TFE-inspired color scheme, typography, and spacing
 - [x] Responsive layout for desktop
 - [x] Navigation breadcrumbs (Org > Workspace > Runs)
 - [x] Organization settings page
@@ -1219,13 +1233,23 @@
 - [x] Tag display and search in workspace list
 - [x] Tag mutation UI in the workspace list
 
-### 27.4 Frontend Engineering
+### 27.4 Reference Screenshot Parity
+- [x] Remove unsupported or dead global navigation destinations (`Stacks`, `Registry`, `Usage`, `Explorer`, and the placeholder HCP link)
+- [ ] Match the reference workspace list columns, health/latest-change data, status summaries, filters, and pagination
+- [ ] Match the workspace-specific left navigation and header instead of using a horizontal tab strip
+- [ ] Match workspace overview behavior and content: real latest-run state, resources, metrics, tags, and run triggers
+- [ ] Match the workspace settings navigation and reference screens for general, locking, notifications, policies, run tasks, run triggers, SSH, VCS, and destruction
+- [ ] Match the supplied organization and administration reference screens for users, organizations, projects, registry, workspaces, and general settings
+- [ ] Complete screenshot-driven visual QA for table density, typography, spacing, empty states, and responsive desktop layouts
+
+### 27.5 Frontend Engineering
 - [x] React Router with proper auth guards
 - [x] `fetchApi` wrapper with token management
 - [x] Automatic token expiry and invalid-session handling
 - [x] Renewable login sessions / refresh-token protocol
 - [x] Error boundary components
-- [x] Loading states (skeletons, spinners)
+- [x] Basic loading indicators
+- [ ] Consistent skeleton/spinner loading states across all views
 - [x] Empty states (no organizations, no workspaces, etc.)
 - [x] Toast/notification system for errors and success
 - [x] Confirm dialogs for destructive actions
@@ -1306,6 +1330,7 @@
 - [x] `ALLOW_TOOL_FALLBACK` — cross-tool binary fallback (default `false`)
 - [x] `ALLOW_UNVERIFIED_CHECKSUMS` — skip SHA256 verification (default `false`)
 - [x] `CLI_TOKEN_TTL_MS` — native `terraform login` token TTL (default 30 days)
+- [x] `AGENT_HEARTBEAT_TIMEOUT_MS` — stale agent/job recovery timeout (default 60 seconds)
 - [x] `PUBLIC_URL` — override for reverse-proxy upload/download/log URLs
 - [x] `NODE_ENV` — environment mode (default `production`)
 - [x] Database configuration (SQLite path, connection params)
@@ -1390,10 +1415,20 @@
 - [x] Run workflow (create, view logs, apply)
 
 ### 30.4 Compatibility Tests
-- [x] `terraform login` end-to-end flow
-- [x] `cloud` backend block compatibility (Terraform CLI 1.1+)
-- [x] `go-tfe` client library compatibility
-- [x] `terrasnek` (Python) client compatibility
+- [x] `terraform login` service-discovery, PKCE, authorization, callback, and token-exchange protocol tests
+- [ ] Actual `terraform login` CLI end-to-end test against a running Terrence instance
+- [x] `cloud` backend API contract and uploaded-configuration worker coverage
+- [ ] Actual Terraform CLI 1.1+ `cloud` backend integration test against a running Terrence instance
+- [x] `go-tfe`-required endpoint aliases and log-reader behavior covered by API tests
+- [ ] Actual `go-tfe` client library integration test
+- [ ] Actual `terrasnek` Python client integration test
+
+### 30.5 Validation Gates
+- [x] Frontend typecheck passes
+- [x] Frontend test suite passes (30 tests)
+- [ ] Backend typecheck passes
+- [ ] Backend full test suite passes in one run
+- [x] Repository lint passes
 
 ---
 
@@ -1401,7 +1436,6 @@
 
 - [x] **Done** — implemented and functional
 - [ ] **Not started** — needs implementation
-- [ ] (Marked with priority notes in parentheses for judgment calls)
 
 Prioritization assumptions for homelab Docker deployment:
 
