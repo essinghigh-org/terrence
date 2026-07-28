@@ -577,6 +577,8 @@ export const registryModuleVersions = sqliteTable("registry_module_versions", {
   status: text("status").notNull().default("pending"), // 'pending', 'ok', 'errored'
   archivePath: text("archive_path"),
   keyId: text("key_id"),
+  isDeprecated: integer("is_deprecated", { mode: "boolean" }).default(false),
+  isRevoked: integer("is_revoked", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version),
@@ -802,6 +804,7 @@ export const runTasks = sqliteTable("run_tasks", {
   category: text("category").default("general"),
   enabled: integer("enabled", { mode: "boolean" }).default(true),
   hmacKey: text("hmac_key"),
+  globalConfiguration: text("global_configuration", { mode: "json" }).$type<{ enabled: boolean; stages: string[]; enforcementLevel: string }>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -809,19 +812,56 @@ export const workspaceRunTasks = sqliteTable("workspace_run_tasks", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   runTaskId: text("run_task_id").notNull().references(() => runTasks.id, { onDelete: "cascade" }),
-  stage: text("stage").notNull().default("post_plan"), // 'pre_plan', 'post_plan'
+  stage: text("stage").notNull().default("post_plan"), // 'pre_plan', 'post_plan', 'pre_apply', 'post_apply'
   enforcementLevel: text("enforcement_level").notNull().default("advisory"), // 'must_pass', 'advisory'
 }, (table) => [
   uniqueIndex("workspace_run_tasks_idx").on(table.workspaceId, table.runTaskId),
 ]);
 
+export const taskStages = sqliteTable("task_stages", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  stage: text("stage").notNull(), // 'pre_plan', 'post_plan', 'pre_apply', 'post_apply'
+  status: text("status").notNull().default("pending"), // 'pending', 'running', 'passed', 'failed', 'awaiting_override', 'errored', 'canceled', 'unreachable'
+  statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
 export const runTaskResults = sqliteTable("run_task_results", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   runTaskId: text("run_task_id").notNull().references(() => runTasks.id, { onDelete: "cascade" }),
+  taskStageId: text("task_stage_id").references(() => taskStages.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("passed"),
   message: text("message"),
   url: text("url"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const policyEvaluations = sqliteTable("policy_evaluations", {
+  id: text("id").primaryKey(),
+  taskStageId: text("task_stage_id").references(() => taskStages.id, { onDelete: "cascade" }),
+  runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("passed"), // 'pending', 'passed', 'failed', 'errored'
+  policyKind: text("policy_kind").default("opa"),
+  policyToolVersion: text("policy_tool_version").default("0.44.0"),
+  resultCount: text("result_count", { mode: "json" }).$type<Record<string, number>>(),
+  statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const policySetOutcomes = sqliteTable("policy_set_outcomes", {
+  id: text("id").primaryKey(),
+  policyEvaluationId: text("policy_evaluation_id").notNull().references(() => policyEvaluations.id, { onDelete: "cascade" }),
+  policySetName: text("policy_set_name"),
+  policyName: text("policy_name"),
+  enforcementLevel: text("enforcement_level").notNull().default("advisory"), // 'advisory', 'mandatory'
+  status: text("status").notNull().default("passed"), // 'passed', 'failed', 'errored'
+  query: text("query"),
+  description: text("description"),
+  error: text("error"),
+  overridable: integer("overridable", { mode: "boolean" }).default(false),
+  resultCount: text("result_count", { mode: "json" }).$type<Record<string, number>>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -979,3 +1019,51 @@ export const adminGeneralSettings = sqliteTable("admin_general_settings", {
   defaultRemoteStateAccess: integer("default_remote_state_access", { mode: "boolean" }).notNull().default(true),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const siteDataRetentionPolicies = sqliteTable("site_data_retention_policies", {
+  id: text("id").primaryKey(),
+  stateVersionsCount: integer("state_versions_count"),
+  deleteOlderThanNDays: integer("delete_older_than_n_days"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const supportBundleRequests = sqliteTable("support_bundle_requests", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().default("pending"),
+  downloadUrl: text("download_url"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const moduleTestConfigurations = sqliteTable("module_test_configurations", {
+  id: text("id").primaryKey(),
+  moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+  oidcProviderUrl: text("oidc_provider_url"),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const moduleTestResults = sqliteTable("module_test_results", {
+  id: text("id").primaryKey(),
+  versionId: text("version_id").notNull().references(() => registryModuleVersions.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"),
+  output: text("output"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const oauthDeviceCodes = sqliteTable("oauth_device_codes", {
+  deviceCode: text("device_code").primaryKey(),
+  userCode: text("user_code").notNull().unique(),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"), // 'pending', 'authorized', 'denied', 'expired'
+  token: text("token"),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const user2FA = sqliteTable("user_2fa", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  secret: text("secret").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+

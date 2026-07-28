@@ -325,6 +325,111 @@ await sqlite.executeMultiple(`
     default_remote_state_access INTEGER NOT NULL DEFAULT 1,
     updated_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS site_data_retention_policies (
+    id TEXT PRIMARY KEY,
+    state_versions_count INTEGER,
+    delete_older_than_n_days INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS support_bundle_requests (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    download_url TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS module_test_configurations (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES registry_modules(id) ON DELETE CASCADE,
+    oidc_provider_url TEXT,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS module_test_results (
+    id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL REFERENCES registry_module_versions(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    output TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS oauth_device_codes (
+    device_code TEXT PRIMARY KEY,
+    user_code TEXT NOT NULL UNIQUE,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    token TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_2fa (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    secret TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS task_stages (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    status_timestamps TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS policy_evaluations (
+    id TEXT PRIMARY KEY,
+    task_stage_id TEXT REFERENCES task_stages(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'passed',
+    policy_kind TEXT DEFAULT 'opa',
+    policy_tool_version TEXT DEFAULT '0.44.0',
+    result_count TEXT,
+    status_timestamps TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS policy_set_outcomes (
+    id TEXT PRIMARY KEY,
+    policy_evaluation_id TEXT NOT NULL REFERENCES policy_evaluations(id) ON DELETE CASCADE,
+    policy_set_name TEXT,
+    policy_name TEXT,
+    enforcement_level TEXT NOT NULL DEFAULT 'advisory',
+    status TEXT NOT NULL DEFAULT 'passed',
+    query TEXT,
+    description TEXT,
+    error TEXT,
+    overridable INTEGER DEFAULT 0,
+    result_count TEXT,
+    created_at INTEGER NOT NULL
+  );
 `);
+
+// Check registry_module_versions for missing columns
+const rmvInfo = await sqlite.execute("PRAGMA table_info(registry_module_versions)");
+const existingRmvCols = getColumnNames(rmvInfo);
+if (!existingRmvCols.has("is_deprecated")) await sqlite.execute("ALTER TABLE registry_module_versions ADD COLUMN is_deprecated INTEGER DEFAULT 0");
+if (!existingRmvCols.has("is_revoked")) await sqlite.execute("ALTER TABLE registry_module_versions ADD COLUMN is_revoked INTEGER DEFAULT 0");
+
+// Check run_tasks for global_configuration
+const rtInfo = await sqlite.execute("PRAGMA table_info(run_tasks)");
+const existingRtCols = getColumnNames(rtInfo);
+if (!existingRtCols.has("global_configuration")) await sqlite.execute("ALTER TABLE run_tasks ADD COLUMN global_configuration TEXT");
+
+// Check run_task_results for task_stage_id
+const rtrInfo = await sqlite.execute("PRAGMA table_info(run_task_results)");
+const existingRtrCols = getColumnNames(rtrInfo);
+if (!existingRtrCols.has("task_stage_id")) await sqlite.execute("ALTER TABLE run_task_results ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
+
+// Check policy_evaluations for task_stage_id & run_id
+const peInfo = await sqlite.execute("PRAGMA table_info(policy_evaluations)");
+const existingPeCols = getColumnNames(peInfo);
+if (!existingPeCols.has("task_stage_id")) await sqlite.execute("ALTER TABLE policy_evaluations ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
+if (!existingPeCols.has("run_id")) await sqlite.execute("ALTER TABLE policy_evaluations ADD COLUMN run_id TEXT REFERENCES runs(id)");
 
 await sqlite.execute('PRAGMA foreign_keys = ON');

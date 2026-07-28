@@ -331,6 +331,27 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
       }));
     return { data, ...pagination(request, number, size, matching.length) };
   })
+  .get("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+    const denied = requireAdmin(user, set, true);
+    if (denied !== undefined) return denied;
+    const teamId = params.external_id ?? "";
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+    if (team === undefined) return error(set, 404, "Not Found");
+    const mapping = await db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, team.id) });
+    if (mapping === undefined) return error(set, 404, "Not Found");
+    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, mapping.scimGroupId) });
+    return {
+      data: {
+        id: mapping.teamId,
+        type: "scim-group-mapping",
+        attributes: {
+          "scim-group-id": mapping.scimGroupId,
+          "scim-group-name": group?.name ?? null,
+          "scim-sync-paused": mapping.syncPaused,
+        },
+      },
+    };
+  })
   .post("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;

@@ -232,7 +232,15 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const sourceName = typeof attributes["source-name"] === "string" ? attributes["source-name"] : null;
     const sourceUrl = typeof attributes["source-url"] === "string" ? attributes["source-url"] : null;
     const iacBinary = attributes["iac-binary"];
-    const executionMode = attributes["execution-mode"];
+    let executionMode = attributes["execution-mode"];
+    if (executionMode === undefined && typeof attributes.operations === "boolean") {
+      executionMode = attributes.operations ? "remote" : "local";
+    }
+    const globalRemoteState = attributes["global-remote-state"] === true;
+    const projectRemoteState = attributes["project-remote-state"] === true;
+    if (globalRemoteState && projectRemoteState) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "global-remote-state and project-remote-state cannot both be true" }] };
+    }
     const rawAgentPoolId = attributes["agent-pool-id"];
     const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
     const rawSettingOverwrites = attributes["setting-overwrites"];
@@ -958,12 +966,21 @@ async function updateWorkspaceResponse(
   const sourceName = attributes["source-name"];
   const sourceUrl = attributes["source-url"];
   const iacBinary = attributes["iac-binary"];
-  const executionMode = attributes["execution-mode"];
+  let executionMode = attributes["execution-mode"];
+  if (executionMode === undefined && typeof attributes.operations === "boolean") {
+    executionMode = attributes.operations ? "remote" : "local";
+  }
   const rawAgentPoolId = attributes["agent-pool-id"];
   const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
   const rawInheritsProjectAutoDestroy = attributes["inherits-project-auto-destroy"];
   const rawSettingOverwrites = attributes["setting-overwrites"];
   const rawVcsRepo = attributes["vcs-repo"];
+
+  const newGlobal = typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState;
+  const newProject = typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState;
+  if (newGlobal && newProject) {
+    (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "global-remote-state and project-remote-state cannot both be true" }] };
+  }
 
   if (tagBindingsData !== undefined && tagBindings === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid tag bindings" }] }; }
   if (name !== undefined && !/^[A-Za-z0-9_-]+$/.test(name)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] }; }

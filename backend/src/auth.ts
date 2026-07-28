@@ -94,6 +94,9 @@ export const authPlugin = new Elysia({ name: "auth" })
       const user = await db.query.users.findFirst({
         where: eq(users.id, token.userId),
       });
+      if (user?.isSuspended === true) {
+        return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" };
+      }
       return { user: user ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null };
     }
 

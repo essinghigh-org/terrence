@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, workspaces, type users } from "../db/schema";
-import { eq, desc, count } from "drizzle-orm";
+import { organizations, workspaces, projects, workspaceTags, stateVersions, runs, type users } from "../db/schema";
+import { eq, desc, count, inArray } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrgPermission, pageRequest, pagination } from "../lib/utils";
 
@@ -17,6 +17,12 @@ type ParamCtx = Readonly<{
   request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
+
+function safeIsoDate(val: unknown): string {
+  if (val === null || val === undefined || val === "") return new Date().toISOString();
+  const d = new Date(val as string | number);
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
 
 export const explorerRoutes = new Elysia({ name: "explorer" })
   .use(authPlugin)
@@ -39,17 +45,76 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
         limit: size,
       });
 
-      const resources = list.map((w) => ({
-        id: w.id,
-        type: "explorer-workspaces",
-        attributes: {
-          name: w.name,
-          "terraform-version": w.terraformVersion,
-          "execution-mode": w.executionMode,
-          "created-at": new Date(w.createdAt).toISOString(),
-          "updated-at": new Date(w.updatedAt).toISOString(),
-        },
-      }));
+      const wsIds = list.map((w) => w.id);
+      const projIds = [...new Set(list.map((w) => w.projectId).filter((id): id is string => id !== null))];
+
+      const [allProjects, allTags, latestStates, latestRuns] = await Promise.all([
+        projIds.length > 0 ? db.query.projects.findMany({ where: inArray(projects.id, projIds) }) : Promise.resolve([]),
+        wsIds.length > 0 ? db.query.workspaceTags.findMany({ where: inArray(workspaceTags.workspaceId, wsIds) }) : Promise.resolve([]),
+        wsIds.length > 0 ? db.query.stateVersions.findMany({ where: inArray(stateVersions.workspaceId, wsIds), orderBy: [desc(stateVersions.serial)] }) : Promise.resolve([]),
+        wsIds.length > 0 ? db.query.runs.findMany({ where: inArray(runs.workspaceId, wsIds), orderBy: [desc(runs.createdAt)] }) : Promise.resolve([]),
+      ]);
+
+      const projectsById = new Map(allProjects.map((p) => [p.id, p]));
+      const tagsByWs = new Map<string, string[]>();
+      for (const t of allTags) {
+        const arr = tagsByWs.get(t.workspaceId) ?? [];
+        arr.push(t.key);
+        tagsByWs.set(t.workspaceId, arr);
+      }
+
+      const latestStateByWs = new Map<string, typeof stateVersions.$inferSelect>();
+      for (const sv of latestStates) {
+        if (!latestStateByWs.has(sv.workspaceId)) latestStateByWs.set(sv.workspaceId, sv);
+      }
+
+      const latestRunByWs = new Map<string, typeof runs.$inferSelect>();
+      for (const r of latestRuns) {
+        if (!latestRunByWs.has(r.workspaceId)) latestRunByWs.set(r.workspaceId, r);
+      }
+
+      const resources = list.map((w) => {
+        const proj = w.projectId ? projectsById.get(w.projectId) : undefined;
+        const sv = latestStateByWs.get(w.id);
+        const r = latestRunByWs.get(w.id);
+        const vcsObj = typeof w.vcsRepo === "object" && w.vcsRepo !== null ? (w.vcsRepo as Record<string, unknown>) : {};
+
+        return {
+          id: w.id,
+          type: "workspaces",
+          attributes: {
+            organization_name: org.name,
+            workspace_name: w.name,
+            name: w.name,
+            workspace_created_at: safeIsoDate(w.createdAt),
+            workspace_updated_at: safeIsoDate(w.updatedAt),
+            "terraform-version": w.terraformVersion,
+            "execution-mode": w.executionMode,
+            current_run_status: r?.status ?? null,
+            current_run_applied_at: r?.appliedAt ? safeIsoDate(r.appliedAt) : null,
+            current_run_external_id: r?.id ?? null,
+            current_rum_count: 0,
+            drifted: false,
+            resources_drifted: 0,
+            resources_undrifted: 0,
+            all_checks_succeeded: true,
+            checks_passed: 0,
+            checks_failed: 0,
+            checks_errored: 0,
+            checks_unknown: 0,
+            vcs_repo_identifier: typeof vcsObj.identifier === "string" ? vcsObj.identifier : null,
+            tags: (tagsByWs.get(w.id) ?? []).join(", "),
+            project_name: proj?.name ?? "Default Project",
+            project_external_id: proj?.id ?? null,
+            provider_count: 0,
+            module_count: 0,
+            state_version_terraform_version: sv?.terraformVersion ?? w.terraformVersion,
+            source_module_id: null,
+            "created-at": safeIsoDate(w.createdAt),
+            "updated-at": safeIsoDate(w.updatedAt),
+          },
+        };
+      });
 
       return { data: resources, ...pagination(request, number, size, total) };
     }
@@ -62,16 +127,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     return {
-      data: [
-        {
-          id: "terrence-node-1",
-          type: "nodes",
-          attributes: {
-            hostname: "terrence-primary",
-            active: true,
-            "created-at": new Date().toISOString(),
-          },
-        },
-      ],
+      data: ["terrence-node-1"],
+      links: { self: "/api/v1/nodes" },
     };
   });

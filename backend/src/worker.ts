@@ -420,8 +420,10 @@ async function streamLog(
   await flush();
 }
 
-function buildSanitizedEnv(workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string }[]): Record<string, string> {
-
+function buildSanitizedEnv(
+  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string }[],
+  extraEnv?: Readonly<Record<string, string>>,
+): Record<string, string> {
   const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL"];
   const protectedKeys = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV", "TF_CLI_CONFIG_FILE", "DYLD_INSERT_LIBRARIES"];
 
@@ -438,6 +440,12 @@ function buildSanitizedEnv(workspaceVars: readonly { readonly key: string; reado
     }
     if (v.category === "env") {
       env[v.key] = v.value;
+    }
+  }
+
+  if (extraEnv !== undefined) {
+    for (const [k, v] of Object.entries(extraEnv)) {
+      if (typeof v === "string") env[k] = v;
     }
   }
 

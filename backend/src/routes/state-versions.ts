@@ -235,6 +235,57 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     (set as { status: number }).status = 200;
     return {};
   })
+  .put("/api/v2/state-versions/:state_version_id/json-outputs-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params.state_version_id ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    const path = `/api/v2/state-versions/${stateVersionId}/json-outputs-upload`;
+    if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const jsonStateOutputs = await requestBodyText(body, request);
+    if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
+    }
+    await db.update(stateVersions).set({ jsonStateOutputs }).where(eq(stateVersions.id, stateVersionId));
+    (set as { status: number }).status = 200;
+    return {};
+  })
+  .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params.state_version_id ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (sv.statePayload === null || sv.status !== "finalized") {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
+    }
+    const latest = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.workspaceId, sv.workspaceId),
+      orderBy: [desc(stateVersions.serial)],
+    });
+    const newSerial = (latest?.serial ?? 0) + 1;
+    const newId = crypto.randomUUID();
+    await db.insert(stateVersions).values({
+      id: newId,
+      workspaceId: sv.workspaceId,
+      serial: newSerial,
+      runId: null,
+      statePayload: sv.statePayload,
+      jsonState: sv.jsonState,
+      jsonStateOutputs: sv.jsonStateOutputs,
+      intermediate: false,
+      status: "finalized",
+      createdAt: Date.now(),
+    });
+    const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
+    if (newSv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    (set as { status: number }).status = 201;
+    return { data: stateVersionResource(newSv, request) };
+  })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params.state_version_id ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });

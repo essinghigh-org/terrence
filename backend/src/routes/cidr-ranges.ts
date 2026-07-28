@@ -21,7 +21,8 @@ type ParamCtx = Readonly<{
 type CidrRangeListItem = Readonly<typeof cidrRangeLists.$inferSelect>;
 type CidrRangeItem = Readonly<typeof cidrRanges.$inferSelect>;
 
-function cidrRangeListResource(list: CidrRangeListItem): Record<string, unknown> {
+async function cidrRangeListResource(list: CidrRangeListItem): Promise<Record<string, unknown>> {
+  const ranges = await db.query.cidrRanges.findMany({ where: eq(cidrRanges.cidrRangeListId, list.id) });
   return {
     id: list.id,
     type: "cidr-range-lists",
@@ -34,6 +35,7 @@ function cidrRangeListResource(list: CidrRangeListItem): Record<string, unknown>
     },
     relationships: {
       organization: { data: { id: list.orgId, type: "organizations" } },
+      "cidr-ranges": { data: ranges.map((r) => ({ id: r.id, type: "cidr-ranges" })) },
     },
   };
 }
@@ -70,7 +72,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
       offset: (number - 1) * size,
       limit: size,
     });
-    return { data: lists.map((l) => cidrRangeListResource(l)), ...pagination(request, number, size, total) };
+    return { data: await Promise.all(lists.map((l) => cidrRangeListResource(l))), ...pagination(request, number, size, total) };
   })
   .post("/api/v2/organizations/:org_name/cidr-range-lists", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
@@ -97,7 +99,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     };
     await db.insert(cidrRangeLists).values(list);
     (set as { status: number }).status = 201;
-    return { data: cidrRangeListResource(list) };
+    return { data: await cidrRangeListResource(list) };
   })
   .get("/api/v2/cidr-range-lists/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
@@ -105,7 +107,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     if (!(await checkOrgPermission(user?.id, list.orgId, "member", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: cidrRangeListResource(list) };
+    return { data: await cidrRangeListResource(list) };
   })
   .patch("/api/v2/cidr-range-lists/:id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
@@ -123,7 +125,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
 
     await db.update(cidrRangeLists).set(updates).where(eq(cidrRangeLists.id, list.id));
     const updated = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, list.id) });
-    return { data: cidrRangeListResource(updated!) };
+    return { data: await cidrRangeListResource(updated!) };
   })
   .delete("/api/v2/cidr-range-lists/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });

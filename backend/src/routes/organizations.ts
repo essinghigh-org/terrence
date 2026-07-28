@@ -509,4 +509,13 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     (set as { status: number }).status = 204;
     return {};
+  })
+  .get("/api/v2/organizations/:org_name/vcs-events", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const { number, size } = pageRequest(request);
+    return { data: [], ...pagination(request, number, size, 0) };
   });

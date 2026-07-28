@@ -38,6 +38,7 @@ import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
 import { assessmentRoutes } from "./routes/assessments";
 import { changeRequestRoutes } from "./routes/change-requests";
+import { policyEvaluationRoutes } from "./routes/policy-evaluations";
 import { workspaceTransferRoutes } from "./routes/workspace-transfers";
 import { planExportRoutes } from "./routes/plan-exports";
 import { cidrRangeRoutes } from "./routes/cidr-ranges";
@@ -336,4 +337,5 @@ export const app = new Elysia()
   .use(queryRoutes)
   .use(scimRoutes)
   .use(explorerRoutes)
-  .use(teamProjectRoutes);
+  .use(teamProjectRoutes)
+  .use(policyEvaluationRoutes);

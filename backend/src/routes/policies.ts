@@ -782,19 +782,4 @@ export const policyRoutes = new Elysia({ name: "policies" })
     await db.delete(policySetParameters).where(eq(policySetParameters.id, paramId));
     (set as { status: number }).status = 204;
     return {};
-  })
-  // --- Policy Evaluations (A.7) ---
-  .get("/api/v2/task-stages/:task_stage_id/policy-evaluations", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    return { data: [] };
-  })
-  .get("/api/v2/policy-evaluations/:policy_evaluation_id/policy-set-outcomes", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    return { data: [] };
   });
