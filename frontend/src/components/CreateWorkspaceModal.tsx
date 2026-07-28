@@ -29,6 +29,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [loading, setLoading] = useState(false);
   const [vcsIdentifier, setVcsIdentifier] = useState("");
   const [ghAppInstallationId, setGhAppInstallationId] = useState("");
+  const [sourceType, setSourceType] = useState("tfe-api");
 
 
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
@@ -47,7 +48,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
 
-      const vcsRepo = normalizedVcsIdentifier !== ""
+      const vcsRepo = sourceType === "vcs" && normalizedVcsIdentifier !== ""
         ? { identifier: normalizedVcsIdentifier, "github-app-installation-id": normalizedInstallationId }
         : undefined;
 
@@ -60,6 +61,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               "auto-apply": autoApply,
               "iac-binary": iacBinary,
               "terraform-version": normalizedVersion,
+              source: sourceType === "vcs" ? "tfe-api" : sourceType,
               "vcs-repo": vcsRepo,
             },
             type: "workspaces",
@@ -135,7 +137,21 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
 
           <div className="pt-4 border-t border-gray-200 mt-2">
-              <h4 className="text-sm font-medium mb-3">Version Control (Optional)</h4>
+            <h4 className="text-sm font-medium mb-3">Workspace Source</h4>
+            <div className="flex flex-col gap-1.5 mb-4">
+              <select
+                id="source-type"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                value={sourceType}
+                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setSourceType(event.target.value); }}
+              >
+                <option value="tfe-api">API Driven (tfe-api)</option>
+                <option value="local">Local Path Directory</option>
+                <option value="vcs">Version Control (VCS)</option>
+              </select>
+            </div>
+
+            {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
                   <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
@@ -163,7 +179,14 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                   <p className="text-xs text-gray-500">Provide both Identifier and Installation ID to connect this workspace to GitHub.</p>
                 </div>
               </div>
-            </div>
+            )}
+            
+            {sourceType === "local" && (
+              <p className="text-sm text-gray-600">
+                Code will be loaded from `/app/backend/storage/local/{orgName}/{"{project_name}"}/{name}`. Make sure to bind mount this path to your Terraform code.
+              </p>
+            )}
+          </div>
           <DialogFooter className="mt-4">
             <Button type="submit" disabled={loading}>
               {loading ? "Creating..." : "Create Workspace"}

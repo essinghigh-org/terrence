@@ -72,6 +72,10 @@ const existingWsCols = getColumnNames(wsTableInfo);
 if (!existingWsCols.has("created_at")) {
   await sqlite.execute("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
 }
+// Check workspaces for source column
+if (!existingWsCols.has("source")) {
+  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN source text DEFAULT 'tfe-api'");
+}
 
 // Check state_versions for created_at column
 const svCreatedAtInfo = await sqlite.execute("PRAGMA table_info(state_versions)");

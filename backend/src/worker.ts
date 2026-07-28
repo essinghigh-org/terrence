@@ -29,6 +29,7 @@ import {
   assessmentCheckResults,
   agentJobs,
   agentPools,
+  projects,
 } from "./db/schema";
 import { eq, desc, asc, and, inArray, notInArray, sql, isNotNull } from "drizzle-orm";
 import { spawn } from "bun";
@@ -751,6 +752,24 @@ export async function executeRun(runId: string): Promise<void> {
         if (!ok) {
           throw new Error("Configuration archive extraction failed or contained invalid path components.");
         }
+      }
+    } else if (workspace.source === "local") {
+      const project = workspace.projectId !== null 
+        ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
+        : null;
+      const projectName = project?.name ?? "Default Project";
+      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, projectName, workspace.name);
+      
+      await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
+      if (!(await exists(localPath))) {
+        throw new Error(`Local source directory does not exist: ${localPath}`);
+      }
+      
+      // Copy files to workDir using cp
+      const cpProc = spawn(["cp", "-r", localPath + "/.", workDir]);
+      const cpExit = await cpProc.exited;
+      if (cpExit !== 0) {
+        throw new Error(`Failed to copy local source directory to working directory.`);
       }
     }
 

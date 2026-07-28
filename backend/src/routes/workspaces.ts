@@ -231,6 +231,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const workingDirectory = attributes["working-directory"];
     const sourceName = typeof attributes["source-name"] === "string" ? attributes["source-name"] : null;
     const sourceUrl = typeof attributes["source-url"] === "string" ? attributes["source-url"] : null;
+    const source = typeof attributes.source === "string" ? attributes.source : "tfe-api";
     const iacBinary = attributes["iac-binary"];
     let executionMode = attributes["execution-mode"];
     if (executionMode === undefined && typeof attributes.operations === "boolean") {
@@ -374,7 +375,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       id, name, orgId: org.id, description: finalDesc, projectId: project.id,
       autoApply, terraformVersion: finalTfVer,
       workingDirectory: normalizedWorkingDirectory, sourceName,
-      sourceUrl, iacBinary: finalIac, vcsRepo,
+      sourceUrl, source, iacBinary: finalIac, vcsRepo,
       executionMode: effectiveExecutionMode,
       agentPoolId,
       autoDestroyActivityDuration: inheritsProjectAutoDestroy
@@ -965,6 +966,7 @@ async function updateWorkspaceResponse(
   const workingDirectory = attributes["working-directory"];
   const sourceName = attributes["source-name"];
   const sourceUrl = attributes["source-url"];
+    const source = typeof attributes.source === "string" ? attributes.source : undefined;
   const iacBinary = attributes["iac-binary"];
   let executionMode = attributes["execution-mode"];
   if (executionMode === undefined && typeof attributes.operations === "boolean") {
@@ -1143,6 +1145,7 @@ async function updateWorkspaceResponse(
     workingDirectory: normalizedWorkingDirectory,
     sourceName: typeof sourceName === "string" ? sourceName : (sourceName === null ? null : workspace.sourceName),
     sourceUrl: typeof sourceUrl === "string" ? sourceUrl : (sourceUrl === null ? null : workspace.sourceUrl),
+    source: source ?? workspace.source,
     iacBinary: typeof iacBinary === "string" ? iacBinary : (iacBinary === null ? null : workspace.iacBinary),
   };
 

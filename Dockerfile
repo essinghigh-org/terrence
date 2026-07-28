@@ -34,7 +34,7 @@ ENV TOFU_VERSION=1.7.2
 RUN ARCH=${TARGETARCH:-amd64} && \
     curl -fLo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${ARCH}.zip" && \
     curl -fLo tofu_SHA256SUMS "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" && \
-    grep "tofu_${TOFU_VERSION}_linux_${ARCH}.zip" tofu_SHA256SUMS | sha256sum -c - && \
+    grep "tofu_${TOFU_VERSION}_linux_${ARCH}.zip" tofu_SHA256SUMS | sed "s|tofu_${TOFU_VERSION}_linux_${ARCH}.zip|tofu.zip|" | sha256sum -c - && \
     unzip tofu.zip -d /usr/local/bin && \
     rm tofu.zip tofu_SHA256SUMS && \
     chmod +x /usr/local/bin/tofu
@@ -44,7 +44,7 @@ ENV TERRAFORM_VERSION=1.9.3
 RUN ARCH=${TARGETARCH:-amd64} && \
     curl -fLo terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" && \
     curl -fLo terraform_SHA256SUMS "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" && \
-    grep "terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" terraform_SHA256SUMS | sha256sum -c - && \
+    grep "terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" terraform_SHA256SUMS | sed "s|terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip|terraform.zip|" | sha256sum -c - && \
     unzip terraform.zip -d /usr/local/bin && \
     rm terraform.zip terraform_SHA256SUMS && \
     chmod +x /usr/local/bin/terraform
@@ -67,7 +67,7 @@ COPY --from=builder /app/frontend/dist /app/frontend/dist
 
 # Create storage directory & unprivileged user
 RUN mkdir -p /app/backend/storage && \
-    useradd -m -u 1000 appuser && \
+    useradd -m appuser && \
     chown -R appuser:appuser /app
 
 VOLUME ["/app/backend/storage"]

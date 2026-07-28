@@ -198,6 +198,7 @@ export const workspaces = sqliteTable("workspaces", {
   workingDirectory: text("working_directory"),
   sourceName: text("source_name"),
   sourceUrl: text("source_url"),
+  source: text("source").default("tfe-api"),
   autoApply: integer("auto_apply", { mode: "boolean" }).default(false),
   autoApplyRunTrigger: integer("auto_apply_run_trigger", { mode: "boolean" }).default(false),
   fileTriggersEnabled: integer("file_triggers_enabled", { mode: "boolean" }).default(true),
