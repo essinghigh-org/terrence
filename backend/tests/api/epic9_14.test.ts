@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, runComments, runTasks, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
+import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, runComments, runTasks, runTaskResults, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
+import { writePlanJsonArtifact } from "../../src/lib/plan-json";
 describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", () => {
   let userToken: string;
   let userId: string;
@@ -14,6 +15,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
   beforeEach(async () => {
     await db.delete(apiTokens);
     await db.delete(auditLogs);
+    await db.delete(runTaskResults);
     await db.delete(workspaceRunTasks);
     await db.delete(runTasks);
     await db.delete(runComments);
@@ -82,6 +84,11 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       message: "Deploy cluster core",
       createdAt: Date.now(),
     });
+    await writePlanJsonArtifact(runId, {
+      format_version: "1.2",
+      terraform_version: "1.9.8",
+      resource_changes: [{ address: "terraform_data.example" }],
+    });
   });
 
   it("manages run apply comments, comments API, and plan JSON output", async () => {
@@ -119,7 +126,11 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     );
     expect(planRes.status).toBe(200);
     const planBody = await planRes.json();
-    expect(planBody.format_version).toBe("1.0");
+    expect(planBody).toMatchObject({
+      format_version: "1.2",
+      terraform_version: "1.9.8",
+      resource_changes: [{ address: "terraform_data.example" }],
+    });
   });
 
   it("manages Team and Organization Authentication Tokens", async () => {
@@ -189,6 +200,26 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       })
     );
     expect(bindTask.status).toBe(201);
+
+    await db.insert(runTaskResults).values({
+      id: `taskrs-${crypto.randomUUID()}`,
+      runId,
+      runTaskId: taskId,
+      status: "passed",
+      message: "Scan complete",
+    });
+    const headers = { Authorization: `Bearer ${userToken}` };
+    const [runResults, taskResults] = await Promise.all([
+      app.handle(new Request(`http://localhost/api/v2/runs/${runId}/run-tasks`, { headers })),
+      app.handle(new Request(`http://localhost/api/v2/run-tasks/${taskId}/task-results`, { headers })),
+    ]);
+    expect(runResults.status).toBe(200);
+    expect(taskResults.status).toBe(200);
+    expect((await runResults.json()).data[0].attributes).toMatchObject({
+      status: "passed",
+      message: "Scan complete",
+    });
+    expect((await taskResults.json()).data).toHaveLength(1);
   });
 
   it("returns Entitlements and Organization Audit Logs", async () => {

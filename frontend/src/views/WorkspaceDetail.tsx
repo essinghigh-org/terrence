@@ -1,7 +1,19 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
+import { toast } from "../components/ui/toast";
+import {
+  WorkspaceHealth,
+  WorkspaceRunTriggers,
+  WorkspaceSshKey,
+} from "../components/WorkspaceConnections";
+import { WorkspaceNotifications } from "../components/WorkspaceNotifications";
+import { WorkspaceSettings } from "../components/WorkspaceSettings";
+import { WorkspaceTeamAccess } from "../components/WorkspaceTeamAccess";
+import { WorkspaceVariables } from "../components/WorkspaceVariables";
+import { WorkspacePolicySets } from "../components/WorkspacePolicySets";
+import { WorkspaceVcs } from "../components/WorkspaceVcs";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2 } from "lucide-react";
@@ -17,6 +29,10 @@ type Workspace = {
     "created-at"?: string;
     [key: string]: unknown;
   };
+  relationships?: {
+    "ssh-key"?: { data: { id: string; type: string } | null };
+    [key: string]: unknown;
+  };
 }
 
 export function WorkspaceDetail(): React.JSX.Element {
@@ -26,32 +42,36 @@ export function WorkspaceDetail(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
 
-  useEffect((): void => {
-    void loadWorkspace();
-  }, [orgName, workspaceName]);
-
-  async function loadWorkspace(): Promise<void> {
+  const loadWorkspace = useCallback(async (): Promise<void> => {
+    setLoading(true);
     try {
-      const data = await fetchApi(`/api/v2/organizations/${orgName ?? ""}/workspaces/${workspaceName ?? ""}`) as { data: Workspace };
+      const data = await fetchApi(
+        `/organizations/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}`,
+      ) as { data: Workspace };
       setWorkspace(data.data);
     } catch {
       console.error("Failed to load workspace");
     } finally {
       setLoading(false);
     }
-  }
+  }, [orgName, workspaceName]);
+
+  useEffect((): void => {
+    void loadWorkspace();
+  }, [loadWorkspace]);
 
   async function handleLock(): Promise<void> {
     if (workspace == null) return;
     try {
       if (workspace.attributes.locked === true) {
-        await fetchApi(`/api/v2/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
+        await fetchApi(`/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
       } else {
-        await fetchApi(`/api/v2/workspaces/${workspace.id}/actions/lock`, { method: "POST" });
+        await fetchApi(`/workspaces/${workspace.id}/actions/lock`, { method: "POST" });
       }
       void loadWorkspace();
+      toast.add({ title: workspace.attributes.locked === true ? "Workspace unlocked" : "Workspace locked", type: "success" });
     } catch {
-      alert("Failed to toggle lock");
+      toast.add({ title: "Failed to toggle workspace lock", type: "error" });
     }
   }
 
@@ -59,13 +79,18 @@ export function WorkspaceDetail(): React.JSX.Element {
   if (workspace == null) return <div className="p-8 text-gray-500">Workspace not found</div>;
 
   const createdAt = workspace.attributes["created-at"];
-  const vcsRepo = workspace.attributes["vcs-repo"] as { identifier?: string; branch?: string } | null | undefined;
-
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "runs", label: "Runs" },
     { id: "states", label: "States" },
     { id: "variables", label: "Variables" },
+    { id: "team-access", label: "Team access" },
+    { id: "notifications", label: "Notifications" },
+    { id: "policy-sets", label: "Policy sets" },
+    { id: "run-triggers", label: "Run triggers" },
+    { id: "ssh-key", label: "SSH key" },
+    { id: "vcs", label: "VCS" },
+    { id: "health", label: "Health" },
     { id: "settings", label: "Settings" },
   ];
 
@@ -119,7 +144,7 @@ export function WorkspaceDetail(): React.JSX.Element {
 
       {/* Navigation Tabs */}
       <div className="border-b border-gray-200 mb-6">
-        <nav className="flex gap-6">
+        <nav className="flex flex-wrap gap-x-6 gap-y-2">
           {tabs.map((tab: Readonly<{ id: string; label: string }>): React.JSX.Element => (
             <button
               key={tab.id}
@@ -207,31 +232,44 @@ export function WorkspaceDetail(): React.JSX.Element {
 
         {activeTab === "runs" && <RunList workspaceId={workspace.id} />}
         {activeTab === "states" && <StateHistory workspaceId={workspace.id} />}
-        {activeTab === "variables" && <div className="text-gray-500">Variables configuration goes here.</div>}
-
-{activeTab === "settings" && (
-  <div className="flex flex-col gap-6 max-w-4xl">
-    <div className="bg-white border border-gray-200 rounded-md shadow-sm p-6">
-      <h3 className="text-lg font-semibold mb-4">Version Control</h3>
-      <p className="text-sm text-gray-500 mb-6">Connect this workspace to a VCS repository to automatically trigger runs on push or pull requests.</p>
-
-      {vcsRepo != null ? (
-        <div className="p-4 bg-gray-50 border border-gray-200 rounded-md">
-          <p className="font-medium">{vcsRepo.identifier}</p>
-          <p className="text-sm text-gray-500">Branch: {vcsRepo.branch ?? "default"}</p>
-          <div className="mt-4">
-            <Button variant="destructive" size="sm" disabled title="Unavailable until the disconnect API is implemented">Disconnect</Button>
-          </div>
-        </div>
-      ) : (
-        <div className="text-sm text-gray-600">
-          <p>No VCS repository is connected to this workspace.</p>
-          <p className="mt-2">To connect a repository, use the global Create Workspace flow or the API.</p>
-        </div>
-      )}
-    </div>
-  </div>
-)}
+        {activeTab === "variables" && <WorkspaceVariables workspaceId={workspace.id} />}
+        {activeTab === "team-access" && (
+          <WorkspaceTeamAccess orgName={orgName ?? ""} workspaceId={workspace.id} />
+        )}
+        {activeTab === "notifications" && <WorkspaceNotifications workspaceId={workspace.id} />}
+        {activeTab === "policy-sets" && <WorkspacePolicySets workspaceId={workspace.id} />}
+        {activeTab === "run-triggers" && (
+          <WorkspaceRunTriggers orgName={orgName ?? ""} workspaceId={workspace.id} />
+        )}
+        {activeTab === "ssh-key" && (
+          <WorkspaceSshKey
+            key={workspace.id}
+            orgName={orgName ?? ""}
+            workspaceId={workspace.id}
+            initialSshKeyId={workspace.relationships?.["ssh-key"]?.data?.id ?? null}
+          />
+        )}
+        {activeTab === "health" && (
+          <WorkspaceHealth
+            key={workspace.id}
+            workspace={workspace}
+            onSaved={(saved: Workspace): void => { setWorkspace(saved); }}
+          />
+        )}
+        {activeTab === "vcs" && (
+          <WorkspaceVcs
+            key={workspace.id}
+            workspace={workspace}
+            onSaved={(saved): void => { setWorkspace(saved); }}
+          />
+        )}
+        {activeTab === "settings" && (
+          <WorkspaceSettings
+            key={workspace.id}
+            workspace={workspace}
+            onSaved={(saved: Workspace): void => { setWorkspace(saved); }}
+          />
+        )}
 
       </div>
     </div>

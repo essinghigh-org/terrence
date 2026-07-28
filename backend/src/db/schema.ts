@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
 import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
@@ -7,6 +8,7 @@ export const users = sqliteTable("users", {
   email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
   isSiteAdmin: integer("is_site_admin", { mode: "boolean" }).default(false),
+  mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
 });
 
 export const organizations = sqliteTable("organizations", {
@@ -14,7 +16,50 @@ export const organizations = sqliteTable("organizations", {
   name: text("name").notNull().unique(),
   defaultIacBinary: text("default_iac_binary").default("tofu"),
   defaultTerraformVersion: text("default_terraform_version").default("latest"),
+  assessmentsEnforced: integer("assessments_enforced", { mode: "boolean" }).notNull().default(false),
+  globalModuleSharing: integer("global_module_sharing", { mode: "boolean" }).notNull().default(false),
+  globalProviderSharing: integer("global_provider_sharing", { mode: "boolean" }).notNull().default(false),
+  samlEnabled: integer("saml_enabled", { mode: "boolean" }).notNull().default(false),
+  ownersTeamSamlRoleId: text("owners_team_saml_role_id"),
 });
+
+export const samlSettings = sqliteTable("saml_settings", {
+  id: text("id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  debug: integer("debug", { mode: "boolean" }).notNull().default(false),
+  oldIdpCert: text("old_idp_cert"),
+  idpCert: text("idp_cert"),
+  sloEndpointUrl: text("slo_endpoint_url"),
+  ssoEndpointUrl: text("sso_endpoint_url"),
+  attrUsername: text("attr_username").notNull().default("Username"),
+  attrGroups: text("attr_groups").notNull().default("MemberOf"),
+  attrSiteAdmin: text("attr_site_admin").notNull().default("SiteAdmin"),
+  siteAdminRole: text("site_admin_role").notNull().default("site-admins"),
+  ssoApiTokenSessionTimeout: integer("sso_api_token_session_timeout").notNull().default(1_209_600),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const registryPartnerships = sqliteTable("registry_partnerships", {
+  id: text("id").primaryKey(),
+  producerOrgId: text("producer_org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  consumerOrgId: text("consumer_org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  modules: integer("modules", { mode: "boolean" }).notNull().default(false),
+  providers: integer("providers", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_partnerships_producer_consumer_idx").on(table.producerOrgId, table.consumerOrgId),
+]);
+
+export const reservedTagKeys = sqliteTable("reserved_tag_keys", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  disableOverrides: integer("disable_overrides", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("reserved_tag_keys_org_key_idx").on(table.orgId, table.key),
+]);
 
 export const organizationMemberships = sqliteTable("organization_memberships", {
   id: text("id").primaryKey(),
@@ -31,6 +76,7 @@ export const teams = sqliteTable("teams", {
   description: text("description"),
   visibility: text("visibility").notNull().default("organization"), // 'organization' or 'secret'
   ssoTeamId: text("sso_team_id"),
+  organizationAccess: text("organization_access", { mode: "json" }).$type<Record<string, boolean>>().notNull().default({}),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("teams_org_name_idx").on(table.orgId, table.name),
@@ -54,9 +100,11 @@ export const projects = sqliteTable("projects", {
   autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   defaultAgentPoolId: text("default_agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
+  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),
+  uniqueIndex("projects_org_default_idx").on(table.orgId).where(sql`${table.isDefault} = 1`),
 ]);
 
 export const projectTags = sqliteTable("project_tags", {
@@ -101,10 +149,12 @@ export const workspaces = sqliteTable("workspaces", {
   allowDestroyPlan: integer("allow_destroy_plan", { mode: "boolean" }).default(true),
   globalRemoteState: integer("global_remote_state", { mode: "boolean" }).default(false),
   projectRemoteState: integer("project_remote_state", { mode: "boolean" }).default(false),
+  executionMode: text("execution_mode").notNull().default("remote"),
   agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   assessmentsEnabled: integer("assessments_enabled", { mode: "boolean" }).default(false),
   autoDestroyAt: text("auto_destroy_at"),
   autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
+  inheritsProjectAutoDestroy: integer("inherits_project_auto_destroy", { mode: "boolean" }).notNull().default(false),
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
@@ -123,8 +173,17 @@ export const dataRetentionPolicies = sqliteTable("data_retention_policies", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().unique().references(() => workspaces.id, { onDelete: "cascade" }),
   stateVersionsCount: integer("state_versions_count"),
+  deleteOlderThanNDays: integer("delete_older_than_n_days"),
   autoDestroyAt: text("auto_destroy_at"),
   autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const organizationDataRetentionPolicies = sqliteTable("organization_data_retention_policies", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }),
+  stateVersionsCount: integer("state_versions_count"),
+  deleteOlderThanNDays: integer("delete_older_than_n_days"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -133,7 +192,7 @@ export const teamWorkspaces = sqliteTable("team_workspaces", {
   teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   access: text("access").notNull().default("write"), // 'read', 'plan', 'write', 'admin', 'custom'
-  permissions: text("permissions", { mode: "json" }).$type<Record<string, boolean>>(),
+  permissions: text("permissions", { mode: "json" }).$type<Record<string, unknown>>(),
 }, (table) => [
   uniqueIndex("team_workspaces_team_workspace_idx").on(table.teamId, table.workspaceId),
 ]);
@@ -142,6 +201,7 @@ export const notificationConfigurations = sqliteTable("notification_configuratio
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
   teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams'
   url: text("url").notNull(),
@@ -174,12 +234,16 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
   error: text("error"),
   errorMessage: text("error_message"),
+  softDeletedAt: integer("soft_deleted_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "set null" }),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
+  agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
   status: text("status").notNull().default("pending"),
   message: text("message"),
   isDestroy: integer("is_destroy", { mode: "boolean" }).default(false),
@@ -204,8 +268,48 @@ export const runs = sqliteTable("runs", {
   applyResourceChanges: integer("apply_resource_changes"),
   applyResourceDestructions: integer("apply_resource_destructions"),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull(),
 });
+
+export const assessmentResults = sqliteTable("assessment_results", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"), // 'pending', 'running', 'completed', 'errored', 'canceled'
+  succeeded: integer("succeeded", { mode: "boolean" }),
+  drifted: integer("drifted", { mode: "boolean" }),
+  errorMessage: text("error_message"),
+  resourcesDrifted: integer("resources_drifted").notNull().default(0),
+  resourcesUndrifted: integer("resources_undrifted").notNull().default(0),
+  allChecksSucceeded: integer("all_checks_succeeded", { mode: "boolean" }),
+  checksPassed: integer("checks_passed").notNull().default(0),
+  checksFailed: integer("checks_failed").notNull().default(0),
+  checksErrored: integer("checks_errored").notNull().default(0),
+  checksUnknown: integer("checks_unknown").notNull().default(0),
+  jsonOutput: text("json_output", { mode: "json" }).$type<Record<string, unknown>>(),
+  jsonSchema: text("json_schema", { mode: "json" }).$type<Record<string, unknown>>(),
+  logOutput: text("log_output"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  completedAt: integer("completed_at"),
+}, (table) => [
+  index("assessment_results_workspace_created_idx").on(table.workspaceId, table.createdAt),
+]);
+
+export const assessmentCheckResults = sqliteTable("check_results", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  assessmentResultId: text("assessment_result_id").references(() => assessmentResults.id, { onDelete: "cascade" }),
+  runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  address: text("address").notNull(),
+  kind: text("kind").notNull().default("check"),
+  status: text("status").notNull(), // 'passed', 'failed', 'errored', 'unknown'
+  message: text("message"),
+  detail: text("detail", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("check_results_assessment_idx").on(table.assessmentResultId),
+  index("check_results_run_idx").on(table.runId),
+]);
 
 export const logs = sqliteTable("logs", {
   id: text("id").primaryKey(),
@@ -229,6 +333,21 @@ export const apiTokens = sqliteTable("api_tokens", {
   expiresAt: integer("expires_at"),
 });
 
+export const refreshSessions = sqliteTable("refresh_sessions", {
+  id: text("id").primaryKey(),
+  familyId: text("family_id").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accessTokenId: text("access_token_id").notNull(),
+  rotatedAt: integer("rotated_at"),
+  revokedAt: integer("revoked_at"),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("refresh_sessions_family_idx").on(table.familyId),
+  index("refresh_sessions_user_idx").on(table.userId),
+]);
+
 export const stateVersions = sqliteTable("state_versions", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
@@ -240,6 +359,8 @@ export const stateVersions = sqliteTable("state_versions", {
   vcsCommitSha: text("vcs_commit_sha"),
   vcsCommitUrl: text("vcs_commit_url"),
   runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  intermediate: integer("intermediate", { mode: "boolean" }).notNull().default(false),
+  softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
@@ -294,6 +415,7 @@ export const variableSetVariables = sqliteTable("variable_set_variables", {
 export const oauthClients = sqliteTable("oauth_clients", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   serviceProvider: text("service_provider").notNull().default("github"), // 'github', 'gitlab', 'bitbucket', etc.
   apiUrl: text("api_url"),
@@ -325,8 +447,24 @@ export const policySets = sqliteTable("policy_sets", {
   policyToolVersion: text("policy_tool_version"),
   policiesPath: text("policies_path"),
   vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; githubAppInstallationId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
+  policyUpdatePatterns: text("policy_update_patterns", { mode: "json" }).$type<string[]>().notNull().default([]),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const policySetVersions = sqliteTable("policy_set_versions", {
+  id: text("id").primaryKey(),
+  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  source: text("source").notNull().default("tfe-api"),
+  status: text("status").notNull().default("pending"),
+  statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; readyAt?: string; erroredAt?: string }>().notNull().default({}),
+  ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ provider?: string; repository?: string; commitSha?: string; branch?: string; tag?: string; manifest?: string; policyCount?: number }>(),
+  error: text("error"),
+  archivePath: text("archive_path"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("policy_set_versions_set_created_idx").on(table.policySetId, table.createdAt),
+]);
 
 export const policySetWorkspaces = sqliteTable("policy_set_workspaces", {
   id: text("id").primaryKey(),
@@ -339,10 +477,13 @@ export const policySetWorkspaces = sqliteTable("policy_set_workspaces", {
 export const policies = sqliteTable("policies", {
   id: text("id").primaryKey(),
   policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  policySetVersionId: text("policy_set_version_id").references(() => policySetVersions.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   description: text("description"),
   enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"), // 'hard-mandatory', 'soft-mandatory', 'advisory'
   query: text("query"),
+  source: text("source"),
+  sourcePath: text("source_path"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -374,9 +515,49 @@ export const registryModuleVersions = sqliteTable("registry_module_versions", {
   version: text("version").notNull(),
   status: text("status").notNull().default("pending"), // 'pending', 'ok', 'errored'
   archivePath: text("archive_path"),
+  keyId: text("key_id"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version),
+]);
+
+export const noCodeModules = sqliteTable("no_code_modules", {
+  id: text("id").primaryKey(),
+  moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+  versionId: text("version_id").notNull().references(() => registryModuleVersions.id, { onDelete: "cascade" }),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("no_code_modules_module_idx").on(table.moduleId),
+]);
+
+export const noCodeVariableOptions = sqliteTable("no_code_variable_options", {
+  id: text("id").primaryKey(),
+  noCodeModuleId: text("no_code_module_id").notNull().references(() => noCodeModules.id, { onDelete: "cascade" }),
+  variableName: text("variable_name").notNull(),
+  variableType: text("variable_type").notNull(),
+  options: text("options", { mode: "json" }).$type<unknown[]>().notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("no_code_variable_options_module_name_idx").on(table.noCodeModuleId, table.variableName),
+]);
+
+export const noCodeWorkspaceConfigurations = sqliteTable("no_code_workspace_configurations", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  noCodeModuleId: text("no_code_module_id").references(() => noCodeModules.id, { onDelete: "set null" }),
+  moduleId: text("module_id").references(() => registryModules.id, { onDelete: "set null" }),
+  moduleVersionId: text("module_version_id").references(() => registryModuleVersions.id, { onDelete: "set null" }),
+  configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "set null" }),
+  moduleSource: text("module_source").notNull(),
+  moduleVersion: text("module_version").notNull(),
+  inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("no_code_workspace_configurations_workspace_idx").on(table.workspaceId),
+  index("no_code_workspace_configurations_module_idx").on(table.noCodeModuleId),
 ]);
 
 export const registryProviders = sqliteTable("registry_providers", {
@@ -390,11 +571,28 @@ export const registryProviders = sqliteTable("registry_providers", {
   uniqueIndex("registry_providers_ns_type_idx").on(table.namespace, table.type),
 ]);
 
+export const registryGpgKeys = sqliteTable("registry_gpg_keys", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  namespace: text("namespace").notNull(),
+  keyId: text("key_id").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  asciiArmor: text("ascii_armor").notNull(),
+  source: text("source").notNull().default(""),
+  sourceUrl: text("source_url"),
+  trustSignature: text("trust_signature").notNull().default(""),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_gpg_keys_namespace_key_idx").on(table.namespace, table.keyId),
+]);
+
 export const registryProviderVersions = sqliteTable("registry_provider_versions", {
   id: text("id").primaryKey(),
   providerId: text("provider_id").notNull().references(() => registryProviders.id, { onDelete: "cascade" }),
   version: text("version").notNull(),
   protocols: text("protocols", { mode: "json" }).$type<string[]>().default(["5.0"]),
+  keyId: text("key_id"),
   shasumsUrl: text("shasums_url"),
   shasumsSignatureUrl: text("shasums_signature_url"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
@@ -422,6 +620,21 @@ export const runComments = sqliteTable("run_comments", {
   body: text("body").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const changeRequests = sqliteTable("change_requests", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  subject: text("subject").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedAt: integer("resolved_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt),
+]);
 
 export const policySetProjects = sqliteTable("policy_set_projects", {
   id: text("id").primaryKey(),
@@ -464,6 +677,22 @@ export const agentPools = sqliteTable("agent_pools", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
+export const agentPoolAllowedWorkspaces = sqliteTable("agent_pool_allowed_workspaces", {
+  id: text("id").primaryKey(),
+  agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("agent_pool_allowed_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId),
+]);
+
+export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects", {
+  id: text("id").primaryKey(),
+  agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("agent_pool_allowed_projects_pool_project_idx").on(table.agentPoolId, table.projectId),
+]);
+
 export const agentPoolTokens = sqliteTable("agent_pool_tokens", {
   id: text("id").primaryKey(),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
@@ -484,6 +713,23 @@ export const agents = sqliteTable("agents", {
   lastPingAt: integer("last_ping_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const agentJobs = sqliteTable("agent_jobs", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+  agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+  phase: text("phase").notNull(), // 'plan' or 'apply'
+  status: text("status").notNull().default("queued"), // 'queued', 'claimed', 'completed', 'errored'
+  result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  claimedAt: integer("claimed_at"),
+  completedAt: integer("completed_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("agent_jobs_run_phase_idx").on(table.runId, table.phase),
+  index("agent_jobs_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
+]);
 
 
 export const runTasks = sqliteTable("run_tasks", {

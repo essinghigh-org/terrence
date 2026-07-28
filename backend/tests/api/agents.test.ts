@@ -6,6 +6,7 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
   const orgName = `agent-org-${crypto.randomUUID()}`;
   let poolId: string;
   let agentId: string;
+  let workspaceId: string;
 
   beforeAll(async () => {
     // Register user & login
@@ -71,15 +72,152 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
     expect(body.data.id).toBeDefined();
     expect(body.data.attributes.name).toBe("homelab-agents");
     expect(body.data.attributes["agent-count"]).toBe(0);
+    expect(body.data.relationships.workspaces.data).toEqual([]);
+    expect(body.data.relationships["authentication-tokens"].links.related).toContain("/authentication-tokens");
     poolId = body.data.id;
   });
 
+  test("agent pool exposes assigned workspace and related-resource relationships", async () => {
+    const createWorkspace = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/workspaces`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "workspaces",
+            attributes: {
+              name: `agent-workspace-${crypto.randomUUID().slice(0, 8)}`,
+              "execution-mode": "agent",
+              "agent-pool-id": poolId,
+            },
+          },
+        }),
+      }),
+    );
+    expect(createWorkspace.status).toBe(201);
+    workspaceId = (await createWorkspace.json()).data.id;
+
+    const showPool = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${poolId}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(showPool.status).toBe(200);
+    const pool = (await showPool.json()).data;
+    expect(pool.relationships.workspaces.data).toContainEqual({
+      id: workspaceId,
+      type: "workspaces",
+    });
+    expect(pool.relationships.agents.links.related).toBe(`/api/v2/agent-pools/${poolId}/agents`);
+    expect(pool.links.self).toBe(`/api/v2/agent-pools/${poolId}`);
+  });
+
+  test("team tokens require manage-agent-pools for pool mutations", async () => {
+    const createTeam = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/teams`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "teams",
+            attributes: { name: `agent-managers-${crypto.randomUUID().slice(0, 8)}` },
+          },
+        }),
+      }),
+    );
+    expect(createTeam.status).toBe(201);
+    const teamId = (await createTeam.json()).data.id as string;
+    const createToken = await app.handle(
+      new Request(`http://localhost/api/v2/teams/${teamId}/authentication-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { description: "agent pool manager" } } }),
+      }),
+    );
+    expect(createToken.status).toBe(201);
+    const teamToken = (await createToken.json()).data.attributes.token as string;
+    const poolPayload = JSON.stringify({
+      data: { type: "agent-pools", attributes: { name: `scoped-${crypto.randomUUID().slice(0, 8)}` } },
+    });
+
+    const denied = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/agent-pools`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${teamToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: poolPayload,
+      }),
+    );
+    expect(denied.status).toBe(404);
+
+    const grant = await app.handle(
+      new Request(`http://localhost/api/v2/teams/${teamId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "teams",
+            attributes: { "organization-access": { "manage-agent-pools": true } },
+          },
+        }),
+      }),
+    );
+    expect(grant.status).toBe(200);
+
+    const allowed = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/agent-pools`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${teamToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: poolPayload,
+      }),
+    );
+    expect(allowed.status).toBe(201);
+    const teamPoolId = (await allowed.json()).data.id as string;
+    const removed = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${teamPoolId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${teamToken}` },
+      }),
+    );
+    expect(removed.status).toBe(204);
+  });
+
   test("should register/create an agent in pool", async () => {
+    const tokenResponse = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${poolId}/authentication-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { description: "worker registration" } } }),
+      }),
+    );
+    expect(tokenResponse.status).toBe(201);
+    const tokenData = (await tokenResponse.json()).data;
+
     const res = await app.handle(
       new Request(`http://localhost/api/v2/agent-pools/${poolId}/agents`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${userToken}`,
+          Authorization: `Bearer ${tokenData.attributes.token}`,
           "Content-Type": "application/vnd.api+json",
         },
         body: JSON.stringify({
@@ -103,6 +241,16 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
     expect(body.data.attributes.status).toBe("idle");
     expect(body.data.attributes["ip-address"]).toBe("192.168.1.50");
     agentId = body.data.id;
+
+    const tokensResponse = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${poolId}/authentication-tokens`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    const usedToken = (await tokensResponse.json()).data.find(
+      (token: { id: string }): boolean => token.id === tokenData.id,
+    );
+    expect(usedToken.attributes["last-used-at"]).not.toBeNull();
   });
 
   test("should list agents in pool and reflect updated agent-count on pool", async () => {
@@ -141,6 +289,48 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
     const body = await res.json();
     expect(body.data.id).toBe(agentId);
     expect(body.data.attributes.name).toBe("worker-node-1");
+  });
+
+  test("generic authentication-token endpoints support agent pool tokens", async () => {
+    const createResponse = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${poolId}/authentication-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { description: "generic endpoint test" } } }),
+      }),
+    );
+    expect(createResponse.status).toBe(201);
+    const token = (await createResponse.json()).data;
+
+    const showResponse = await app.handle(
+      new Request(`http://localhost/api/v2/authentication-tokens/${token.id}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(showResponse.status).toBe(200);
+    const shown = (await showResponse.json()).data;
+    expect(shown.id).toBe(token.id);
+    expect(shown.attributes.description).toBe("generic endpoint test");
+    expect(shown.attributes.token).toBeUndefined();
+    expect(shown.relationships["agent-pool"].data.id).toBe(poolId);
+
+    const deleteResponse = await app.handle(
+      new Request(`http://localhost/api/v2/authentication-tokens/${token.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(deleteResponse.status).toBe(204);
+
+    const missingResponse = await app.handle(
+      new Request(`http://localhost/api/v2/authentication-tokens/${token.id}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(missingResponse.status).toBe(404);
   });
 
   test("should delete agent and decrease agent-count", async () => {

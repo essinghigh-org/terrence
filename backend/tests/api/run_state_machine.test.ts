@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { costEstimateResource } from "../../src/routes/misc";
 import {
   apiTokens,
   organizationMemberships,
@@ -274,7 +275,7 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
     const body = await res.json();
     const attrs = body.data.attributes;
 
-    expect(attrs.status).toBe("finished");
+    expect(attrs.status).toBe("queued");
     expect(attrs["prior-monthly-cost"]).toBe("0.0");
     expect(attrs["proposed-monthly-cost"]).toBe("0.0");
     expect(attrs["delta-monthly-cost"]).toBe("0.0");
@@ -282,6 +283,29 @@ describe("TFE API v2 - Cost estimate stub fields", () => {
     expect(typeof attrs["matched-resources-count"]).toBe("number");
     expect(typeof attrs["unmatched-resources-count"]).toBe("number");
     expect(attrs).toHaveProperty("error-message");
+    expect(attrs.resources).toEqual({});
+
+    for (const [runStatus, expectedStatus] of [
+      ["cost_estimating", "pending"],
+      ["planned_and_finished", "skipped"],
+      ["errored", "errored"],
+      ["canceled", "canceled"],
+    ] as const) {
+      const state = costEstimateResource({ id: runId, status: runStatus, statusTimestamps: null });
+      expect((state["attributes"] as Record<string, unknown>)["status"]).toBe(expectedStatus);
+    }
+
+    const finished = costEstimateResource({
+      id: runId,
+      status: "applied",
+      statusTimestamps: {
+        "cost-estimating-at": "2026-01-01T00:00:00.000Z",
+        "cost-estimated-at": "2026-01-01T00:00:01.000Z",
+      },
+    });
+    const finishedAttributes = finished["attributes"] as Record<string, unknown>;
+    expect(finishedAttributes["status"]).toBe("finished");
+    expect((finishedAttributes["status-timestamps"] as Record<string, unknown>)["finished-at"]).toBe("2026-01-01T00:00:01.000Z");
   });
 
   it("GET /api/v2/cost-estimates/:ce_id returns all required stub fields", async () => {

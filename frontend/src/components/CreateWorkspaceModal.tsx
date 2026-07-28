@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { toast } from "@/components/ui/toast";
 
 type CreateWorkspaceModalProps = {
   orgName: string;
@@ -35,7 +36,11 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     const normalizedVcsIdentifier = vcsIdentifier.trim();
     const normalizedInstallationId = ghAppInstallationId.trim();
     if ((normalizedVcsIdentifier === "") !== (normalizedInstallationId === "")) {
-      alert("Provide both a repository identifier and GitHub App installation ID.");
+      toast.add({
+        title: "Incomplete VCS connection",
+        description: "Provide both a repository identifier and GitHub App installation ID.",
+        type: "error",
+      });
       return;
     }
     setLoading(true);
@@ -69,9 +74,10 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setTerraformVersion("latest");
       setVcsIdentifier("");
       setGhAppInstallationId("");
+      toast.add({ title: "Workspace created", type: "success" });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create workspace";
-      alert(errorMessage);
+      toast.add({ title: "Could not create workspace", description: errorMessage, type: "error" });
     } finally {
       setLoading(false);
     }

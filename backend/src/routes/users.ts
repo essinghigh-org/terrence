@@ -1,11 +1,20 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, apiTokens, organizationMemberships, organizations, teamMemberships } from "../db/schema";
+import {
+  users,
+  apiTokens,
+  agentPools,
+  agentPoolTokens,
+  organizationMemberships,
+  organizations,
+  teams,
+  teamMemberships,
+} from "../db/schema";
 import { eq, and, desc, count, inArray, like } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
-import { checkOrgPermission, pageRequest, pagination } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -15,7 +24,8 @@ type ParamCtx = Readonly<{
   query: Readonly<Record<string, string>>;
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
-  orgId?: string | null;
+  orgId: string | null;
+  teamId: string | null;
   request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
@@ -115,10 +125,10 @@ export const userRoutes = new Elysia({ name: "users" })
     return {};
   })
   // --- Org Memberships ---
-  .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) {
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -160,6 +170,8 @@ export const userRoutes = new Elysia({ name: "users" })
       for (const t of teamRelData) {
         if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).id === "string") {
           const tId = (t as Record<string, unknown>).id as string;
+          const team = await db.query.teams.findFirst({ where: eq(teams.id, tId) });
+          if (team?.orgId !== org.id) continue;
           teamIds.push(tId);
           try {
             await db.insert(teamMemberships).values({
@@ -176,10 +188,10 @@ export const userRoutes = new Elysia({ name: "users" })
     (set as { status: number }).status = 201;
     return { data: orgMembershipResource(mem, targetUser, teamIds) };
   })
-  .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const mems = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id) });
@@ -195,10 +207,10 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     return result;
   })
-  .get("/api/v2/organization-memberships/:id", async ({ params, query, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organization-memberships/:id", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const memId = params["id"] ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-    if (mem === undefined || !(await checkOrgPermission(user?.id, mem.orgId, "member", tokenOrgId))) {
+    if (mem === undefined || !(await checkOrgPermission(user?.id, mem.orgId, "member", tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, mem.userId) });
@@ -210,10 +222,10 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     return result;
   })
-  .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const memId = params["id"] ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
-    if (mem === undefined || !(await checkOrgPermission(user?.id, mem.orgId, "owner", tokenOrgId))) {
+    if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
@@ -237,23 +249,60 @@ export const userRoutes = new Elysia({ name: "users" })
     const totalCount = countRows[0]?.total ?? 0;
     return { data: tokens.map((token: Readonly<typeof apiTokens.$inferSelect>): Record<string, unknown> => tokenResource(token)), ...pagination(request, number, size, totalCount) };
   })
-  .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const tokenId = params["token_id"] ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
-    if (token === undefined || user?.id !== token.userId) {
+    if (token !== undefined && user?.id === token.userId) {
+      return { data: tokenResource(token) };
+    }
+    const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
+    const pool = agentToken === undefined
+      ? undefined
+      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, agentToken.agentPoolId) });
+    if (
+      agentToken === undefined
+      || pool === undefined
+      || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-agent-pools"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: tokenResource(token) };
+    return {
+      data: {
+        id: agentToken.id,
+        type: "authentication-tokens",
+        attributes: {
+          description: agentToken.description,
+          "created-at": new Date(agentToken.createdAt).toISOString(),
+          "last-used-at": agentToken.lastUsedAt === null ? null : new Date(agentToken.lastUsedAt).toISOString(),
+        },
+        relationships: {
+          "agent-pool": { data: { id: pool.id, type: "agent-pools" } },
+        },
+      },
+    };
   })
-  .delete("/api/v2/authentication-tokens/:token_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const tokenId = params["token_id"] ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
-    if (token === undefined || user?.id !== token.userId) {
+    if (token !== undefined && user?.id === token.userId) {
+      await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+      (set as { status: number }).status = 204;
+      return {};
+    }
+    const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
+    const pool = agentToken === undefined
+      ? undefined
+      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, agentToken.agentPoolId) });
+    if (
+      agentToken === undefined
+      || pool === undefined
+      || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-agent-pools"))
+    ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+    await db.delete(agentPoolTokens).where(eq(agentPoolTokens.id, tokenId));
     (set as { status: number }).status = 204;
     return {};
   })

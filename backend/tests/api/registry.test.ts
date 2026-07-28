@@ -82,13 +82,13 @@ describe("Private Module & Provider Registries API contract", () => {
     });
 
     // 3. Query module versions via standard registry protocol
-    const verRes = await app.handle(new Request(`http://terrence.test/api/registry/v1/modules/${orgName}/vpc/aws/versions`));
+    const verRes = await request(`/api/registry/v1/modules/${orgName}/vpc/aws/versions`);
     expect(verRes.status).toBe(200);
     const verBody = await verRes.json();
     expect(verBody.modules[0].versions[0].version).toBe("1.0.0");
 
     // 4. Download header redirection for module
-    const dlRes = await app.handle(new Request(`http://terrence.test/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/download`));
+    const dlRes = await request(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/download`);
     expect(dlRes.status).toBe(204);
     expect(dlRes.headers.get("X-Terraform-Get")).toBe(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive`);
 
@@ -134,17 +134,40 @@ describe("Private Module & Provider Registries API contract", () => {
     });
 
     // 3. Query provider versions via standard protocol
-    const provVerRes = await app.handle(new Request(`http://terrence.test/api/registry/v1/providers/${orgName}/customcloud/versions`));
+    const provVerRes = await request(`/api/registry/v1/providers/${orgName}/customcloud/versions`);
     expect(provVerRes.status).toBe(200);
     const provVerBody = await provVerRes.json();
     expect(provVerBody.versions[0].version).toBe("2.1.0");
 
     // 4. Download binary metadata via standard protocol
-    const dlPlatRes = await app.handle(new Request(`http://terrence.test/api/registry/v1/providers/${orgName}/customcloud/2.1.0/download/linux/amd64`));
+    const dlPlatRes = await request(`/api/registry/v1/providers/${orgName}/customcloud/2.1.0/download/linux/amd64`);
     expect(dlPlatRes.status).toBe(200);
     const dlPlatBody = await dlPlatRes.json();
     expect(dlPlatBody.download_url).toBe("https://example.com/provider.zip");
     expect(dlPlatBody.shasum).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+    // 5. Consume the same release through the authenticated network mirror protocol
+    const mirrorPath = `/api/registry/v1/provider-mirror/terrence.test/${orgName}/customcloud`;
+    const anonymousMirrorRes = await app.handle(new Request(`http://terrence.test${mirrorPath}/index.json`));
+    expect(anonymousMirrorRes.status).toBe(404);
+    expect((await request(`/api/registry/v1/provider-mirror/registry.terraform.io/${orgName}/customcloud/index.json`)).status).toBe(404);
+
+    const mirrorIndexRes = await request(`${mirrorPath}/index.json`);
+    expect(mirrorIndexRes.status).toBe(200);
+    expect(mirrorIndexRes.headers.get("Content-Type")).toContain("application/json");
+    expect(await mirrorIndexRes.json()).toEqual({ versions: { "2.1.0": {} } });
+
+    const mirrorPackagesRes = await request(`${mirrorPath}/2.1.0.json`);
+    expect(mirrorPackagesRes.status).toBe(200);
+    expect(await mirrorPackagesRes.json()).toEqual({
+      archives: {
+        linux_amd64: {
+          url: "https://example.com/provider.zip",
+          hashes: ["zh:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+        },
+      },
+    });
+    expect((await request(`${mirrorPath}/9.9.9.json`)).status).toBe(404);
 
     // Clean up
     await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platId));

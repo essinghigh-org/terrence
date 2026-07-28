@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, organizationMemberships, apiTokens, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, type users } from "../db/schema";
+import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, apiTokens, samlSettings, teams, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { organizationResource } from "../lib/response";
-import { checkOrgPermission, pageRequest, pagination } from "../lib/utils";
+import { applyDataRetentionGarbageCollection, auditLog, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 
@@ -18,6 +18,43 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
+type ReservedTagKey = Readonly<typeof reservedTagKeys.$inferSelect>;
+
+function reservedTagKeyInput(body: unknown): Readonly<{ key: string; disableOverrides: boolean }> | Readonly<{ error: string }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const rawData = payload["data"];
+  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
+  const rawAttributes = data["attributes"];
+  const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
+  if (data["type"] !== "reserved-tag-keys") return { error: "data.type must be reserved-tag-keys" };
+  const rawKey = attributes["key"];
+  if (typeof rawKey !== "string" || typeof attributes["disable-overrides"] !== "boolean") {
+    return { error: "key and disable-overrides are required" };
+  }
+  const key = rawKey.trim();
+  if (key.length === 0 || key.length > 128 || !/^[A-Za-z0-9 .=+@:_-]+$/.test(key)) {
+    return { error: "key must be 1-128 characters and contain only letters, numbers, spaces, or .=+-@:_ characters" };
+  }
+  return { key, disableOverrides: attributes["disable-overrides"] };
+}
+
+function reservedTagKeyResource(tag: ReservedTagKey): Record<string, unknown> {
+  return {
+    id: tag.id,
+    type: "reserved-tag-keys",
+    attributes: {
+      key: tag.key,
+      "disable-overrides": tag.disableOverrides,
+      "created-at": new Date(tag.createdAt).toISOString(),
+      "updated-at": new Date(tag.updatedAt).toISOString(),
+    },
+    relationships: {
+      organization: { data: { id: tag.orgId, type: "organizations" } },
+    },
+    links: { self: `/api/v2/reserved-tags/${tag.id}` },
+  };
+}
+
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
@@ -27,6 +64,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : "tofu";
     const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"].trim() : "latest";
+    const assessmentsEnforced = attributes["assessments-enforced"] === true;
     if (name === "") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
     }
@@ -40,7 +78,16 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     try {
       const id = crypto.randomUUID();
-      const org = { id, name, defaultIacBinary, defaultTerraformVersion };
+      const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
+      const org = {
+        id,
+        name,
+        defaultIacBinary,
+        defaultTerraformVersion,
+        assessmentsEnforced,
+        samlEnabled: saml?.enabled ?? false,
+        ownersTeamSamlRoleId: null,
+      };
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
         await t.insert(organizations).values(org);
@@ -48,6 +95,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
           id: crypto.randomUUID(), userId: user.id, orgId: id, role: "owner",
         });
       });
+      await auditLog("create", "organizations", id, user.id, id, { name });
       (set as { status: number }).status = 201;
       return { data: organizationResource(org) };
     } catch (e: unknown) {
@@ -80,6 +128,100 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const totalCount = countRows[0]?.total ?? 0;
     return { data: orgs.map((o: Readonly<typeof organizations.$inferSelect>): Record<string, unknown> => organizationResource(o)), ...pagination(request, number, size, totalCount) };
   })
+  .get("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const { number, size } = pageRequest(request);
+    const [tags, countRows] = await Promise.all([
+      db.query.reservedTagKeys.findMany({
+        where: eq(reservedTagKeys.orgId, org.id),
+        orderBy: [asc(reservedTagKeys.key)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(reservedTagKeys).where(eq(reservedTagKeys.orgId, org.id)),
+    ]);
+    return {
+      data: tags.map((tag: ReservedTagKey): Record<string, unknown> => reservedTagKeyResource(tag)),
+      ...pagination(request, number, size, countRows[0]?.total ?? 0),
+    };
+  })
+  .post("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const input = reservedTagKeyInput(body);
+    if ("error" in input) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+    }
+    const now = Date.now();
+    const tag = {
+      id: `rtk-${crypto.randomUUID()}`,
+      orgId: org.id,
+      key: input.key,
+      disableOverrides: input.disableOverrides,
+      createdAt: now,
+      updatedAt: now,
+    } satisfies typeof reservedTagKeys.$inferInsert;
+    try {
+      await db.insert(reservedTagKeys).values(tag);
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Reserved tag key already exists" }] };
+      }
+      throw error;
+    }
+    (set as { status: number }).status = 201;
+    return { data: reservedTagKeyResource(tag) };
+  })
+  .patch("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const tagId = params["reserved_tag_key_id"] ?? "";
+    const tag = await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, tagId) });
+    if (tag === undefined || !(await checkOrgPermission(user?.id, tag.orgId, "owner", orgId))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const input = reservedTagKeyInput(body);
+    if ("error" in input) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+    }
+    const updated = { ...tag, key: input.key, disableOverrides: input.disableOverrides, updatedAt: Date.now() };
+    try {
+      await db.update(reservedTagKeys).set({
+        key: updated.key,
+        disableOverrides: updated.disableOverrides,
+        updatedAt: updated.updatedAt,
+      }).where(eq(reservedTagKeys.id, tag.id));
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Reserved tag key already exists" }] };
+      }
+      throw error;
+    }
+    return { data: reservedTagKeyResource(updated) };
+  })
+  .delete("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const tagId = params["reserved_tag_key_id"] ?? "";
+    const tag = await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, tagId) });
+    if (tag === undefined || !(await checkOrgPermission(user?.id, tag.orgId, "owner", orgId))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(reservedTagKeys).where(eq(reservedTagKeys.id, tag.id));
+    (set as { status: number }).status = 204;
+    return {};
+  })
   .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
@@ -109,6 +251,102 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       },
     };
   })
+  .get("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const policy = await db.query.organizationDataRetentionPolicies.findFirst({
+      where: eq(organizationDataRetentionPolicies.organizationId, org.id),
+    });
+    if (policy === undefined) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: policy.id,
+        type: policy.deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
+        attributes: {
+          "state-versions-count": policy.stateVersionsCount,
+          "delete-older-than-n-days": policy.deleteOlderThanNDays,
+        },
+      },
+    };
+  })
+  .post("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? data["attributes"] as Record<string, unknown>
+      : {};
+    const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
+    const rawDeleteOlderThanNDays = attributes["delete-older-than-n-days"] ?? attributes["deleteOlderThanNDays"];
+    if (
+      policyType === "data-retention-policy-delete-olders"
+      && !(typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0)
+    ) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const existing = await db.query.organizationDataRetentionPolicies.findFirst({
+      where: eq(organizationDataRetentionPolicies.organizationId, org.id),
+    });
+    const stateVersionsCount = typeof attributes["state-versions-count"] === "number"
+      ? attributes["state-versions-count"]
+      : existing?.stateVersionsCount ?? null;
+    const deleteOlderThanNDays = policyType === "data-retention-policy-dont-deletes"
+      ? null
+      : typeof rawDeleteOlderThanNDays === "number"
+        ? rawDeleteOlderThanNDays
+        : existing?.deleteOlderThanNDays ?? null;
+    const values = {
+      id: existing?.id ?? `drp-${crypto.randomUUID()}`,
+      organizationId: org.id,
+      stateVersionsCount,
+      deleteOlderThanNDays,
+      createdAt: existing?.createdAt ?? Date.now(),
+    };
+    if (existing === undefined) {
+      await db.insert(organizationDataRetentionPolicies).values(values);
+    } else {
+      await db.update(organizationDataRetentionPolicies).set(values).where(eq(organizationDataRetentionPolicies.id, existing.id));
+    }
+    const organizationWorkspaces = await db.query.workspaces.findMany({
+      where: eq(workspaces.orgId, org.id),
+      columns: { id: true },
+    });
+    const gc: Record<string, unknown> = {};
+    for (const workspace of organizationWorkspaces) {
+      gc[workspace.id] = await applyDataRetentionGarbageCollection(workspace.id);
+    }
+    (set as { status: number }).status = 201;
+    return {
+      data: {
+        id: values.id,
+        type: deleteOlderThanNDays === null ? "data-retention-policy-dont-deletes" : "data-retention-policy-delete-olders",
+        attributes: {
+          "state-versions-count": stateVersionsCount,
+          "delete-older-than-n-days": deleteOlderThanNDays,
+        },
+        meta: { gc },
+      },
+    };
+  })
+  .delete("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const orgName = params["org_name"] ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.delete(organizationDataRetentionPolicies).where(eq(organizationDataRetentionPolicies.organizationId, org.id));
+    (set as { status: number }).status = 204;
+    return {};
+  })
   .patch("/api/v2/organizations/:org_name", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
@@ -121,13 +359,49 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const newName = attributes.name === undefined ? org.name : (typeof attributes.name === "string" ? attributes.name.trim() : "");
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : (org.defaultIacBinary ?? "tofu");
     const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"] : (org.defaultTerraformVersion ?? "latest");
+    const assessmentsEnforced = attributes["assessments-enforced"] === undefined
+      ? org.assessmentsEnforced
+      : attributes["assessments-enforced"] === true;
+    const ownersTeamSamlRoleId = attributes["owners-team-saml-role-id"] === undefined
+      ? org.ownersTeamSamlRoleId
+      : typeof attributes["owners-team-saml-role-id"] === "string"
+        ? attributes["owners-team-saml-role-id"].trim()
+        : attributes["owners-team-saml-role-id"] === null
+          ? null
+          : undefined;
     if (newName === "" || !["tofu", "terraform"].includes(defaultIacBinary) || defaultTerraformVersion.trim() === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
+    if (ownersTeamSamlRoleId === undefined) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id must be a string or null" }] };
+    }
+    if (ownersTeamSamlRoleId !== null && ownersTeamSamlRoleId !== "") {
+      const conflictingTeam = await db.query.teams.findFirst({
+        where: and(eq(teams.orgId, org.id), eq(teams.name, ownersTeamSamlRoleId)),
+      });
+      if (conflictingTeam !== undefined && conflictingTeam.name !== "owners") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id conflicts with an existing team name" }] };
+      }
+    }
     try {
-      const updated = { ...org, name: newName, defaultIacBinary, defaultTerraformVersion: defaultTerraformVersion.trim() };
-      await db.update(organizations).set({ name: updated.name, defaultIacBinary: updated.defaultIacBinary, defaultTerraformVersion: updated.defaultTerraformVersion }).where(eq(organizations.id, org.id));
+      const updated = {
+        ...org,
+        name: newName,
+        defaultIacBinary,
+        defaultTerraformVersion: defaultTerraformVersion.trim(),
+        assessmentsEnforced,
+        ownersTeamSamlRoleId: ownersTeamSamlRoleId === "" ? null : ownersTeamSamlRoleId,
+      };
+      await db.update(organizations).set({
+        name: updated.name,
+        defaultIacBinary: updated.defaultIacBinary,
+        defaultTerraformVersion: updated.defaultTerraformVersion,
+        assessmentsEnforced: updated.assessmentsEnforced,
+        ownersTeamSamlRoleId: updated.ownersTeamSamlRoleId,
+      }).where(eq(organizations.id, org.id));
       return { data: organizationResource(updated) };
     } catch (e: unknown) {
       if (isUniqueConstraintError(e)) {
@@ -141,6 +415,13 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const organizationWorkspaces = await db.query.workspaces.findMany({
+      where: eq(workspaces.orgId, org.id),
+      columns: { id: true },
+    });
+    for (const workspace of organizationWorkspaces) {
+      await deleteWorkspaceData(workspace.id);
     }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;

@@ -36,9 +36,9 @@ export function Register(): React.JSX.Element {
       try {
         const login = await fetchApi("/users/login", {
           method: "POST",
-          body: JSON.stringify({ data: { attributes: { username, password } } }),
-        }) as { data: { attributes: { token: string } } };
-        setAuthToken(login.data.attributes.token);
+          body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
+        }) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
+        setAuthToken(login.data.attributes.token, login.data.attributes["expired-at"], true);
         await navigate("/app");
       } catch (_loginError: unknown) {
         setError("Account created, but failed to log in automatically. Please sign in.");

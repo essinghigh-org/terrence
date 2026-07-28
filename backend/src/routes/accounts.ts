@@ -1,13 +1,33 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, apiTokens, organizations } from "../db/schema";
-import { eq, count } from "drizzle-orm";
+import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams } from "../db/schema";
+import { and, count, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
-import { createHash } from "node:crypto";
-import { type userResource } from "../lib/response";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
+
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const REFRESH_COOKIE = "terrence_refresh";
+// ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
+let refreshRotationQueue = Promise.resolve();
+
+async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = refreshRotationQueue;
+  let release!: () => void;
+  refreshRotationQueue = new Promise<void>((resolve): void => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
 
 type Attrs = Record<string, unknown>;
 type DataPayload = { readonly data?: { readonly attributes?: Attrs; readonly type?: string; readonly id?: string } };
@@ -20,22 +40,195 @@ function extractAttrs(body: unknown): Attrs | undefined {
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
+type RequestInfo = Readonly<{
+  url: string;
+  headers: Readonly<{ get: (name: string) => string | null }>;
+}>;
+
 type ReqCtx = Readonly<{
   body?: unknown;
+  request?: RequestInfo;
   set: SetObj;
 }>;
 
 type AuthReqCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
+  token?: Readonly<{ id: string }> | null;
   orgId?: string | null;
+  teamId?: string | null;
   tokenError?: string | null;
   body?: unknown;
   set: SetObj;
 }>;
 
+function opaqueToken(prefix: string): string {
+  return `${prefix}-${randomBytes(32).toString("base64url")}`;
+}
+
+function tokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function refreshCookie(request: RequestInfo | undefined): string | undefined {
+  for (const part of request?.headers.get("cookie")?.split(";") ?? []) {
+    const separator = part.indexOf("=");
+    if (separator !== -1 && part.slice(0, separator).trim() === REFRESH_COOKIE) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return undefined;
+}
+
+function secureRequest(request: RequestInfo | undefined): boolean {
+  const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return forwarded === "https" || (request !== undefined && new URL(request.url).protocol === "https:");
+}
+
+function setRefreshCookie(
+  set: SetObj,
+  request: RequestInfo | undefined,
+  token: string,
+  expiresAt: number,
+): void {
+  const maxAge = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+  const secure = secureRequest(request) ? "; Secure" : "";
+  (set.headers as Record<string, string | number>)["Set-Cookie"] =
+    `${REFRESH_COOKIE}=${token}; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
+}
+
+function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void {
+  const secure = secureRequest(request) ? "; Secure" : "";
+  (set.headers as Record<string, string | number>)["Set-Cookie"] =
+    `${REFRESH_COOKIE}=; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+function accessTokenDocument(
+  id: string,
+  token: string,
+  user: Readonly<typeof users.$inferSelect>,
+  expiresAt?: number,
+): Record<string, unknown> {
+  return {
+    data: {
+      id,
+      type: "tokens",
+      attributes: {
+        token,
+        "must-change-password": user.mustChangePassword,
+        ...(expiresAt === undefined
+          ? {}
+          : { "expired-at": new Date(expiresAt).toISOString(), refreshable: true }),
+      },
+    },
+  };
+}
+
+async function revokeRefreshFamily(familyId: string, revokedAt = Date.now()): Promise<void> {
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    const family = await t.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, familyId),
+      columns: { accessTokenId: true },
+    });
+    await t.update(refreshSessions)
+      .set({ revokedAt })
+      .where(eq(refreshSessions.familyId, familyId));
+    const accessTokenIds = [...new Set(family.map((session): string => session.accessTokenId))];
+    if (accessTokenIds.length > 0) {
+      await t.delete(apiTokens).where(inArray(apiTokens.id, accessTokenIds));
+    }
+  });
+}
+
+function refreshUnauthorized(
+  set: SetObj,
+  request: RequestInfo | undefined,
+  detail: string,
+): Record<string, unknown> {
+  (set as { status: number }).status = 401;
+  clearRefreshCookie(set, request);
+  return { errors: [{ status: "401", title: "Unauthorized", detail }] };
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
-  .post("/api/v2/users/login", async ({ body, set }: ReqCtx): Promise<unknown> => {
+  .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
+    const configuredToken = process.env["IACT_TOKEN"];
+    const suppliedToken = request === undefined ? null : new URL(request.url).searchParams.get("token");
+    const configured = Buffer.from(configuredToken ?? "");
+    const supplied = Buffer.from(suppliedToken ?? "");
+    if (
+      configuredToken === undefined
+      || configuredToken === ""
+      || suppliedToken === null
+      || configured.length !== supplied.length
+      || !timingSafeEqual(configured, supplied)
+      || (await db.select({ value: count() }).from(users))[0]?.value !== 0
+    ) {
+      (set as { status: number }).status = 404;
+      return { status: "error", error: "Not found" };
+    }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const username = typeof payload["username"] === "string" ? payload["username"].trim() : "";
+    const email = typeof payload["email"] === "string" ? payload["email"].trim() : "";
+    const password = typeof payload["password"] === "string" ? payload["password"] : "";
+    if (username === "" || email === "" || password.length < 10) {
+      (set as { status: number }).status = 422;
+      return { status: "error", error: "Username, email, and a password of at least 10 characters are required" };
+    }
+
+    const userId = `user-${crypto.randomUUID()}`;
+    const organizationId = `org-${crypto.randomUUID()}`;
+    const configuredOrganizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
+    const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
+    const token = `user-${crypto.randomUUID()}`;
+    const passwordHash = await bcrypt.hash(password, 10);
+    const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
+      const t = tx as typeof db;
+      if (((await t.select({ value: count() }).from(users))[0]?.value ?? 0) !== 0) return null;
+      await t.insert(users).values({
+        id: userId,
+        username,
+        email,
+        passwordHash,
+        isSiteAdmin: true,
+      });
+      const existingOrganization = await t.query.organizations.findFirst({
+        where: eq(organizations.name, organizationName),
+      });
+      const targetOrganizationId = existingOrganization?.id ?? organizationId;
+      if (existingOrganization === undefined) {
+        const saml = await t.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
+        await t.insert(organizations).values({
+          id: targetOrganizationId,
+          name: organizationName,
+          samlEnabled: saml?.enabled ?? false,
+        });
+      }
+      await t.insert(organizationMemberships).values({
+        id: `oum-${crypto.randomUUID()}`,
+        userId,
+        orgId: targetOrganizationId,
+        role: "owner",
+      });
+      await t.insert(apiTokens).values({
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(token).digest("hex"),
+        userId,
+        description: "Initial administrator token",
+        createdAt: Date.now(),
+      });
+      return targetOrganizationId;
+    });
+    if (createdOrganizationId === null) {
+      (set as { status: number }).status = 404;
+      return { status: "error", error: "Not found" };
+    }
+    delete process.env["IACT_TOKEN"];
+    await auditLog("create", "users", userId, userId, createdOrganizationId, { username, source: "IACT_TOKEN" });
+    return { status: "created", token };
+  })
+  .post("/api/v2/users/login", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     let payload: DataPayload | undefined;
     if (typeof body === "string") {
       try {
@@ -51,6 +244,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const attrs = payload?.data?.attributes ?? {};
     const username = typeof attrs.username === "string" ? attrs.username : "";
     const password = typeof attrs.password === "string" ? attrs.password : "";
+    const browserSession = attrs["browser-session"] === true;
 
     if (username === "" || password === "") {
       (set as { status: number }).status = 400;
@@ -66,27 +260,132 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
 
-    const tokenStr = `user-${crypto.randomUUID()}`;
+    const tokenStr = opaqueToken("user");
     const tokenId = crypto.randomUUID();
-
-    const tokenHash = createHash("sha256").update(tokenStr).digest("hex");
-    await db.insert(apiTokens).values({
-      id: tokenId,
-      token: tokenHash,
-      userId: user.id,
-      description: "User login token",
-      createdAt: Date.now(),
-    });
-
-    return {
-      data: {
+    const createdAt = Date.now();
+    if (!browserSession) {
+      await db.insert(apiTokens).values({
         id: tokenId,
-        type: "tokens",
-        attributes: {
-          token: tokenStr,
-        },
-      },
-    };
+        token: tokenHash(tokenStr),
+        userId: user.id,
+        description: "User login token",
+        createdAt,
+      });
+      return accessTokenDocument(tokenId, tokenStr, user);
+    }
+
+    const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
+    const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
+    const refreshToken = opaqueToken("refresh");
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.insert(apiTokens).values({
+        id: tokenId,
+        token: tokenHash(tokenStr),
+        userId: user.id,
+        description: "Browser session access token",
+        expiresAt: accessExpiresAt,
+        createdAt,
+      });
+      await t.insert(refreshSessions).values({
+        id: crypto.randomUUID(),
+        familyId: crypto.randomUUID(),
+        tokenHash: tokenHash(refreshToken),
+        userId: user.id,
+        accessTokenId: tokenId,
+        expiresAt: refreshExpiresAt,
+        createdAt,
+      });
+    });
+    setRefreshCookie(set, request, refreshToken, refreshExpiresAt);
+    return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
+  })
+  .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
+    const presentedToken = refreshCookie(request);
+    if (presentedToken === undefined || presentedToken === "") {
+      return refreshUnauthorized(set, request, "Refresh session is missing");
+    }
+    return withRefreshRotationLock(async (): Promise<unknown> => {
+      const current = await db.query.refreshSessions.findFirst({
+        where: eq(refreshSessions.tokenHash, tokenHash(presentedToken)),
+      });
+      if (current === undefined) {
+        return refreshUnauthorized(set, request, "Refresh session is invalid");
+      }
+
+      const now = Date.now();
+      if (current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= now) {
+        await revokeRefreshFamily(current.familyId, now);
+        return refreshUnauthorized(
+          set,
+          request,
+          current.rotatedAt !== null ? "Refresh token reuse detected" : "Refresh session expired",
+        );
+      }
+      const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
+      if (user === undefined) {
+        await revokeRefreshFamily(current.familyId, now);
+        return refreshUnauthorized(set, request, "Refresh session is invalid");
+      }
+
+      const accessToken = opaqueToken("user");
+      const accessTokenId = crypto.randomUUID();
+      const refreshToken = opaqueToken("refresh");
+      const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+      const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
+        const t = tx as typeof db;
+        const claimed = await t.update(refreshSessions)
+          .set({ rotatedAt: now })
+          .where(and(
+            eq(refreshSessions.id, current.id),
+            isNull(refreshSessions.rotatedAt),
+            isNull(refreshSessions.revokedAt),
+            gt(refreshSessions.expiresAt, now),
+          ))
+          .returning({ id: refreshSessions.id });
+        if (claimed.length === 0) return false;
+        await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
+        await t.insert(apiTokens).values({
+          id: accessTokenId,
+          token: tokenHash(accessToken),
+          userId: user.id,
+          description: "Browser session access token",
+          expiresAt: accessExpiresAt,
+          createdAt: now,
+        });
+        await t.insert(refreshSessions).values({
+          id: crypto.randomUUID(),
+          familyId: current.familyId,
+          tokenHash: tokenHash(refreshToken),
+          userId: user.id,
+          accessTokenId,
+          expiresAt: current.expiresAt,
+          createdAt: now,
+        });
+        return true;
+      });
+      if (!rotated) {
+        await revokeRefreshFamily(current.familyId, now);
+        return refreshUnauthorized(set, request, "Refresh token reuse detected");
+      }
+
+      setRefreshCookie(set, request, refreshToken, current.expiresAt);
+      return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
+    });
+  })
+  .post("/api/v2/users/logout", async ({ request, set }: ReqCtx): Promise<unknown> => {
+    const presentedToken = refreshCookie(request);
+    if (presentedToken !== undefined && presentedToken !== "") {
+      await withRefreshRotationLock(async (): Promise<void> => {
+        const current = await db.query.refreshSessions.findFirst({
+          where: eq(refreshSessions.tokenHash, tokenHash(presentedToken)),
+        });
+        if (current !== undefined) await revokeRefreshFamily(current.familyId);
+      });
+    }
+    clearRefreshCookie(set, request);
+    (set as { status: number }).status = 204;
+    return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
     const attrs = extractAttrs(body) ?? {};
@@ -146,13 +445,21 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
   })
   .use(authPlugin)
-  .get("/api/v2/account/details", async ({ user, orgId, tokenError, set }: AuthReqCtx): Promise<unknown> => {
+  .get("/api/v2/account/details", async ({ user, orgId, teamId, tokenError, set }: AuthReqCtx): Promise<unknown> => {
     // Return 401 for invalid or expired tokens (distinct from "no auth" → 404)
     if (tokenError !== null && tokenError !== undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: tokenError === "expired" ? "Token expired" : "Invalid token" }] };
     }
     if (user !== null && user !== undefined) return { data: userResource(user) };
+
+    if (teamId !== null && teamId !== undefined) {
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+      if (team !== undefined) {
+        const synthetic = { id: `service-user-${team.id}`, username: `${team.name}-service-user` };
+        return { data: userResource(synthetic, { id: team.id, type: "teams" }) };
+      }
+    }
 
     const org = orgId !== null && orgId !== undefined
       ? await db.query.organizations.findFirst({ where: eq(organizations.id, orgId) })
@@ -210,7 +517,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     return { data: userResource({ ...user, ...changes }) };
   })
-  .patch("/api/v2/account/password", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
+  .patch("/api/v2/account/password", async ({ user, token, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -229,6 +536,19 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
     }
 
-    await db.update(users).set({ passwordHash: await bcrypt.hash(password, 10) }).where(eq(users.id, user.id));
-    return { data: userResource(user) };
+    const passwordHash = await bcrypt.hash(password, 10);
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.update(users)
+        .set({ passwordHash, mustChangePassword: false })
+        .where(eq(users.id, user.id));
+      if (token !== null && token !== undefined) {
+        await t.delete(apiTokens)
+          .where(and(eq(apiTokens.userId, user.id), ne(apiTokens.id, token.id)));
+      }
+      await t.update(refreshSessions)
+        .set({ revokedAt: Date.now() })
+        .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
+    });
+    return { data: userResource({ ...user, mustChangePassword: false }) };
   });

@@ -136,6 +136,18 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     });
     expect(attachWsRes.status).toBe(204);
 
+    const workspaceSetsRes = await request(`/api/v2/workspaces/${workspaceId}/policy-sets`);
+    expect(workspaceSetsRes.status).toBe(200);
+    const workspaceSetsBody = await workspaceSetsRes.json();
+    expect(workspaceSetsBody.data).toContainEqual(expect.objectContaining({
+      id: psId,
+      attributes: expect.objectContaining({
+        name: "Security Standard",
+        scope: "global",
+        "policy-count": 1,
+      }),
+    }));
+
     // 4. Create run & policy check
     const runId = `run-pol-${suffix}`;
     await db.insert(runs).values({

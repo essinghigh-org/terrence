@@ -21,6 +21,23 @@ function hashToken(token: string): string {
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
+const rateLimitPrincipals = new WeakMap<object, string>();
+
+export function authenticatedRateLimitKey(request: object): string | undefined {
+  return rateLimitPrincipals.get(request);
+}
+
+function rememberRateLimitPrincipal(request: object, token: Readonly<AuthToken>): void {
+  const principal = token.userId !== null
+    ? `user:${token.userId}`
+    : token.teamId !== null
+      ? `team:${token.teamId}`
+      : token.orgId !== null
+        ? `organization:${token.orgId}`
+        : undefined;
+  if (principal !== undefined) rateLimitPrincipals.set(request, principal);
+}
+
 export const authPlugin = new Elysia({ name: "auth" })
   .derive({ as: "global" }, async ({ request }: DeriveContext): Promise<{
     user: typeof users.$inferSelect | null;
@@ -29,6 +46,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     teamId: string | null;
     tokenError: string | null;
   }> => {
+    rateLimitPrincipals.delete(request);
     const authHeader = request.headers.get("authorization");
     if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
@@ -65,11 +83,12 @@ export const authPlugin = new Elysia({ name: "auth" })
     }
 
     if (token.lastUsedAt === null || now - token.lastUsedAt > 60000) {
-      void db.update(apiTokens)
+      await db.update(apiTokens)
         .set({ lastUsedAt: now })
         .where(eq(apiTokens.id, token.id));
     }
     const usedToken: AuthToken = { ...token, lastUsedAt: now };
+    rememberRateLimitPrincipal(request, token);
 
     if (token.userId !== null) {
       const user = await db.query.users.findFirst({
@@ -82,7 +101,7 @@ export const authPlugin = new Elysia({ name: "auth" })
       const team = await db.query.teams.findFirst({
         where: eq(teams.id, token.teamId),
       });
-      return { user: null, token: usedToken, orgId: team?.orgId ?? token.orgId, teamId: token.teamId, tokenError: null };
+      return { user: null, token: usedToken, orgId: null, teamId: team?.id ?? null, tokenError: team === undefined ? "invalid" : null };
     }
 
     if (token.orgId !== null) {
@@ -98,7 +117,7 @@ export const authPlugin = new Elysia({ name: "auth" })
 
           if (!value) return;
           if (token === null || token === undefined) {
-            set.status = 401;
+            (set as { status: number }).status = 401;
             return { errors: [{ status: "401", title: "Unauthorized" }] };
           }
         },

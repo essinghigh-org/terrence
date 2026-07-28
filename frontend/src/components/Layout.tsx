@@ -14,7 +14,8 @@ import {
   ChevronRight,
   ChevronDown,
   ChevronsLeftRight,
-  LogOut
+  LogOut,
+  PackageOpen
 } from "lucide-react";
 
 import {
@@ -26,7 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
-import { removeAuthToken } from "../lib/api";
+import { logoutAuthSession } from "../lib/api";
 
 type DeepReadonly<T> = T extends null | undefined
   ? T
@@ -51,8 +52,9 @@ export function Layout({ children }: Readonly<{ readonly children?: ChildNode }>
   };
 
   const handleLogout = (): void => {
-    removeAuthToken();
-    void navigate("/login");
+    void logoutAuthSession().finally((): void => {
+      void navigate("/login");
+    });
   };
 
   const currentOrgName = orgName ?? "Choose an organization";
@@ -135,6 +137,11 @@ export function Layout({ children }: Readonly<{ readonly children?: ChildNode }>
                 <Link to={`/app/${orgName}`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}`, true) || location.pathname.includes('/workspaces/') ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
                   <Box className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}`, true) || location.pathname.includes('/workspaces/') ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
                   Workspaces
+                </Link>
+
+                <Link to={`/app/${orgName}/no-code`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}/no-code`) ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
+                  <PackageOpen className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}/no-code`) ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
+                  No-code modules
                 </Link>
 
                 <Link to={`/app/${orgName}/registry`} className={`group flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}/registry`) ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>

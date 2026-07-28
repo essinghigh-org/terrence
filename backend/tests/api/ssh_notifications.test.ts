@@ -1,14 +1,21 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
+  notificationConfigurations,
   organizationMemberships,
   organizations,
+  projects,
+  runs,
+  sshKeys,
   users,
   workspaces,
 } from "../../src/db/schema";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
+import { deliverRunNotifications } from "../../src/lib/notifications";
 
 describe("SSH Keys & Notification Configurations API contract", () => {
   const suffix = crypto.randomUUID();
@@ -17,6 +24,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
   const orgName = `ssh-notif-org-${suffix}`;
   const token = `user-token-${suffix}`;
   const workspaceId = `ws-ssh-${suffix}`;
+  const projectId = `prj-notif-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -35,11 +43,13 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token, userId }]);
-    await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
+    await db.insert(projects).values([{ id: projectId, orgId, name: `project-${suffix}` }]);
+    await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId, projectId }]);
   });
 
   afterAll(async () => {
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(projects).where(eq(projects.id, projectId));
     await db.delete(apiTokens).where(eq(apiTokens.token, token));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -60,6 +70,11 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     const createKeyBody = await createKeyRes.json();
     const sshKeyId = createKeyBody.data.id;
     expect(createKeyBody.data.attributes.name).toBe("deploy-key");
+    const storedKey = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
+    expect(storedKey).toBeDefined();
+    expect(storedKey?.value).not.toContain("BEGIN RSA PRIVATE KEY");
+    expect(isEncryptedSecret(storedKey?.value ?? "")).toBeTrue();
+    expect(await decryptSecret(storedKey?.value ?? "")).toContain("BEGIN RSA PRIVATE KEY");
 
     // 2. List SSH Keys
     const listKeysRes = await request(`/api/v2/organizations/${orgName}/ssh-keys`);
@@ -89,37 +104,137 @@ describe("SSH Keys & Notification Configurations API contract", () => {
   });
 
   it("creates, lists, updates, verifies and deletes notification configurations", async () => {
-    // 1. Create notification configuration
-    const createNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
-      data: {
-        attributes: {
-          name: "Slack Alert",
-          "destination-type": "slack",
-          url: "https://hooks.slack.com/services/xxx/yyy/zzz",
-          triggers: ["run:created", "run:completed", "run:errored"],
-          enabled: true,
-        },
+    const deliveries: { body: string; signature: string | null }[] = [];
+    let attempts = 0;
+    const webhook = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(webhookRequest) {
+        attempts += 1;
+        deliveries.push({
+          body: await webhookRequest.text(),
+          signature: webhookRequest.headers.get("X-TFE-Notification-Signature"),
+        });
+        return new Response(attempts < 3 ? "retry" : "ok", { status: attempts < 3 ? 503 : 200 });
       },
     });
-    expect(createNcRes.status).toBe(201);
-    const createNcBody = await createNcRes.json();
-    const ncId = createNcBody.data.id;
-    expect(createNcBody.data.attributes.name).toBe("Slack Alert");
 
-    // 2. List notification configurations
-    const listNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`);
-    expect(listNcRes.status).toBe(200);
-    const listNcBody = await listNcRes.json();
-    expect(listNcBody.data.some((nc: any) => nc.id === ncId)).toBeTrue();
+    try {
+      // 1. Create notification configuration
+      const createNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
+        data: {
+          attributes: {
+            name: "Generic Alert",
+            "destination-type": "generic",
+            url: webhook.url.toString(),
+            token: "notification-secret",
+            triggers: ["run:created", "run:completed", "run:errored"],
+            enabled: true,
+          },
+        },
+      });
+      expect(createNcRes.status).toBe(201);
+      const createNcBody = await createNcRes.json();
+      const ncId = createNcBody.data.id;
+      expect(createNcBody.data.attributes.name).toBe("Generic Alert");
+      expect(createNcBody.data.attributes.token).toBeNull();
 
-    // 3. Verify notification configuration
-    const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
-    expect(verifyRes.status).toBe(200);
-    const verifyBody = await verifyRes.json();
-    expect(verifyBody.status).toBe("verification_sent");
+      // 2. List notification configurations
+      const listNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`);
+      expect(listNcRes.status).toBe(200);
+      const listNcBody = await listNcRes.json();
+      expect(listNcBody.data.some((nc: any) => nc.id === ncId)).toBeTrue();
+      expect(listNcBody.data.find((nc: any) => nc.id === ncId).attributes.token).toBeNull();
 
-    // 4. Delete notification configuration
-    const deleteNcRes = await request(`/api/v2/notification-configurations/${ncId}`, "DELETE");
-    expect(deleteNcRes.status).toBe(204);
+      // 3. Verify notification configuration
+      const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
+      expect(verifyRes.status).toBe(200);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.status).toBe("verification_sent");
+      expect(verifyBody.data.attributes["delivery-responses"][0].successful).toBeTrue();
+      expect(attempts).toBe(3);
+      for (const delivery of deliveries) {
+        expect(delivery.signature).toBe(
+          createHmac("sha512", "notification-secret").update(delivery.body).digest("hex"),
+        );
+      }
+
+      // 4. Delete notification configuration
+      const deleteNcRes = await request(`/api/v2/notification-configurations/${ncId}`, "DELETE");
+      expect(deleteNcRes.status).toBe(204);
+    } finally {
+      await webhook.stop(true);
+    }
+  });
+
+  it("delivers versioned run notifications for workspace and project configurations", async () => {
+    const payloads: Record<string, any>[] = [];
+    const webhook = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(webhookRequest) {
+        payloads.push(JSON.parse(await webhookRequest.text()));
+        return new Response(null, { status: 204 });
+      },
+    });
+    const createdIds: string[] = [];
+    const runId = `run-notif-${suffix}`;
+
+    try {
+      for (const [path, name] of [
+        [`/api/v2/workspaces/${workspaceId}/notification-configurations`, "Workspace Alert"],
+        [`/api/v2/projects/${projectId}/notification-configurations`, "Project Alert"],
+      ]) {
+        const response = await request(path, "POST", {
+          data: {
+            attributes: {
+              name,
+              "destination-type": "generic",
+              url: webhook.url.toString(),
+              triggers: ["run:completed"],
+              enabled: true,
+            },
+          },
+        });
+        const responseBody = await response.json();
+        if (response.status !== 201) {
+          throw new Error(`Notification create returned ${response.status}: ${JSON.stringify(responseBody)}`);
+        }
+        createdIds.push(responseBody.data.id);
+      }
+
+      const projectList = await request(`/api/v2/projects/${projectId}/notification-configurations`);
+      expect(projectList.status).toBe(200);
+      const projectListBody = await projectList.json();
+      expect(projectListBody.data).toHaveLength(1);
+      expect(projectListBody.data[0].relationships.subscribable.data).toEqual({
+        id: projectId,
+        type: "projects",
+      });
+
+      await db.insert(runs).values({
+        id: runId,
+        workspaceId,
+        status: "applied",
+        message: "Notification delivery",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      const results = await deliverRunNotifications(runId, "run:completed");
+      expect(results).toHaveLength(2);
+      expect(results.every((result) => result.successful)).toBeTrue();
+      expect(payloads).toHaveLength(2);
+      expect(payloads.every((payload) => payload.payload_version === 1)).toBeTrue();
+      expect(payloads.every((payload) => payload.run_id === runId)).toBeTrue();
+      expect(new Set(payloads.map((payload) => payload.notification_configuration_id))).toEqual(
+        new Set(createdIds),
+      );
+    } finally {
+      await db.delete(runs).where(eq(runs.id, runId));
+      for (const id of createdIds) {
+        await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, id));
+      }
+      await webhook.stop(true);
+    }
   });
 });

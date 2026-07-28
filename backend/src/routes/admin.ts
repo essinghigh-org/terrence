@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions } from "../db/schema";
+import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings } from "../db/schema";
 import { eq, and, desc, count, notInArray } from "drizzle-orm";
 import { runResource } from "../lib/response";
-import { pageRequest, pagination } from "../lib/utils";
+import { apiURL, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -34,6 +34,165 @@ type VerItem = Readonly<{
   readonly isDefault: boolean | null;
   readonly deprecated: boolean | null;
 }>;
+type SamlSettings = Readonly<typeof samlSettings.$inferSelect>;
+
+const SAML_SETTINGS_ID = "saml";
+const SAML_DEFAULTS = {
+  id: SAML_SETTINGS_ID,
+  enabled: false,
+  debug: false,
+  oldIdpCert: null,
+  idpCert: null,
+  sloEndpointUrl: null,
+  ssoEndpointUrl: null,
+  attrUsername: "Username",
+  attrGroups: "MemberOf",
+  attrSiteAdmin: "SiteAdmin",
+  siteAdminRole: "site-admins",
+  ssoApiTokenSessionTimeout: 1_209_600,
+  updatedAt: 0,
+} satisfies typeof samlSettings.$inferInsert;
+
+async function currentSamlSettings(): Promise<SamlSettings> {
+  await db.insert(samlSettings).values(SAML_DEFAULTS).onConflictDoNothing();
+  const settings = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, SAML_SETTINGS_ID) });
+  if (settings === undefined) throw new Error("SAML settings are unavailable");
+  return settings;
+}
+
+function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: string }>): Record<string, unknown> {
+  return {
+    id: SAML_SETTINGS_ID,
+    type: "saml-settings",
+    attributes: {
+      enabled: settings.enabled,
+      debug: settings.debug,
+      "old-idp-cert": settings.oldIdpCert,
+      "idp-cert": settings.idpCert,
+      "slo-endpoint-url": settings.sloEndpointUrl,
+      "sso-endpoint-url": settings.ssoEndpointUrl,
+      "attr-username": settings.attrUsername,
+      "attr-groups": settings.attrGroups,
+      "attr-site-admin": settings.attrSiteAdmin,
+      "site-admin-role": settings.siteAdminRole,
+      "sso-api-token-session-timeout": settings.ssoApiTokenSessionTimeout,
+      "acs-consumer-url": apiURL(request, "/users/saml/auth"),
+      "metadata-url": apiURL(request, "/users/saml/metadata"),
+    },
+  };
+}
+
+function validHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
+}
+
+function samlInput(
+  attributes: Readonly<Record<string, unknown>>,
+  current: SamlSettings,
+): Readonly<{ values: typeof samlSettings.$inferInsert }> | Readonly<{ error: string }> {
+  for (const key of ["enabled", "debug"] as const) {
+    if (attributes[key] !== undefined && typeof attributes[key] !== "boolean") {
+      return { error: `${key} must be a boolean` };
+    }
+  }
+  for (const key of [
+    "idp-cert",
+    "slo-endpoint-url",
+    "sso-endpoint-url",
+    "attr-username",
+    "attr-groups",
+    "attr-site-admin",
+    "site-admin-role",
+  ] as const) {
+    if (attributes[key] !== undefined && attributes[key] !== null && typeof attributes[key] !== "string") {
+      return { error: `${key} must be a string or null` };
+    }
+  }
+  const timeout = attributes["sso-api-token-session-timeout"];
+  if (timeout !== undefined && !(typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout > 0)) {
+    return { error: "sso-api-token-session-timeout must be a positive integer" };
+  }
+
+  const nullableString = (key: "idp-cert" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
+    attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
+  const requiredString = (
+    key: "attr-username" | "attr-groups" | "attr-site-admin" | "site-admin-role",
+    fallback: string,
+  ): string => attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
+
+  const idpCert = nullableString("idp-cert", current.idpCert);
+  const sloEndpointUrl = nullableString("slo-endpoint-url", current.sloEndpointUrl);
+  const ssoEndpointUrl = nullableString("sso-endpoint-url", current.ssoEndpointUrl);
+  const attrUsername = requiredString("attr-username", current.attrUsername);
+  const attrGroups = requiredString("attr-groups", current.attrGroups);
+  const attrSiteAdmin = requiredString("attr-site-admin", current.attrSiteAdmin);
+  const siteAdminRole = requiredString("site-admin-role", current.siteAdminRole);
+  const enabled = typeof attributes.enabled === "boolean" ? attributes.enabled : current.enabled;
+
+  if (idpCert !== null && (
+    !idpCert.includes("-----BEGIN CERTIFICATE-----")
+    || !idpCert.includes("-----END CERTIFICATE-----")
+  )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
+  if (sloEndpointUrl !== null && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
+  if (ssoEndpointUrl !== null && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
+  if (attrUsername === "" || attrGroups === "") return { error: "attr-username and attr-groups must not be empty" };
+  if (enabled && (idpCert === null || ssoEndpointUrl === null)) {
+    return { error: "idp-cert and sso-endpoint-url are required when SAML is enabled" };
+  }
+
+  return {
+    values: {
+      id: SAML_SETTINGS_ID,
+      enabled,
+      debug: typeof attributes.debug === "boolean" ? attributes.debug : current.debug,
+      oldIdpCert: idpCert !== null && idpCert !== current.idpCert && current.idpCert !== null
+        ? current.idpCert
+        : current.oldIdpCert,
+      idpCert,
+      sloEndpointUrl,
+      ssoEndpointUrl,
+      attrUsername,
+      attrGroups,
+      attrSiteAdmin,
+      siteAdminRole,
+      ssoApiTokenSessionTimeout: typeof timeout === "number" ? timeout : current.ssoApiTokenSessionTimeout,
+      updatedAt: Date.now(),
+    },
+  };
+}
+
+function adminOrganizationResource(org: OrgItem): Record<string, unknown> {
+  return {
+    id: org.id,
+    type: "organizations",
+    attributes: {
+      name: org.name,
+      "global-module-sharing": org.globalModuleSharing,
+      "global-provider-sharing": org.globalProviderSharing,
+      "saml-enabled": org.samlEnabled,
+      "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
+    },
+  };
+}
+
+async function clearSpecificRegistrySharing(orgId: string, kind: "modules" | "providers"): Promise<void> {
+  const rows = await db.query.registryPartnerships.findMany({ where: eq(registryPartnerships.producerOrgId, orgId) });
+  for (const row of rows) {
+    const otherEnabled = kind === "modules" ? row.providers : row.modules;
+    if (otherEnabled) {
+      await db.update(registryPartnerships)
+        .set(kind === "modules" ? { modules: false } : { providers: false })
+        .where(eq(registryPartnerships.id, row.id));
+    } else {
+      await db.delete(registryPartnerships).where(eq(registryPartnerships.id, row.id));
+    }
+  }
+}
 
 export const adminRoutes = new Elysia({ name: "admin" })
   .use(authPlugin)
@@ -77,14 +236,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
   .get("/api/v2/admin/organizations", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const allOrgs = await db.query.organizations.findMany();
-    return { data: allOrgs.map((o: OrgItem): Record<string, unknown> => ({ id: o.id, type: "organizations", attributes: { name: o.name } })) };
+    return { data: allOrgs.map(adminOrganizationResource) };
   })
   .get("/api/v2/admin/organizations/:org_name", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: org.id, type: "organizations", attributes: { name: org.name } } };
+    return { data: adminOrganizationResource(org) };
   })
   .patch("/api/v2/admin/organizations/:org_name", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
@@ -96,10 +255,30 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const updates: Partial<typeof organizations.$inferInsert> = {};
     if (typeof attributes.name === "string") updates.name = attributes.name;
+    for (const key of ["global-module-sharing", "global-provider-sharing"] as const) {
+      if (attributes[key] !== undefined && typeof attributes[key] !== "boolean") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
+      }
+    }
+    if (typeof attributes["global-module-sharing"] === "boolean") updates.globalModuleSharing = attributes["global-module-sharing"];
+    if (typeof attributes["global-provider-sharing"] === "boolean") updates.globalProviderSharing = attributes["global-provider-sharing"];
+    if (attributes["owners-team-saml-role-id"] !== undefined) {
+      if (attributes["owners-team-saml-role-id"] !== null && typeof attributes["owners-team-saml-role-id"] !== "string") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owners-team-saml-role-id must be a string or null" }] };
+      }
+      const roleId = typeof attributes["owners-team-saml-role-id"] === "string"
+        ? attributes["owners-team-saml-role-id"].trim()
+        : "";
+      updates.ownersTeamSamlRoleId = roleId === "" ? null : roleId;
+    }
     if (Object.keys(updates).length > 0) await db.update(organizations).set(updates).where(eq(organizations.id, org.id));
+    if (updates.globalModuleSharing === true) await clearSpecificRegistrySharing(org.id, "modules");
+    if (updates.globalProviderSharing === true) await clearSpecificRegistrySharing(org.id, "providers");
     const updated = await db.query.organizations.findFirst({ where: eq(organizations.id, org.id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "organizations", attributes: { name: updated.name } } };
+    return { data: adminOrganizationResource(updated) };
   })
   .delete("/api/v2/admin/organizations/:org_name", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params["org_name"] ?? "";
@@ -363,6 +542,55 @@ export const adminRoutes = new Elysia({ name: "admin" })
     await db.delete(adminOpaVersions).where(eq(adminOpaVersions.id, versionId));
     (set as { status: number }).status = 204;
     return {};
+  })
+  // --- SAML Settings ---
+  .get("/api/v2/admin/saml-settings", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { data: samlSettingsResource(await currentSamlSettings(), request) };
+  })
+  .patch("/api/v2/admin/saml-settings", async ({ user, body, request, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object"
+      ? payload.data as Record<string, unknown>
+      : {};
+    if (data.type !== undefined && data.type !== "saml-settings") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be saml-settings" }] };
+    }
+    const attributes = data.attributes !== null && typeof data.attributes === "object"
+      ? data.attributes as Record<string, unknown>
+      : {};
+    const current = await currentSamlSettings();
+    const input = samlInput(attributes, current);
+    if ("error" in input) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+    }
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.update(samlSettings).set(input.values).where(eq(samlSettings.id, SAML_SETTINGS_ID));
+      if (input.values.enabled !== current.enabled) {
+        await t.update(organizations).set({ samlEnabled: input.values.enabled });
+      }
+    });
+    return { data: samlSettingsResource(await currentSamlSettings(), request) };
+  })
+  .post("/api/v2/admin/saml-settings/actions/revoke-old-certificate", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await currentSamlSettings();
+    await db.update(samlSettings).set({ oldIdpCert: null, updatedAt: Date.now() })
+      .where(eq(samlSettings.id, SAML_SETTINGS_ID));
+    return { data: samlSettingsResource(await currentSamlSettings(), request) };
   })
   // --- Admin Settings ---
   .get("/api/v2/admin/settings", ({ user, set }: ParamCtx): unknown => {

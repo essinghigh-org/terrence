@@ -1,252 +1,394 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { fetchApi } from "../lib/api";
-import { Button } from "../components/ui/button";
-import { Search, MoreHorizontal, Filter, AlertCircle, XCircle, Clock, PauseCircle, CheckCircle2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Pencil, Plus, Tags, Trash2, X } from "lucide-react";
 
-type WorkspaceAttrs = Readonly<{
-  readonly name: string;
-  readonly locked?: boolean;
-  readonly description?: string | null;
-  readonly "terraform-version"?: string;
-  readonly "auto-apply"?: boolean;
-  readonly "tag-names"?: readonly string[];
-  readonly tags?: readonly string[];
-  readonly "vcs-repo"?: Readonly<{ identifier: string }>;
-  readonly [key: string]: unknown;
+import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "@/components/ui/toast";
+import { fetchApi } from "@/lib/api";
+
+type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
+
+type Workspace = Readonly<{
+  id: string;
+  attributes: Readonly<{
+    name: string;
+    locked?: boolean;
+    "tag-names"?: readonly string[];
+    "vcs-repo"?: Readonly<{ identifier: string }> | null;
+  }>;
+  relationships?: Readonly<{ project?: Readonly<{ data: Readonly<{ id: string }> | null }> }>;
 }>;
 
-type WorkspaceItem = Readonly<{
-  readonly id: string;
-  readonly attributes: WorkspaceAttrs;
+type TagBinding = Readonly<{
+  id: string;
+  attributes: Readonly<{ key: string; value?: string }>;
 }>;
+
+const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
+  attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
+  errored: ["errored"],
+  running: ["pending", "fetching", "planning", "cost_estimating", "policy_checking", "applying"],
+  "on-hold": ["planned", "planned_and_saved"],
+  completed: ["applied", "discarded", "canceled"],
+};
 
 export function Workspaces(): React.JSX.Element {
-  const { orgName } = useParams<{ orgName: string }>();
+  const { orgName: rawOrgName } = useParams<{ orgName: string }>();
+  const orgName = rawOrgName ?? "";
   const navigate = useNavigate();
-  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [tagWorkspace, setTagWorkspace] = useState<Workspace | null>(null);
+  const [tagBindings, setTagBindings] = useState<TagBinding[]>([]);
+  const [tagKey, setTagKey] = useState("");
+  const [tagValue, setTagValue] = useState("");
+  const [editingTagKey, setEditingTagKey] = useState<string | null>(null);
+  const [savingTag, setSavingTag] = useState(false);
 
-  useEffect((): void => {
-    void loadWorkspaces();
-  }, [orgName]);
-
-  async function loadWorkspaces(): Promise<void> {
+  const loadData = useCallback(async (): Promise<void> => {
+    setLoading(true);
     try {
-      const data = await fetchApi(`/organizations/${orgName ?? ""}/workspaces`) as { data: WorkspaceItem[] };
-      setWorkspaces(Array.isArray(data.data) ? data.data : []);
-    } catch {
-      console.error("Failed to load workspaces");
+      const statuses = runStatusFilters[statusFilter];
+      const query = statuses === undefined
+        ? "?page%5Bsize%5D=100"
+        : `?page%5Bsize%5D=100&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
+      const [workspaceResponse, projectResponse] = await Promise.all([
+        fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`) as Promise<{ data?: Workspace[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects`) as Promise<{ data?: Project[] }>,
+      ]);
+      setWorkspaces(Array.isArray(workspaceResponse.data) ? workspaceResponse.data : []);
+      setProjects(Array.isArray(projectResponse.data) ? projectResponse.data : []);
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not load workspaces",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
     } finally {
       setLoading(false);
     }
-  }
+  }, [orgName, statusFilter]);
 
-  const filteredWorkspaces = workspaces.filter((ws: WorkspaceItem): boolean => {
-    const nameMatch = ws.attributes.name.toLowerCase().includes(search.toLowerCase());
-    const tags = ws.attributes["tag-names"] ?? ws.attributes.tags ?? [];
-    const tagMatch = tags.some((t: string): boolean => t.toLowerCase().includes(search.toLowerCase()));
-    return nameMatch || tagMatch;
-  });
+  useEffect((): void => {
+    if (orgName !== "") void loadData();
+  }, [loadData, orgName]);
+
+  const visibleWorkspaces = useMemo((): Workspace[] => {
+    const needle = search.trim().toLowerCase();
+    return workspaces.filter((workspace): boolean => {
+      const projectId = workspace.relationships?.project?.data?.id ?? "";
+      const tags = workspace.attributes["tag-names"] ?? [];
+      const matchesSearch = needle === ""
+        || workspace.attributes.name.toLowerCase().includes(needle)
+        || tags.some((tag): boolean => tag.toLowerCase().includes(needle));
+      return matchesSearch && (projectFilter === "" || projectId === projectFilter);
+    });
+  }, [projectFilter, search, workspaces]);
+
+  const loadTags = async (workspace: Workspace): Promise<void> => {
+    try {
+      const response = await fetchApi(`/workspaces/${workspace.id}/tag-bindings`) as { data?: TagBinding[] };
+      setTagBindings(Array.isArray(response.data) ? response.data : []);
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not load tags",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    }
+  };
+
+  const openTags = (workspace: Workspace): void => {
+    setTagWorkspace(workspace);
+    setTagKey("");
+    setTagValue("");
+    setEditingTagKey(null);
+    setTagBindings([]);
+    void loadTags(workspace);
+  };
+
+  const saveTag = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    if (tagWorkspace === null || tagKey.trim() === "") return;
+    setSavingTag(true);
+    try {
+      await fetchApi(`/workspaces/${tagWorkspace.id}/tag-bindings`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: [{
+            type: "tag-bindings",
+            attributes: { key: tagKey.trim(), value: tagValue.trim() },
+          }],
+        }),
+      });
+      setTagKey("");
+      setTagValue("");
+      setEditingTagKey(null);
+      await Promise.all([loadTags(tagWorkspace), loadData()]);
+      toast.add({ title: editingTagKey === null ? "Tag added" : "Tag updated", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not save tag",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setSavingTag(false);
+    }
+  };
+
+  const deleteTag = async (tag: TagBinding): Promise<void> => {
+    if (tagWorkspace === null) return;
+    try {
+      await fetchApi(`/workspaces/${tagWorkspace.id}/relationships/tags`, {
+        method: "DELETE",
+        body: JSON.stringify({ data: [{ id: tag.attributes.key, type: "tags" }] }),
+      });
+      await Promise.all([loadTags(tagWorkspace), loadData()]);
+      toast.add({ title: "Tag removed", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not remove tag",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    }
+  };
+
+  const projectName = (workspace: Workspace): string => {
+    const projectId = workspace.relationships?.project?.data?.id;
+    return projects.find((project): boolean => project.id === projectId)?.attributes.name ?? "Unknown project";
+  };
+
+  const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
 
   return (
-    <div className="max-w-full w-full">
-      <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
-        <span className="hover:underline cursor-pointer">{orgName}</span>
-        <span className="text-gray-300">/</span>
-        <span className="text-gray-900">Workspaces</span>
-      </div>
-
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Workspaces</h1>
-        <Button className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none font-medium">
+    <div className="flex w-full flex-col gap-6">
+      <header className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-muted-foreground">{orgName} / Workspaces</p>
+          <h1 className="text-3xl font-bold tracking-tight">Workspaces</h1>
+        </div>
+        <Button onClick={(): void => { setCreateOpen(true); }}>
+          <Plus data-icon="inline-start" />
           New workspace
         </Button>
-      </div>
+      </header>
 
-      <div className="flex items-center gap-4 mb-4">
-        <Button variant="outline" className="h-9 px-3 text-sm text-gray-700 font-medium rounded-[4px] border-gray-300 shadow-sm flex items-center gap-2 bg-white hover:bg-gray-50">
-          <Filter className="h-4 w-4 text-gray-500" /> All filters
+      <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto]">
+        <Input
+          aria-label="Search workspaces"
+          placeholder="Search by workspace name or tag"
+          value={search}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
+        />
+        <Select aria-label="Status filter" value={statusFilter} onValueChange={setStatusFilter}>
+          <option value="">All statuses</option>
+          <option value="attention">Needs attention</option>
+          <option value="errored">Errored</option>
+          <option value="running">Running</option>
+          <option value="on-hold">On hold</option>
+          <option value="completed">Completed</option>
+        </Select>
+        <Select aria-label="Project filter" value={projectFilter} onValueChange={setProjectFilter}>
+          <option value="">All projects</option>
+          {projects.map((project): React.JSX.Element => (
+            <option key={project.id} value={project.id}>{project.attributes.name}</option>
+          ))}
+        </Select>
+        <Button
+          variant="ghost"
+          disabled={!hasFilters}
+          onClick={(): void => {
+            setSearch("");
+            setStatusFilter("");
+            setProjectFilter("");
+          }}
+        >
+          <X data-icon="inline-start" />
+          Clear
         </Button>
+      </section>
 
-        <div className="relative flex-1 max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-4 w-4 text-gray-400" />
-          </div>
-          <input
-            type="text"
-            placeholder="Search by workspace name"
-            value={search}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
-            className="pl-9 pr-4 py-1.5 h-9 w-full border border-gray-300 rounded-[4px] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
-          />
-        </div>
-
-        <div className="ml-auto flex items-center gap-2">
-          {/* Status filter pills mimicking the screenshot */}
-          <div className="flex items-center border border-gray-300 rounded-[4px] overflow-hidden shadow-sm bg-white text-xs font-medium text-gray-700 h-9">
-            <button className="flex items-center gap-1.5 px-3 py-1 hover:bg-gray-50 border-r border-gray-300 h-full">
-              <AlertCircle className="h-3.5 w-3.5 text-orange-500" /> 0 Need attention
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1 hover:bg-gray-50 border-r border-gray-300 h-full">
-              <XCircle className="h-3.5 w-3.5 text-red-500" /> 0 Errored
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1 hover:bg-gray-50 border-r border-gray-300 h-full">
-              <Clock className="h-3.5 w-3.5 text-blue-500" /> 0 Running
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1 hover:bg-gray-50 border-r border-gray-300 h-full">
-              <PauseCircle className="h-3.5 w-3.5 text-gray-500" /> 0 On hold
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1 hover:bg-gray-50 h-full">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> {workspaces.length} Completed
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="text-xs text-gray-500 mb-3 flex items-center gap-1">
-        No filters applied <HelpCircleIcon />
-      </div>
-
-      <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
-        <table className="w-full text-left text-sm border-collapse">
-          <thead>
-            <tr className="bg-[#f9fafb] border-b border-gray-200 text-gray-800 font-semibold text-xs tracking-wide">
-              <th className="px-4 py-3 border-r border-gray-200 cursor-pointer hover:bg-gray-100 flex items-center gap-1">
-                Workspace name <SortIcon />
-              </th>
-              <th className="px-4 py-3 border-r border-gray-200 w-1/4">Repository</th>
-              <th className="px-4 py-3 border-r border-gray-200">Health</th>
-              <th className="px-4 py-3 border-r border-gray-200">Project</th>
-              <th className="px-4 py-3 border-r border-gray-200 cursor-pointer hover:bg-gray-100 text-right flex items-center justify-end gap-1">
-                Latest change <SortIcon />
-              </th>
-              <th className="px-4 py-3 text-center">Manage</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Workspace</TableHead>
+              <TableHead>Repository</TableHead>
+              <TableHead>Tags</TableHead>
+              <TableHead>Project</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Manage</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {loading ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                  Loading workspaces...
-                </td>
-              </tr>
-            ) : filteredWorkspaces.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-gray-500">
-                  <p className="text-base text-gray-900 font-medium mb-1">No workspaces found</p>
-                  <p className="text-sm">Try adjusting your search or filters.</p>
-                </td>
-              </tr>
-            ) : (
-              filteredWorkspaces.map((ws: WorkspaceItem): React.JSX.Element => (
-                <tr key={ws.id} className="border-b border-gray-200 hover:bg-gray-50 group">
-                  <td className="px-4 py-3 border-r border-gray-200">
-                    <div className="flex items-start gap-2">
-                      <div className="mt-0.5">
-                         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                      </div>
-                      <div>
-                        <button
-                          onClick={(): void => { void navigate(`/app/${orgName ?? ""}/workspaces/${ws.attributes.name}`); }}
-                          className="text-gray-900 font-medium hover:underline text-[13px] text-left break-all"
-                        >
-                          {ws.attributes.name}
-                        </button>
-                        <div className="text-[11px] text-gray-500 mt-0.5">Planned and finished</div>
-                      </div>
+              <TableRow><TableCell colSpan={6} className="py-12 text-center"><Spinner /></TableCell></TableRow>
+            ) : visibleWorkspaces.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="py-12 text-center text-muted-foreground">
+                  <p className="font-medium text-foreground">No workspaces found</p>
+                  <p>Try adjusting the filters.</p>
+                </TableCell>
+              </TableRow>
+            ) : visibleWorkspaces.map((workspace): React.JSX.Element => (
+              <TableRow key={workspace.id}>
+                <TableCell>
+                  <button
+                    className="font-medium hover:underline"
+                    onClick={(): void => {
+                      void navigate(`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspace.attributes.name)}`);
+                    }}
+                  >
+                    {workspace.attributes.name}
+                  </button>
+                </TableCell>
+                <TableCell>{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {(workspace.attributes["tag-names"] ?? []).map((tag): React.JSX.Element => (
+                      <Badge key={tag} variant="secondary">{tag}</Badge>
+                    ))}
+                    {(workspace.attributes["tag-names"] ?? []).length === 0 && <span className="text-muted-foreground">None</span>}
+                  </div>
+                </TableCell>
+                <TableCell>{projectName(workspace)}</TableCell>
+                <TableCell>
+                  <Badge variant={workspace.attributes.locked === true ? "outline" : "secondary"}>
+                    {workspace.attributes.locked === true ? "Locked" : "Available"}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Manage tags for ${workspace.attributes.name}`}
+                    onClick={(): void => { openTags(workspace); }}
+                  >
+                    <Tags data-icon="inline-start" />
+                    Tags
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <CreateWorkspaceModal
+        orgName={orgName}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(): void => { void loadData(); }}
+      />
+
+      <Dialog open={tagWorkspace !== null} onOpenChange={(open: boolean): void => { if (!open) setTagWorkspace(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tags for {tagWorkspace?.attributes.name}</DialogTitle>
+            <DialogDescription>Add, update, or remove direct workspace tags.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={saveTag}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="workspace-tag-key">Key</FieldLabel>
+                <Input
+                  id="workspace-tag-key"
+                  value={tagKey}
+                  disabled={editingTagKey !== null}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTagKey(event.currentTarget.value); }}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="workspace-tag-value">Value</FieldLabel>
+                <Input
+                  id="workspace-tag-value"
+                  value={tagValue}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTagValue(event.currentTarget.value); }}
+                />
+              </Field>
+            </FieldGroup>
+            <DialogFooter className="mt-4">
+              {editingTagKey !== null && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={(): void => {
+                    setEditingTagKey(null);
+                    setTagKey("");
+                    setTagValue("");
+                  }}
+                >
+                  Cancel edit
+                </Button>
+              )}
+              <Button type="submit" disabled={tagKey.trim() === "" || savingTag}>
+                {savingTag && <Spinner data-icon="inline-start" />}
+                {editingTagKey === null ? "Add tag" : "Update tag"}
+              </Button>
+            </DialogFooter>
+          </form>
+          <Table>
+            <TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Value</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {tagBindings.map((tag): React.JSX.Element => (
+                <TableRow key={tag.id}>
+                  <TableCell className="font-medium">{tag.attributes.key}</TableCell>
+                  <TableCell>{tag.attributes.value ?? ""}</TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Edit tag ${tag.attributes.key}`}
+                        onClick={(): void => {
+                          setEditingTagKey(tag.attributes.key);
+                          setTagKey(tag.attributes.key);
+                          setTagValue(tag.attributes.value ?? "");
+                        }}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete tag ${tag.attributes.key}`}
+                        onClick={(): void => { void deleteTag(tag); }}
+                      >
+                        <Trash2 />
+                      </Button>
                     </div>
-                  </td>
-                  <td className="px-4 py-3 border-r border-gray-200 text-gray-600 text-[13px]">
-                    {ws.attributes["vcs-repo"] != null ? (
-                      <span className="hover:underline cursor-pointer">{ws.attributes["vcs-repo"].identifier}</span>
-                    ) : (
-                      <span className="text-gray-400">None</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 border-r border-gray-200 text-gray-500 text-[13px]">
-                    {(ws.attributes["tag-names"] ?? ws.attributes.tags ?? []).length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {(ws.attributes["tag-names"] ?? ws.attributes.tags ?? []).map((tag: string): React.JSX.Element => (
-                          <span key={tag} className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 border border-blue-200">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-gray-400">None</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 border-r border-gray-200 text-gray-600 text-[13px]">
-                    <span className="hover:underline cursor-pointer">Default Project</span>
-                  </td>
-                  <td className="px-4 py-3 border-r border-gray-200 text-gray-500 text-[13px] text-right">
-                    a day ago
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <button className="h-8 w-8 rounded border border-gray-200 inline-flex items-center justify-center hover:bg-gray-100 text-gray-500 transition-colors bg-white">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {!loading && filteredWorkspaces.length > 0 && (
-        <div className="flex items-center justify-between mt-4 px-1">
-          <div className="text-xs text-gray-500">
-            1-{filteredWorkspaces.length} of {filteredWorkspaces.length}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button className="text-gray-400 hover:text-gray-600 disabled:opacity-50" disabled>
-               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-            </button>
-            <div className="text-blue-600 font-medium text-sm border-b-2 border-blue-600 px-1 pb-0.5">1</div>
-            <button className="text-gray-400 hover:text-gray-600 disabled:opacity-50" disabled>
-               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <span>Items per page</span>
-            <select className="border border-gray-300 rounded-[4px] py-1 px-2 text-gray-700 focus:outline-none focus:border-blue-500 bg-white">
-              <option>20</option>
-              <option>50</option>
-              <option>100</option>
-            </select>
-          </div>
-        </div>
-      )}
-
-      {/* Footer minimal text */}
-      <div className="mt-16 flex items-center justify-center gap-4 text-xs text-gray-500 pb-8">
-        <a href="#" className="hover:text-gray-700">Support</a>
-        <a href="#" className="hover:text-gray-700">Terms</a>
-        <a href="#" className="hover:text-gray-700">Privacy</a>
-        <a href="#" className="hover:text-gray-700">Security</a>
-        <a href="#" className="hover:text-gray-700">Accessibility</a>
-        <span className="flex items-center gap-1.5 ml-4">
-          <div className="font-bold border border-gray-400 rounded-sm px-1 text-[8px] leading-3 uppercase tracking-tighter">IBM</div>
-          © 2026 HashiCorp, an IBM Company
-        </span>
-      </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {tagBindings.length === 0 && (
+                <TableRow><TableCell colSpan={3} className="py-8 text-center text-muted-foreground">No direct tags.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </DialogContent>
+      </Dialog>
     </div>
-  );
-}
-
-function SortIcon(): React.JSX.Element {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>
-  );
-}
-
-function HelpCircleIcon(): React.JSX.Element {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
   );
 }

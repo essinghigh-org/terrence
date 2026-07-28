@@ -4,7 +4,56 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
-import { Settings, Users, Trash2, HelpCircle } from "lucide-react";
+import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Select } from "../components/ui/select";
+import { Checkbox } from "../components/ui/checkbox";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { toast } from "../components/ui/toast";
+import { HelpCircle, MailPlus, Settings, Trash2, UserMinus, Users } from "lucide-react";
+
+type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
+type Membership = Readonly<{
+  id: string;
+  attributes: Readonly<{ email?: string | null; role?: string; status?: string }>;
+}>;
+
+const organizationPermissions = [
+  "manage-policies",
+  "manage-policy-overrides",
+  "delegate-policy-overrides",
+  "manage-run-tasks",
+  "manage-workspaces",
+  "manage-vcs-settings",
+  "manage-agent-pools",
+  "manage-providers",
+  "manage-modules",
+  "manage-projects",
+  "read-projects",
+  "read-workspaces",
+  "manage-membership",
+  "manage-teams",
+  "manage-organization-access",
+] as const;
+
+type OrganizationPermission = typeof organizationPermissions[number];
+
+function teamOrganizationAccess(team: Team): Record<OrganizationPermission, boolean> {
+  const raw = team.attributes["organization-access"];
+  const access = raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  return Object.fromEntries(
+    organizationPermissions.map((permission): [OrganizationPermission, boolean] => [
+      permission,
+      access[permission] === true,
+    ]),
+  ) as Record<OrganizationPermission, boolean>;
+}
+
+function permissionLabel(permission: OrganizationPermission): string {
+  return permission.split("-").map((word: string): string =>
+    word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+}
 
 export function OrganizationSettings(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
@@ -15,13 +64,24 @@ export function OrganizationSettings(): React.JSX.Element {
   const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [saving, setSaving] = useState(false);
-  const [teams, setTeams] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [newTeamName, setNewTeamName] = useState("");
+  const [editingTeamId, setEditingTeamId] = useState("");
+  const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
+    (): Record<OrganizationPermission, boolean> =>
+      Object.fromEntries(organizationPermissions.map((permission): [OrganizationPermission, boolean] => [permission, false])) as Record<OrganizationPermission, boolean>,
+  );
+  const [savingTeamPermissions, setSavingTeamPermissions] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteTeamId, setInviteTeamId] = useState("");
+  const [inviting, setInviting] = useState(false);
   const [activeTab, setActiveTab] = useState("general");
 
   useEffect((): void => {
     void loadOrg();
     void loadTeams();
+    void loadMemberships();
   }, [orgName]);
 
   const loadOrg = async (): Promise<void> => {
@@ -38,10 +98,21 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadTeams = async (): Promise<void> => {
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`) as { data: { id: string; attributes: Record<string, unknown> }[] };
-      setTeams(res.data);
+      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`) as { data?: Team[] };
+      setTeams(Array.isArray(res.data) ? res.data : []);
     } catch {
       setTeams([]);
+    }
+  };
+
+  const loadMemberships = async (): Promise<void> => {
+    try {
+      const response = await fetchApi(
+        `/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`,
+      ) as { data?: Membership[] };
+      setMemberships(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      setMemberships([]);
     }
   };
 
@@ -65,10 +136,10 @@ export function OrganizationSettings(): React.JSX.Element {
       if (name !== orgNameParam) {
         void navigate(`/app/${name}/settings`);
       }
-      alert("Organization settings saved");
+      toast.add({ title: "Organization settings saved", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to save settings";
-      alert(msg);
+      toast.add({ title: "Could not save organization", description: msg, type: "error" });
     } finally {
       setSaving(false);
     }
@@ -81,7 +152,7 @@ export function OrganizationSettings(): React.JSX.Element {
       void navigate("/app");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete organization";
-      alert(msg);
+      toast.add({ title: "Could not delete organization", description: msg, type: "error" });
     }
   };
 
@@ -96,10 +167,104 @@ export function OrganizationSettings(): React.JSX.Element {
         }),
       });
       setNewTeamName("");
-      void loadTeams();
+      await loadTeams();
+      toast.add({ title: "Team created", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to create team";
-      alert(msg);
+      toast.add({ title: "Could not create team", description: msg, type: "error" });
+    }
+  };
+
+  const editTeamPermissions = (team: Team): void => {
+    setEditingTeamId(team.id);
+    setTeamPermissions(teamOrganizationAccess(team));
+  };
+
+  const setTeamPermission = (permission: OrganizationPermission, enabled: boolean): void => {
+    setTeamPermissions((current): Record<OrganizationPermission, boolean> => {
+      const next = { ...current, [permission]: enabled };
+      if (permission === "manage-projects" && enabled) next["manage-workspaces"] = true;
+      if (permission === "manage-workspaces" && !enabled) next["manage-projects"] = false;
+      if (permission === "read-projects" && enabled) next["read-workspaces"] = true;
+      if (permission === "read-workspaces" && !enabled) next["read-projects"] = false;
+      return next;
+    });
+  };
+
+  const saveTeamPermissions = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    if (editingTeamId === "") return;
+    setSavingTeamPermissions(true);
+    try {
+      const response = await fetchApi(`/teams/${encodeURIComponent(editingTeamId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: {
+            type: "teams",
+            attributes: { "organization-access": teamPermissions },
+          },
+        }),
+      }) as { data: Team };
+      setTeams((current: Team[]): Team[] =>
+        current.map((team: Team): Team => team.id === response.data.id ? response.data : team));
+      setEditingTeamId("");
+      toast.add({ title: "Team organization access saved", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not save team permissions",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setSavingTeamPermissions(false);
+    }
+  };
+
+  const inviteMember = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    const email = inviteEmail.trim();
+    if (email === "") return;
+    setInviting(true);
+    try {
+      await fetchApi(`/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "organization-memberships",
+            attributes: { email, status: "invited" },
+            relationships: inviteTeamId === ""
+              ? undefined
+              : { teams: { data: [{ id: inviteTeamId, type: "teams" }] } },
+          },
+        }),
+      });
+      setInviteEmail("");
+      setInviteTeamId("");
+      await Promise.all([loadMemberships(), loadTeams()]);
+      toast.add({ title: "Invitation created", description: `${email} was added to the organization.`, type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not invite member",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const removeMembership = async (membership: Membership): Promise<void> => {
+    if (!window.confirm(`Remove ${membership.attributes.email ?? "this member"} from the organization?`)) return;
+    try {
+      await fetchApi(`/organization-memberships/${membership.id}`, { method: "DELETE" });
+      await Promise.all([loadMemberships(), loadTeams()]);
+      toast.add({ title: "Member removed", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not remove member",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
     }
   };
 
@@ -259,27 +424,147 @@ export function OrganizationSettings(): React.JSX.Element {
                   </form>
                 </div>
                 <div className="divide-y divide-gray-100">
-                  {teams.map((team: { id: string; attributes: Record<string, unknown> }): React.JSX.Element => (
-                    <div key={team.id} className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors">
-                      <div className="flex items-center gap-3">
-                         <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center border border-gray-200">
-                            <Users className="h-4 w-4 text-gray-500" />
-                         </div>
-                        <div>
-                          <p className="font-semibold text-[14px] text-blue-700 hover:underline cursor-pointer">
-                            {(team.attributes["name"] as string)}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+                  {teams.map((team): React.JSX.Element => {
+                    const teamName = team.attributes["name"] as string;
+                    return (
+                      <div key={team.id}>
+                        <div className="flex items-center justify-between gap-3 p-4 hover:bg-gray-50 transition-colors">
+                          <div className="flex items-center gap-3">
+                            <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center border border-gray-200">
+                              <Users className="h-4 w-4 text-gray-500" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-[14px] text-blue-700">
+                                {teamName}
+                              </p>
+                              <p className="text-xs text-gray-500 mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full border border-gray-200 capitalize font-medium tracking-wide">
+                              {(team.attributes["visibility"] as string | undefined) ?? "organization"}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`Manage permissions for ${teamName}`}
+                              onClick={(): void => { editTeamPermissions(team); }}
+                            >
+                              Permissions
+                            </Button>
+                          </div>
                         </div>
+                        {editingTeamId === team.id && (
+                          <form onSubmit={saveTeamPermissions} className="border-t bg-gray-50/70 p-4">
+                            <div className="mb-3">
+                              <p className="text-sm font-semibold text-gray-900">Organization access for {teamName}</p>
+                              <p className="text-xs text-gray-500">
+                                Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
+                              </p>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              {organizationPermissions.map((permission): React.JSX.Element => {
+                                const id = `team-${team.id}-${permission}`;
+                                return (
+                                  <div key={permission} className="flex items-center gap-2">
+                                    <Checkbox
+                                      id={id}
+                                      checked={teamPermissions[permission]}
+                                      onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
+                                      disabled={savingTeamPermissions}
+                                    />
+                                    <label htmlFor={id} className="text-sm text-gray-700">{permissionLabel(permission)}</label>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-4 flex justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                disabled={savingTeamPermissions}
+                                onClick={(): void => { setEditingTeamId(""); }}
+                              >
+                                Cancel
+                              </Button>
+                              <Button type="submit" disabled={savingTeamPermissions}>
+                                {savingTeamPermissions ? "Saving…" : "Save permissions"}
+                              </Button>
+                            </div>
+                          </form>
+                        )}
                       </div>
-                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full border border-gray-200 capitalize font-medium tracking-wide">
-                        {(team.attributes["visibility"] as string | undefined) ?? "organization"}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {teams.length === 0 && (
                     <p className="p-8 text-sm text-gray-500 text-center">No teams created yet.</p>
                   )}
+                </div>
+                <div className="flex flex-col gap-5 border-t p-5">
+                  <div className="flex flex-col gap-1">
+                    <h3 className="font-semibold">Organization members</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Invite a user and optionally add them to a team.
+                    </p>
+                  </div>
+                  <form onSubmit={inviteMember}>
+                    <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
+                      <Field>
+                        <FieldLabel htmlFor="member-email">Email</FieldLabel>
+                        <Input
+                          id="member-email"
+                          type="email"
+                          value={inviteEmail}
+                          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }}
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="member-team">Team</FieldLabel>
+                        <Select id="member-team" value={inviteTeamId} onValueChange={setInviteTeamId}>
+                          <option value="">No team</option>
+                          {teams.map((team): React.JSX.Element => (
+                            <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field className="justify-end">
+                        <Button type="submit" disabled={inviting || inviteEmail.trim() === ""}>
+                          <MailPlus data-icon="inline-start" />
+                          {inviting ? "Inviting" : "Invite"}
+                        </Button>
+                      </Field>
+                    </FieldGroup>
+                  </form>
+                  <Table>
+                    <TableHeader>
+                      <TableRow><TableHead>Email</TableHead><TableHead>Status</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {memberships.map((membership): React.JSX.Element => (
+                        <TableRow key={membership.id}>
+                          <TableCell className="font-medium">{membership.attributes.email ?? "Local user"}</TableCell>
+                          <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                          <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Remove ${membership.attributes.email ?? "member"}`}
+                              disabled={membership.attributes.role === "owner"}
+                              onClick={(): void => { void removeMembership(membership); }}
+                            >
+                              <UserMinus />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {memberships.length === 0 && (
+                        <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization members found.</TableCell></TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>

@@ -129,6 +129,14 @@ describe("Terraform cloud protocol contract", () => {
       body: new Uint8Array([0x1f, 0x8b, 0x08]),
     });
     expect(uploadResponse.status).toBe(200);
+    const downloadResponse = await request(
+      `/api/v2/configuration-versions/${configurationVersionId}/download`,
+      { headers: authHeaders },
+    );
+    expect(downloadResponse.status).toBe(200);
+    expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(
+      new Uint8Array([0x1f, 0x8b, 0x08]),
+    );
 
     const configurationListResponse = await request(
       `/api/v2/workspaces/${workspaceId}/configuration-versions?page[number]=1&page[size]=1`,
@@ -212,6 +220,7 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports state version creation, current version retrieval, and state download", async () => {
+    const state = { version: 4, serial: 1, lineage: suffix, resources: [] };
     const metadataOnlyStateResponse = await request(
       `/api/v2/workspaces/${workspaceId}/state-versions`,
       {
@@ -222,33 +231,34 @@ describe("Terraform cloud protocol contract", () => {
         }),
       },
     );
-    expect(metadataOnlyStateResponse.status).toBe(400);
-    expect((await metadataOnlyStateResponse.json()).errors[0].detail).toBe(
-      "param is missing or the value is empty: state",
+    expect(metadataOnlyStateResponse.status).toBe(201);
+    const pendingState = (await metadataOnlyStateResponse.json()).data;
+    expect(pendingState.attributes.status).toBe("pending");
+    const stateUploadUrl = pendingState.attributes["hosted-state-upload-url"];
+    const jsonStateUploadUrl = pendingState.attributes["hosted-json-state-upload-url"];
+    expect(stateUploadUrl).toMatch(
+      /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/upload\?expires=\d+&signature=[a-f0-9]+$/,
     );
+    expect((await request(stateUploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    })).status).toBe(200);
+    expect((await request(jsonStateUploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    })).status).toBe(200);
 
-    const state = { version: 4, serial: 1, lineage: suffix, resources: [] };
-    const createStateResponse = await request(
-      `/api/v2/workspaces/${workspaceId}/state-versions`,
-      {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          data: {
-            type: "state-versions",
-            attributes: {
-              serial: 1,
-              state: Buffer.from(JSON.stringify(state)).toString("base64"),
-            },
-          },
-        }),
-      },
+    const createdStateResponse = await request(
+      `/api/v2/state-versions/${pendingState.id}`,
+      { headers: authHeaders },
     );
-    expect(createStateResponse.status).toBe(201);
-    const createdState = await createStateResponse.json();
+    expect(createdStateResponse.status).toBe(200);
+    const createdState = await createdStateResponse.json();
     const stateDownloadUrl = createdState.data.attributes["hosted-state-download-url"];
     expect(stateDownloadUrl).toMatch(
-      /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/download$/,
+      /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/download\?expires=\d+&signature=[a-f0-9]+$/,
     );
 
     const currentStateResponse = await request(
@@ -257,9 +267,9 @@ describe("Terraform cloud protocol contract", () => {
     );
     expect(currentStateResponse.status).toBe(200);
     const currentState = await currentStateResponse.json();
-    expect(currentState.data.attributes["hosted-state-download-url"]).toBe(stateDownloadUrl);
+    expect(currentState.data.id).toBe(pendingState.id);
 
-    const stateDownloadResponse = await request(stateDownloadUrl, { headers: authHeaders });
+    const stateDownloadResponse = await request(stateDownloadUrl);
     expect(stateDownloadResponse.status).toBe(200);
     expect(await stateDownloadResponse.json()).toEqual(state);
   });

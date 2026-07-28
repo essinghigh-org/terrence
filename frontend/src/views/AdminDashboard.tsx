@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { toast } from "../components/ui/toast";
 
 export function AdminDashboard(): React.JSX.Element {
   type ItemAttrs = {
@@ -121,9 +122,10 @@ export function AdminDashboard(): React.JSX.Element {
       setNewUrl("");
       setNewSha("");
       void loadAdminData();
+      toast.add({ title: "Terraform version added", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error adding version";
-      alert(msg);
+      toast.add({ title: "Could not add Terraform version", description: msg, type: "error" });
     }
   };
 
@@ -132,9 +134,10 @@ export function AdminDashboard(): React.JSX.Element {
     try {
       await fetchApi(`/api/v2/admin/terraform-versions/${id}`, { method: "DELETE" });
       void loadAdminData();
+      toast.add({ title: "Terraform version deleted", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error deleting version";
-      alert(msg);
+      toast.add({ title: "Could not delete Terraform version", description: msg, type: "error" });
     }
   };
 
@@ -144,9 +147,10 @@ export function AdminDashboard(): React.JSX.Element {
         method: "POST",
       });
       void loadAdminData();
+      toast.add({ title: force ? "Run force-canceled" : "Run canceled", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error canceling run";
-      alert(msg);
+      toast.add({ title: "Could not cancel run", description: msg, type: "error" });
     }
   };
 

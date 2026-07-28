@@ -1,5 +1,8 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
+import { db } from "../../src/db";
+import { stateVersions } from "../../src/db/schema";
+import { and, eq } from "drizzle-orm";
 
 describe("TFE API v2 - Data Retention & Garbage Collection", () => {
   let userToken: string;
@@ -101,13 +104,27 @@ describe("TFE API v2 - Data Retention & Garbage Collection", () => {
 
     expect(drpRes.status).toBe(201);
     const drpBody = await drpRes.json();
-    // State version creation auto-soft-deletes previous finalized versions,
-    // so all excess versions are already in "backing_data_soft_deleted" status.
-    // The GC function will permanently delete the soft-deleted ones.
-    expect(drpBody.data.meta.gc.softDeleted).toBe(0);
-    expect(drpBody.data.meta.gc.permanentlyDeleted).toBe(2);
+    expect(drpBody.data.meta.gc.softDeleted).toBe(1);
+    expect(drpBody.data.meta.gc.permanentlyDeleted).toBe(0);
 
-    // Trigger GC again — no more soft-deleted versions remain
+    const softDeleted = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, workspaceId),
+        eq(stateVersions.status, "backing_data_soft_deleted"),
+      ),
+    });
+    expect(softDeleted).toBeDefined();
+
+    const restoreRes = await app.handle(
+      new Request(`http://localhost/api/v2/state-versions/${softDeleted!.id}/actions/restore_backing_data`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    );
+    expect(restoreRes.status).toBe(200);
+
+    // The next pass marks the excess version again, but does not permanently
+    // delete it until the grace period elapses.
     const gcRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/gc`, {
         method: "POST",
@@ -116,6 +133,20 @@ describe("TFE API v2 - Data Retention & Garbage Collection", () => {
     );
     expect(gcRes.status).toBe(200);
     const gcBody = await gcRes.json();
+    expect(gcBody.data.softDeleted).toBe(1);
     expect(gcBody.data.permanentlyDeleted).toBe(0);
+
+    await db.update(stateVersions)
+      .set({ softDeletedAt: Date.now() - 8 * 86_400_000 })
+      .where(eq(stateVersions.id, softDeleted!.id));
+
+    const finalGcRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/gc`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    );
+    expect(finalGcRes.status).toBe(200);
+    expect((await finalGcRes.json()).data.permanentlyDeleted).toBe(1);
   });
 });

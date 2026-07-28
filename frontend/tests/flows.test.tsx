@@ -2,10 +2,12 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
+import { Toaster } from "../src/components/ui/toast";
 import { Login } from "../src/views/Login";
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 
 const originalFetch = globalThis.fetch;
@@ -75,8 +77,9 @@ test("logs in, stores the token, and navigates home", async () => {
   const [loginUrl, loginOptions] = fetchMock.mock.calls[0]!;
   expect(getUrlString(loginUrl)).toBe("/api/v2/users/login");
   expect(JSON.parse((loginOptions as RequestInit).body as string)).toEqual({
-    data: { attributes: { username: "alice", password: "correct horse" } },
+    data: { attributes: { username: "alice", password: "correct horse", "browser-session": true } },
   });
+  expect(localStorage.getItem("tfe_refreshable_session")).toBe("true");
 });
 
 test("creates a workspace from the modal", async () => {
@@ -131,24 +134,39 @@ test("creates a workspace from the modal", async () => {
   expect(view.getByLabelText("GitHub App Installation ID").value).toBe("");
 });
 
+test("opens workspace creation from the workspace list", async () => {
+  globalThis.fetch = mock(async (): Promise<Response> => json({ data: [] })) as typeof fetch;
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes>
+        <Route path="/app/:orgName" element={<Workspaces />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("No workspaces found")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "New workspace" }));
+  expect(view.getByRole("heading", { name: "New Workspace" })).toBeTruthy();
+  expect(view.getByLabelText("Execution Engine")).toBeTruthy();
+});
+
 test("rejects a partially configured workspace VCS connection", async () => {
   const fetchMock = mock(async (): Promise<Response> => json({ data: { id: "unexpected" } }));
-  const alertMock = mock((): void => {
-    // Intentional alert mock
-  });
   globalThis.fetch = fetchMock as typeof fetch;
-  globalThis.alert = alertMock;
   const view = render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open
-      onOpenChange={(): void => {
-        // Intentional noop
-      }}
-      onCreated={(): void => {
-        // Intentional noop
-      }}
-    />,
+    <>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open
+        onOpenChange={(): void => {
+          // Intentional noop
+        }}
+        onCreated={(): void => {
+          // Intentional noop
+        }}
+      />
+      <Toaster />
+    </>,
   );
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
@@ -157,13 +175,19 @@ test("rejects a partially configured workspace VCS connection", async () => {
     if (form !== null) fireEvent.submit(form);
   });
   expect(fetchMock).toHaveBeenCalledTimes(0);
-  expect(alertMock).toHaveBeenCalledTimes(1);
+  await waitFor((): void => {
+    expect(view.getByText("Incomplete VCS connection")).toBeTruthy();
+  });
 });
 
-test("creates and deletes a workspace variable", async () => {
+test("creates, edits, and deletes a workspace variable", async () => {
+  const variables: {
+    id: string;
+    attributes: Record<string, unknown>;
+  }[] = [];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
-    if (url.endsWith("/organizations/acme/workspaces/production")) {
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
         data: {
           id: "ws-1",
@@ -178,23 +202,25 @@ test("creates and deletes a workspace variable", async () => {
       });
     }
     if (url.endsWith("/workspaces/ws-1/vars") && init?.method === "POST") {
-      return json({
-        data: {
-          id: "var-1",
-          attributes: {
-            key: "region",
-            value: "eu-west-2",
-            category: "terraform",
-            sensitive: false,
-          },
-        },
-      });
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const variable = { id: "var-1", attributes: payload.data.attributes };
+      variables.push(variable);
+      return json({ data: variable });
     }
-    if (url.endsWith("/workspaces/ws-1/vars") && init?.method === undefined) return json({ data: [] });
-    if (url.endsWith("/workspaces/ws-1/vars/var-1")) return new Response(null, { status: 204 });
+    if (url.includes("/workspaces/ws-1/vars?") && init?.method === undefined) return json({ data: variables });
+    if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      variables[0] = { id: "var-1", attributes: payload.data.attributes };
+      return json({ data: variables[0] });
+    }
+    if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "DELETE") {
+      variables.splice(0);
+      return new Response(null, { status: 204 });
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.confirm = mock((): boolean => true);
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -208,6 +234,637 @@ test("creates and deletes a workspace variable", async () => {
   );
 
   await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "variables" }));
+  await waitFor((): void => { expect(view.getByText("No workspace variables have been added.")).toBeTruthy(); });
+
+  fireEvent.click(view.getByRole("button", { name: "Add variable" }));
+  changeInput(asElement(view.getByLabelText("Key")), "region");
+  changeInput(asElement(view.getByLabelText("Value")), "eu-west-2");
+  fireEvent.change(view.getByLabelText("Category"), { target: { value: "env" } });
+  changeInput(asElement(view.getByLabelText("Description")), "Deployment region");
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save variable" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  const createdRow = await waitFor((): HTMLElement =>
+    view.getByText("region").closest("tr") as HTMLElement,
+  );
+  expect(within(createdRow).getByText("eu-west-2")).toBeTruthy();
+  expect(within(createdRow).getByText("Environment")).toBeTruthy();
+
+  fireEvent.click(within(createdRow).getByRole("button", { name: "Edit" }));
+  changeInput(asElement(view.getByLabelText("Value")), "eu-central-1");
+  fireEvent.click(view.getByLabelText("Sensitive"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save variable" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  const editedRow = await waitFor((): HTMLElement =>
+    view.getByText("region").closest("tr") as HTMLElement,
+  );
+  expect(within(editedRow).getByText("Sensitive — write only")).toBeTruthy();
+  fireEvent.click(within(editedRow).getByRole("button", { name: "Delete" }));
+  await waitFor((): void => {
+    expect(view.getByText("No workspace variables have been added.")).toBeTruthy();
+  });
+
+  expect(fetchMock.mock.calls.map(([input]): string => getUrlString(input))).toContain(
+    "/api/v2/workspaces/ws-1/vars/var-1",
+  );
+});
+
+test("updates workspace execution and auto-apply settings", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    const workspace = {
+      id: "ws-1",
+      attributes: {
+        name: "production",
+        "auto-apply": false,
+        "auto-apply-run-trigger": false,
+        "iac-binary": "tofu",
+        "terraform-version": "latest",
+        locked: false,
+        permissions: { "can-update": true },
+      },
+    };
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: workspace });
+    }
+    if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as {
+        data: { attributes: Record<string, unknown> };
+      };
+      return json({
+        data: {
+          ...workspace,
+          attributes: { ...workspace.attributes, ...payload.data.attributes },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "settings" }));
+  fireEvent.change(view.getByLabelText("Execution engine"), { target: { value: "terraform" } });
+  changeInput(asElement(view.getByLabelText("Engine version")), "1.9.3");
+  fireEvent.click(view.getByLabelText("Auto-apply API, UI, and VCS runs"));
+  fireEvent.click(view.getByLabelText("Auto-apply run-triggered runs"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save settings" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  await waitFor((): void => { expect(view.getByText("Settings saved.")).toBeTruthy(); });
+  const patchCall = fetchMock.mock.calls.find(([input, init]): boolean =>
+    getUrlString(input) === "/api/v2/workspaces/ws-1" && init?.method === "PATCH"
+  );
+  expect(patchCall).toBeDefined();
+  if (patchCall === undefined) throw new Error("Expected workspace settings PATCH request");
+  expect(JSON.parse(patchCall[1]!.body as string)).toEqual({
+    data: {
+      id: "ws-1",
+      type: "workspaces",
+      attributes: {
+        "iac-binary": "terraform",
+        "terraform-version": "1.9.3",
+        "auto-apply": true,
+        "auto-apply-run-trigger": true,
+      },
+    },
+  });
+});
+
+test("assigns an SSH key and enables workspace health assessments", async () => {
+  const workspace = {
+    id: "ws-1",
+    attributes: {
+      name: "production",
+      "assessments-enabled": false,
+      locked: false,
+      permissions: { "can-update": true },
+    },
+    relationships: { "ssh-key": { data: null } },
+  };
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") return json({ data: workspace });
+    if (url === "/api/v2/organizations/acme/ssh-keys") {
+      return json({ data: [{ id: "ssh-1", attributes: { name: "Deploy key" } }] });
+    }
+    if (url === "/api/v2/workspaces/ws-1/relationships/ssh-key" && init?.method === "PATCH") {
+      return json({ data: { id: "ws-1", relationships: { "ssh-key": { data: { id: "ssh-1", type: "ssh-keys" } } } } });
+    }
+    if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      return json({
+        data: {
+          ...workspace,
+          attributes: { ...workspace.attributes, ...payload.data.attributes },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "ssh key" }));
+  await waitFor((): void => { expect(view.getByLabelText("Assigned key")).toBeTruthy(); });
+  fireEvent.change(view.getByLabelText("Assigned key"), { target: { value: "ssh-1" } });
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save assignment" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  await waitFor((): void => { expect(view.getByText("SSH key assignment saved.")).toBeTruthy(); });
+  fireEvent.change(view.getByLabelText("Assigned key"), { target: { value: "" } });
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save assignment" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.filter(([input]): boolean =>
+      getUrlString(input) === "/api/v2/workspaces/ws-1/relationships/ssh-key"
+    )).toHaveLength(2);
+  });
+
+  fireEvent.click(view.getByRole("button", { name: "health" }));
+  fireEvent.click(view.getByLabelText("Enable health assessments"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save health settings" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  await waitFor((): void => { expect(view.getByText("Health assessment setting saved.")).toBeTruthy(); });
+
+  const sshPatches = fetchMock.mock.calls.filter(([input]): boolean =>
+    getUrlString(input) === "/api/v2/workspaces/ws-1/relationships/ssh-key"
+  );
+  const [assignPatch, removePatch] = sshPatches;
+  if (assignPatch === undefined || removePatch === undefined) {
+    throw new Error("Expected SSH key assignment and removal PATCH requests");
+  }
+  expect(JSON.parse(assignPatch[1]!.body as string)).toEqual({
+    data: { id: "ssh-1", type: "ssh-keys" },
+  });
+  expect(JSON.parse(removePatch[1]!.body as string)).toEqual({ data: null });
+  const healthPatch = fetchMock.mock.calls.find(([input]): boolean =>
+    getUrlString(input) === "/api/v2/workspaces/ws-1"
+  );
+  if (healthPatch === undefined) throw new Error("Expected health assessment PATCH request");
+  expect(JSON.parse(healthPatch[1]!.body as string).data.attributes).toEqual({
+    "assessments-enabled": true,
+  });
+});
+
+test("manages workspace run triggers and custom team access", async () => {
+  const triggers: Record<string, unknown>[] = [];
+  const teamAccess: {
+    id: string;
+    attributes: Record<string, unknown>;
+    relationships: Record<string, unknown>;
+  }[] = [];
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: { id: "ws-1", attributes: { name: "production", locked: false } } });
+    }
+    if (url.includes("/organizations/acme/workspaces?")) {
+      return json({
+        data: [
+          { id: "ws-1", attributes: { name: "production" } },
+          { id: "ws-source", attributes: { name: "networking" } },
+        ],
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/run-triggers") return json({ data: triggers });
+    if (url === "/api/v2/workspaces/ws-1/relationships/run-triggers" && init?.method === "POST") {
+      triggers.push({
+        id: "rt-1",
+        attributes: { "created-at": "2026-07-28T12:00:00.000Z" },
+        relationships: {
+          "sourceable-workspace": { data: { id: "ws-source", type: "workspaces" } },
+        },
+      });
+      return new Response(null, { status: 204 });
+    }
+    if (url === "/api/v2/workspaces/ws-1/relationships/run-triggers" && init?.method === "DELETE") {
+      triggers.splice(0);
+      return new Response(null, { status: 204 });
+    }
+    if (url === "/api/v2/organizations/acme/teams") {
+      return json({ data: [{ id: "team-1", attributes: { name: "Platform" } }] });
+    }
+    if (url.includes("/api/v2/team-workspaces?")) return json({ data: teamAccess });
+    if (url === "/api/v2/team-workspaces" && init?.method === "POST") {
+      const payload = JSON.parse(init.body as string) as {
+        data: {
+          attributes: Record<string, unknown>;
+          relationships: Record<string, unknown>;
+        };
+      };
+      const relationship = {
+        id: "tw-1",
+        attributes: payload.data.attributes,
+        relationships: payload.data.relationships,
+      };
+      teamAccess.push(relationship);
+      return json({ data: relationship });
+    }
+    if (url === "/api/v2/team-workspaces/tw-1" && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      teamAccess[0] = {
+        ...teamAccess[0]!,
+        attributes: payload.data.attributes,
+      };
+      return json({ data: teamAccess[0] });
+    }
+    if (url === "/api/v2/team-workspaces/tw-1" && init?.method === "DELETE") {
+      teamAccess.splice(0);
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.confirm = mock((): boolean => true);
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "run triggers" }));
+  await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
+  fireEvent.change(view.getByLabelText("Source workspace"), { target: { value: "ws-source" } });
+  fireEvent.click(view.getByRole("button", { name: "Add trigger" }));
+  const triggerRow = await waitFor((): HTMLElement =>
+    view.getByRole("cell", { name: "networking" }).closest("tr") as HTMLElement,
+  );
+  fireEvent.click(within(triggerRow).getByRole("button", { name: "Remove" }));
+  await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
+
+  fireEvent.click(view.getByRole("button", { name: "team access" }));
+  await waitFor((): void => { expect(view.getByText("No teams have explicit access to this workspace.")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Add team" }));
+  fireEvent.change(view.getByLabelText("Team"), { target: { value: "team-1" } });
+  fireEvent.change(view.getByLabelText("Access level"), { target: { value: "custom" } });
+  fireEvent.change(view.getByLabelText("Runs"), { target: { value: "apply" } });
+  fireEvent.change(view.getByLabelText("Variables"), { target: { value: "write" } });
+  fireEvent.click(view.getByLabelText("Workspace locking"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save team access" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  const teamRow = await waitFor((): HTMLElement =>
+    view.getByRole("cell", { name: "Platform" }).closest("tr") as HTMLElement,
+  );
+  expect(within(teamRow).getByText("custom")).toBeTruthy();
+  fireEvent.click(within(teamRow).getByRole("button", { name: "Edit" }));
+  fireEvent.change(view.getByLabelText("Access level"), { target: { value: "admin" } });
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save team access" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  const adminRow = await waitFor((): HTMLElement =>
+    view.getByRole("cell", { name: "Platform" }).closest("tr") as HTMLElement,
+  );
+  expect(within(adminRow).getByText("admin")).toBeTruthy();
+  fireEvent.click(within(adminRow).getByRole("button", { name: "Remove" }));
+  await waitFor((): void => { expect(view.getByText("No teams have explicit access to this workspace.")).toBeTruthy(); });
+
+  const customCreate = fetchMock.mock.calls.find(([input, init]): boolean =>
+    getUrlString(input) === "/api/v2/team-workspaces" && init?.method === "POST"
+  );
+  if (customCreate === undefined) throw new Error("Expected custom team access POST request");
+  const customAttributes = JSON.parse(customCreate[1]!.body as string).data.attributes;
+  expect(customAttributes.access).toBe("custom");
+  expect(customAttributes.permissions).toMatchObject({
+    runs: "apply",
+    variables: "write",
+    "workspace-locking": true,
+  });
+});
+
+test("creates, verifies, edits, and deletes a workspace notification", async () => {
+  const configurations: {
+    id: string;
+    attributes: Record<string, unknown>;
+  }[] = [];
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: { id: "ws-1", attributes: { name: "production", locked: false } } });
+    }
+    if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === undefined) {
+      return json({ data: configurations });
+    }
+    if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === "POST") {
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const configuration = { id: "nc-1", attributes: payload.data.attributes };
+      configurations.push(configuration);
+      return json({ data: configuration });
+    }
+    if (url === "/api/v2/notification-configurations/nc-1/actions/verify" && init?.method === "POST") {
+      return json({ status: "verification_sent" });
+    }
+    if (url === "/api/v2/notification-configurations/nc-1" && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      configurations[0] = { id: "nc-1", attributes: payload.data.attributes };
+      return json({ data: configurations[0] });
+    }
+    if (url === "/api/v2/notification-configurations/nc-1" && init?.method === "DELETE") {
+      configurations.splice(0);
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.confirm = mock((): boolean => true);
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "notifications" }));
+  await waitFor((): void => {
+    expect(view.getByText("No notification configurations have been added.")).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Add notification" }));
+  changeInput(asElement(view.getByLabelText("Name")), "Deploy alerts");
+  fireEvent.change(view.getByLabelText("Destination type"), { target: { value: "slack" } });
+  changeInput(asElement(view.getByLabelText("Webhook URL")), "https://hooks.example.test/deploy");
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save notification" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  let notificationRow = await waitFor((): HTMLElement =>
+    view.getByText("Deploy alerts").closest("tr") as HTMLElement,
+  );
+  expect(within(notificationRow).getByText("slack")).toBeTruthy();
+  fireEvent.click(within(notificationRow).getByRole("button", { name: "Verify" }));
+  await waitFor((): void => {
+    expect(view.getByText("Verification requested for Deploy alerts.")).toBeTruthy();
+  });
+  fireEvent.click(within(notificationRow).getByRole("button", { name: "Edit" }));
+  fireEvent.click(view.getByLabelText("Enabled"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save notification" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  notificationRow = await waitFor((): HTMLElement =>
+    view.getByText("Deploy alerts").closest("tr") as HTMLElement,
+  );
+  expect(within(notificationRow).getByText("Disabled")).toBeTruthy();
+  fireEvent.click(within(notificationRow).getByRole("button", { name: "Delete" }));
+  await waitFor((): void => {
+    expect(view.getByText("No notification configurations have been added.")).toBeTruthy();
+  });
+});
+
+test("shows effective policy sets and manages workspace VCS settings", async () => {
+  let workspace = {
+    id: "ws-1",
+    attributes: {
+      name: "production",
+      locked: false,
+      "working-directory": "",
+      "auto-apply": false,
+      "file-triggers-enabled": true,
+      "trigger-prefixes": ["modules"],
+      "trigger-patterns": ["services/**/*.tf"],
+      "speculative-enabled": true,
+      "vcs-repo": {
+        identifier: "acme/infrastructure",
+        branch: "main",
+        githubAppInstallationId: "ghain-123",
+        ingressSubmodules: false,
+      },
+      permissions: { "can-update": true },
+    },
+  };
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: workspace });
+    }
+    if (url === "/api/v2/workspaces/ws-1/policy-sets") {
+      return json({
+        data: [{
+          id: "polset-1",
+          type: "policy-sets",
+          attributes: {
+            name: "Production guardrails",
+            description: "Security rules for production infrastructure.",
+            kind: "opa",
+            scope: "global",
+            overridable: false,
+            "policy-count": 2,
+          },
+        }],
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+      const payload = JSON.parse(init.body as string) as {
+        data: { attributes: Record<string, unknown> };
+      };
+      const vcsRepo = payload.data.attributes["vcs-repo"];
+      workspace = {
+        ...workspace,
+        attributes: {
+          ...workspace.attributes,
+          ...payload.data.attributes,
+          "vcs-repo": vcsRepo === null ? null : {
+            identifier: (vcsRepo as Record<string, unknown>)["identifier"] as string,
+            branch: ((vcsRepo as Record<string, unknown>)["branch"] as string | null) ?? undefined,
+            githubAppInstallationId: (
+              (vcsRepo as Record<string, unknown>)["github-app-installation-id"] as string | null
+            ) ?? undefined,
+            ingressSubmodules: (vcsRepo as Record<string, unknown>)["ingress-submodules"] as boolean,
+            tagsRegex: ((vcsRepo as Record<string, unknown>)["tags-regex"] as string | null) ?? undefined,
+          },
+        },
+      };
+      return json({ data: workspace });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.confirm = mock((): boolean => true);
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "policy sets" }));
+  const policyRow = await waitFor((): HTMLElement =>
+    view.getByText("Production guardrails").closest("tr") as HTMLElement,
+  );
+  expect(within(policyRow).getByText("global")).toBeTruthy();
+  expect(within(policyRow).getByText("OPA")).toBeTruthy();
+  expect(within(policyRow).getByText("2")).toBeTruthy();
+
+  fireEvent.click(view.getByRole("button", { name: "vcs" }));
+  await waitFor((): void => { expect(view.getByText("Connected")).toBeTruthy(); });
+  changeInput(asElement(view.getByLabelText("VCS branch")), "release");
+  changeInput(asElement(view.getByLabelText("Terraform working directory")), "environments/production");
+  changeInput(asElement(view.getByLabelText("Git tag regular expression")), "^v\\d+\\.\\d+\\.\\d+$");
+  changeInput(asElement(view.getByLabelText("Trigger prefixes")), "modules, shared");
+  changeInput(asElement(view.getByLabelText("Trigger patterns")), "services/**/*.tf, common/**/*.tf");
+  fireEvent.click(view.getByLabelText("Auto-apply successful plans"));
+  fireEvent.click(view.getByLabelText("Include submodules when cloning"));
+  await act(async () => {
+    const form = view.getByRole("button", { name: "Save VCS settings" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+  await waitFor((): void => { expect(view.getByText("VCS settings saved.")).toBeTruthy(); });
+
+  const saveCall = fetchMock.mock.calls.find(([input, init]): boolean => {
+    if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
+    const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+    return body.data.attributes["vcs-repo"] !== null;
+  });
+  if (saveCall === undefined) throw new Error("Expected VCS settings PATCH request");
+  expect(JSON.parse(saveCall[1]!.body as string).data.attributes).toEqual({
+    "vcs-repo": {
+      identifier: "acme/infrastructure",
+      branch: "release",
+      "github-app-installation-id": "ghain-123",
+      "oauth-token-id": null,
+      "ingress-submodules": true,
+      "tags-regex": "^v\\d+\\.\\d+\\.\\d+$",
+    },
+    "working-directory": "environments/production",
+    "auto-apply": true,
+    "file-triggers-enabled": true,
+    "trigger-prefixes": ["modules", "shared"],
+    "trigger-patterns": ["services/**/*.tf", "common/**/*.tf"],
+    "speculative-enabled": true,
+  });
+
+  fireEvent.click(view.getByRole("button", { name: "Disconnect" }));
+  await waitFor((): void => { expect(view.getByText("Not connected")).toBeTruthy(); });
+  const disconnectCall = fetchMock.mock.calls.find(([input, init]): boolean => {
+    if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
+    const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+    return body.data.attributes["vcs-repo"] === null;
+  });
+  expect(disconnectCall).toBeDefined();
+});
+
+test("displays run cost and policy check results", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/runs/run-policy") {
+      return json({
+        data: {
+          id: "run-policy",
+          attributes: {
+            message: "Review production changes",
+            status: "policy_soft_failed",
+            "created-at": "2026-07-28T12:00:00.000Z",
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/runs/run-policy/logs") {
+      return json({ data: [{ attributes: { "output-text": "Plan: 2 to change." } }] });
+    }
+    if (url === "/api/v2/runs/run-policy/cost-estimate") {
+      return json({
+        data: {
+          id: "ce-run-policy",
+          attributes: {
+            status: "finished",
+            "prior-monthly-cost": "100",
+            "proposed-monthly-cost": "125.5",
+            "delta-monthly-cost": "25.5",
+            "resources-count": 3,
+            "matched-resources-count": 2,
+            "unmatched-resources-count": 1,
+            "error-message": null,
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/runs/run-policy/policy-checks") {
+      return json({
+        data: [{
+          id: "polchk-regions",
+          attributes: {
+            status: "soft_failed",
+            result: { policy: "Restrict regions", violations: ["eu-west-3"] },
+          },
+        }],
+      });
+    }
+    if (url === "/api/v2/runs/run-policy/actions/override-policy" && init?.method === "POST") {
+      return new Response(null, { status: 202 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-policy"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
+          element={<RunDetail />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getAllByText("$25.50 / month").length).toBeGreaterThan(0);
+  });
+  expect(view.getByText("$100.00 / month")).toBeTruthy();
+  expect(view.getByText("$125.50 / month")).toBeTruthy();
+  expect(view.getByText("2 of 3")).toBeTruthy();
+  expect(view.getByText("Restrict regions — 1 violation: eu-west-3")).toBeTruthy();
+  expect(view.getByText("polchk-regions")).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: "Override policy" }));
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      getUrlString(input) === "/api/v2/runs/run-policy/actions/override-policy"
+      && init?.method === "POST"
+    )).toBeTrue();
+  });
 });
 
 test("queues a run, displays its logs, and applies it", async () => {
@@ -524,7 +1181,11 @@ test("manages workspace attachments for variable sets", async () => {
   const attachmentCalls = fetchMock.mock.calls.filter(([url]): boolean =>
     getUrlString(url).endsWith("/varsets/varset-shared/relationships/workspaces"),
   );
-  expect(attachmentCalls).toHaveLength(1);
+  expect(attachmentCalls).toHaveLength(2);
+  expect(attachmentCalls.map(([, init]): string | undefined => init?.method).sort()).toEqual([
+    "DELETE",
+    "POST",
+  ]);
 });
 
 test("manages variables inside a variable set", async () => {

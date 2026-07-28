@@ -1,8 +1,8 @@
 import { Elysia, type BunFile } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
-import { rateLimit } from "elysia-rate-limit";
+import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
-import { authPlugin } from "./auth";
+import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 
@@ -21,8 +21,11 @@ import { stateVersionRoutes } from "./routes/state-versions";
 import { configurationVersionRoutes } from "./routes/configuration-versions";
 import { teamRoutes } from "./routes/teams";
 import { projectRoutes } from "./routes/projects";
+import { gpgKeyRoutes } from "./routes/gpg-keys";
 import { registryRoutes } from "./routes/registry";
 import { adminRoutes } from "./routes/admin";
+import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
+import { systemAdminRoutes } from "./routes/system-admin";
 import { policyRoutes } from "./routes/policies";
 import { agentRoutes } from "./routes/agents";
 import { runTaskRoutes } from "./routes/run-tasks";
@@ -31,6 +34,8 @@ import { notificationRoutes } from "./routes/notifications";
 import { sshKeyRoutes } from "./routes/ssh-keys";
 import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
+import { assessmentRoutes } from "./routes/assessments";
+import { changeRequestRoutes } from "./routes/change-requests";
 
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
@@ -71,20 +76,139 @@ type ErrorContext = Readonly<{
   set: SetObject;
 }>;
 
+type PasswordGuardContext = Readonly<{
+  request: CustomRequest;
+  user?: Readonly<{ mustChangePassword?: boolean }> | null;
+  set: SetObject;
+}>;
+
+type RateLimitServer = Readonly<{
+  readonly requestIP?: (request: CustomRequest) => Readonly<{ readonly address?: string }> | null;
+}>;
+
+const SENSITIVE_RATE_LIMIT = 5;
+const SENSITIVE_RATE_DURATION_MS = 60_000;
+const sensitivePaths = new Set([
+  "/admin/initial-admin-user",
+  "/api/v2/tokens",
+  "/api/v2/users",
+  "/api/v2/users/login",
+  "/oauth/authorization",
+  "/oauth/token",
+]);
+
+function fixedWindowContext(): RateLimitContext {
+  const counts = new Map<string, number>();
+  let duration = SENSITIVE_RATE_DURATION_MS;
+  let resetAt = Date.now() + duration;
+
+  const resetExpiredWindow = (): void => {
+    if (Date.now() < resetAt) return;
+    counts.clear();
+    resetAt = Date.now() + duration;
+  };
+
+  return {
+    init(options): void {
+      duration = options.duration;
+      resetAt = Date.now() + duration;
+    },
+    increment(key): { count: number; nextReset: Date } {
+      resetExpiredWindow();
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { count, nextReset: new Date(resetAt) };
+    },
+    decrement(key): void {
+      const count = counts.get(key);
+      if (count !== undefined && count > 0) counts.set(key, count - 1);
+    },
+    reset(key): void {
+      if (key !== undefined) {
+        counts.delete(key);
+        return;
+      }
+      counts.clear();
+      resetAt = Date.now() + duration;
+    },
+    kill(): void {
+      counts.clear();
+    },
+  };
+}
+
+function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
+  const directAddress = typeof server?.requestIP === "function"
+    ? server.requestIP(request)?.address
+    : undefined;
+  const forwardedAddress = server === null
+    ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    : undefined;
+  // app.handle() has no socket address; isolate those requests unless a test
+  // explicitly supplies a simulated client address.
+  const address = directAddress ?? forwardedAddress ?? crypto.randomUUID();
+  return `ip:${address}`;
+}
+
+function principalRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
+  return authenticatedRateLimitKey(request) ?? ipRateLimitKey(request, server);
+}
+
+function sensitivePath(request: CustomRequest): string | undefined {
+  const path = new URL(request.url).pathname;
+  if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
+  if (request.method !== "POST") return undefined;
+  if (sensitivePaths.has(path)) return path;
+  if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
+    return "/api/v2/notification-configurations/*/actions/verify";
+  }
+  if (
+    /^\/api\/v2\/(?:agent-pools|teams)\/[^/]+\/authentication-tokens?$/.test(path)
+    || /^\/api\/v2\/organizations\/[^/]+\/authentication-token$/.test(path)
+  ) {
+    return "/api/v2/*/authentication-tokens";
+  }
+  return undefined;
+}
+
 export const app = new Elysia()
   .use(authPlugin)
+  .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
+    if (user?.mustChangePassword !== true) return;
+    const path = new URL(request.url).pathname;
+    if (path === "/api/v2/account/details" || path === "/api/v2/account/password") return;
+    if (!path.startsWith("/api/")) return;
+    (set as { status: number }).status = 403;
+    return {
+      errors: [{
+        status: "403",
+        title: "Password Change Required",
+        detail: "Change the temporary administrator password before continuing",
+      }],
+    };
+  })
   .use(rateLimit({
     max: 30,
     duration: 1000,
     generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }> | null): string => {
-
-      const authHeader = request.headers.get("authorization");
-      const bearer = authHeader !== null ? authHeader.replace(/^Bearer /, "") : undefined;
-      if (bearer !== undefined) {
-        return `token:${Bun.hash(bearer)}`;
-      }
-      return `ip:${typeof server?.requestIP === "function" ? server.requestIP(request)?.address ?? "unknown" : "unknown"}`;
+      return principalRateLimitKey(request, server);
     },
+  }))
+  .use(rateLimit({
+    context: fixedWindowContext(),
+    duration: SENSITIVE_RATE_DURATION_MS,
+    max: SENSITIVE_RATE_LIMIT,
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+      return `sensitive:${sensitivePath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+    },
+    responseMessage: {
+      errors: [{
+        detail: "You have exceeded the API's rate limit.",
+        status: "429",
+        title: "Too Many Requests",
+      }],
+    },
+    skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
   }))
   .use(oauthPlugin)
   .onRequest(({ request, set }: RequestContext): void => {
@@ -181,8 +305,11 @@ export const app = new Elysia()
   .use(configurationVersionRoutes)
   .use(teamRoutes)
   .use(projectRoutes)
+  .use(gpgKeyRoutes)
   .use(registryRoutes)
   .use(adminRoutes)
+  .use(adminRegistrySharingRoutes)
+  .use(systemAdminRoutes)
   .use(policyRoutes)
   .use(agentRoutes)
   .use(runTaskRoutes)
@@ -190,4 +317,6 @@ export const app = new Elysia()
   .use(notificationRoutes)
   .use(sshKeyRoutes)
   .use(githubAppInstallationRoutes)
-  .use(miscRoutes);
+  .use(miscRoutes)
+  .use(assessmentRoutes)
+  .use(changeRequestRoutes);

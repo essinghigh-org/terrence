@@ -1,10 +1,15 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, type users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, type users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
 import { runResource, planResource, applyResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
+import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
+import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
 import { authPlugin } from "../auth";
+import { queueRunNotification } from "../lib/notifications";
+import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
+import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -14,6 +19,7 @@ type ParamCtx = Readonly<{
   readonly body?: unknown;
   readonly user?: Readonly<typeof users.$inferSelect> | null;
   readonly orgId?: string | null;
+  readonly teamId?: string | null;
   readonly request: Readonly<{ readonly url: string; readonly headers: Readonly<{ readonly get: (h: string) => string | null }> }>;
   readonly set: SetObj;
 }>;
@@ -30,13 +36,30 @@ type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 
+async function authorizedOrgWorkspaces(
+  organizationId: string,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+  required: WorkspacePermission = "read",
+): Promise<(typeof workspaces.$inferSelect)[]> {
+  const ids = await workspaceIdsForPermission(organizationId, userId, orgId, teamId, required);
+  if (ids !== null && ids.length === 0) return [];
+  return db.query.workspaces.findMany({
+    where: ids === null
+      ? eq(workspaces.orgId, organizationId)
+      : and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, [...ids])),
+  });
+}
+
 
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
-  .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const canApply = await checkWorkspacePermission(workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
     const { number, size } = pageRequest(request);
     const where = workspaceRunHistoryWhere(request, workspaceId);
     const [workspaceRuns, countRows] = await Promise.all([
@@ -44,13 +67,16 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, Boolean(user))), ...pagination(request, number, size, totalCount) };
+    return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply)), ...pagination(request, number, size, totalCount) };
   })
-  .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const orgWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, organization.id) });
+    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const [orgWorkspaces, applyIds] = await Promise.all([
+      authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
+      workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
+    ]);
     const { number, size } = pageRequest(request);
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
     const where = inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
@@ -59,13 +85,17 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, Boolean(user))), ...pagination(request, number, size, totalCount) };
+    const applySet = new Set(applyIds ?? []);
+    return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId))), ...pagination(request, number, size, totalCount) };
   })
-  .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const orgWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, organization.id) });
+    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const [orgWorkspaces, applyIds] = await Promise.all([
+      authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
+      workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
+    ]);
     const { number, size } = pageRequest(request);
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
     const queue = await db.query.runs.findMany({
@@ -73,8 +103,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       orderBy: [asc(runs.createdAt)],
     });
     let position = queue.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length;
+    const applySet = new Set(applyIds ?? []);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
-      const resource = runResource(r, Boolean(user));
+      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId));
       const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
@@ -82,18 +113,18 @@ export const runRoutes = new Elysia({ name: "runs" })
     }).slice((number - 1) * size, number * size);
     return { data, ...pagination(request, number, size, queue.length) };
   })
-  .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const orgWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, organization.id) });
+    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
     const active = orgWorkspaces.length === 0 ? [] : await db.query.runs.findMany({
       columns: { status: true },
       where: and(inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)), inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES])),
     });
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status)).length, running: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length } } };
   })
-  .post("/api/v2/runs", async ({ body, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -104,7 +135,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvData = typeof cvRel.data === "object" && cvRel.data !== null ? (cvRel.data as Record<string, unknown>) : {};
     const message = typeof attributes.message === "string" ? attributes.message : "";
     const isDestroy = typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false;
-    const autoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : false;
+    const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
     const requestedPlanOnly = typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
     const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
     const refreshOnly = typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false;
@@ -122,9 +153,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
     }
-    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
+    if (!canApply && (requestedAutoApply === true || allowEmptyApply)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const autoApply = canApply && (requestedAutoApply ?? workspace.autoApply === true);
     let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
     if (cvId !== undefined) {
       configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
@@ -138,53 +173,56 @@ export const runRoutes = new Elysia({ name: "runs" })
     const nowIso = new Date(createdAt).toISOString();
     const finalMsg = message !== "" ? message : "Queued manually";
     await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, createdAt });
+    queueRunNotification(id, "run:created", "pending");
     (set as { status: number }).status = 201;
-    return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, createdAt }, true) };
+    return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, softDeletedAt: null, createdAt }, canApply) };
   })
-  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: runResource(authorized.run, Boolean(user)) };
+    const canApply = await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
+    return { data: runResource(authorized.run, canApply) };
   })
-  .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(logs).where(eq(logs.runId, runId));
+    await Promise.all([deleteRunLogArchive(runId), deletePlanJsonArtifact(runId)]);
     await db.delete(runs).where(eq(runs.id, runId));
     (set as { status: number }).status = 204;
     return {};
   })
-  .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
-  .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawPlanId = params["plan_id"] ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
-  .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawApplyId = params["apply_id"] ?? "";
     const runId = rawApplyId.replace(/^apply-/, "");
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: applyResource(authorized.run, request) };
   })
-  .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: [] };
   })
-  .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const currentSV = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, authorized.run.workspaceId), ne(stateVersions.runId, runId)),
@@ -194,56 +232,87 @@ export const runRoutes = new Elysia({ name: "runs" })
     const { stateVersionResource } = await import("../lib/response");
     return { data: stateVersionResource(currentSV, request) };
   })
-  .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const runLogs = await db.query.logs.findMany({ where: eq(logs.runId, runId), orderBy: [asc(logs.createdAt)] });
+    const runLogs = await readRunLogs(runId);
     return { data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })) };
   })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken)) !== true) { (set as { status: number }).status = 404; return "Not Found"; }
-    const planLogs = await db.query.logs.findMany({ where: and(eq(logs.runId, runId), eq(logs.phase, "plan")), orderBy: [asc(logs.createdAt)] });
+    if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    const planLogs = await readRunLogs(runId, "plan");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
-    if ((await findLogCapability(runId, logToken)) !== true) { (set as { status: number }).status = 404; return "Not Found"; }
-    const applyLogs = await db.query.logs.findMany({ where: and(eq(logs.runId, runId), eq(logs.phase, "apply")), orderBy: [asc(logs.createdAt)] });
+    if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
+    const applyLogs = await readRunLogs(runId, "apply");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
-  .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const planLogs = await db.query.logs.findMany({ where: and(eq(logs.runId, runId), eq(logs.phase, "plan")), orderBy: [asc(logs.createdAt)] });
+    const planLogs = await readRunLogs(runId, "plan");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
-  .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const applyLogs = await db.query.logs.findMany({ where: and(eq(logs.runId, runId), eq(logs.phase, "apply")), orderBy: [asc(logs.createdAt)] });
+    const applyLogs = await readRunLogs(runId, "apply");
     set.headers["Content-Type"] = "text/plain";
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
-  .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "policy_soft_failed"])) });
-    if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be planned or policy_soft_failed before apply" }] }; }
-    await db.update(runs).set({ status: "applying" }).where(eq(runs.id, runId));
-    await auditLog("apply", "runs", runId, user?.id ?? null, null, { fromStatus: before.status });
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved", "policy_soft_failed"])) });
+    if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
+    let agentPoolId: string | null = null;
+    if (authorized.workspace.executionMode === "agent") {
+      const pool = authorized.workspace.agentPoolId === null
+        ? undefined
+        : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
+      if (
+        pool?.orgId !== authorized.workspace.orgId
+        || !(await agentPoolAllowsWorkspace(
+          pool,
+          authorized.workspace.id,
+          authorized.workspace.projectId,
+        ))
+      ) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "The workspace does not have an allowed agent pool" }] };
+      }
+      agentPoolId = pool.id;
+    }
+    const confirmed = await db.update(runs).set({
+      status: "confirmed",
+      statusTimestamps: {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      },
+    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+    if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
+    await auditLog("apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: before.status,
+      toStatus: "confirmed",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
     if (before.status === "policy_soft_failed") {
-      const failedChecks = await db.query.policyChecks.findMany({ where: and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])) });
+      const failedChecks = await db.query.policyChecks.findMany({ where: and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed", "errored", "unreachable"])) });
       for (const check of failedChecks) await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, check.id));
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -252,55 +321,91 @@ export const runRoutes = new Elysia({ name: "runs" })
     const commentVal = payload.comment ?? attrs.comment;
     const commentStr = typeof commentVal === "string" ? commentVal : "";
     if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
+    if (agentPoolId !== null) {
+      const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
+      if (job === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
+      }
+      return { data: { id: authorized.run.id, type: "runs", attributes: { status: "apply_queued" } } };
+    }
     const { executeApply } = await import("../worker");
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     return { data: { id: authorized.run.id, type: "runs", attributes: { status: "applying" } } };
   })
-  .post("/api/v2/runs/:run_id/actions/discard", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/discard", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
+    await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: authorized.run.status,
+      toStatus: "discarded",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    queueRunNotification(runId, "run:errored", "discarded");
     return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
   })
-  .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
+    await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: authorized.run.status,
+      toStatus: "canceled",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    queueRunNotification(runId, "run:errored", "canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
   })
-  .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
+    await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: authorized.run.status,
+      toStatus: "force_canceled",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    queueRunNotification(runId, "run:errored", "force_canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
   })
-  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
     await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
+    queueRunNotification(runId, "run:needs_attention", "planned");
     return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
   })
   // --- Comments ---
-  .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const commentsList = await db.query.runComments.findMany({ where: eq(runComments.runId, runId) });
     return { data: commentsList.map((c: CommentItem): Record<string, unknown> => ({ id: c.id, type: "comments", attributes: { body: c.body, "created-at": new Date(c.createdAt).toISOString() } })) };
   })
-  .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
@@ -313,22 +418,28 @@ export const runRoutes = new Elysia({ name: "runs" })
     (set as { status: number }).status = 201;
     return { data: { id, type: "comments", attributes: { body: text, "created-at": new Date().toISOString() } } };
   })
-  .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const commentId = params["comment_id"] ?? "";
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(c.runId, user?.id, orgId);
+    const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(runComments).where(eq(runComments.id, commentId));
     (set as { status: number }).status = 204;
     return {};
   })
   // --- Plan JSON Output ---
-  .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const planId = params["plan_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, planId) });
+    const runId = planId.replace(/^plan-/, "");
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { format_version: "1.0", terraform_version: run.terraformVersion ?? "latest", changes: { resource_changes: [] } };
+    const planJson = await readPlanJsonArtifact(runId);
+    if (planJson === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
+    }
+    return planJson;
   });

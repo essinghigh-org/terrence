@@ -3,7 +3,15 @@ import { db } from "../db";
 import { stateVersions, workspaces, type users } from "../db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
-import { checkOrgPermission, findAuthorizedWorkspace, pageRequest, pagination, decodeStatePayload, parseStatePayload } from "../lib/utils";
+import {
+  checkWorkspacePermission,
+  findAuthorizedWorkspace,
+  pageRequest,
+  pagination,
+  decodeStatePayload,
+  parseStatePayload,
+  validSignedApiURL,
+} from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -12,16 +20,29 @@ type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
-  orgId?: string | null;
-  request: Readonly<{ url: string }>;
+  orgId: string | null;
+  teamId: string | null;
+  request: Readonly<{ url: string; arrayBuffer: () => Promise<ArrayBuffer> }>;
   set: SetObj;
 }>;
 
+async function requestBodyText(
+  body: unknown,
+  request: Readonly<{ arrayBuffer: () => Promise<ArrayBuffer> }>,
+): Promise<string> {
+  if (typeof body === "string") return body;
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(body);
+  if (body instanceof Blob) return body.text();
+  if (body !== undefined && body !== null) return JSON.stringify(body);
+  return new TextDecoder().decode(await request.arrayBuffer());
+}
+
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
   .use(authPlugin)
-  .get("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
     const where = eq(stateVersions.workspaceId, workspaceId);
@@ -32,109 +53,265 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const totalCount = countRows[0]?.total ?? 0;
     return { data: versions.map((sv: Readonly<typeof stateVersions.$inferSelect>): Record<string, unknown> => stateVersionResource(sv, request)), ...pagination(request, number, size, totalCount) };
   })
-  .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
+    const sv = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, workspaceId),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial)],
+    });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: stateVersionResource(sv, request) };
+    return { data: stateVersionResource(sv, request, true) };
   })
-  .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-outputs");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
+    const sv = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, workspaceId),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial)],
+    });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stateOutputResources(sv) };
   })
-  .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: stateVersionResource(sv, request) };
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: stateVersionResource(sv, request, true) };
   })
-  .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    if ((user === undefined || user === null) && orgId === null && teamId === null) {
+      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
     const outputs = stateOutputResources(sv);
     const sliced = outputs.slice((number - 1) * size, number * size);
     return { data: sliced, ...pagination(request, number, size, outputs.length) };
   })
-  .get("/api/v2/state-versions/:state_version_id/outputs", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id/outputs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    if ((user === undefined || user === null) && orgId === null && teamId === null) {
+      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stateOutputResources(sv) };
   })
-  .get("/api/v2/state-version-outputs/:state_version_output_id", ({ params, set }: ParamCtx): unknown => {
+  .get("/api/v2/state-version-outputs/:state_version_output_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    if ((user === undefined || user === null) && orgId === null && teamId === null) {
+      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const stateVersionOutputId = params["state_version_output_id"] ?? "";
-    const match = /^wsout-([a-f0-9]+)$/.exec(stateVersionOutputId);
-    if (match === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: null };
+    if (!/^wsout-[a-f0-9]{16}$/.test(stateVersionOutputId)) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const versions = await db.query.stateVersions.findMany();
+    for (const stateVersion of versions) {
+      const output = stateOutputResources(stateVersion).find(({ id }): boolean => id === stateVersionOutputId);
+      if (output === undefined) continue;
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, stateVersion.workspaceId) });
+      if (ws !== undefined && await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs")) {
+        return { data: output };
+      }
+      break;
+    }
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
   })
-  .get("/api/v2/state-versions/:state_version_id/json-download", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id/json-download", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (sv.jsonState === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const path = `/api/v2/state-versions/${stateVersionId}/json-download`;
+    if (ws === undefined || (!validSignedApiURL(request, path) && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (
+      typeof sv.jsonState !== "string"
+      || sv.jsonState === ""
+      || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
+    ) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
     return sv.jsonState;
   })
-  .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "owner", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(stateVersions).where(eq(stateVersions.id, stateVersionId));
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.update(stateVersions).set({ status: "discarded", softDeletedAt: null }).where(eq(stateVersions.id, stateVersionId));
     (set as { status: number }).status = 204;
     return {};
   })
-  .get("/api/v2/state-versions/:state_version_id/download", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id/download", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const path = `/api/v2/state-versions/${stateVersionId}/download`;
+    if (ws === undefined || (!validSignedApiURL(request, path) && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (
+      typeof sv.statePayload !== "string"
+      || sv.statePayload === ""
+      || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")
+    ) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const payload = decodeStatePayload(sv.statePayload);
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
     return payload;
   })
-  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .put("/api/v2/state-versions/:state_version_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params["state_version_id"] ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    const path = `/api/v2/state-versions/${stateVersionId}/upload`;
+    if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
+    }
+    const rawState = await requestBodyText(body, request);
+    if (rawState === "" || parseStatePayload(rawState) === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    }
+    await db.update(stateVersions).set({ statePayload: rawState, status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
+    (set as { status: number }).status = 200;
+    return {};
+  })
+  .put("/api/v2/state-versions/:state_version_id/json-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params["state_version_id"] ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    const path = `/api/v2/state-versions/${stateVersionId}/json-upload`;
+    if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (typeof sv.jsonState === "string" && sv.jsonState !== "") {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] };
+    }
+    const jsonState = await requestBodyText(body, request);
+    if (jsonState === "" || parseStatePayload(jsonState) === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
+    }
+    await db.update(stateVersions).set({ jsonState }).where(eq(stateVersions.id, stateVersionId));
+    (set as { status: number }).status = 200;
+    return {};
+  })
+  .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params["state_version_id"] ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const current = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, sv.workspaceId),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true },
+    });
+    if (sv.status !== "finalized" || current?.id === sv.id) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    const softDeletedAt = Date.now();
+    await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt }).where(eq(stateVersions.id, sv.id));
+    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request) };
+  })
+  .post("/api/v2/state-versions/:state_version_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params["state_version_id"] ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (sv.status !== "backing_data_soft_deleted") {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    await db.update(stateVersions).set({ status: "finalized", softDeletedAt: null }).where(eq(stateVersions.id, sv.id));
+    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request) };
+  })
+  .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const runRel = typeof rels.run === "object" && rels.run !== null ? (rels.run as Record<string, unknown>) : {};
-    const runData = typeof runRel.data === "object" && runRel.data !== null ? (runRel.data as Record<string, unknown>) : {};
-    const serial = typeof attributes.serial === "number" ? attributes.serial : undefined;
-    const statePayload = typeof attributes.state === "string" ? attributes.state : undefined;
-    const runId = typeof runData.id === "string" ? runData.id : null;
-    if (serial === undefined || statePayload === undefined || statePayload === "") {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: state" }] };
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const runRel = typeof rels["run"] === "object" && rels["run"] !== null ? (rels["run"] as Record<string, unknown>) : {};
+    const runData = typeof runRel["data"] === "object" && runRel["data"] !== null ? (runRel["data"] as Record<string, unknown>) : {};
+    const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
+    const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
+    const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
+    const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
+    const jsonState = inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
+    const inlineJsonStateOutputs = typeof attributes["json-state-outputs"] === "string" ? attributes["json-state-outputs"] : undefined;
+    const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
+      ? decodeStatePayload(inlineJsonStateOutputs)
+      : null;
+    const runId = typeof runData["id"] === "string" ? runData["id"] : null;
+    const intermediate = attributes["intermediate"] === true;
+    if (serial === undefined) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
     }
-    await db.update(stateVersions).set({ status: "backing_data_soft_deleted" }).where(and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")));
+    if (ws.locked === true && !intermediate) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is locked" }] };
+    }
+    if (intermediate && ws.locked !== true) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] };
+    }
+    if (statePayload !== null && parseStatePayload(statePayload) === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    }
+    if (jsonState !== null && parseStatePayload(jsonState) === null) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
+    }
     const id = crypto.randomUUID();
-    const parsed = parseStatePayload(statePayload);
-    const lineage = typeof parsed?.lineage === "string" ? parsed.lineage : null;
-    const jsonState = statePayload;
     await db.insert(stateVersions).values({
-      id, workspaceId, serial, runId, statePayload, jsonState,
-      lineage, status: "finalized", createdAt: Date.now(),
+      id,
+      workspaceId,
+      serial,
+      runId,
+      statePayload,
+      jsonState: jsonState ?? statePayload,
+      jsonStateOutputs,
+      intermediate,
+      status: statePayload === null ? "pending" : "finalized",
+      createdAt: Date.now(),
     });
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

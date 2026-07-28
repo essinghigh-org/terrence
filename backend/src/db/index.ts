@@ -4,6 +4,7 @@ import { createClient } from '@libsql/client';
 import { mkdir } from 'fs/promises';
 import { join, resolve } from 'path';
 import * as schema from './schema';
+import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
 
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
 await mkdir(storageDir, { recursive: true });
@@ -16,7 +17,7 @@ await sqlite.executeMultiple(`
   PRAGMA busy_timeout = 5000;
 `);
 
-type TableInfoRow = { name: string };
+type TableInfoRow = { name: string; notnull?: number };
 
 function getColumnNames(info: { readonly rows: readonly unknown[] }): Set<string> {
   return new Set(info.rows.map((r: unknown): string => (r as TableInfoRow).name));
@@ -148,6 +149,36 @@ for (const [col, def] of ncAdditions) {
     await sqlite.execute(`ALTER TABLE notification_configurations ADD COLUMN ${col} ${def}`);
   }
 }
+const workspaceNotificationColumn = ncTableInfo.rows
+  .map((row: unknown): TableInfoRow => row as TableInfoRow)
+  .find((column: Readonly<TableInfoRow>): boolean => column.name === "workspace_id");
+if (workspaceNotificationColumn?.notnull === 1) {
+  await sqlite.executeMultiple(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE __new_notification_configurations (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+      team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      destination_type TEXT NOT NULL,
+      url TEXT NOT NULL,
+      triggers TEXT NOT NULL,
+      enabled INTEGER DEFAULT true,
+      token TEXT,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO __new_notification_configurations (
+      id, workspace_id, team_id, project_id, name, destination_type, url, triggers, enabled, token, created_at
+    )
+    SELECT
+      id, workspace_id, team_id, project_id, name, destination_type, url, triggers, enabled, token, created_at
+    FROM notification_configurations;
+    DROP TABLE notification_configurations;
+    ALTER TABLE __new_notification_configurations RENAME TO notification_configurations;
+    PRAGMA foreign_keys = ON;
+  `);
+}
 
 // Check policy_checks for missing columns
 const pcTableInfo = await sqlite.execute("PRAGMA table_info(policy_checks)");
@@ -159,6 +190,17 @@ const pcAdditions: [string, string][] = [
 for (const [col, def] of pcAdditions) {
   if (!existingPcCols.has(col)) {
     await sqlite.execute(`ALTER TABLE policy_checks ADD COLUMN ${col} ${def}`);
+  }
+}
+
+// Encrypt private keys created by older releases before serving requests.
+const storedSshKeys = await db.query.sshKeys.findMany();
+for (const key of storedSshKeys) {
+  if (!isEncryptedSecret(key.value)) {
+    await sqlite.execute({
+      sql: "UPDATE ssh_keys SET value = ? WHERE id = ?",
+      args: [await encryptSecret(key.value), key.id],
+    });
   }
 }
 

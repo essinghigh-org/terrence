@@ -1,13 +1,13 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { configurationVersions, workspaces, type users } from "../db/schema";
-import { eq, count } from "drizzle-orm";
-import { checkOrgPermission, findAuthorizedWorkspace, pageRequest, pagination } from "../lib/utils";
+import { configurationVersions, runs, type users } from "../db/schema";
+import { eq, count, desc, and, inArray, notInArray } from "drizzle-orm";
+import { apiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination } from "../lib/utils";
 import { join } from "path";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, rm, writeFile } from "fs/promises";
 import { authPlugin } from "../auth";
 
-const rawStorageDir = process.env.STORAGE_DIR;
+const rawStorageDir = process.env["STORAGE_DIR"];
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
 const CV_STORAGE_DIR = join(storageDir, "cv");
 
@@ -17,80 +17,231 @@ type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
-  orgId?: string | null;
+  orgId: string | null;
+  teamId: string | null;
   request: Readonly<{ url: string; arrayBuffer: () => Promise<ArrayBuffer> }>;
   set: SetObj;
 }>;
 
+type ConfigurationVersion = typeof configurationVersions.$inferSelect;
+type DeepReadonly<T> = T extends null | undefined | boolean | number | string
+  ? T
+  : T extends readonly (infer Item)[]
+    ? readonly DeepReadonly<Item>[]
+    : { readonly [Key in keyof T]: DeepReadonly<T[Key]> };
+
+function configurationVersionResource(cv: DeepReadonly<ConfigurationVersion>, request: Readonly<{ url: string }>): Record<string, unknown> {
+  const uploadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/upload`);
+  const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
+  return {
+    id: cv.id,
+    type: "configuration-versions",
+    attributes: {
+      "auto-queue-runs": false,
+      speculative: cv.speculative,
+      provisional: cv.provisional,
+      status: cv.status,
+      source: cv.source,
+      "ingress-attributes": cv.ingressAttributes,
+      "status-timestamps": {
+        "uploaded-at": cv.statusTimestamps?.uploadedAt ?? null,
+        "archived-at": cv.statusTimestamps?.archivedAt ?? null,
+      },
+      error: cv.error,
+      "error-message": cv.errorMessage,
+      "upload-url": uploadUrl,
+      "download-url": downloadUrl,
+    },
+    links: {
+      self: `/api/v2/configuration-versions/${cv.id}`,
+      download: `/api/v2/configuration-versions/${cv.id}/download`,
+    },
+  };
+}
+
 export const configurationVersionRoutes = new Elysia({ name: "configurationVersions" })
   .use(authPlugin)
-  .get("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
     const where = eq(configurationVersions.workspaceId, workspaceId);
     const [cvs, countRows] = await Promise.all([
-      db.query.configurationVersions.findMany({ where, limit: size, offset: (number - 1) * size }),
+      db.query.configurationVersions.findMany({ where, orderBy: [desc(configurationVersions.createdAt)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(configurationVersions).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: cvs.map((cv: Readonly<{ readonly id: string; readonly speculative: boolean; readonly status: string; readonly source: string; readonly ingressAttributes: unknown }>): Record<string, unknown> => ({ id: cv.id, type: "configuration-versions", attributes: { "auto-queue-runs": false, speculative: cv.speculative, status: cv.status, source: cv.source, "ingress-attributes": cv.ingressAttributes } })), ...pagination(request, number, size, totalCount) };
+    return { data: cvs.map((cv: DeepReadonly<ConfigurationVersion>): Record<string, unknown> => configurationVersionResource(cv, request)), ...pagination(request, number, size, totalCount) };
 
   })
-  .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "plan");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
 
     const id = crypto.randomUUID();
-    const speculative = typeof attributes.speculative === "boolean" ? attributes.speculative : false;
-    const source = typeof attributes.source === "string" ? attributes.source : "tfe-api";
+    const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
+    const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
+    const source = typeof attributes["source"] === "string" ? attributes["source"] : "tfe-api";
     const autoQueueRuns = typeof attributes["auto-queue-runs"] === "boolean" ? attributes["auto-queue-runs"] : false;
-    await db.insert(configurationVersions).values({ id, workspaceId, status: "pending", speculative, source });
+    const createdAt = Date.now();
+    const cv: ConfigurationVersion = {
+      id,
+      workspaceId,
+      status: "pending",
+      archivePath: null,
+      speculative,
+      provisional,
+      source,
+      ingressAttributes: null,
+      statusTimestamps: null,
+      error: null,
+      errorMessage: null,
+      softDeletedAt: null,
+      createdAt,
+    };
+    await db.insert(configurationVersions).values(cv);
     (set as { status: number }).status = 201;
-    return { data: { id, type: "configuration-versions", attributes: { "auto-queue-runs": autoQueueRuns, speculative, status: "pending", source, "upload-url": `/api/v2/configuration-versions/${id}/upload`, "download-url": `/api/v2/configuration-versions/${id}/download` } } };
+    const resource = configurationVersionResource(cv, request);
+    return {
+      data: {
+        ...resource,
+        attributes: {
+          ...(resource.attributes as Record<string, unknown>),
+          "auto-queue-runs": autoQueueRuns,
+        },
+      },
+    };
   })
-  .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, cv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: cv.id, type: "configuration-versions", attributes: { "auto-queue-runs": false, speculative: cv.speculative, status: cv.status, source: cv.source, "ingress-attributes": cv.ingressAttributes } } };
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: configurationVersionResource(cv, request) };
   })
-  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
+  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (cv.status !== "pending" || cv.archivePath !== null) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
+    }
     const tarName = `config-${cvId}.tar.gz`;
     const tarPath = join(CV_STORAGE_DIR, tarName);
     await mkdir(CV_STORAGE_DIR, { recursive: true });
-    const buffer = await request.arrayBuffer();
-    await writeFile(tarPath, Buffer.from(buffer));
-    await db.update(configurationVersions).set({ status: "uploaded" }).where(eq(configurationVersions.id, cvId));
+    const buffer = body instanceof ArrayBuffer
+      ? new Uint8Array(body)
+      : ArrayBuffer.isView(body)
+        ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+        : body instanceof Blob
+          ? new Uint8Array(await body.arrayBuffer())
+          : new Uint8Array(await request.arrayBuffer());
+    if (buffer.byteLength === 0) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
+    }
+    await writeFile(tarPath, buffer, { mode: 0o600 });
+    const uploadedAt = new Date().toISOString();
+    await db.update(configurationVersions).set({
+      archivePath: tarPath,
+      status: "uploaded",
+      statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
+    }).where(eq(configurationVersions.id, cvId));
     (set as { status: number }).status = 200;
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
   })
-  .get("/api/v2/configuration-versions/:cv_id/download", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/configuration-versions/:cv_id/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, cv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", orgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    (set.headers as Record<string, string>)["Content-Type"] = "text/plain";
-    return "Configuration content not available";
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (
+      cv.archivePath === null
+      || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(cv.status)
+      || !(await Bun.file(cv.archivePath).exists())
+    ) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
+    return Bun.file(cv.archivePath);
+  })
+  .post("/api/v2/configuration-versions/:cv_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const cvId = params["cv_id"] ?? "";
+    const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
+    if (ws === undefined) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const current = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.workspaceId, cv.workspaceId),
+        inArray(configurationVersions.status, ["uploaded", "archived"]),
+      ),
+      orderBy: [desc(configurationVersions.createdAt)],
+      columns: { id: true },
+    });
+    const activeRun = await db.query.runs.findFirst({
+      where: and(
+        eq(runs.configurationVersionId, cv.id),
+        notInArray(runs.status, FINAL_RUN_STATUSES),
+      ),
+      columns: { id: true },
+    });
+    if (!["uploaded", "archived"].includes(cv.status) || current?.id === cv.id || activeRun !== undefined) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    await db.update(configurationVersions).set({
+      status: "backing_data_soft_deleted",
+      softDeletedAt: Date.now(),
+    }).where(eq(configurationVersions.id, cv.id));
+    return {};
+  })
+  .post("/api/v2/configuration-versions/:cv_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const cvId = params["cv_id"] ?? "";
+    const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
+    if (ws === undefined) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (cv.status !== "backing_data_soft_deleted" || cv.archivePath === null || !(await Bun.file(cv.archivePath).exists())) {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    await db.update(configurationVersions).set({ status: "uploaded", softDeletedAt: null }).where(eq(configurationVersions.id, cv.id));
+    return {};
+  })
+  .post("/api/v2/configuration-versions/:cv_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const cvId = params["cv_id"] ?? "";
+    const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
+    if (ws === undefined) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (cv.status !== "backing_data_soft_deleted") {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    if (cv.archivePath !== null) await rm(cv.archivePath, { force: true });
+    await db.update(configurationVersions).set({
+      archivePath: null,
+      status: "backing_data_permanently_deleted",
+    }).where(eq(configurationVersions.id, cv.id));
+    return {};
   })
   // --- Config Version Ingress Attributes ---
-  .get("/api/v2/configuration-versions/:cv_id/ingress-attributes", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/configuration-versions/:cv_id/ingress-attributes", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, cv.workspaceId) });
-    if (ws === undefined || !(await checkOrgPermission(user?.id, ws.orgId, "member", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, tokenOrgId, teamId);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
     return { data: { id: cv.id, type: "ingress-attributes", attributes: { "commit-sha": ingress["commitSha"] ?? null, "commit-url": ingress["commitUrl"] ?? null, "commit-message": ingress["commitMessage"] ?? null, branch: ingress["branch"] ?? null, tag: ingress["tag"] ?? null, "pull-request-number": ingress["pullRequestNumber"] ?? null, "sender-username": ingress["senderUsername"] ?? null, "clone-url": ingress["cloneUrl"] ?? null, "compare-url": ingress["compareUrl"] ?? null } } };
   });

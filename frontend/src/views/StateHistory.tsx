@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import {
   Dialog,
   DialogContent,
@@ -56,7 +57,7 @@ export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Elem
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load state version JSON";
-      alert(msg);
+      toast.add({ title: "Could not load state", description: msg, type: "error" });
     } finally {
       setLoadingStateId(null);
     }
@@ -76,9 +77,10 @@ export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Elem
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      toast.add({ title: "State downloaded", type: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to download state version";
-      alert(msg);
+      toast.add({ title: "Could not download state", description: msg, type: "error" });
     }
   };
 

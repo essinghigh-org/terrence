@@ -8,7 +8,9 @@ import { Spinner } from "../components/ui/spinner";
 import { KeyRound, User, Lock, Trash2, Plus, ShieldCheck } from "lucide-react";
 
 export function AccountSettings(): React.JSX.Element {
-  const [, setAccount] = useState<{ id: string; attributes: { username: string; email: string | null } } | null>(null);
+  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean } };
+  const [account, setAccount] = useState<Account | null>(null);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [tokens, setTokens] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,13 +39,18 @@ export function AccountSettings(): React.JSX.Element {
 
   async function loadAccount(): Promise<void> {
     try {
-      const me = await fetchApi("/users/me") as { id: string; attributes: { username: string; email: string | null } };
+      const details = await fetchApi("/account/details") as { data: Account };
+      const me = details.data;
       setAccount(me);
       setUsername(me.attributes.username);
       setEmail(me.attributes.email ?? "");
+      const requiresChange = me.attributes["must-change-password"] === true;
+      setMustChangePassword(requiresChange);
 
-      const tokensRes = await fetchApi("/users/me/tokens") as { data: { id: string; attributes: Record<string, unknown> }[] };
-      setTokens(tokensRes.data);
+      if (!requiresChange) {
+        const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+        setTokens(tokensRes.data);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load account";
       setError(message);
@@ -58,12 +65,13 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
-      const updated = await fetchApi("/users/me", {
+      const response = await fetchApi("/account/update", {
         method: "PATCH",
         body: JSON.stringify({
           data: { attributes: { username, email: email !== "" ? email : null } },
         }),
-      }) as { id: string; attributes: { username: string; email: string | null } };
+      }) as { data: Account };
+      const updated = response.data;
       setAccount(updated);
       setSuccessMsg("Profile updated");
     } catch (err: unknown) {
@@ -84,16 +92,25 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
-      await fetchApi("/users/me/change-password", {
-        method: "POST",
+      await fetchApi("/account/password", {
+        method: "PATCH",
         body: JSON.stringify({
-          data: { attributes: { currentPassword, newPassword } },
+          data: {
+            type: "users",
+            attributes: {
+              current_password: currentPassword,
+              password: newPassword,
+              password_confirmation: confirmPassword,
+            },
+          },
         }),
       });
+      setMustChangePassword(false);
       setSuccessMsg("Password changed");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      await loadAccount();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to change password";
       setError(message);
@@ -107,16 +124,18 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
-      const created = await fetchApi("/users/me/tokens", {
+      const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({
           data: { attributes: { description: newTokenDesc } },
         }),
-      }) as { data: { id: string }; attributes: { token: string } };
-      setCreatedTokenSecret(created.attributes.token);
+      }) as { data: { id: string; attributes: { token: string } } };
+      setCreatedTokenSecret(created.data.attributes.token);
       setNewTokenDesc("");
-      const tokensRes = await fetchApi("/users/me/tokens") as { data: { id: string; attributes: Record<string, unknown> }[] };
-      setTokens(tokensRes.data);
+      if (account !== null) {
+        const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+        setTokens(tokensRes.data);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create token";
       setError(message);
@@ -129,7 +148,7 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
-      await fetchApi(`/users/me/tokens/${tokenId}`, { method: "DELETE" });
+      await fetchApi(`/authentication-tokens/${tokenId}`, { method: "DELETE" });
       setTokens((prev: { id: string; attributes: Record<string, unknown> }[]): { id: string; attributes: Record<string, unknown> }[] => prev.filter((t: { id: string; attributes: Record<string, unknown> }): boolean => t.id !== tokenId));
       setSuccessMsg("Token deleted");
     } catch (err: unknown) {
@@ -154,9 +173,14 @@ export function AccountSettings(): React.JSX.Element {
       {successMsg !== "" && (
         <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-md text-sm">{successMsg}</div>
       )}
+      {mustChangePassword && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-md text-sm">
+          Change the temporary administrator password before continuing.
+        </div>
+      )}
 
       {/* ── 1. Profile ── */}
-      <Card>
+      <Card className={mustChangePassword ? "hidden" : undefined}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <User className="w-4 h-4" />
@@ -190,20 +214,39 @@ export function AccountSettings(): React.JSX.Element {
             <Lock className="w-4 h-4" />
             Change Password
           </CardTitle>
+          {mustChangePassword && <CardDescription>A new password is required for this administrator account.</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Current password</label>
-            <Input type="password" value={currentPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setCurrentPassword(event.target.value); }} />
+            <label htmlFor="account-current-password" className="text-sm font-medium">Current password</label>
+            <Input
+              id="account-current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setCurrentPassword(event.target.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setCurrentPassword(event.currentTarget.value); }}
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">New password</label>
-              <Input type="password" value={newPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewPassword(event.target.value); }} />
+              <label htmlFor="account-new-password" className="text-sm font-medium">New password</label>
+              <Input
+                id="account-new-password"
+                type="password"
+                value={newPassword}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewPassword(event.target.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setNewPassword(event.currentTarget.value); }}
+              />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Confirm new password</label>
-              <Input type="password" value={confirmPassword} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setConfirmPassword(event.target.value); }} />
+              <label htmlFor="account-confirm-password" className="text-sm font-medium">Confirm new password</label>
+              <Input
+                id="account-confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setConfirmPassword(event.target.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setConfirmPassword(event.currentTarget.value); }}
+              />
             </div>
           </div>
         </CardContent>
@@ -215,7 +258,7 @@ export function AccountSettings(): React.JSX.Element {
       </Card>
 
       {/* ── 3. Tokens ── */}
-      <Card>
+      <Card className={mustChangePassword ? "hidden" : undefined}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <KeyRound className="w-4 h-4" />

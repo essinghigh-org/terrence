@@ -134,6 +134,153 @@
       "when": 1785268800000,
       "tag": "0018_scope_github_installations",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1785390000000,
+      "tag": "0019_state_storage_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1785391000000,
+      "tag": "0020_organization_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1785392000000,
+      "tag": "0021_admin_bootstrap",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1785393000000,
+      "tag": "0022_organization_assessments",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1785394000000,
+      "tag": "0023_reserved_tag_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1785395000000,
+      "tag": "0024_no_code_modules",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1785396000000,
+      "tag": "0025_health_assessments",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1785397000000,
+      "tag": "0026_policy_set_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1785398000000,
+      "tag": "0027_run_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1785399000000,
+      "tag": "0028_registry_sharing",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1785400000000,
+      "tag": "0029_change_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1785401000000,
+      "tag": "0030_project_semantics",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1785402000000,
+      "tag": "0031_no_code_provisioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1785403000000,
+      "tag": "0032_team_organization_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1785404000000,
+      "tag": "0033_vcs_policy_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1785405000000,
+      "tag": "0034_agent_pool_scoping",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1785406000000,
+      "tag": "0035_registry_gpg_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1785407000000,
+      "tag": "0036_refresh_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1785408000000,
+      "tag": "0037_agent_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1785409000000,
+      "tag": "0038_oauth_client_agent_pool",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1785410000000,
+      "tag": "0039_saml_settings",
+      "breakpoints": true
     }
   ]
 }

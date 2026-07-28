@@ -1,9 +1,23 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
+import { organizations, runs, users, workspaces } from "../db/schema";
+import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
+type MetricsCtx = Readonly<{
+  request: Readonly<{ url: string }>;
+  set: Readonly<{ headers: Readonly<Record<string, string | number>> }>;
+}>;
+
+function metricValue(rows: readonly Readonly<{ value: number }>[] | undefined): number {
+  return rows?.[0]?.value ?? 0;
+}
+
+function prometheusLabel(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
+}
 
 export const healthRoutes = new Elysia({ name: "health" })
   .use(authPlugin)
@@ -30,6 +44,46 @@ export const healthRoutes = new Elysia({ name: "health" })
     return {};
   })
   .get("/healthz", (): string => "ok")
+  .get("/metrics", async ({ request, set }: MetricsCtx): Promise<unknown> => {
+    const [userCount, organizationCount, workspaceCount, runCount, runsByStatus] = await Promise.all([
+      db.select({ value: count() }).from(users),
+      db.select({ value: count() }).from(organizations),
+      db.select({ value: count() }).from(workspaces),
+      db.select({ value: count() }).from(runs),
+      db.select({ status: runs.status, value: count() }).from(runs).groupBy(runs.status),
+    ]);
+    const metrics = {
+      terrence_users_total: metricValue(userCount),
+      terrence_organizations_total: metricValue(organizationCount),
+      terrence_workspaces_total: metricValue(workspaceCount),
+      terrence_runs_total: metricValue(runCount),
+      tfe_run_current_count: Object.fromEntries(runsByStatus.map((row): [string, number] => [row.status, row.value])),
+    };
+    if (new URL(request.url).searchParams.get("format") !== "prometheus") return { metrics };
+
+    const headers = set.headers as Record<string, string | number>;
+    headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8";
+    const lines = [
+      "# HELP terrence_users_total Registered users.",
+      "# TYPE terrence_users_total gauge",
+      `terrence_users_total ${metrics.terrence_users_total}`,
+      "# HELP terrence_organizations_total Organizations.",
+      "# TYPE terrence_organizations_total gauge",
+      `terrence_organizations_total ${metrics.terrence_organizations_total}`,
+      "# HELP terrence_workspaces_total Workspaces.",
+      "# TYPE terrence_workspaces_total gauge",
+      `terrence_workspaces_total ${metrics.terrence_workspaces_total}`,
+      "# HELP terrence_runs_total Runs.",
+      "# TYPE terrence_runs_total gauge",
+      `terrence_runs_total ${metrics.terrence_runs_total}`,
+      "# HELP tfe_run_current_count Current runs by status.",
+      "# TYPE tfe_run_current_count gauge",
+      ...runsByStatus.map((row): string =>
+        `tfe_run_current_count{status="${prometheusLabel(row.status)}"} ${row.value}`,
+      ),
+    ];
+    return `${lines.join("\n")}\n`;
+  })
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
       await db.query.users.findFirst();

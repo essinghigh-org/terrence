@@ -8,7 +8,7 @@ import { workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
-import { apiURL } from "./utils";
+import { apiURL, signedApiURL } from "./utils";
 import { parseStatePayload } from "./validation";
 
 type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | boolean | number | string | null | undefined
@@ -19,7 +19,7 @@ type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | bo
       ? readonly DeepReadonly<R>[]
       : { readonly [K in keyof T]: DeepReadonly<T[K]> };
 
-type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean }>;
+type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean; mustChangePassword?: boolean }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 export function userResource(
@@ -41,6 +41,7 @@ export function userResource(
       "avatar-url": avatarUrl,
       "v2-only": false,
       "is-site-admin": user.isSiteAdmin === true,
+      "must-change-password": user.mustChangePassword === true,
       permissions: {
         "can-create-organizations": authenticatedResource.type === "users",
         "can-change-email": authenticatedResource.type === "users",
@@ -138,6 +139,9 @@ export function organizationResource(org: OrganizationParam): Record<string, unk
       "user-tokens-enabled": true,
       "default-iac-binary": org.defaultIacBinary ?? "tofu",
       "default-terraform-version": org.defaultTerraformVersion ?? "latest",
+      "assessments-enforced": org.assessmentsEnforced,
+      "saml-enabled": org.samlEnabled,
+      "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
     },
     relationships: {
       "oauth-tokens": { links: { related: `/api/v2/organizations/${name}/oauth-tokens` } },
@@ -186,14 +190,15 @@ export async function workspaceResource(
       "assessments-enabled": workspace.assessmentsEnabled === true,
       "auto-destroy-at": workspace.autoDestroyAt ?? null,
       "auto-destroy-activity-duration": workspace.autoDestroyActivityDuration ?? null,
-      "setting-overwrites": workspace.settingOverwrites ?? null,
+      "inherits-project-auto-destroy": workspace.inheritsProjectAutoDestroy,
+      "setting-overwrites": workspace.settingOverwrites ?? { "execution-mode": false, "agent-pool": false },
       "terraform-version": workspace.terraformVersion,
       "working-directory": workspace.workingDirectory,
       "source-name": workspace.sourceName,
       "source-url": workspace.sourceUrl,
       "tag-names": tags.map((tag: DeepReadonly<typeof workspaceTags.$inferSelect>): string => tag.key),
       "iac-binary": iacBinary,
-      "execution-mode": "remote",
+      "execution-mode": workspace.executionMode,
       locked: workspace.locked === true,
       "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
       operations: true,
@@ -254,12 +259,17 @@ export function projectResource(project: ProjectParam): Record<string, unknown> 
       description: project.description,
       "default-execution-mode": project.defaultExecutionMode ?? "remote",
       "auto-destroy-activity-duration": project.autoDestroyActivityDuration ?? null,
-      "setting-overwrites": project.settingOverwrites ?? null,
+      "setting-overwrites": project.settingOverwrites ?? { "execution-mode": false },
       "created-at": new Date(project.createdAt).toISOString(),
     },
     relationships: {
       organization: {
         data: { id: project.orgId, type: "organizations" },
+      },
+      "default-agent-pool": {
+        data: project.defaultAgentPoolId === null
+          ? null
+          : { id: project.defaultAgentPoolId, type: "agent-pools" },
       },
       "tag-bindings": {
         links: { related: `/api/v2/projects/${project.id}/tag-bindings` },
@@ -406,10 +416,27 @@ export function workspaceVariableResource(v: WorkspaceVarParam): Record<string, 
 
 type RunParam = DeepReadonly<typeof runs.$inferSelect>;
 
+function runHasChanges(run: RunParam): boolean {
+  const counts = [run.planResourceAdditions, run.planResourceChanges, run.planResourceDestructions];
+  if (counts.some((count): boolean => count !== null)) {
+    return counts.reduce((total: number, count): number => total + (count ?? 0), 0) > 0;
+  }
+  return [
+    "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
+    "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
+    "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
+  ].includes(run.status);
+}
+
 export function runResource(run: RunParam, canRun: boolean): Record<string, unknown> {
   const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
-  const isRunning = ["pending", "planning", "fetching", "fetching_completed", "plan_queued", "queuing", "applying", "apply_queued"].includes(run.status);
-  const hasChanges = ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status);
+  const isRunning = [
+    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+    "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+    "post_plan_completed", "confirmed", "apply_queued", "applying",
+  ].includes(run.status);
+  const hasChanges = runHasChanges(run);
 
   return {
     id: run.id,
@@ -488,6 +515,12 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
       "created-by": {
         data: run.createdBy !== null ? { id: run.createdBy, type: "users" } : null,
       },
+      agent: {
+        data: run.agentId !== null ? { id: run.agentId, type: "agents" } : null,
+      },
+      "agent-pool": {
+        data: run.agentPoolId !== null ? { id: run.agentPoolId, type: "agent-pools" } : null,
+      },
       "cost-estimate": {
         links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
       },
@@ -514,7 +547,11 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
     ? "running"
     : run.status === "plan_queued" || run.status === "queuing"
       ? "queued"
-      : ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status)
+      : [
+          "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
+          "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
+          "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
+        ].includes(run.status)
         ? "finished"
         : run.status === "errored"
           ? "errored"
@@ -529,7 +566,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
     type: "plans",
     attributes: {
       status,
-      "has-changes": ["planned", "planned_and_finished", "planned_and_saved", "applying", "applied"].includes(run.status),
+      "has-changes": runHasChanges(run),
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,
       "resource-destructions": run.planResourceDestructions ?? 0,
@@ -550,7 +587,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
 export function applyResource(run: RunParam, request: RequestParam): Record<string, unknown> {
   const status = run.status === "applying"
     ? "running"
-    : run.status === "apply_queued"
+    : run.status === "confirmed" || run.status === "apply_queued"
       ? "queued"
       : run.status === "applied"
         ? "finished"
@@ -627,7 +664,7 @@ type OutputResourceRef = { id: string; type: string };
 
 export function stateVersionResource(
   state: StateParam,
-  request: RequestParam,
+  request: Readonly<{ url: string }>,
   includeState = false,
 ): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
@@ -673,6 +710,12 @@ export function stateVersionResource(
 
   const outputResources = stateOutputResources(state);
   const payload = state.statePayload ?? "";
+  const backingDataAvailable = state.status !== "backing_data_soft_deleted"
+    && state.status !== "backing_data_permanently_deleted"
+    && state.status !== "discarded";
+  const rawStateAvailable = backingDataAvailable && payload !== "";
+  const jsonStateAvailable = backingDataAvailable && typeof state.jsonState === "string" && state.jsonState !== "";
+  const pending = state.status === "pending";
   return {
     id: state.id,
     type: "state-versions",
@@ -688,14 +731,22 @@ export function stateVersionResource(
       providers,
       "state-version": parsed !== null && typeof parsed.version === "number" && Number.isInteger(parsed.version) ? parsed.version : null,
       status: state.status ?? "finalized",
-      intermediate: false,
+      intermediate: state.intermediate,
       size: Buffer.byteLength(payload),
       "vcs-commit-sha": state.vcsCommitSha,
       "vcs-commit-url": state.vcsCommitUrl,
-      "hosted-state-download-url": apiURL(request, `/api/v2/state-versions/${state.id}/download`),
-      "hosted-state-upload-url": null,
-      "hosted-json-state-download-url": typeof state.jsonState === "string" && state.jsonState !== "" ? apiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
-      "hosted-json-state-upload-url": null,
+      "hosted-state-download-url": rawStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`)
+        : null,
+      "hosted-state-upload-url": pending && !rawStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT")
+        : null,
+      "hosted-json-state-download-url": jsonStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`)
+        : null,
+      "hosted-json-state-upload-url": pending && !jsonStateAvailable
+        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT")
+        : null,
     },
     relationships: {
       workspace: { data: { id: state.workspaceId, type: "workspaces" } },

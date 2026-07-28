@@ -28,6 +28,7 @@ const originalAppId = process.env["GITHUB_APP_ID"];
 const originalPrivateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
+const commitStatuses: Record<string, unknown>[] = [];
 
 const pushPayload = {
   ref: "refs/heads/main",
@@ -104,6 +105,15 @@ async function waitForDelivery(deliveryId: string): Promise<void> {
   throw new Error(`Delivery ${deliveryId} was not processed`);
 }
 
+async function waitForCommitStatus(): Promise<Record<string, unknown> | undefined> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (commitStatuses.length > 0) return commitStatuses.at(-1);
+    await Bun.sleep(10);
+  }
+  return commitStatuses.at(-1);
+}
+
 describe("GitHub Webhooks", () => {
   beforeAll(async () => {
     process.env["GITHUB_WEBHOOK_SECRET"] = "test-secret";
@@ -113,12 +123,19 @@ describe("GitHub Webhooks", () => {
       privateKeyEncoding: { type: "pkcs8", format: "pem" },
       publicKeyEncoding: { type: "spki", format: "pem" },
     }).privateKey;
-    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
+    const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "test-token" });
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
         return new Response(new Uint8Array([1, 2, 3]));
+      }
+      if (url.includes("/statuses/")) {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : {};
+        if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+          commitStatuses.push(body as Record<string, unknown>);
+        }
+        return Response.json({});
       }
       throw new Error(`Unexpected outbound request: ${url}`);
     };
@@ -157,13 +174,20 @@ describe("GitHub Webhooks", () => {
 
   beforeEach(async () => {
     tarballFetches = 0;
+    commitStatuses.length = 0;
     await db.delete(githubWebhookDeliveries);
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
     await db.delete(organizations).where(eq(organizations.id, crossOrgId));
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
     await db.update(workspaces)
-      .set({ speculativeEnabled: true, queueAllRuns: true, triggerPrefixes: ["src/"] })
+      .set({
+        speculativeEnabled: true,
+        queueAllRuns: true,
+        triggerPrefixes: ["src/"],
+        triggerPatterns: [],
+        vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: installationId },
+      })
       .where(eq(workspaces.id, workspaceId));
   });
 
@@ -252,6 +276,7 @@ describe("GitHub Webhooks", () => {
     await waitForDelivery(deliveryId);
     expect(runList.find((run): boolean => run.workspaceId === workspaceId && !run.planOnly)).toBeDefined();
     expect(tarballFetches).toBe(1);
+    expect(await waitForCommitStatus()).toMatchObject({ state: "pending" });
   });
 
   test("matching pull request creates a speculative run", async () => {
@@ -269,11 +294,67 @@ describe("GitHub Webhooks", () => {
     expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
   });
 
+  test("matching tag regex creates a run and records the tag", async () => {
+    await db.update(workspaces).set({
+      vcsRepo: {
+        identifier: "hashicorp/terraform",
+        branch: "main",
+        githubAppInstallationId: installationId,
+        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+      },
+    }).where(eq(workspaces.id, workspaceId));
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", {
+      ...pushPayload,
+      ref: "refs/tags/v1.2.3",
+      commits: [{ modified: ["docs/readme.md"] }],
+    }, deliveryId);
+    const runList = await waitForRuns((items): boolean => items.length === 1);
+    await waitForDelivery(deliveryId);
+    const run = runList[0];
+    expect(run?.message).toContain("tag v1.2.3");
+    const configurationVersion = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, run?.configurationVersionId ?? ""),
+    });
+    expect(configurationVersion?.ingressAttributes?.tag).toBe("v1.2.3");
+    expect(configurationVersion?.ingressAttributes?.branch).toBeUndefined();
+    expect(tarballFetches).toBe(1);
+  });
+
+  test("non-matching or invalid tag regex creates no run", async () => {
+    for (const tagsRegex of ["^release-", "["]) {
+      await db.update(workspaces).set({
+        vcsRepo: {
+          identifier: "hashicorp/terraform",
+          branch: "main",
+          githubAppInstallationId: installationId,
+          tagsRegex,
+        },
+      }).where(eq(workspaces.id, workspaceId));
+      const deliveryId = crypto.randomUUID();
+      await sendWebhook("push", { ...pushPayload, ref: "refs/tags/v1.2.3" }, deliveryId);
+      await waitForDelivery(deliveryId);
+    }
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+  });
+
   test("changes outside trigger prefixes create no run", async () => {
     const deliveryId = crypto.randomUUID();
     await sendWebhook("push", { ...pushPayload, commits: [{ modified: ["docs/readme.md"] }] }, deliveryId);
     await waitForDelivery(deliveryId);
     expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
+  });
+
+  test("trigger patterns use repository-root glob matching", async () => {
+    await db.update(workspaces).set({ triggerPatterns: ["/**/networking/*.tf"] }).where(eq(workspaces.id, workspaceId));
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", {
+      ...pushPayload,
+      commits: [{ modified: ["environments/dev/networking/main.tf"] }],
+    }, deliveryId);
+    const runList = await waitForRuns((items): boolean => items.length === 1);
+    await waitForDelivery(deliveryId);
+    expect(runList).toHaveLength(1);
   });
 
   test("disabled speculative runs create no pull request run", async () => {

@@ -1,135 +1,196 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { fetchApi } from "../lib/api";
-import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Card, CardContent } from "../components/ui/card";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
-import { Spinner } from "../components/ui/spinner";
-import { FolderKanban, Plus, Pencil, Trash2, Layers } from "lucide-react";
+import { FolderKanban, Layers, Pencil, Plus, Trash2 } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "@/components/ui/toast";
+import { fetchApi } from "@/lib/api";
+
+type Project = Readonly<{
+  id: string;
+  attributes: Readonly<{ name: string; description?: string | null }>;
+}>;
+
+type Workspace = Readonly<{
+  id: string;
+  attributes: Readonly<{ name: string }>;
+  relationships?: Readonly<{ project?: Readonly<{ data: Readonly<{ id: string }> | null }> }>;
+}>;
 
 export function Projects(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
-  const [projects, setProjects] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  // Create/Edit Dialog State
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProject, setEditingProject] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
+  const [assignmentsOpen, setAssignmentsOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null);
 
-  useEffect((): void => {
-    if (orgName !== "") {
-      void loadProjects();
-    }
-  }, [orgName]);
-
-  const loadProjects = async (): Promise<void> => {
+  const loadData = useCallback(async (): Promise<void> => {
     setLoading(true);
-    setError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/projects`) as { data: { id: string; attributes: Record<string, unknown> }[] };
-      setProjects(res.data);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to load projects";
-      setError(message);
+      const [projectResponse, workspaceResponse] = await Promise.all([
+        fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects`) as Promise<{ data?: Project[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100`) as Promise<{ data?: Workspace[] }>,
+      ]);
+      setProjects(Array.isArray(projectResponse.data) ? projectResponse.data : []);
+      setWorkspaces(Array.isArray(workspaceResponse.data) ? workspaceResponse.data : []);
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not load projects",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgName]);
 
-  const openCreateDialog = (): void => {
-    setEditingProject(null);
-    setName("");
-    setDescription("");
-    setFormError("");
-    setDialogOpen(true);
-  };
+  useEffect((): void => {
+    if (orgName !== "") void loadData();
+  }, [loadData, orgName]);
 
-  const openEditDialog = (project: { id: string; attributes: Record<string, unknown> }): void => {
+  const openProjectDialog = (project: Project | null): void => {
     setEditingProject(project);
-    setName(project.attributes["name"] as string);
-    setDescription((project.attributes["description"] as string | null) ?? "");
+    setName(project?.attributes.name ?? "");
+    setDescription(project?.attributes.description ?? "");
     setFormError("");
     setDialogOpen(true);
   };
 
-  const handleSave = async (): Promise<void> => {
+  const saveProject = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
     if (name.trim() === "") {
       setFormError("Name is required");
       return;
     }
-
     setSaving(true);
     setFormError("");
     try {
-      if (editingProject != null) {
-        await fetchApi(`/organizations/${orgName}/projects/${editingProject.id}`, {
-          method: "PATCH",
+      await fetchApi(
+        editingProject === null
+          ? `/organizations/${encodeURIComponent(orgName)}/projects`
+          : `/projects/${editingProject.id}`,
+        {
+          method: editingProject === null ? "POST" : "PATCH",
           body: JSON.stringify({
-            data: { attributes: { name: name.trim(), description: description.trim() !== "" ? description.trim() : null } },
+            data: {
+              type: "projects",
+              ...(editingProject === null ? {} : { id: editingProject.id }),
+              attributes: {
+                name: name.trim(),
+                description: description.trim() === "" ? null : description.trim(),
+              },
+            },
           }),
-        });
-      } else {
-        await fetchApi(`/organizations/${orgName}/projects`, {
-          method: "POST",
-          body: JSON.stringify({
-            data: { type: "projects", attributes: { name: name.trim(), description: description.trim() !== "" ? description.trim() : null } },
-          }),
-        });
-      }
+        },
+      );
       setDialogOpen(false);
-      await loadProjects();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to save project";
-      setFormError(message);
+      await loadData();
+      toast.add({ title: editingProject === null ? "Project created" : "Project updated", type: "success" });
+    } catch (error: unknown) {
+      setFormError(error instanceof Error ? error.message : "Failed to save project");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (projectId: string): Promise<void> => {
+  const deleteProject = async (project: Project): Promise<void> => {
+    if (!window.confirm(`Delete project "${project.attributes.name}"?`)) return;
     try {
-      await fetchApi(`/organizations/${orgName}/projects/${projectId}`, { method: "DELETE" });
-      await loadProjects();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to delete project";
-      setError(message);
+      await fetchApi(`/projects/${project.id}`, { method: "DELETE" });
+      await loadData();
+      toast.add({ title: "Project deleted", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not delete project",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
     }
   };
 
+  const assignWorkspace = async (workspace: Workspace, projectId: string): Promise<void> => {
+    setAssigningWorkspaceId(workspace.id);
+    try {
+      await fetchApi(`/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: {
+            id: workspace.id,
+            type: "workspaces",
+            relationships: { project: { data: { id: projectId, type: "projects" } } },
+          },
+        }),
+      });
+      setWorkspaces((current): Workspace[] => current.map((item): Workspace =>
+        item.id === workspace.id
+          ? { ...item, relationships: { ...item.relationships, project: { data: { id: projectId } } } }
+          : item));
+      toast.add({ title: `${workspace.attributes.name} reassigned`, type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not assign workspace",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setAssigningWorkspaceId(null);
+    }
+  };
+
+  const workspaceCount = (projectId: string): number =>
+    workspaces.filter((workspace): boolean => workspace.relationships?.project?.data?.id === projectId).length;
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="flex flex-col gap-6">
+      <header className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-bold">Projects</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Organize workspaces into projects under <span className="font-medium">{orgName}</span>.
-          </p>
+          <p className="text-sm text-muted-foreground">Organize workspaces under {orgName}.</p>
         </div>
-        <Button onClick={openCreateDialog}>
-          <Plus className="w-4 h-4 mr-2" />
-          Create Project
-        </Button>
-      </div>
-
-      {error !== "" && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-md text-sm">{error}</div>
-      )}
-
-      {loading ? (
-        <div className="flex justify-center py-12">
-          <Spinner className="w-6 h-6" />
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={(): void => { setAssignmentsOpen(true); }}>
+            <Layers data-icon="inline-start" />
+            Assign workspaces
+          </Button>
+          <Button onClick={(): void => { openProjectDialog(null); }}>
+            <Plus data-icon="inline-start" />
+            Create project
+          </Button>
         </div>
-      ) : (
-        <Card>
-          <CardContent className="p-0">
+      </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Organization projects</CardTitle>
+          <CardDescription>{projects.length} project{projects.length === 1 ? "" : "s"}</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <Spinner className="mx-auto my-12" />
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -140,81 +201,118 @@ export function Projects(): React.JSX.Element {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {projects.length === 0 ? (
+                {projects.map((project): React.JSX.Element => (
+                  <TableRow key={project.id}>
+                    <TableCell className="font-medium">{project.attributes.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
+                    <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Edit ${project.attributes.name}`}
+                          onClick={(): void => { openProjectDialog(project); }}
+                        >
+                          <Pencil />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete ${project.attributes.name}`}
+                          onClick={(): void => { void deleteProject(project); }}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {projects.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                      <FolderKanban className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                    <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                      <FolderKanban className="mx-auto mb-2 size-8 opacity-50" />
                       No projects yet
                     </TableCell>
                   </TableRow>
-                ) : (
-                  projects.map((project): React.JSX.Element => (
-                    <TableRow key={project.id}>
-                      <TableCell className="font-medium">{project.attributes["name"] as string}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {(project.attributes["description"] as string | null) ?? "—"}
-                      </TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center gap-1 text-sm">
-                          <Layers className="w-3 h-3" />
-                          {(project.attributes["workspace-count"] as number | undefined) ?? 0}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(): void => { openEditDialog(project); }}
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(): void => { void handleDelete(project.id); }}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
                 )}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
-      {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingProject != null ? "Edit Project" : "Create Project"}</DialogTitle>
-            <DialogDescription>
-              {editingProject != null ? "Update the project details." : "Add a new project to organize workspaces."}
-            </DialogDescription>
+            <DialogTitle>{editingProject === null ? "Create project" : "Edit project"}</DialogTitle>
+            <DialogDescription>Set the project name and optional description.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            {formError !== "" && (
-              <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{formError}</div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Name</label>
-              <Input value={name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }} placeholder="My Project" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Description</label>
-              <Input value={description} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }} placeholder="Optional description" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Saving..." : editingProject != null ? "Save" : "Create"}
-            </Button>
-          </DialogFooter>
+          <form onSubmit={saveProject}>
+            <FieldGroup>
+              <Field data-invalid={formError !== ""}>
+                <FieldLabel htmlFor="project-name">Name</FieldLabel>
+                <Input
+                  id="project-name"
+                  value={name}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
+                  aria-invalid={formError !== ""}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="project-description">Description</FieldLabel>
+                <Input
+                  id="project-description"
+                  value={description}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
+                />
+              </Field>
+              {formError !== "" && <FieldError>{formError}</FieldError>}
+            </FieldGroup>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
+              <Button type="submit" disabled={saving}>
+                {saving && <Spinner data-icon="inline-start" />}
+                {editingProject === null ? "Create project" : "Save project"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assignmentsOpen} onOpenChange={setAssignmentsOpen}>
+        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Workspace assignments</DialogTitle>
+            <DialogDescription>Move each workspace to an organization project.</DialogDescription>
+          </DialogHeader>
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>Workspace</TableHead><TableHead>Project</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {workspaces.map((workspace): React.JSX.Element => (
+                <TableRow key={workspace.id}>
+                  <TableCell className="font-medium">{workspace.attributes.name}</TableCell>
+                  <TableCell>
+                    <Select
+                      aria-label={`Project for ${workspace.attributes.name}`}
+                      value={workspace.relationships?.project?.data?.id ?? ""}
+                      disabled={assigningWorkspaceId === workspace.id}
+                      onValueChange={(projectId): void => { void assignWorkspace(workspace, projectId); }}
+                    >
+                      {projects.map((project): React.JSX.Element => (
+                        <option key={project.id} value={project.id}>{project.attributes.name}</option>
+                      ))}
+                    </Select>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {workspaces.length === 0 && (
+                <TableRow><TableCell colSpan={2} className="py-8 text-center text-muted-foreground">No workspaces found.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
         </DialogContent>
       </Dialog>
     </div>

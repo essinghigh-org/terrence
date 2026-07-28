@@ -217,7 +217,9 @@ test("workspace core routes persist settings and execute from the configured sub
         excludedWorkspaceIds: (await excludedByTag.json()).data.map(workspace => workspace.id),
         tagBindingWorkspaceIds: (await filteredByTagBindings.json()).data.map(workspace => workspace.id),
         wrongTagBindingWorkspaceIds: (await excludedByTagBindingValue.json()).data.map(workspace => workspace.id),
-        updatedTagValue: (await updateTagBindings.json()).data[0].attributes.value,
+        updatedTagValue: (await updateTagBindings.json()).data.find(
+          tag => tag.attributes.key === "environment",
+        )?.attributes.value,
         tagBindingValues: (await tagBindings.json()).data.map(tag => tag.attributes.value).sort(),
         effectiveTagTypes: (await effectiveTagBindings.json()).data.map(tag => tag.type),
         clearTagBindings: clearTagBindings.status,

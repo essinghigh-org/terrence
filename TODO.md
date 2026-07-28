@@ -29,10 +29,10 @@
 
 ### 0.3 Rate Limiting
 - [x] 30 requests/second default rate limit with 429 response
-- [x] Per-user rate limiting (not per-token)
+- [x] Per-authenticated-principal rate limiting (user tokens share one user bucket; team and organization tokens share their principal bucket)
 - [x] Per-IP rate limiting for unauthenticated requests
 - [x] `X-RateLimit-Limit` header on responses
-- [x] Lower rate limits for sensitive endpoints (auth, notifications, etc.)
+- [x] Five requests/minute limit for sensitive endpoints (login/registration, password changes, token issuance, admin bootstrap, OAuth, and notification verification)
 
 ### 0.4 System Endpoints (TFE Enterprise)
 - [x] `GET /api/v1/ping` — health check returning `"pong"` (requires auth)
@@ -96,7 +96,9 @@
 - [x] Organization membership permission checks (`checkOrgPermission`)
 - [x] Team-based permission checks for workspace access
 - [x] Organization-level permission checks (manage-workspaces, manage-vcs-settings, etc.)
+  - [x] Enforce every granular team organization-access permission across its management routes
 - [x] Workspace-level permission checks (read, plan, apply, lock/unlock, admin)
+  - [ ] Propagate team-token workspace authorization through assessment and change-request APIs
 - [x] Owner role auto-assignment on org creation
 
 ---
@@ -193,9 +195,9 @@
 - [x] Custom access sub-permissions: `runs`, `variables`, `state-versions`, `sentinel-mocks`, `workspace-locking`, `run-tasks`, `policy-overrides`
 
 ### 3.6 SSO / SAML
-- [ ] SAML configuration API (admin)
-- [ ] `saml-enabled` flag on organization
-- [ ] `owners-team-saml-role-id` field
+- [x] SAML configuration API (admin)
+- [x] `saml-enabled` flag on organization
+- [x] `owners-team-saml-role-id` field
 - [ ] SSO team mapping
 - [ ] (Low priority for homelab — omit unless needed)
 
@@ -275,6 +277,7 @@
 - [x] `structured-run-output-enabled` — structured JSON output (fixed `false`)
 - [x] `auto-destroy-at` — scheduled destroy timestamp
 - [x] `auto-destroy-activity-duration` — inactivity-based auto-destroy
+- [x] Schedule and execute workspace auto-destroy from timestamp and inactivity settings
 - [x] `source-name`, `source-url` — friendly client identification
 - [x] `setting-overwrites` — override project-level defaults
 - [x] `tag-bindings` relationship — key-value tags on create
@@ -383,6 +386,7 @@
 - [x] `DELETE /varsets/:varset_id/relationships/vars` — remove variables from set
 - [x] `global` flag persisted on organization variable sets
 - [x] Global and workspace-attached variable sets feed worker execution
+- [x] Project-attached variable sets feed worker execution
 - [x] `priority` flag — override more specific variables
 - [x] `parent` relationship — organization ownership
 - [x] Global variable set conflict detection
@@ -404,7 +408,7 @@
 - [x] `GET /workspaces/:workspace_id/current-state-version` — get current state
 - [x] `GET /state-versions/:sv_id` — show state version
 - [x] `GET /workspaces/:workspace_id/state-versions` — list state versions (pagination)
-- [x] `DELETE /state-versions/:sv_id` — delete state version (mark for GC)
+- [x] `DELETE /state-versions/:sv_id` — discard state version without losing its metadata
 
 ### 7.2 State Version Attributes
 - [x] `serial` — incrementing serial number
@@ -421,14 +425,14 @@
 - [x] `status` — accepts `pending` or `finalized`; value stored in DB and returned in attribute
 - [x] State version `pending` / `finalized` lifecycle supported (can create as `pending`, set to `finalized`)
 - [x] `hosted-state-download-url` — download URL (attribute in response)
-- [ ] `hosted-state-download-url` — signed temporal URL pattern (currently direct download)
+- [x] `hosted-state-download-url` — signed temporal capability URL
 - [x] `hosted-json-state-download-url` — JSON format download URL (in response attributes when `json_state` exists)
-- [ ] `hosted-state-upload-url` — separate upload URL flow (state posted inline instead; attribute returns null)
-- [ ] `hosted-json-state-upload-url` — separate JSON upload flow (attribute returns null)
+- [x] `hosted-state-upload-url` — separate one-time state upload flow
+- [x] `hosted-json-state-upload-url` — separate one-time JSON state upload flow
 - [x] Separate JSON download endpoint (`GET /state-versions/:sv_id/json-download`)
 - [x] `run` relationship — link state version to run
-- [x] Workspace locking requirement for state creation (TFE requires lock)
-- [ ] Intermediate state versions (snapshots during run)
+- [x] Locked workspaces reject ordinary state creation while allowing intermediate snapshots
+- [x] Intermediate state versions (latest snapshot promoted on workspace unlock)
 
 ### 7.5 State Version Outputs
 - [x] `GET /state-versions/:sv_id/state-version-outputs` and go-tfe `/outputs` alias — list outputs (with pagination)
@@ -464,14 +468,14 @@
 ### 8.4 CV Lifecycle
 - [x] Upload → extracted → archived flow
 - [x] Path traversal protection on tar extraction
-- [x] `backing_data_soft_deleted` state transition on new state version creation (state version route)
+- [x] `backing_data_soft_deleted` state transition via retention GC and manual actions
 - [x] `backing_data_permanently_deleted` state via `applyDataRetentionGarbageCollection` function
 - [x] `backing_data_soft_deleted` → `backing_data_permanently_deleted` two-phase GC lifecycle
-- [x] Re-fetch from VCS for VCS-linked workspaces
-- [ ] GC (garbage collection) for old CV archives and backing data
+- [x] Re-fetch archived configuration versions from VCS for VCS-linked workspaces
+- [x] GC (garbage collection) for old CV archives and backing data
   - [x] State version GC via `applyDataRetentionGarbageCollection` (retention-policy-driven)
-  - [ ] CV archive cleanup
-  - [ ] Run log archival
+  - [x] CV archive cleanup
+  - [x] Run log archival
 
 ---
 
@@ -506,21 +510,21 @@
 - [x] `discarded` — discarded by user (final, via actions/discard)
 - [x] `policy_soft_failed` — policy soft-fail, requires override before apply (worker enters for soft-mandatory failures)
 
-**Phase 2 — States recognized by DB/API but NEVER auto-transitioned by worker:**
-- [ ] `fetching` — fetching config from VCS
-- [ ] `fetching_completed` — VCS fetch done
-- [ ] `pre_plan_running` — pre-plan phase
-- [ ] `pre_plan_completed` — pre-plan done
+**Phase 2 — Intermediate worker states:**
+- [x] `fetching` — fetching config from VCS
+- [x] `fetching_completed` — VCS fetch done
+- [x] `pre_plan_running` — pre-plan phase
+- [x] `pre_plan_completed` — pre-plan done
 - [x] `queuing` — queuing for execution
 - [x] `plan_queued` — waiting for backend capacity
-- [ ] `cost_estimating` — cost estimation
-- [ ] `cost_estimated` — cost estimation done
-- [ ] `policy_checking` — policy evaluation
-- [ ] `policy_override` — policy soft fail, awaiting override
-- [ ] `policy_checked` — policy evaluation done
-- [ ] `confirmed` — user confirmed apply
-- [ ] `post_plan_running` — post-plan phase
-- [ ] `post_plan_completed` — post-plan done
+- [x] `cost_estimating` — cost estimation
+- [x] `cost_estimated` — cost estimation done
+- [x] `policy_checking` — policy evaluation
+- [x] `policy_override` — policy soft fail, awaiting override
+- [x] `policy_checked` — policy evaluation done
+- [x] `confirmed` — user confirmed apply
+- [x] `post_plan_running` — post-plan phase
+- [x] `post_plan_completed` — post-plan done
 - [x] `planned_and_saved` — saved plan ready to confirm
 - [x] `apply_queued` — waiting for backend capacity
 - [x] `unreachable` — agent unreachable (final)
@@ -577,7 +581,7 @@
 ### 9.7 Plans
 - [x] `GET /plans/:plan_id` — show plan details
 - [x] `GET /runs/:run_id/plan` — plan relationship from run
-- [x] `GET /plans/:plan_id/json-output` — JSON plan output
+- [x] `GET /plans/:plan_id/json-output` — persist and serve real Terraform plan JSON
 - [x] Plan states: `pending`, `running`, `finished`, `errored`, `canceled`
 - [x] Plan states: `queued`, `unreachable`
 - [x] Plan attribute: `has-changes`
@@ -621,7 +625,7 @@
 - [x] Apply must wait for plan to complete
 - [x] Auto-apply vs manual apply
 - [x] Policy check must pass before apply (if policy enforcement enabled) — wired into worker pipeline
-- [ ] Cost estimation must complete before apply (if enabled) — not wired into worker pipeline
+- [x] Cost estimation must complete before apply (if enabled)
 
 ---
 
@@ -631,10 +635,10 @@
 - [x] Database schema for logs
 - [x] Log streaming APIs
 - [x] `GET /runs/:run_id/logs` — structured JSON logs endpoint
-- [ ] Log retention and GC
+- [x] Log retention and GC
   - [x] State version GC via retention policy (`applyDataRetentionGarbageCollection`)
-  - [ ] Log record archival/cleanup
-- [ ] Chunked/streamed log delivery (for large runs)
+  - [x] Log record cleanup
+- [x] Chunked/streamed log delivery (for large runs)
 
 ### 10.2 Run Comments
 - [x] `GET /runs/:run_id/comments` — list comments
@@ -664,7 +668,7 @@
 - [x] `agent-enabled` flag — run policy in HCP Terraform agent
 - [x] `policy-tool-version` — specific version for policy evaluation
 - [x] `vcs-repo` — VCS connection for policy set source
-- [ ] Policy set versions (upload tar.gz)
+- [x] Policy set versions (upload tar.gz)
 - [x] `policies-path` — subdirectory within VCS repo
 - [x] Policy set attachment to projects via `POST /policy-sets/:id/relationships/projects`
 - [x] Policy set workspace exclusions via `POST /policy-sets/:id/relationships/workspace-exclusions`
@@ -683,7 +687,7 @@
 - [x] `POST /policy-checks/:check_id/actions/override` — override a soft-failed policy
 - [x] Policy check states: `pending`, `running`, `passed`, `failed`, `overridden`, `soft_failed`, `canceled`, `errored`
 - [x] Policy check result (pass/fail counts, individual policy results)
-- [x] Sentinel result details (`result.sentinel` hash)
+- [x] Evaluate Sentinel policies and persist structured Sentinel results (`result.sentinel`)
 - [x] OPA result details
 
 ### 11.4 Policy Enforcement in Run Pipeline
@@ -693,6 +697,7 @@
 - [x] Advisory: failed policy logs warning, doesn't block
 - [x] Policy override via `actions/override-policy` endpoint
 - [x] OPA policy evaluation in worker (`opa eval` against plan JSON)
+- [x] Synchronize VCS-backed policy sets, including `policy-update-patterns`
 
 ### 11.5 Policy Set Parameters
 - [x] `GET /policy-sets/:policy_set_id/parameters` — list parameters
@@ -711,18 +716,18 @@
 ## Epic 12: Cost Estimation
 
 ### 12.1 Cost Estimates
-- [x] `GET /runs/:run_id/cost-estimate` — show cost estimate via run (stub, returns zero costs)
+- [x] `GET /runs/:run_id/cost-estimate` — show persisted cost estimate via run
 - [x] `GET /cost-estimates/:ce_id` — individual cost estimate by ID endpoint
-- [ ] Cost estimate wired into run pipeline (plan → cost estimate → policy check → apply)
-- [ ] Cost estimate states: always returns `finished` (no support for `skipped`, `queued`, `pending`, `errored`, `canceled`)
-- [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost` (stub returns `0.0`)
-- [x] `resources-count`, `matched-resources-count`, `unmatched-resources-count` (stub returns 0)
-- [ ] `resources` object (detailed cost breakdown per resource)
-- [x] `error-message` field (stub returns null)
+- [x] Cost estimate wired into run pipeline (plan → cost estimate → policy check → apply)
+- [x] Cost estimate states: `skipped`, `queued`, `pending`, `finished`, `errored`, `canceled`
+- [x] `prior-monthly-cost`, `proposed-monthly-cost`, `delta-monthly-cost`
+- [x] `resources-count`, `matched-resources-count`, `unmatched-resources-count`
+- [x] `resources` object with detailed per-resource cost changes
+- [x] `error-message` field (null on success; populated when estimation tooling fails)
 
 ### 12.2 Cost Estimation Integration
-- [ ] Cost estimation engine (requires cloud provider pricing data)
-- [ ] UI display of cost estimates in run view
+- [x] Cost estimation engine via configurable Infracost CLI integration
+- [x] UI display of cost estimates in run view
 - [x] (Low priority for homelab — stub implementation or omit)
 
 ---
@@ -737,14 +742,15 @@
 - [x] `DELETE /oauth-clients/:oc_id` — delete OAuth client
 - [x] `service-provider` — github, gitlab, bitbucket, github_enterprise, gitlab_ce, gitlab_ee, etc.
 - [x] `service-provider-display-name` — human-readable provider name
-- [ ] Additional service providers: `azure_devops_server`, `bitbucket_data_center` (not implemented)
+- [x] Additional service providers: `azure_devops_server`, `bitbucket_data_center`
 - [x] `api-url`, `http-url` — VCS instance URLs
 - [x] `key`, `secret` — OAuth app credentials
 - [x] `callback-url`, `connect-path` — OAuth flow URLs
 - [x] `rsa-public-key` — SSH key for VCS
-- [ ] OAuth handshake flow (redirect to VCS, callback handling) — OAuth CRUD endpoints exist, no actual VCS OAuth flow
-- [ ] `projects` relationship — scope OAuth client to projects (schema exists, no API routes)
-- [ ] `agent-pool` relationship — private VCS via agent (not implemented)
+- [x] OAuth2 authorization-code handshake flow for GitHub, GitHub Enterprise, GitLab hosted/self-hosted, and Bitbucket Cloud
+- [x] Bitbucket Data Center OAuth 1.0 handshake flow
+- [x] `projects` relationship — create/update response scoping plus attach/detach API routes
+- [x] `agent-pool` relationship — private VCS via agent
 
 ### 13.2 OAuth Tokens
 - [x] `GET /oauth-clients/:oc_id/oauth-tokens` — list tokens for a client
@@ -755,21 +761,22 @@
 
 ### 13.3 GitHub App Installations
 - [x] `GET /organizations/:organization_name/github-app-installations` — list installations
-- [x] GitHub App integration flow
+- [x] Manual GitHub App installation-ID registration and token exchange
+- [x] GitHub App installation callback/setup flow (organization-authorized setup redirect, one-time state, GitHub App verification, and metadata refresh)
 - [x] GitHub App installation ID ↔ workspace linking
 
 ### 13.4 Webhook Handling
 - [x] `POST /api/webhooks/github` — GitHub push/PR event receiver (returns 200 acknowledged)
 - [x] `POST /api/webhooks/gitlab` — GitLab event receiver (returns 200 acknowledged)
 - [x] `POST /api/webhooks/bitbucket` — Bitbucket event receiver (returns 200 acknowledged)
-- [x] Actual webhook payload parsing and run triggering
-- [x] Webhook payload parsing and validation
+- [x] GitHub webhook payload parsing, validation, and run triggering
 - [x] Auto-create configuration version on push
 - [x] Auto-trigger run on push (if auto-queue enabled)
 - [x] Speculative plan on PR
 - [x] Trigger filtering by file paths (trigger-prefixes, trigger-patterns, working-directory)
 - [x] Commit status reporting (pending, success, failure)
-- [ ] `tags-regex` support — trigger runs on Git tags
+- [x] Validated GitLab and Bitbucket webhook parsing, configuration fetch, run triggering, and status reporting
+- [x] `tags-regex` support — trigger runs on matching Git tags
 
 ### 13.5 VCS Events
 - [x] `GET /configuration-versions/:cv_id/ingress-attributes` — commit info from VCS event
@@ -791,7 +798,7 @@
 - [x] `DELETE /ssh-keys/:ssh_key_id` — delete SSH key
 - [x] `name` attribute
 - [x] Private key is write-only (never returned in responses)
-- [ ] Keys stored encrypted at rest
+- [x] Keys stored encrypted at rest
 
 ### 14.2 SSH Key Assignment
 - [x] Assign to VCS OAuth token (for repo access)
@@ -819,13 +826,13 @@
 - [x] (Low priority for homelab)
 
 ### 15.3 Project Notification Configurations
-- [ ] Project-level notification configurations (schema exists, no API routes)
+- [x] Project-level notification configurations
 - [ ] (Low priority for homelab)
 
 ### 15.4 Notification Delivery
-- [ ] HTTP POST delivery with standardized payload (only CRUD + stub verify endpoint exist; no actual delivery code)
-- [ ] Payload versioning
-- [ ] Retry logic
+- [x] HTTP POST delivery with standardized payload
+- [x] Payload versioning
+- [x] Retry logic
 - [ ] (Low priority for homelab)
 
 ---
@@ -852,7 +859,7 @@
 - [x] `GET /authentication-tokens/:token_id` — show any token (generic endpoint, works for agent tokens)
 - [x] `DELETE /authentication-tokens/:token_id` — delete any token (generic endpoint, works for agent tokens)
 - [x] `description` attribute on tokens
-- [ ] `last-used-at` tracking (schema exists, not updated)
+- [x] `last-used-at` tracking
 
 ### 16.3 Agent Objects
 - [x] `GET /agent-pools/:pool_id/agents` — list agents in pool
@@ -865,8 +872,9 @@
 ### 16.4 Agent Execution Mode
 - [x] Workspace execution-mode: `agent` (schema + route support)
 - [x] Agent pool assignment on workspace
-- [ ] Run dispatch to agent pool (worker always executes locally; agent route dispatching not implemented)
-- [ ] Agent-poll-based job retrieval
+- [x] Run dispatch to agent pool
+- [x] Agent-poll-based job retrieval
+- [ ] Agent heartbeat timeout and stale claimed-job recovery
 - [ ] Agent hooks (pre-plan, post-plan, pre-apply, post-apply)
 - [ ] Agent-based policy evaluation
 - [ ] (Very low priority for homelab — local execution mode is primary)
@@ -889,8 +897,9 @@
 - [x] `DELETE /workspaces/:workspace_id/run-tasks/:task_id` — detach
 - [x] `GET /runs/:run_id/run-tasks` — list task results for a run
 - [x] `GET /run-tasks/:task_id/task-results` — get task result details
-- [ ] Pre-plan and post-plan stages
-- [ ] HMAC-signed payloads for task callback verification
+- [x] Pre-plan and post-plan stages
+- [x] HMAC-signed payloads for task callback verification
+- [x] Asynchronous run-task result callback protocol with signed callback URLs and progressive `running` updates
 - [x] (Low priority for homelab)
 
 ---
@@ -915,16 +924,16 @@
 - [x] `PATCH /api/v2/registry-module-versions/:version_id` — update version status
 - [x] `DELETE /api/v2/registry-module-versions/:version_id` — delete version
 - [x] VCS-driven module publishing
-- [ ] No-code provisioning ready modules
+- [x] No-code provisioning ready modules
 
 ### 18.3 Module GPG Keys
-- [ ] GPG key management for module signing
+- [x] GPG key management for module signing
 - [x] (Low priority for homelab)
 
 ### 18.4 Module Tests
-- [ ] `POST /registry-modules/:module_id/versions/:version/test` — trigger module test
-- [ ] `GET /registry-modules/:module_id/versions/:version/test` — get test results
-- [ ] Module test configuration
+- [x] `POST /registry-modules/:module_id/versions/:version/test` — trigger module test
+- [x] `GET /registry-modules/:module_id/versions/:version/test` — get test results
+- [x] Module test configuration
 - [ ] (Low priority for homelab)
 
 ---
@@ -936,7 +945,7 @@
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch` — download URL
 - [x] `GET /api/registry/v1/providers/:namespace/:type/:version` — get version details
 - [x] `GET /api/registry/v1/providers/-/versions` — search providers
-- [ ] Network mirror protocol for `provider_installation` blocks (standard registry protocol endpoints exist, network mirror protocol has different URL patterns)
+- [x] Network mirror protocol for `provider_installation` blocks (authenticated metadata at `/api/registry/v1/provider-mirror/`)
 
 ### 19.2 Provider Management
 - [x] `POST /api/v2/organizations/:org/registry-providers` — add provider to private registry
@@ -947,7 +956,7 @@
 - [x] `GET /api/v2/registry-providers/:provider_id/versions` — list provider versions
 - [x] `POST /api/v2/registry-providers/:provider_id/versions` — create provider version
 - [x] `DELETE /api/v2/registry-provider-versions/:version_id` — delete provider version
-- [ ] GPG key management for provider signing
+- [x] GPG key management for provider signing
 
 ### 19.3 Provider Version Platforms
 - [x] `GET /api/v2/registry-provider-versions/:version_id/platforms` — list platforms
@@ -962,17 +971,17 @@
 
 ### 20.1 Health Assessments
 - [x] `workspace.assessments-enabled` flag
-- [ ] `organization.assessments-enforced` flag
-- [ ] Scheduled health assessment runs
+- [x] `organization.assessments-enforced` flag
+- [x] Scheduled health assessment runs
 - [x] `assessment:drifted` notification trigger
 - [x] `assessment:check_failure` notification trigger
 - [x] `assessment:failed` notification trigger
-- [ ] Health assessment results storage and API
+- [x] Health assessment results storage and API
 - [ ] (Low priority for homelab MVP)
 
 ### 20.2 Continuous Validation
-- [ ] Pre-apply check evaluation
-- [ ] Check result storage
+- [x] Pre-apply check evaluation
+- [x] Check result storage
 - [ ] (Low priority for homelab MVP)
 
 ---
@@ -980,11 +989,11 @@
 ## Epic 21: Data Retention & Garbage Collection
 
 ### 21.1 Data Retention Policies
-- [ ] Organization-level data retention settings
+- [x] Organization-level data retention settings (workspace policies override inherited defaults)
 - [x] Workspace-level data retention policies (override org)
 - [x] State version retention count/duration (via `dataRetentionPolicies` table)
-- [ ] Configuration version retention
-- [ ] Run retention
+- [x] Configuration version retention
+- [x] Run retention
 - [x] `backing_data_soft_deleted` state for state versions and CVs
 - [x] `backing_data_permanently_deleted` state
 - [x] GC scheduler / maintenance trigger
@@ -992,7 +1001,7 @@
   - [x] Phase 1: finalized → `backing_data_soft_deleted` for excess state versions
   - [x] Phase 2: `backing_data_soft_deleted` → permanently deleted (row removal)
   - [x] Integration with workspace data retention policy POST and GC action endpoints
-- [ ] Data restoration before permanent deletion
+- [x] Data restoration before permanent deletion
 
 ### 21.2 Retention Policy API
 - [x] `GET /workspaces/:ws_id/relationships/data-retention-policy`
@@ -1014,20 +1023,26 @@
 - [x] Filter workspaces by included/excluded tag keys and exact key-value bindings (on list endpoint)
 
 ### 22.2 Organization Tags & Tag Filtering
-- [ ] Reserved tag key management
+- [x] Reserved tag key management (organization-scoped CRUD, validation, uniqueness, and disable-overrides enforcement)
 - [x] Tag-based workspace organization
 - [x] Filter workspaces by included/excluded tag keys (`search[tags]`, `search[exclude-tags]`)
-- [ ] Filter workspaces by exact key-value tag bindings (`filter[tagged]`) — only flat string tag search (`search[tags]`) is implemented
+- [x] Filter workspaces by exact key-value tag bindings (`filter[tagged]`)
 
 ---
 
 ## Epic 23: No-Code Provisioning
 
 ### 23.1 No-Code Provisioning
-- [ ] `POST /api/v2/organizations/:org/no-code-modules` — enable no-code on module version
-- [ ] `GET /api/v2/organizations/:org/no-code-modules` — list no-code enabled modules
-- [ ] `DELETE /api/v2/no-code-modules/:id` — disable no-code
-- [ ] No-code workspace creation UI
+- [x] `POST /api/v2/organizations/:org/no-code-modules` — enable no-code on module version
+- [x] `GET /api/v2/organizations/:org/no-code-modules` — list no-code enabled modules
+- [x] `DELETE /api/v2/no-code-modules/:id` — disable no-code
+- [x] No-code provisioning catalog and workspace creation form shell
+- [x] Persist no-code module variable options and implement their GET/PATCH APIs
+- [x] Collect, type-check, and validate no-code module inputs in the provisioning UI
+- [x] Implement module-backed no-code workspace creation via `/no-code-modules/:id/workspaces`
+- [x] Persist module configuration versions and execute the selected module configuration
+- [x] Scan module variable declarations and defaults for no-code input metadata beyond configured option sets
+- [x] Implement no-code workspace upgrade plan, status, and confirmation APIs
 - [ ] (Very low priority for homelab)
 
 ---
@@ -1088,41 +1103,43 @@
 - [x] Settings: cost-estimation enabled, sentinel enabled, etc.
 
 ### 24.9 Admin Module Registry Sharing
-- [ ] `POST /api/v2/admin/module-sharing` — share modules across orgs
-- [ ] `DELETE /api/v2/admin/module-sharing/:id` — stop sharing
-- [ ] `GET /api/v2/admin/module-sharing` — list sharing configs
+- [x] `POST /api/v2/admin/module-sharing` — share modules across orgs
+- [x] `DELETE /api/v2/admin/module-sharing/:id` — stop sharing
+- [x] `GET /api/v2/admin/module-sharing` — list sharing configs
 
 ### 24.10 Admin Registry Sharing
 - [ ] Registry mirror/proxy settings
 - [ ] (Low priority)
 
 ### 24.11 Initial Admin User
-- [ ] First-run setup wizard / initial admin creation
-- [ ] Bootstrap process for fresh TFE instance
+- [x] First-run setup / initial admin creation (browser flow, environment bootstrap, and IACT-compatible API)
+- [x] Bootstrap process for fresh TFE instance
 - [x] Browser first-run flow for local user registration and organization creation
-- [ ] (Important for homelab — need admin bootstrap)
+- [x] `ADMIN_PASSWORD` homelab bootstrap with a forced first-login password change
+- [x] Default organization creation for the automated bootstrap
 
 ### 24.11 Audit Logs
 - [x] `GET /api/v2/admin/audit-logs` — list all audit log entries (site admin)
 - [x] `GET /organizations/:org_name/audit-logs` — list audit log entries for an org (owner)
 - [x] `GET /api/v2/audit-trails` — audit trail endpoint (returns empty data array)
 - [x] `GET /api/v2/organization-audit-trailers` — org audit trail endpoint (returns empty data array)
-- [x] Audit log entries created automatically on user/org/workspace creation, run actions (apply, cancel, discard, force-cancel) via `auditLog()` utility function
+- [x] Audit log entries emitted for bootstrap, registration, apply, and workspace lock actions
+- [x] Complete audit logging for organization/workspace creation and run cancel/discard/force-cancel actions
 
 ### 24.12 Support Bundles
-- [ ] `POST /api/v1/support-bundle-requests` — generate support bundle
-- [ ] `GET /api/v1/support-bundle-requests` — list bundles
-- [ ] `GET /api/v1/support-bundle-requests/:id` — download bundle
-- [ ] `DELETE /api/v1/support-bundle-requests/:id` — delete bundle
-- [ ] (Low priority for homelab)
+- [x] `POST /api/v1/support/bundle-requests` — generate local support bundle (`/api/v1/support-bundle-requests` compatibility alias)
+- [x] `GET /api/v1/support/bundle-requests` — list bundles
+- [x] `GET /api/v1/support/bundle-requests/:id` and `/:id/download` — inspect and download bundle
+- [x] `DELETE /api/v1/support/bundle-requests/:id` — delete bundle artifact and retain a gone tombstone
+- [x] (Low priority for homelab)
 
 ### 24.13 Usage Bundles
-- [ ] `GET /api/v1/usage/bundle` — retrieve usage data
-- [ ] (Very low priority for homelab)
+- [x] `GET /api/v1/usage/bundle` — retrieve privacy-limited usage data
+- [x] (Very low priority for homelab)
 
 ### 24.14 Diagnostics
-- [ ] `GET /api/v1/diagnostics` — comprehensive health diagnostics
-- [ ] (Low priority)
+- [x] `GET /api/v1/diagnostics` — database, storage, and runtime health diagnostics
+- [x] (Low priority)
 
 ---
 
@@ -1138,11 +1155,11 @@
 ## Epic 26: Change Requests
 
 ### 26.1 Change Requests
-- [ ] `GET /workspaces/:ws_id/change-requests` — list change requests
-- [ ] `POST /workspaces/:ws_id/change-requests` — create change request
-- [ ] `GET /change-requests/:cr_id` — show change request
-- [ ] `POST /change-requests/:cr_id/actions/approve` — approve
-- [ ] `POST /change-requests/:cr_id/actions/discard` — discard
+- [x] `GET /workspaces/:ws_id/change-requests` — list change requests
+- [x] `POST /workspaces/:ws_id/change-requests` — create change request
+- [x] `GET /change-requests/:cr_id` — show change request
+- [x] `POST /change-requests/:cr_id/actions/approve` — approve
+- [x] `POST /change-requests/:cr_id/actions/discard` — discard
 - [ ] (Very low priority for homelab)
 
 ---
@@ -1163,16 +1180,16 @@
 ### 27.2 Workspace Detail Tabs
 - [x] Overview tab (metadata cards)
 - [x] Runs tab (run list with trigger button)
-- [ ] Variables tab (placeholder only — no actual variable editor UI in workspace detail)
+- [x] Variables tab (workspace variable list/create/edit/delete with category, sensitive, and HCL controls)
 - [x] State Versions tab
-- [ ] Settings tab (placeholder only — no actual settings form in workspace detail)
-- [ ] Team Access tab (not implemented in frontend)
-- [ ] Notification Configurations tab (not implemented in frontend)
-- [ ] Policy Sets tab (not implemented in frontend)
-- [ ] SSH Key tab (not implemented in frontend)
-- [ ] VCS tab (not implemented in frontend)
-- [ ] Health Assessments tab (not implemented in frontend)
-- [ ] Run Triggers tab (not implemented in frontend)
+- [x] Settings tab (execution engine, version, and auto-apply settings)
+- [x] Team Access tab (standard and custom workspace permissions)
+- [x] Notification Configurations tab (CRUD and verification)
+- [x] Policy Sets tab (effective direct, project, and global policy sets)
+- [x] SSH Key tab (organization key assignment and removal)
+- [x] VCS tab (repository, trigger, clone, apply, connect, and disconnect settings)
+- [x] Health Assessments tab (workspace enablement setting)
+- [x] Run Triggers tab (list, attach, and detach upstream workspaces)
 - [x] Organization settings page (general settings, team list, delete)
 
 ### 27.3 TFE UI Mirroring
@@ -1182,25 +1199,31 @@
 - [x] Responsive layout for desktop
 - [x] Navigation breadcrumbs (Org > Workspace > Runs)
 - [x] Organization settings page
-- [x] Team management UI (create, invite, permissions)
-- [x] Project management UI (create, workspace assignment)
+- [x] Team management UI (create and list)
+- [x] Team invitation and team-assignment UI
+- [x] Team organization-access permission management UI
+- [x] Project management UI (create and list)
+- [x] Project edit/delete and workspace assignment UI using supported API routes
 - [x] Variable Set CRUD, global scope, and workspace attachment UI
 - [x] Variable Set variable editor UI
 - [x] VCS integration setup UI
 - [x] Agent pool management UI
 - [x] Workspace lock/unlock UI indicators
 - [x] Run detail with full state machine visualization
-- [ ] Policy check results display (backend API exists, no frontend UI)
-- [ ] Cost estimate display (backend stub exists, no frontend UI)
+- [x] Policy check results display (per-check status, result detail, and soft-fail override)
+- [x] Cost estimate display (status, monthly totals, delta, resource coverage, and errors)
 - [x] User profile / account settings page
 - [x] Admin dashboard (TFE instance management)
-- [x] Search/filter workspaces
-- [x] Tag display and management in workspace list
+- [x] Search workspaces by name and tag
+- [x] Functional workspace status and filter controls
+- [x] Tag display and search in workspace list
+- [x] Tag mutation UI in the workspace list
 
 ### 27.4 Frontend Engineering
 - [x] React Router with proper auth guards
 - [x] `fetchApi` wrapper with token management
-- [x] Automatic token refresh / expiry handling
+- [x] Automatic token expiry and invalid-session handling
+- [x] Renewable login sessions / refresh-token protocol
 - [x] Error boundary components
 - [x] Loading states (skeletons, spinners)
 - [x] Empty states (no organizations, no workspaces, etc.)
@@ -1304,7 +1327,7 @@
 - [x] Request logging middleware (method, path, status, duration)
 - [x] `LOG_LEVEL` environment variable consumed at runtime (error/warn/info/debug levels)
 - [x] Structured JSON logging (structured JSON output via `log.info/warn/error/debug` helper)
-- [ ] Prometheus metrics (Phase 2)
+- [x] Prometheus metrics (`/metrics?format=prometheus`)
 
 ### 29.6 Security
 - [x] Environment variable sanitization in worker

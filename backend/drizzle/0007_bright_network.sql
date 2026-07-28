@@ -1,6 +1,8 @@
 CREATE TABLE `notification_configurations` (
 	`id` text PRIMARY KEY NOT NULL,
-	`workspace_id` text NOT NULL,
+	`workspace_id` text,
+	`team_id` text,
+	`project_id` text,
 	`name` text NOT NULL,
 	`destination_type` text NOT NULL,
 	`url` text NOT NULL,
@@ -8,7 +10,9 @@ CREATE TABLE `notification_configurations` (
 	`enabled` integer DEFAULT true,
 	`token` text,
 	`created_at` integer NOT NULL,
-	FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`team_id`) REFERENCES `teams`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE TABLE `projects` (

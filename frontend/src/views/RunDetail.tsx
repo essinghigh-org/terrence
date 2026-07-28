@@ -1,42 +1,145 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { toast } from "../components/ui/toast";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../components/ui/table";
 import { CheckCircle2, XCircle, Clock, AlertCircle, ChevronDown, ExternalLink } from "lucide-react";
+
+type RunResource = {
+  id: string;
+  attributes: Record<string, unknown>;
+};
+
+type CostEstimate = {
+  id: string;
+  attributes: {
+    status: string;
+    "prior-monthly-cost"?: string;
+    "proposed-monthly-cost"?: string;
+    "delta-monthly-cost"?: string;
+    "resources-count"?: number;
+    "matched-resources-count"?: number;
+    "unmatched-resources-count"?: number;
+    "error-message"?: string | null;
+  };
+};
+
+type PolicyCheck = {
+  id: string;
+  attributes: {
+    status: string;
+    result?: unknown;
+    "created-at"?: string;
+  };
+};
+
+function formatMonthlyCost(value: string | undefined): string {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `${new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)} / month`;
+}
+
+function policyResultText(result: unknown): string {
+  if (result === null || result === undefined) return "No detailed result";
+  if (typeof result === "string") return result;
+  if (typeof result === "number" || typeof result === "boolean" || typeof result === "bigint") return `${result}`;
+  if (typeof result !== "object") return "No detailed result";
+  const details = result as Record<string, unknown>;
+  const summary: string[] = [];
+  if (typeof details["policy"] === "string") summary.push(details["policy"]);
+  if (typeof details["error"] === "string") summary.push(details["error"]);
+  const violations = details["violations"];
+  if (Array.isArray(violations)) {
+    summary.push(`${violations.length} violation${violations.length === 1 ? "" : "s"}${
+      violations.length > 0 ? `: ${violations.map(String).join(", ")}` : ""
+    }`);
+  }
+  return summary.length > 0 ? summary.join(" — ") : JSON.stringify(result);
+}
 
 export function RunDetail(): React.JSX.Element {
   const { orgName: rawOrgName, workspaceName: rawWorkspaceName, runId: rawRunId } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
   const orgName = rawOrgName ?? "";
   const workspaceName = rawWorkspaceName ?? "";
   const runId = rawRunId ?? "";
-  const [run, setRun] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
+  const [run, setRun] = useState<RunResource | null>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<string>("");
+  const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
+  const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const logsRef = useRef<HTMLPreElement>(null);
 
-  useEffect((): (() => void) => {
-    void loadRun();
-    const interval = window.setInterval((): void => { void loadRun(); }, 3000);
-    return (): void => { clearInterval(interval); };
-  }, [runId]);
-
-  async function loadRun(): Promise<void> {
+  const loadRun = useCallback(async (signal: AbortSignal): Promise<void> => {
     try {
-      const data = await fetchApi(`/api/v2/runs/${runId}`) as { data: { id: string; attributes: Record<string, unknown> } };
+      const data = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource };
+      signal.throwIfAborted();
       setRun(data.data);
 
-      if (data.data.attributes["status"] !== 'pending') {
-        const logData = await fetchApi(`/api/v2/runs/${runId}/logs`) as { logs?: { message: string }[] };
-        if (logData.logs != null) {
-           setLogs(logData.logs.map((l: { message: string }): string => l.message).join(""));
-        }
+      const [logResult, costResult, policyResult] = await Promise.allSettled([
+        data.data.attributes["status"] === "pending"
+          ? Promise.resolve(null)
+          : fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
+      ]);
+      signal.throwIfAborted();
+      if (logResult.status === "fulfilled" && logResult.value !== null) {
+        const logData = logResult.value as {
+          data?: { attributes?: { "output-text"?: string } }[];
+          logs?: { message: string }[];
+        };
+        setLogs(
+          logData.logs?.map((log): string => log.message).join("")
+          ?? logData.data?.map((log): string => log.attributes?.["output-text"] ?? "").join("")
+          ?? "",
+        );
+      }
+      if (costResult.status === "fulfilled") {
+        const costData = costResult.value as { data?: CostEstimate };
+        setCostEstimate(costData.data ?? null);
+      }
+      if (policyResult.status === "fulfilled") {
+        const policyData = policyResult.value as { data?: PolicyCheck[] };
+        setPolicyChecks(Array.isArray(policyData.data) ? policyData.data : []);
       }
     } catch (err: unknown) {
-      console.error(err);
+      if (!signal.aborted) console.error(err);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }
+  }, [runId]);
+
+  useEffect((): (() => void) => {
+    let active = true;
+    const controllers = new Set<AbortController>();
+    const refresh = (): void => {
+      if (!active) return;
+      const controller = new AbortController();
+      controllers.add(controller);
+      void loadRun(controller.signal).finally((): void => { controllers.delete(controller); });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 3000);
+    return (): void => {
+      active = false;
+      window.clearInterval(interval);
+      controllers.forEach((controller): void => { controller.abort(); });
+    };
+  }, [loadRun]);
 
   useEffect((): void => {
     if (logsRef.current != null) {
@@ -47,27 +150,27 @@ export function RunDetail(): React.JSX.Element {
   async function handleApply(): Promise<void> {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/apply`, { method: "POST" });
-      void loadRun();
-    } catch (_err: unknown) {
-      alert("Failed to apply run");
+      toast.add({ title: "Run queued for apply", type: "success" });
+    } catch {
+      toast.add({ title: "Failed to apply run", type: "error" });
     }
   }
 
   async function handleDiscard(): Promise<void> {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/discard`, { method: "POST" });
-      void loadRun();
-    } catch (_err: unknown) {
-      alert("Failed to discard run");
+      toast.add({ title: "Run discarded", type: "success" });
+    } catch {
+      toast.add({ title: "Failed to discard run", type: "error" });
     }
   }
 
   async function handleOverridePolicy(): Promise<void> {
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/override-policy`, { method: "POST" });
-      void loadRun();
-    } catch (_err: unknown) {
-      alert("Failed to override policy");
+      toast.add({ title: "Policy override accepted", type: "success" });
+    } catch {
+      toast.add({ title: "Failed to override policy", type: "error" });
     }
   }
 
@@ -77,10 +180,25 @@ export function RunDetail(): React.JSX.Element {
   const status = run.attributes["status"] as string;
   const isPending = status === 'pending';
   const isPlanning = status === 'planning';
-  const isPlanned = status === 'planned';
+  const isPlanned = status === 'planned' || status === "planned_and_saved";
   const isApplying = status === 'applying';
   const isApplied = status === 'applied';
   const isErrored = status === 'errored' || status === 'failed';
+  const costAttributes = costEstimate?.attributes;
+  const costStatus = costAttributes?.status ?? "unavailable";
+  const costPending = costStatus === "queued" || costStatus === "pending";
+  const costFailed = costStatus === "errored" || costStatus === "canceled";
+  const hasSoftFailedPolicy = status === "policy_soft_failed"
+    || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
+  const hasFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
+    ["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status),
+  );
+  const policySummary = policyChecks.length === 0
+    ? status === "policy_checking" ? "checking" : "not required"
+    : hasFailedPolicy ? hasSoftFailedPolicy ? "soft failed" : "failed"
+    : policyChecks.every((check: PolicyCheck): boolean => check.attributes.status === "overridden")
+      ? "overridden"
+      : "passed";
 
   return (
     <div className="max-w-full w-full">
@@ -159,38 +277,115 @@ export function RunDetail(): React.JSX.Element {
              <div className="border-b border-gray-200">
                 <div className="flex items-center justify-between px-5 py-4">
                    <div className="flex items-center gap-3">
-                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                      {costPending ? (
+                        <Clock className="h-5 w-5 text-muted-foreground" />
+                      ) : costFailed ? (
+                        <XCircle className="h-5 w-5 text-destructive" />
+                      ) : (
+                        <CheckCircle2 className="h-5 w-5 text-muted-foreground" />
+                      )}
                       <span className="font-semibold text-gray-900">Cost estimation</span>
                    </div>
-                   <div className="flex items-center gap-3 text-xs">
-                      <span className="text-gray-500">Monthly Delta:</span>
-                      <span className="font-mono font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">$0.00 / mo</span>
+                   <div className="flex items-center gap-3">
+                      <Badge variant={costFailed ? "destructive" : costPending ? "outline" : "secondary"}>
+                        {costStatus.replace(/_/g, " ")}
+                      </Badge>
+                      {costAttributes != null && (
+                        <span className="font-mono text-sm font-medium">
+                          {formatMonthlyCost(costAttributes["delta-monthly-cost"])}
+                        </span>
+                      )}
                    </div>
                 </div>
+                {costAttributes != null && (
+                  <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 px-5 pb-4 text-sm md:grid-cols-4">
+                    <div className="flex flex-col gap-1">
+                      <dt className="text-muted-foreground">Prior monthly</dt>
+                      <dd className="font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <dt className="text-muted-foreground">Proposed monthly</dt>
+                      <dd className="font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <dt className="text-muted-foreground">Monthly delta</dt>
+                      <dd className="font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <dt className="text-muted-foreground">Priced resources</dt>
+                      <dd className="font-medium">
+                        {costAttributes["matched-resources-count"] ?? 0} of {costAttributes["resources-count"] ?? 0}
+                      </dd>
+                    </div>
+                    {costAttributes["error-message"] != null && (
+                      <div className="col-span-full text-destructive">
+                        {costAttributes["error-message"]}
+                      </div>
+                    )}
+                  </dl>
+                )}
              </div>
 
              {/* Policy Check step */}
              <div className="border-b border-gray-200">
                 <div className="flex items-center justify-between px-5 py-4">
                    <div className="flex items-center gap-3">
-                      {status === 'policy_soft_failed' ? (
-                        <AlertCircle className="h-5 w-5 text-amber-500" />
+                      {hasFailedPolicy ? (
+                        <AlertCircle className="h-5 w-5 text-destructive" />
+                      ) : policySummary === "checking" ? (
+                        <Clock className="h-5 w-5 text-muted-foreground" />
                       ) : (
-                        <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                        <CheckCircle2 className="h-5 w-5 text-muted-foreground" />
                       )}
                       <span className="font-semibold text-gray-900">Policy check</span>
                    </div>
-                   {status === 'policy_soft_failed' ? (
+                   {hasSoftFailedPolicy ? (
                       <div className="flex items-center gap-2">
-                        <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-medium">Soft Failed</span>
+                        <Badge variant="destructive">Soft failed</Badge>
                         <Button size="sm" variant="outline" onClick={(): void => { void handleOverridePolicy(); }}>
-                          Override Policy
+                          Override policy
                         </Button>
                       </div>
                    ) : (
-                      <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-medium border border-emerald-100">PASSED</span>
+                      <Badge variant={hasFailedPolicy ? "destructive" : policySummary === "passed" ? "default" : "secondary"}>
+                        {policySummary}
+                      </Badge>
                    )}
                 </div>
+                {policyChecks.length > 0 && (
+                  <div className="px-5 pb-4">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Check</TableHead>
+                          <TableHead>Result</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {policyChecks.map((check: PolicyCheck): React.JSX.Element => (
+                          <TableRow key={check.id}>
+                            <TableCell className="font-mono text-xs">{check.id}</TableCell>
+                            <TableCell className="whitespace-normal">
+                              {policyResultText(check.attributes.result)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={
+                                  ["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status)
+                                    ? "destructive"
+                                    : check.attributes.status === "passed" ? "default" : "secondary"
+                                }
+                              >
+                                {check.attributes.status.replace(/_/g, " ")}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
              </div>
 
              {/* Apply step */}

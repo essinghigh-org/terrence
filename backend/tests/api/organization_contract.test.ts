@@ -52,6 +52,7 @@ describe("organization API contract", () => {
           name: createdName,
           "default-iac-binary": "terraform",
           "default-terraform-version": "1.15.0",
+          "assessments-enforced": true,
         },
       },
     });
@@ -68,6 +69,7 @@ describe("organization API contract", () => {
       "default-execution-mode": "remote",
       "default-iac-binary": "terraform",
       "default-terraform-version": "1.15.0",
+      "assessments-enforced": true,
     });
     expect(resource.relationships).toMatchObject({
       "oauth-tokens": { links: { related: `/api/v2/organizations/${createdName}/oauth-tokens` } },
@@ -87,6 +89,7 @@ describe("organization API contract", () => {
         attributes: {
           "default-iac-binary": "tofu",
           "default-terraform-version": "1.12.1",
+          "assessments-enforced": false,
         },
       },
     });
@@ -94,6 +97,7 @@ describe("organization API contract", () => {
     expect((await updated.json()).data.attributes).toMatchObject({
       "default-iac-binary": "tofu",
       "default-terraform-version": "1.12.1",
+      "assessments-enforced": false,
     });
   });
 

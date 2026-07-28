@@ -2,6 +2,7 @@ import { useState } from "react";
 import { fetchApi, setAuthToken } from "../lib/api";
 import { useNavigate, Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
+import { toast } from "../components/ui/toast";
 
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
@@ -14,13 +15,13 @@ export function Login(): React.JSX.Element {
       const data = await fetchApi("/users/login", {
         method: "POST",
         body: JSON.stringify({
-          data: { attributes: { username, password } }
+          data: { attributes: { username, password, "browser-session": true } }
         })
-      }) as { data: { attributes: { token: string } } };
-      setAuthToken(data.data.attributes.token);
-      await navigate("/app");
+      }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
+      setAuthToken(data.data.attributes.token, data.data.attributes["expired-at"], true);
+      await navigate(data.data.attributes["must-change-password"] === true ? "/app/account" : "/app");
     } catch (_err: unknown) {
-      alert("Login failed");
+      toast.add({ title: "Login failed", description: "Check your username and password.", type: "error" });
     }
   }
 
