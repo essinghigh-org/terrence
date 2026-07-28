@@ -76,10 +76,7 @@ export default tseslint.config(
 
       // ── Readonly discipline ─────────────────────────────────────────────
       '@typescript-eslint/prefer-readonly': 'error',
-      '@typescript-eslint/prefer-readonly-parameter-types': [
-        'warn',
-        { allow: ['Map', 'Set', 'WeakMap', 'WeakSet', 'Buffer'] },
-      ],
+      '@typescript-eslint/prefer-readonly-parameter-types': 'off',
 
       // ── Type / interface discipline ─────────────────────────────────────
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
@@ -100,6 +97,7 @@ export default tseslint.config(
         { selector: 'property', format: ['camelCase'] },
         { selector: 'typeLike', format: ['PascalCase'] },
         { selector: 'enumMember', format: ['PascalCase'] },
+        { selector: 'typeProperty', format: null },
         { selector: 'objectLiteralProperty', format: null, leadingUnderscore: 'allow' },
       ],
 

@@ -24,11 +24,11 @@ function DropdownMenuTrigger({ ...props }: DeepReadonly<MenuPrimitive.Trigger.Pr
   return <MenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...(props as MenuPrimitive.Trigger.Props)} />;
 }
 
-type MenuContentProps = DeepReadonly<MenuPrimitive.Popup.Props &
+type MenuContentProps = DeepReadonly<MenuPrimitive.Popup.Props> &
   Pick<
     MenuPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset"
-  >>;
+  >;
 
 function DropdownMenuContent({
   align = "start",
@@ -132,7 +132,7 @@ function DropdownMenuSubTrigger({
       )}
       {...(props as MenuPrimitive.SubmenuTrigger.Props)}
     >
-      {children}
+      {children as React.ReactNode}
 
       <ChevronRightIcon className="ml-auto" />
     </MenuPrimitive.SubmenuTrigger>
@@ -146,7 +146,7 @@ function DropdownMenuSubContent({
   sideOffset = 0,
   className,
   ...props
-}: DeepReadonly<ComponentProps<typeof DropdownMenuContent>>): JSX.Element {
+}: ComponentProps<typeof DropdownMenuContent>): JSX.Element {
   return (
     <DropdownMenuContent
       data-slot="dropdown-menu-sub-content"
