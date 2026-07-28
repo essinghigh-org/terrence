@@ -74,9 +74,9 @@ type VariableSet = {
     name: string;
     description: string | null;
     global: boolean;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "var-count": number;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "workspace-count": number;
   };
   relationships: {

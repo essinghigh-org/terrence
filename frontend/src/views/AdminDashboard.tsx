@@ -22,31 +22,31 @@ export function AdminDashboard(): React.JSX.Element {
   type ItemAttrs = {
     username?: string;
     email?: string | null;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "is-site-admin"?: boolean;
     name?: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "iac-binary"?: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "default-terraform-version"?: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "auto-apply"?: boolean;
     locked?: boolean;
     status?: string;
     message?: string | null;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "has-changes"?: boolean;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     actions?: { "is-cancelable"?: boolean };
     version?: string;
     url?: string | null;
     sha?: string | null;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "created-at"?: string;
     action?: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "resource-type"?: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "resource-id"?: string | null;
     [key: string]: unknown;
   };

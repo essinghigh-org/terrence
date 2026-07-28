@@ -15,7 +15,7 @@ type AgentPool = {
   attributes: {
     name: string;
     organization: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "agent-count"?: number;
   };
 }
@@ -24,9 +24,9 @@ type AgentToken = {
   id: string;
   attributes: {
     description: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "created-at": string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "last-used-at"?: string | null;
   };
 }

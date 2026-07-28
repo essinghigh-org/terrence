@@ -9,7 +9,7 @@ type RunItem = {
   attributes: {
     message?: string | null;
     status: string;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
+
     "created-at"?: string;
   };
 };

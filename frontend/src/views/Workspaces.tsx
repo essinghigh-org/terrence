@@ -45,7 +45,7 @@ export function Workspaces(): React.JSX.Element {
 
   const filteredWorkspaces = workspaces.filter((ws: WorkspaceItem): boolean => {
     const nameMatch = ws.attributes.name.toLowerCase().includes(search.toLowerCase());
-    const tags = (ws.attributes["tag-names"] ?? ws.attributes.tags ?? []) as string[];
+    const tags = ws.attributes["tag-names"] ?? ws.attributes.tags ?? [];
     const tagMatch = tags.some((t: string): boolean => t.toLowerCase().includes(search.toLowerCase()));
     return nameMatch || tagMatch;
   });
