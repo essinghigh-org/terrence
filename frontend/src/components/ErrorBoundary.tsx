@@ -24,7 +24,7 @@ export class ErrorBoundary extends Component<Readonly<{ children: ReactNode }>, 
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-semibold">Something went wrong</h1>
             <p className="text-sm text-muted-foreground">
-              Reload the page to recover. Your saved Terraform Enterprise data is unaffected.
+              Reload the page to recover. Your saved Terrence data is unaffected.
             </p>
           </div>
           <Button onClick={(): void => { window.location.reload(); }}>Reload page</Button>

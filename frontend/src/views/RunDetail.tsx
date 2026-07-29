@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { PlanOutput } from "../components/PlanOutput";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { toast } from "../components/ui/toast";
@@ -271,6 +272,9 @@ export function RunDetail(): React.JSX.Element {
                      </div>
                   </div>
                 )}
+
+                {/* Structured Plan Output */}
+                {(!isPending) && <PlanOutput runId={runId} />}
              </div>
 
              {/* Cost Estimation step */}

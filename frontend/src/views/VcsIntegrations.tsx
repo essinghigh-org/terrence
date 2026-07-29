@@ -187,7 +187,7 @@ export function VcsIntegrations(): React.JSX.Element {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-xl font-semibold">GitHub App Installations</h2>
-              <p className="text-sm text-muted-foreground">Manage your Terraform Enterprise GitHub App installations.</p>
+              <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
             </div>
             <Button onClick={(): void => { setGhDialogOpen(true); }}>
               <Plus className="mr-1.5 size-4" /> Register GitHub App
@@ -413,7 +413,7 @@ export function VcsIntegrations(): React.JSX.Element {
             <DialogHeader>
               <DialogTitle>Register GitHub App Installation</DialogTitle>
               <DialogDescription>
-                Register an installation ID of the Terraform Enterprise GitHub App.
+                Register an installation ID of the Terrence GitHub App.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">

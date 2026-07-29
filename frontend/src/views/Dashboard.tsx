@@ -151,10 +151,7 @@ export function Dashboard(): React.JSX.Element {
         <a href="#" className="hover:text-gray-700">Privacy</a>
         <a href="#" className="hover:text-gray-700">Security</a>
         <a href="#" className="hover:text-gray-700">Accessibility</a>
-        <span className="flex items-center gap-1.5 ml-4">
-          <div className="font-bold border border-gray-400 rounded-sm px-1 text-[8px] leading-3 uppercase tracking-tighter">IBM</div>
-          © 2026 HashiCorp, an IBM Company
-        </span>
+        <span className="text-muted-foreground">Terrence v0.1.0-dev</span>
       </div>
     </div>
   );
