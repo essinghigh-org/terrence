@@ -129,7 +129,7 @@ export function AgentPools(): React.JSX.Element {
   };
 
   const [poolToDelete, setPoolToDelete] = useState<AgentPool | null>(null);
-  const [tokenToRevoke, setTokenToRevoke] = useState<AgentPoolToken | null>(null);
+  const [tokenToRevoke, setTokenToRevoke] = useState<AgentToken | null>(null);
   const [deletingPool, setDeletingPool] = useState(false);
 
   const handleDeletePool = async (pool: AgentPool): Promise<void> => {
@@ -226,7 +226,10 @@ export function AgentPools(): React.JSX.Element {
     <div className="mx-auto max-w-6xl space-y-6 p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
+            <HelpTooltip content="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure." />
+          </div>
           <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>
         </div>
         {canManage && <Button onClick={(): void => { setPoolDialogOpen(true); }}>
@@ -331,6 +334,11 @@ export function AgentPools(): React.JSX.Element {
                 Define an agent pool to manage self-hosted execution workers for organization run tasks.
               </DialogDescription>
             </DialogHeader>
+            {poolFormError !== "" && (
+              <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
+                {poolFormError}
+              </div>
+            )}
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <label htmlFor="agent-pool-name" className="text-sm font-medium">Pool Name</label>

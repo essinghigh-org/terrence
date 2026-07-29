@@ -21,7 +21,7 @@ export type ConfirmDialogProps = Readonly<{
   confirmText?: string;
   cancelText?: string;
   confirmVariant?: "destructive" | "default" | "outline";
-  requireText?: string;
+  requireText?: string | undefined;
   requireTextLabel?: string;
   onConfirm: () => void | Promise<void>;
   loading?: boolean;

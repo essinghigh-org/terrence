@@ -16,7 +16,7 @@ import { HelpTooltip } from "../components/ui/help-tooltip";
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Membership = Readonly<{
   id: string;
-  attributes: Readonly<{ email?: string | null; role?: string; status?: string }>;
+  attributes: Readonly<{ email?: string | null; username?: string | null; role?: string; status?: string }>;
 }>;
 type OrganizationPermissions = Readonly<{
   "can-update"?: boolean;
