@@ -36,7 +36,9 @@ RUN ARCH=${TARGETARCH:-amd64} && \
     curl -fLo infracost.tar.gz "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-${ARCH}.tar.gz" && \
     curl -fLo infracost_SHA256SUMS "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-${ARCH}.tar.gz.sha256" && \
     grep "$(sha256sum infracost.tar.gz | cut -d' ' -f1)" infracost_SHA256SUMS && \
-    tar -xzf infracost.tar.gz -C /usr/local/bin && \
+    tar -xzf infracost.tar.gz -C /tmp && \
+    mv /tmp/infracost-linux-${ARCH} /usr/local/bin/infracost && \
+    chmod +x /usr/local/bin/infracost && \
     rm infracost.tar.gz infracost_SHA256SUMS
 
 # Copy monorepo files for backend
