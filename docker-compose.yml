@@ -1,0 +1,24 @@
+services:
+  terrence:
+    build:
+      context: .
+      args:
+        TARGETARCH: ${TARGETARCH:-amd64}
+    ports:
+      - "3000:3000"
+    volumes:
+      - terrence-storage:/app/backend/storage
+    environment:
+      - PORT=3000
+      - STORAGE_DIR=/app/backend/storage
+      - DATABASE_URL=file:/app/backend/storage/terrence.db
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  terrence-storage:
