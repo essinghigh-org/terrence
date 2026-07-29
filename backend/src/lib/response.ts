@@ -218,6 +218,7 @@ export async function workspaceResource(
         "can-update-variable": canRun,
         "can-force-delete": canRun,
       },
+      "created-at": new Date(workspace.createdAt).toISOString(),
       source: workspace.source ?? "tfe-api",
       "structured-run-output-enabled": false,
     },
