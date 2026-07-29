@@ -1,5 +1,6 @@
 services:
   terrence:
+    image: ghcr.io/essinghigh-org/terrence:latest
     build:
       context: .
       args:

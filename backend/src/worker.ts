@@ -36,7 +36,7 @@ import { spawn } from "bun";
 import { createHmac } from "node:crypto";
 import { join } from "path";
 import { tmpdir } from "os";
-import { mkdir, rm, writeFile, readFile, exists, readdir } from "fs/promises";
+import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
@@ -531,7 +531,11 @@ async function executionVariables(
   return [...effective.values()];
 }
 
-async function extractTarArchive(archivePath: string, destDir: string): Promise<boolean> {
+async function extractTarArchive(
+  archivePath: string,
+  destDir: string,
+  workingDirectory?: string | null,
+): Promise<boolean> {
   try {
     const verboseProc = spawn(["tar", "-tvzf", archivePath]);
     const verboseText = await new Response(verboseProc.stdout).text();
@@ -565,10 +569,43 @@ async function extractTarArchive(archivePath: string, destDir: string): Promise<
     }
 
     const extractProc = spawn(["tar", "-xzf", archivePath, "-C", destDir]);
-    return (await extractProc.exited) === 0;
+    const ok = (await extractProc.exited) === 0;
+    if (ok) {
+      await unnestArchiveDirectory(destDir, workingDirectory);
+    }
+    return ok;
   } catch (err: unknown) {
     console.error("[terrence] Tar extraction error", err);
     return false;
+  }
+}
+
+async function unnestArchiveDirectory(
+  destDir: string,
+  workingDirectory?: string | null,
+): Promise<void> {
+  if (typeof workingDirectory === "string" && workingDirectory !== "" && workingDirectory !== ".") {
+    return;
+  }
+  try {
+    const entries = await readdir(destDir, { withFileTypes: true });
+    const hasTfInRoot = entries.some(
+      (e): boolean => e.isFile() && (e.name.endsWith(".tf") || e.name.endsWith(".tf.json")),
+    );
+    if (hasTfInRoot) return;
+
+    const dirEntries = entries.filter((e): boolean => e.isDirectory());
+    if (entries.length === 1 && dirEntries.length === 1 && dirEntries[0] !== undefined) {
+      const subDir = join(destDir, dirEntries[0].name);
+      const subFiles = await readdir(subDir);
+      for (const file of subFiles) {
+        await rename(join(subDir, file), join(destDir, file));
+      }
+      await rm(subDir, { recursive: true, force: true });
+      console.log(`[terrence] Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
+    }
+  } catch (err: unknown) {
+    console.warn("[terrence] Could not unnest archive directory:", err);
   }
 }
 
@@ -798,9 +835,8 @@ export async function executeRun(runId: string): Promise<void> {
     await updateRunStatus(runId, "planning");
 
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
-    let dirFiles: string[];
     try {
-      dirFiles = await readdir(executionDir);
+      await readdir(executionDir);
     } catch {
       throw new Error(`Working directory '${workspace.workingDirectory ?? ""}' does not exist in the configuration.`);
     }
@@ -859,7 +895,8 @@ export async function executeRun(runId: string): Promise<void> {
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "tofu";
     const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
-    const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+    const currentDirFiles = await readdir(executionDir);
+    const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
     const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
@@ -928,8 +965,10 @@ export async function executeRun(runId: string): Promise<void> {
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Execution engine: Simulated plan completed successfully.`);
       await writeLog(runId, "plan", `Plan: 1 to add, 0 to change, 0 to destroy.`);
+    } else if (resolved === null) {
+      throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}).`);
     } else {
-      throw new Error(`Unable to resolve CLI binary '${requestedTool}' or no Terraform configuration (.tf) files were found in workspace.`);
+      throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
     }
 
     const planJson = isSimulatedAllowed

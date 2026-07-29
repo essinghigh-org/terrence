@@ -347,7 +347,7 @@ function matchesFileTriggers(workspace: DeepReadonly<typeof workspaces.$inferSel
   return paths.includes("") || [...files].some((file: string): boolean => paths.some((path: string): boolean => file === path || file.startsWith(`${path}/`)));
 }
 
-async function getGitHubAppAccessToken(installationId: number): Promise<string | null> {
+export async function getGitHubAppAccessToken(installationId: number): Promise<string | null> {
   const appId = process.env.GITHUB_APP_ID;
   const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {

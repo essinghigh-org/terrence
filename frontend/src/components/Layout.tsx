@@ -20,19 +20,24 @@ import {
   GitPullRequest,
   HelpCircle,
   KeyRound,
+  Keyboard,
   LayoutDashboard,
   ListChecks,
+  ListTodo,
   Lock,
   LogOut,
   Menu,
+  Monitor,
   MonitorSmartphone,
+  Moon,
   Package,
   PackageOpen,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   Settings,
   ShieldCheck,
-  ListTodo,
+  Sun,
   Trash2,
   UserRound,
   Users,
@@ -57,7 +62,11 @@ import {
 } from "./ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "./ui/avatar";
 import { Button, buttonVariants } from "./ui/button";
+import { CommandPalette } from "./CommandPalette";
+import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
+import { applyThemeMode, getStoredThemeMode, type ThemeMode } from "../lib/theme";
+import { usePageTitle } from "../lib/usePageTitle";
 import { cn } from "../lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
@@ -98,7 +107,7 @@ function writeSidebarCollapsed(collapsed: boolean): void {
   try {
     window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
   } catch {
-    // The sidebar still works when browser storage is unavailable.
+    // Storage silent fallback
   }
 }
 
@@ -173,6 +182,33 @@ export function Layout({
   const [canReadStateVersions, setCanReadStateVersions] = useState(false);
   const [canReadVariable, setCanReadVariable] = useState(false);
   const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredThemeMode);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+
+  useEffect(() => {
+    applyThemeMode(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      } else if (
+        e.key === "?" &&
+        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+      ) {
+        e.preventDefault();
+        setShortcutsModalOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return (): void => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
@@ -257,6 +293,19 @@ export function Layout({
       || location.pathname === `${orgPath}/variable-sets`
     );
   const currentOrgName = orgName ?? "Choose an organization";
+
+  const computedTitle = hasWorkspace
+    ? `${workspaceName} · ${currentOrgName}`
+    : hasOrg
+      ? currentOrgName
+      : inAccountSettings
+        ? "Account Settings"
+        : location.pathname === "/app/admin"
+          ? "Site Administration"
+          : "Organizations";
+
+  usePageTitle(computedTitle);
+
   const hasCurrentOrganizationPermissions = organizationPermissionPath === orgPath;
   const canManageWorkspaces =
     hasCurrentOrganizationPermissions
@@ -288,7 +337,7 @@ export function Layout({
       setOrganizationPermissions(permissions ?? null);
       setOrganizationPermissionPath(orgPath);
     }).catch((): void => {
-      // Keep management navigation hidden when permissions cannot be loaded.
+      // Management nav hidden when permissions fail
     });
 
     return (): void => {
@@ -322,7 +371,7 @@ export function Layout({
       setCanReadVariable(permissions?.["can-read-variable"] === true);
       setWorkspacePermissionPath(workspacePath);
     }).catch((): void => {
-      // Keep state-derived navigation hidden when its permissions cannot be loaded.
+      // Permission-based navigation hidden on error
     });
 
     return (): void => { controller.abort(); };
@@ -653,205 +702,263 @@ export function Layout({
         Skip to main content
       </a>
 
-      <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-4">
-          <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-background hover:bg-background/10 hover:text-background lg:hidden"
-                aria-label="Open navigation"
-                aria-controls="mobile-app-sidebar"
+      {/* Conditionally hide top navbar header on /app/account per user request */}
+      {!inAccountSettings && (
+        <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+            <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-background hover:bg-background/10 hover:text-background lg:hidden"
+                  aria-label="Open navigation"
+                  aria-controls="mobile-app-sidebar"
+                >
+                  <Menu data-icon="inline-start" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent
+                id="mobile-app-sidebar"
+                aria-describedby={undefined}
+                className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:rounded-none lg:hidden"
               >
-                <Menu data-icon="inline-start" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent
-              id="mobile-app-sidebar"
-              aria-describedby={undefined}
-              className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:rounded-none lg:hidden"
+                <DialogTitle className="sr-only">Application navigation</DialogTitle>
+                <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">
+                  {renderNavigation()}
+                </nav>
+              </DialogContent>
+            </Dialog>
+
+            <Link
+              to="/app"
+              aria-label="Home"
+              className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background"
             >
-              <DialogTitle className="sr-only">Application navigation</DialogTitle>
-              <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">
-                {renderNavigation()}
-              </nav>
-            </DialogContent>
-          </Dialog>
+              <svg
+                aria-hidden="true"
+                className="size-7"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
+                <path d="M12 22V12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 12L22 7" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M2 7L12 12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Link>
 
-          <Link
-            to="/app"
-            aria-label="Home"
-            className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background"
-          >
-            <svg
-              aria-hidden="true"
-              className="size-7"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
+            <div aria-hidden="true" className="hidden h-5 w-px bg-background/20 sm:block" />
+
+            {hasOrg ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={(
+                    <Button
+                      variant="ghost"
+                      className="min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56"
+                      aria-label={`Organization menu for ${currentOrgName}`}
+                    />
+                  )}
+                >
+                  <Building2 data-icon="inline-start" />
+                  <span className="truncate">{currentOrgName}</span>
+                  <ChevronDown data-icon="inline-end" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>Organization</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      onClick={(): void => {
+                        void navigate(`${orgPath}/workspaces`);
+                      }}
+                    >
+                      Workspaces
+                    </DropdownMenuItem>
+                    {organizationNames.some((name): boolean => name !== orgName) && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
+                        {organizationNames
+                          .filter((name): boolean => name !== orgName)
+                          .map((name): JSX.Element => (
+                            <DropdownMenuItem
+                              key={name}
+                              onClick={(): void => {
+                                void navigate(`/app/${encodeURIComponent(name)}/workspaces`);
+                              }}
+                            >
+                              {name}
+                            </DropdownMenuItem>
+                          ))}
+                      </>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={(): void => {
+                        void navigate("/app");
+                      }}
+                    >
+                      All organizations
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Link
+                to="/app"
+                className={cn(
+                  buttonVariants({ variant: "ghost" }),
+                  "min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56",
+                )}
+              >
+                <Building2 data-icon="inline-start" />
+                <span className="truncate">{currentOrgName}</span>
+              </Link>
+            )}
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/* Command Palette Trigger */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden sm:inline-flex items-center gap-2 text-background/80 hover:bg-background/10 hover:text-background border border-background/20 h-8 px-2.5"
+              onClick={() => setCommandPaletteOpen(true)}
             >
-              <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
-              <path d="M12 22V12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M12 12L22 7" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M2 7L12 12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Link>
+              <Search className="size-3.5" />
+              <span className="text-xs">Search...</span>
+              <kbd className="pointer-events-none rounded bg-background/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-background">
+                ⌘K
+              </kbd>
+            </Button>
 
-          <div aria-hidden="true" className="hidden h-5 w-px bg-background/20 sm:block" />
-
-          {hasOrg ? (
+            {/* Theme Toggle */}
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={(
                   <Button
                     variant="ghost"
-                    className="min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56"
-                    aria-label={`Organization menu for ${currentOrgName}`}
+                    size="icon"
+                    className="text-background hover:bg-background/10 hover:text-background size-8"
+                    aria-label="Theme mode switcher"
                   />
                 )}
               >
-                <Building2 data-icon="inline-start" />
-                <span className="truncate">{currentOrgName}</span>
-                <ChevronDown data-icon="inline-end" />
+                {themeMode === "dark" ? (
+                  <Moon className="size-4" />
+                ) : themeMode === "light" ? (
+                  <Sun className="size-4" />
+                ) : (
+                  <Monitor className="size-4" />
+                )}
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => setThemeMode("light")}>
+                  <Sun className="mr-2 size-4" /> Light
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setThemeMode("dark")}>
+                  <Moon className="mr-2 size-4" /> Dark
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setThemeMode("system")}>
+                  <Monitor className="mr-2 size-4" /> System
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Help & Support */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={(
+                  <Button
+                    variant="ghost"
+                    className="text-background hover:bg-background/10 hover:text-background h-8 px-2"
+                    aria-label="Help and support"
+                  />
+                )}
+              >
+                <HelpCircle data-icon="inline-start" />
+                <ChevronDown className="size-3.5" data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>Organization</DropdownMenuLabel>
-                  <DropdownMenuItem
-                    onClick={(): void => {
-                      void navigate(`${orgPath}/workspaces`);
-                    }}
-                  >
-                    Workspaces
+                  <DropdownMenuLabel>Help and support</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => setShortcutsModalOpen(true)}>
+                    <Keyboard className="mr-2 size-4 text-muted-foreground" />
+                    Keyboard shortcuts (?)
                   </DropdownMenuItem>
-                  {organizationNames.some((name): boolean => name !== orgName) && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
-                      {organizationNames
-                        .filter((name): boolean => name !== orgName)
-                        .map((name): JSX.Element => (
-                          <DropdownMenuItem
-                            key={name}
-                            onClick={(): void => {
-                              void navigate(`/app/${encodeURIComponent(name)}/workspaces`);
-                            }}
-                          >
-                            {name}
-                          </DropdownMenuItem>
-                        ))}
-                    </>
-                  )}
                   <DropdownMenuSeparator />
+                  {[
+                    ["Documentation", "https://developer.hashicorp.com/terraform/cloud-docs"],
+                    ["Tutorials", "https://developer.hashicorp.com/terraform/tutorials/cloud"],
+                    ["Support", "https://support.hashicorp.com/"],
+                    ["Status", "https://status.hashicorp.com/"],
+                  ].map(([label, href]): JSX.Element => (
+                    <DropdownMenuItem
+                      key={href}
+                      render={<a href={href} target="_blank" rel="noreferrer" />}
+                    >
+                      {label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* User Account Menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={(
+                  <Button
+                    variant="ghost"
+                    className="text-background hover:bg-background/10 hover:text-background h-8 px-2"
+                    aria-label="Account menu"
+                  />
+                )}
+              >
+                <Avatar className="size-6 rounded">
+                  <AvatarFallback className="rounded bg-background/15 text-background text-xs">
+                    {accountName === ""
+                      ? <UserRound aria-hidden="true" />
+                      : accountName.slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <ChevronDown className="size-3.5" data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>{accountName === "" ? "My account" : accountName}</DropdownMenuLabel>
                   <DropdownMenuItem
                     onClick={(): void => {
-                      void navigate("/app");
+                      void navigate("/app/account");
                     }}
                   >
-                    All organizations
+                    Account settings
+                  </DropdownMenuItem>
+                  {siteAdmin && (
+                    <DropdownMenuItem
+                      onClick={(): void => {
+                        void navigate("/app/admin");
+                      }}
+                    >
+                      Site administration
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem variant="destructive" onClick={handleLogout}>
+                    <LogOut />
+                    Log out
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : (
-            <Link
-              to="/app"
-              className={cn(
-                buttonVariants({ variant: "ghost" }),
-                "min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56",
-              )}
-            >
-              <Building2 data-icon="inline-start" />
-              <span className="truncate">{currentOrgName}</span>
-            </Link>
-          )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={(
-                <Button
-                  variant="ghost"
-                  className="text-background hover:bg-background/10 hover:text-background"
-                  aria-label="Help and support"
-                />
-              )}
-            >
-              <HelpCircle data-icon="inline-start" />
-              <ChevronDown className="size-3.5" data-icon="inline-end" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>Help and support</DropdownMenuLabel>
-                {[
-                  ["Documentation", "https://developer.hashicorp.com/terraform/cloud-docs"],
-                  ["Tutorials", "https://developer.hashicorp.com/terraform/tutorials/cloud"],
-                  ["Support", "https://support.hashicorp.com/"],
-                  ["Status", "https://status.hashicorp.com/"],
-                ].map(([label, href]): JSX.Element => (
-                  <DropdownMenuItem
-                    key={href}
-                    render={<a href={href} target="_blank" rel="noreferrer" />}
-                  >
-                    {label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={(
-                <Button
-                  variant="ghost"
-                  className="text-background hover:bg-background/10 hover:text-background"
-                  aria-label="Account menu"
-                />
-              )}
-            >
-              <Avatar className="size-7 rounded">
-                <AvatarFallback className="rounded bg-background/15 text-background">
-                  {accountName === ""
-                    ? <UserRound aria-hidden="true" />
-                    : accountName.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-              <ChevronDown className="size-3.5" data-icon="inline-end" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>{accountName === "" ? "My account" : accountName}</DropdownMenuLabel>
-                <DropdownMenuItem
-                  onClick={(): void => {
-                    void navigate("/app/account");
-                  }}
-                >
-                  Account settings
-                </DropdownMenuItem>
-                {siteAdmin && (
-                  <DropdownMenuItem
-                    onClick={(): void => {
-                      void navigate("/app/admin");
-                    }}
-                  >
-                    Site administration
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuItem variant="destructive" onClick={handleLogout}>
-                  <LogOut />
-                  Log out
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </header>
+          </div>
+        </header>
+      )}
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <aside
@@ -902,6 +1009,17 @@ export function Layout({
           </div>
         </main>
       </div>
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        currentOrgName={orgName}
+      />
+
+      <ShortcutsHelpModal
+        open={shortcutsModalOpen}
+        onOpenChange={setShortcutsModalOpen}
+      />
     </div>
   );
 }

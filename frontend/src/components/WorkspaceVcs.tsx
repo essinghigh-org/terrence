@@ -185,6 +185,29 @@ export function WorkspaceVcs({
     ? [initialConnection, ...connections]
     : connections;
 
+  const [vcsRepositories, setVcsRepositories] = useState<Array<{ identifier: string; name: string }>>([]);
+
+  useEffect((): (() => void) | undefined => {
+    setVcsRepositories([]);
+    if (!canUpdate || orgName === "" || connectionValue === "") return undefined;
+    const controller = new AbortController();
+    void fetchApi(
+      `/organizations/${encodeURIComponent(orgName)}/vcs-connections/${encodeURIComponent(connectionValue)}/repositories`,
+      { signal: controller.signal },
+    )
+      .then((res: unknown): void => {
+        if (controller.signal.aborted) return;
+        const list = (res as { data?: Array<{ attributes: { identifier: string; name: string } }> }).data;
+        if (Array.isArray(list)) {
+          setVcsRepositories(list.map((item) => item.attributes));
+        }
+      })
+      .catch((): void => {});
+    return (): void => {
+      controller.abort();
+    };
+  }, [canUpdate, connectionValue, orgName]);
+
   useEffect((): (() => void) | undefined => {
     if (!canUpdate || orgName === "") return undefined;
     const controller = new AbortController();
@@ -312,18 +335,48 @@ export function WorkspaceVcs({
           <FieldGroup>
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
-              <Input
-                id="vcs-identifier"
-                value={identifier}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  setIdentifier(event.target.value);
-                }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                  setIdentifier(event.currentTarget.value);
-                }}
-                placeholder="organization/repository"
-                disabled={!canUpdate}
-              />
+              {vcsRepositories.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  <Select
+                    id="vcs-repo-select"
+                    value={identifier}
+                    onValueChange={setIdentifier}
+                    disabled={!canUpdate}
+                  >
+                    <SelectItem value="">-- Choose an accessible repository --</SelectItem>
+                    {vcsRepositories.map((repo) => (
+                      <SelectItem key={repo.identifier} value={repo.identifier}>
+                        {repo.identifier}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  <Input
+                    id="vcs-identifier"
+                    value={identifier}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                      setIdentifier(event.target.value);
+                    }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                      setIdentifier(event.currentTarget.value);
+                    }}
+                    placeholder="Or enter custom path e.g. organization/repository"
+                    disabled={!canUpdate}
+                  />
+                </div>
+              ) : (
+                <Input
+                  id="vcs-identifier"
+                  value={identifier}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    setIdentifier(event.target.value);
+                  }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setIdentifier(event.currentTarget.value);
+                  }}
+                  placeholder="organization/repository"
+                  disabled={!canUpdate}
+                />
+              )}
               <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
             </Field>
             <Field data-disabled={!canUpdate}>

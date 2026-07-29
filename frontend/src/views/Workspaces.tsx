@@ -17,9 +17,11 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -155,6 +157,39 @@ export function Workspaces(): React.JSX.Element {
     });
   }, [projectFilter, search, workspaces]);
 
+  const activeRunsCount = useMemo((): number => {
+    let count = 0;
+    const runningStatuses = runStatusFilters["running"];
+    if (runningStatuses !== undefined) {
+      for (const run of latestRuns.values()) {
+        if (runningStatuses.includes(run.attributes.status)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }, [latestRuns]);
+
+  const attentionNeededCount = useMemo((): number => {
+    let count = 0;
+    const attentionStatuses = runStatusFilters["attention"];
+    if (attentionStatuses !== undefined) {
+      for (const run of latestRuns.values()) {
+        if (
+          attentionStatuses.includes(run.attributes.status) ||
+          run.attributes.status === "errored"
+        ) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }, [latestRuns]);
+
+  const lockedWorkspacesCount = useMemo((): number => {
+    return workspaces.filter((ws): boolean => ws.attributes.locked === true).length;
+  }, [workspaces]);
+
   const loadTags = async (workspace: Workspace): Promise<void> => {
     try {
       const response = await fetchApi(`/workspaces/${workspace.id}/tag-bindings`) as { data?: TagBinding[] };
@@ -231,14 +266,7 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
-  const statusLabel = (status: string): string =>
-    status.replace(/_/g, " ").replace(/\b\w/g, (letter: string): string => letter.toUpperCase());
-  const statusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
-    if (["errored", "canceled", "policy_hard_failed"].includes(status)) return "destructive";
-    if (["applied", "planned_and_finished", "planned_and_saved"].includes(status)) return "secondary";
-    if (["discarded"].includes(status)) return "outline";
-    return "default";
-  };
+
   const runDate = (run: RunSummary | undefined): string => {
     const value = run?.attributes["created-at"];
     if (value === undefined) return "";
@@ -260,6 +288,28 @@ export function Workspaces(): React.JSX.Element {
           </Button>
         )}
       </header>
+
+      {/* Top KPI Metrics Bar */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+          <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
+          <div className="mt-1 text-2xl font-bold">{workspaces.length}</div>
+        </div>
+        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+          <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
+          <div className="mt-1 text-2xl font-bold text-primary">{activeRunsCount}</div>
+        </div>
+        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+          <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
+          <div className={cn("mt-1 text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
+            {attentionNeededCount}
+          </div>
+        </div>
+        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+          <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
+          <div className="mt-1 text-2xl font-bold">{lockedWorkspacesCount}</div>
+        </div>
+      </div>
 
       <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto]">
         <Input
@@ -297,12 +347,12 @@ export function Workspaces(): React.JSX.Element {
       </section>
 
       {runStatusError && (
-        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
           Run statuses could not be refreshed. Workspace results and filters are still available.
         </p>
       )}
       {projectDataError && (
-        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
           Projects could not be refreshed. Workspace results are still available.
         </p>
       )}
@@ -389,12 +439,7 @@ export function Workspaces(): React.JSX.Element {
                   {latestRuns.get(workspace.id) === undefined ? (
                     <span className="text-muted-foreground">No runs</span>
                   ) : (
-                    <Badge
-                      variant={statusVariant(latestRuns.get(workspace.id)?.attributes.status ?? "")}
-                      className={latestRuns.get(workspace.id)?.attributes.status === "applied" ? "bg-emerald-50 text-emerald-800" : ""}
-                    >
-                      {statusLabel(latestRuns.get(workspace.id)?.attributes.status ?? "")}
-                    </Badge>
+                    <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />
                   )}
                 </TableCell>
                 <TableCell className="text-right">

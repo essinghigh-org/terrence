@@ -18,16 +18,22 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 
 type CreateWorkspaceModalProps = {
   orgName: string;
+  defaultIacBinary?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (ws: Readonly<{ id: string }>) => void;
 }
 
+type VcsRepoOption = {
+  identifier: string;
+  name: string;
+};
+
 export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>): React.JSX.Element {
-  const { orgName, open, onOpenChange, onCreated } = props;
+  const { orgName, defaultIacBinary, open, onOpenChange, onCreated } = props;
   const [name, setName] = useState("");
   const [autoApply, setAutoApply] = useState(false);
-  const [iacBinary, setIacBinary] = useState("tofu");
+  const [iacBinary, setIacBinary] = useState(defaultIacBinary ?? "tofu");
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(false);
   const [vcsIdentifier, setVcsIdentifier] = useState("");
@@ -35,8 +41,18 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [vcsConnectionValue, setVcsConnectionValue] = useState("");
   const [vcsConnectionsLoading, setVcsConnectionsLoading] = useState(false);
   const [vcsConnectionsError, setVcsConnectionsError] = useState("");
+  const [vcsRepositories, setVcsRepositories] = useState<VcsRepoOption[]>([]);
+  const [vcsReposLoading, setVcsReposLoading] = useState(false);
   const [sourceType, setSourceType] = useState("tfe-api");
 
+  // Sync default engine when defaultIacBinary prop changes or modal opens
+  useEffect((): void => {
+    if (open && defaultIacBinary !== undefined && defaultIacBinary !== "") {
+      setIacBinary(defaultIacBinary);
+    }
+  }, [defaultIacBinary, open]);
+
+  // Fetch registered VCS connections
   useEffect((): (() => void) | undefined => {
     if (!open || sourceType !== "vcs") return undefined;
     const controller = new AbortController();
@@ -65,6 +81,33 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     };
   }, [open, orgName, sourceType]);
 
+  // Fetch accessible repositories when a VCS connection is selected
+  useEffect((): (() => void) | undefined => {
+    setVcsRepositories([]);
+    if (!open || sourceType !== "vcs" || vcsConnectionValue === "") return undefined;
+    const controller = new AbortController();
+    setVcsReposLoading(true);
+    void fetchApi(
+      `/organizations/${encodeURIComponent(orgName)}/vcs-connections/${encodeURIComponent(vcsConnectionValue)}/repositories`,
+      { signal: controller.signal },
+    )
+      .then((res: unknown): void => {
+        if (controller.signal.aborted) return;
+        const list = (res as { data?: Array<{ attributes: { identifier: string; name: string } }> }).data;
+        if (Array.isArray(list)) {
+          setVcsRepositories(list.map((item) => item.attributes));
+        }
+      })
+      .catch((): void => {})
+      .finally((): void => {
+        if (!controller.signal.aborted) setVcsReposLoading(false);
+      });
+
+    return (): void => {
+      controller.abort();
+    };
+  }, [open, orgName, sourceType, vcsConnectionValue]);
+
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     const workspaceName = name.trim();
@@ -84,7 +127,6 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     setLoading(true);
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
-
       const vcsRepo = sourceType === "vcs" && selectedConnection !== undefined
         ? {
             identifier: normalizedVcsIdentifier,
@@ -114,7 +156,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       onOpenChange(false);
       setName("");
       setAutoApply(false);
-      setIacBinary("tofu");
+      setIacBinary(defaultIacBinary ?? "tofu");
       setTerraformVersion("latest");
       setVcsIdentifier("");
       setVcsConnectionValue("");
@@ -178,7 +220,6 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             </label>
           </div>
 
-
           <div className="pt-4 border-t border-gray-200 mt-2">
             <div className="flex flex-col gap-1.5 mb-4">
               <label htmlFor="source-type" className="text-sm font-medium">Workspace Source</label>
@@ -201,16 +242,37 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                     <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                       Repository Identifier
                     </label>
-                    <HelpTooltip content="The repository path on your VCS provider (e.g. 'org/repo-name' or 'user/repo-name')." />
+                    <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
                   </div>
+
+                  {vcsRepositories.length > 0 && (
+                    <select
+                      id="vcs-repo-select"
+                      aria-label="Accessible repositories dropdown"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                      value={vcsIdentifier}
+                      onChange={(e): void => { setVcsIdentifier(e.target.value); }}
+                      disabled={loading}
+                    >
+                      <option value="">-- Choose an accessible repository --</option>
+                      {vcsRepositories.map((repo): React.JSX.Element => (
+                        <option key={repo.identifier} value={repo.identifier}>
+                          {repo.identifier}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
                   <Input
                     id="vcs-identifier"
                     value={vcsIdentifier}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
                     onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
-                    placeholder="e.g. hashicorp/terraform"
-                    disabled={loading}
+                    placeholder={vcsReposLoading ? "Fetching accessible repositories…" : "e.g. hashicorp/terraform"}
+                    disabled={loading || vcsReposLoading}
                   />
                 </div>
+
                 <div className="flex flex-col gap-2">
                   <label htmlFor="vcs-connection" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                     VCS Connection
@@ -244,7 +306,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                 </div>
               </div>
             )}
-            
+
             {sourceType === "local" && (
               <p className="text-sm text-gray-600">
                 Code will be loaded from `/app/backend/storage/local/{orgName}/{"{project_name}"}/{name}`. Make sure to bind mount this path to your Terraform code.

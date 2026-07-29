@@ -3,8 +3,10 @@ import { and, eq } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { authPlugin } from "../auth";
 import { db } from "../db";
-import { apiTokens, githubAppInstallations, organizations, type users } from "../db/schema";
+import { apiTokens, githubAppInstallations, oauthTokens, organizations, type users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
+import { decryptSecret } from "../lib/secrets";
+import { getGitHubAppAccessToken } from "../lib/webhooks";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -230,6 +232,73 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
 
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
+  .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+
+    const connectionId = params.connection_id ?? "";
+    const repos: Array<{ id: string; type: string; attributes: { identifier: string; name: string } }> = [];
+
+    // 1. Check if connection is GitHub App Installation
+    const installation = await db.query.githubAppInstallations.findFirst({
+      where: and(eq(githubAppInstallations.id, connectionId), eq(githubAppInstallations.orgId, org.id)),
+    });
+
+    if (installation !== undefined) {
+      const token = await getGitHubAppAccessToken(installation.installationId);
+      if (token !== null) {
+        try {
+          const res = await fetch("https://api.github.com/installation/repositories?per_page=100", {
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+          });
+          if (res.ok) {
+            const body = await res.json() as { repositories?: Array<{ full_name?: string; name?: string }> };
+            for (const repo of body.repositories ?? []) {
+              if (typeof repo.full_name === "string" && repo.full_name !== "") {
+                repos.push({
+                  id: repo.full_name,
+                  type: "vcs-repositories",
+                  attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name },
+                });
+              }
+            }
+          }
+        } catch {}
+      }
+    } else {
+      // 2. Check if connection is OAuth Token
+      const oauthToken = await db.query.oauthTokens.findFirst({
+        where: eq(oauthTokens.id, connectionId),
+      });
+      if (oauthToken !== undefined) {
+        try {
+          const tokenStr = await decryptSecret(oauthToken.token);
+          const res = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
+            headers: { Authorization: `Bearer ${tokenStr}`, Accept: "application/vnd.github.v3+json" },
+          });
+          if (res.ok) {
+            const body = await res.json() as Array<{ full_name?: string; name?: string }>;
+            if (Array.isArray(body)) {
+              for (const repo of body) {
+                if (typeof repo.full_name === "string" && repo.full_name !== "") {
+                  repos.push({
+                    id: repo.full_name,
+                    type: "vcs-repositories",
+                    attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name },
+                  });
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return { data: repos };
+  })
   .get("/api/v2/organizations/:org_name/github-app/installations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {
