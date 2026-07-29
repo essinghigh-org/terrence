@@ -161,7 +161,7 @@ export function AgentPools(): React.JSX.Element {
   const handleDeleteToken = async (tokenId: string): Promise<void> => {
     if (!window.confirm("Revoke this agent token?")) return;
     try {
-      await fetchApi(`/agent-tokens/${tokenId}`, { method: "DELETE" });
+      await fetchApi(`/authentication-tokens/${tokenId}`, { method: "DELETE" });
       setTokens((prev: AgentToken[]): AgentToken[] => prev.filter((t: AgentToken): boolean => t.id !== tokenId));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to revoke token";
