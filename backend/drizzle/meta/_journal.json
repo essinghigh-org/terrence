@@ -288,6 +288,13 @@
       "when": 1785411000000,
       "tag": "0040_scim_admin",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1786640001000,
+      "tag": "0042_schema_gaps",
+      "breakpoints": true
     }
   ]
 }

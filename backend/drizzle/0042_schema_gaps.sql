@@ -1,0 +1,13 @@
+-- This migration formalizes three columns that were previously added via
+-- runtime ALTER TABLE fallback in src/db/index.ts. These columns already
+-- exist in running databases; this migration is a tracking entry so the
+-- Drizzle snapshot stays in sync with the schema definition.
+--
+-- Columns being tracked:
+--   workspaces.updated_at      — timestamp of last workspace modification
+--   runs.applied_at            — timestamp of last apply completion
+--   state_versions.terraform_version — version of Terraform/OpenTofu used
+--
+-- The columns were added to schema.ts and the database earlier. No ALTER TABLE
+-- is issued here because they already exist in production databases.
+SELECT 1;

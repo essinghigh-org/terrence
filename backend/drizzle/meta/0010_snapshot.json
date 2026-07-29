@@ -1596,6 +1596,13 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "applied_at": {
+          "name": "applied_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {},
@@ -1738,6 +1745,13 @@
         },
         "state_payload": {
           "name": "state_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "terraform_version": {
+          "name": "terraform_version",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -2516,6 +2530,20 @@
           "notNull": false,
           "autoincrement": false,
           "default": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
         }
       },
       "indexes": {},
