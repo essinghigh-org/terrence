@@ -199,7 +199,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       body: {
         data: {
           type: "agent-job-logs",
-          attributes: { "output-text": "Plan: 2 to add, 1 to change, 0 to destroy." },
+          attributes: { "output-text": "Plan: 2 to import, 0 to add, 0 to change, 0 to destroy." },
         },
       },
     });
@@ -211,15 +211,33 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
         },
       },
     });
+    const invalidPlanJsonCompletion = await request(winnerAgentId, "/jobs/" + jobId + "/complete", {
+      body: {
+        data: {
+          type: "agent-jobs",
+          attributes: { status: "completed", "plan-json": [] },
+        },
+      },
+    });
+    const structuredPlanJson = {
+      format_version: "1.2",
+      resource_changes: [{
+        address: "terraform_data.imported_one",
+        mode: "managed",
+        change: { actions: ["no-op"], importing: { id: "existing-one" } },
+      }, {
+        address: "terraform_data.imported_two",
+        mode: "managed",
+        change: { actions: ["no-op"], importing: { id: "existing-two" } },
+      }],
+    };
     const planCompletion = await request(winnerAgentId, "/jobs/" + jobId + "/complete", {
       body: {
         data: {
           type: "agent-jobs",
           attributes: {
             status: "completed",
-            "resource-additions": 2,
-            "resource-changes": 1,
-            "resource-destructions": 0,
+            "plan-json": structuredPlanJson,
             result: { "plan-handle": "saved-plan" },
           },
         },
@@ -237,20 +255,29 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       body: {
         data: {
           type: "agent-job-logs",
-          attributes: { "output-text": "Apply complete! Resources: 2 added, 1 changed, 0 destroyed." },
+          attributes: { "output-text": "Apply complete! Resources: 2 imported, 0 added, 0 changed, 0 destroyed." },
         },
       },
     });
     const appliedState = JSON.stringify({ version: 4, serial: 4, lineage: "agent-lineage" });
+    const invalidApplyPlanJsonCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
+      body: {
+        data: {
+          type: "agent-jobs",
+          attributes: { status: "completed", "plan-json": structuredPlanJson },
+        },
+      },
+    });
     const applyCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
       body: {
         data: {
           type: "agent-jobs",
           attributes: {
             status: "completed",
-            "resource-additions": 2,
-            "resource-changes": 1,
+            "resource-additions": 0,
+            "resource-changes": 0,
             "resource-destructions": 0,
+            "resource-imports": 2,
             state: appliedState,
             "json-state-outputs": JSON.stringify({ outputs: {} }),
           },
@@ -280,8 +307,55 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     const manualJob = await db.query.agentJobs.findFirst({
       where: and(eq(agentJobs.runId, "manual-run"), eq(agentJobs.phase, "apply")),
     });
+    await db.insert(runs).values({
+      id: "errored-run",
+      workspaceId: "workspace",
+      agentPoolId: "pool",
+      status: "planning",
+      logToken: "errored-log-token",
+      createdAt: 4,
+    });
+    await db.insert(agentJobs).values({
+      id: "errored-job",
+      runId: "errored-run",
+      agentPoolId: "pool",
+      agentId: "agent-a",
+      phase: "plan",
+      status: "claimed",
+      createdAt: 4,
+    });
+    const oversizedErrorCompletion = await request("agent-a", "/jobs/errored-job/complete", {
+      body: {
+        data: {
+          type: "agent-jobs",
+          attributes: { status: "errored", "error-message": "x".repeat(16_385) },
+        },
+      },
+    });
+    const erroredCompletion = await request("agent-a", "/jobs/errored-job/complete", {
+      body: {
+        data: {
+          type: "agent-jobs",
+          attributes: { status: "errored", "error-message": "Provider authentication failed" },
+        },
+      },
+    });
+    const erroredRun = await db.query.runs.findFirst({ where: eq(runs.id, "errored-run") });
+    const errorLogResponse = await app.handle(new Request(
+      "http://terrence.test/api/v2/runs/errored-run/plan/log/errored-log-token",
+    ));
+    const errorLogText = await errorLogResponse.text();
 
-    const [finalRun, finalState, finalLogs, finalAgents, runResponse] = await Promise.all([
+    const [
+      finalRun,
+      finalState,
+      finalLogs,
+      finalAgents,
+      runResponse,
+      planResponse,
+      applyResponse,
+      planJsonResponse,
+    ] = await Promise.all([
       db.query.runs.findFirst({ where: eq(runs.id, "run") }),
       db.query.stateVersions.findFirst({
         where: eq(stateVersions.workspaceId, "workspace"),
@@ -293,8 +367,20 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       app.handle(new Request("http://terrence.test/api/v2/runs/run", {
         headers: { Authorization: "Bearer " + userToken },
       })),
+      app.handle(new Request("http://terrence.test/api/v2/plans/plan-run", {
+        headers: { Authorization: "Bearer " + userToken },
+      })),
+      app.handle(new Request("http://terrence.test/api/v2/applies/apply-run", {
+        headers: { Authorization: "Bearer " + userToken },
+      })),
+      app.handle(new Request("http://terrence.test/api/v2/plans/plan-run/json-output", {
+        headers: { Authorization: "Bearer " + userToken },
+      })),
     ]);
     const runResource = (await runResponse.json()).data;
+    const planResource = (await planResponse.json()).data;
+    const applyResource = (await applyResponse.json()).data;
+    const persistedPlanJson = await planJsonResponse.json();
 
     console.log(JSON.stringify({
       dispatched,
@@ -314,28 +400,44 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       inputStateBody,
       logStatus: logResponse.status,
       wrongAgentCompletion: wrongAgentCompletion.status,
+      invalidPlanJsonCompletion: invalidPlanJsonCompletion.status,
       planCompletion: planCompletion.status,
       afterPlanStatus: afterPlan?.status,
+      afterPlanTimestamps: afterPlan?.statusTimestamps,
       jobsAfterPlan: jobsAfterPlan.map(job => [job.phase, job.status]),
       applyClaimStatus: applyClaim.status,
       applyPhase: applyData.attributes.phase,
       applyPlanResult: applyData.attributes["plan-result"],
       applyLogStatus: applyLog.status,
+      invalidApplyPlanJsonCompletion: invalidApplyPlanJsonCompletion.status,
       applyCompletion: applyCompletion.status,
       replayedCompletion: replayedCompletion.status,
       emptyPoll: emptyPoll.status,
       manualApply: manualApply.status,
       manualRunStatus: manualRun?.status,
       manualJobStatus: manualJob?.status,
+      oversizedErrorCompletion: oversizedErrorCompletion.status,
+      erroredCompletion: erroredCompletion.status,
+      erroredRunStatus: erroredRun?.status,
+      errorLogStatus: errorLogResponse.status,
+      errorLogText,
       finalRunStatus: finalRun?.status,
       finalRunAgentId: finalRun?.agentId,
       finalRunPoolId: finalRun?.agentPoolId,
+      finalRunPlanImports: finalRun?.planResourceImports,
+      finalRunApplyImports: finalRun?.applyResourceImports,
       finalStateSerial: finalState?.serial,
       finalStatePayload: finalState?.statePayload,
       finalLogs: finalLogs.map(log => [log.phase, log.outputText]),
       finalAgentStatuses: finalAgents.map(agent => [agent.id, agent.status]),
       runRelationshipAgent: runResource.relationships.agent.data.id,
       runRelationshipPool: runResource.relationships["agent-pool"].data.id,
+      runHasChanges: runResource.attributes["has-changes"],
+      runResourceImports: runResource.attributes["resource-imports"],
+      planResourceImports: planResource.attributes["resource-imports"],
+      applyResourceImports: applyResource.attributes["resource-imports"],
+      planJsonStatus: planJsonResponse.status,
+      persistedPlanJson,
     }));
     process.exit(0);
   `);
@@ -358,29 +460,59 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     inputStateBody: JSON.stringify({ version: 4, serial: 3 }),
     logStatus: 201,
     wrongAgentCompletion: 409,
+    invalidPlanJsonCompletion: 422,
     planCompletion: 200,
     afterPlanStatus: "apply_queued",
+    afterPlanTimestamps: {
+      "planned-at": expect.any(String),
+      "apply-queued-at": expect.any(String),
+    },
     jobsAfterPlan: [["plan", "completed"], ["apply", "queued"]],
     applyClaimStatus: 200,
     applyPhase: "apply",
     applyPlanResult: { "plan-handle": "saved-plan" },
     applyLogStatus: 201,
+    invalidApplyPlanJsonCompletion: 422,
     applyCompletion: 200,
     replayedCompletion: 409,
     emptyPoll: 204,
     manualApply: 200,
     manualRunStatus: "apply_queued",
     manualJobStatus: "queued",
+    oversizedErrorCompletion: 422,
+    erroredCompletion: 200,
+    erroredRunStatus: "errored",
+    errorLogStatus: 200,
+    errorLogText: "[agent error] Provider authentication failed",
     finalRunStatus: "applied",
     finalRunPoolId: "pool",
+    finalRunPlanImports: 2,
+    finalRunApplyImports: 2,
     finalStateSerial: 4,
     finalStatePayload: JSON.stringify({ version: 4, serial: 4, lineage: "agent-lineage" }),
     finalLogs: [
-      ["plan", "Plan: 2 to add, 1 to change, 0 to destroy."],
-      ["apply", "Apply complete! Resources: 2 added, 1 changed, 0 destroyed."],
+      ["plan", "Plan: 2 to import, 0 to add, 0 to change, 0 to destroy."],
+      ["apply", "Apply complete! Resources: 2 imported, 0 added, 0 changed, 0 destroyed."],
     ],
     finalAgentStatuses: [["agent-a", "idle"], ["agent-b", "idle"]],
     runRelationshipPool: "pool",
+    runHasChanges: true,
+    runResourceImports: 2,
+    planResourceImports: 2,
+    applyResourceImports: 2,
+    planJsonStatus: 200,
+    persistedPlanJson: {
+      format_version: "1.2",
+      resource_changes: [{
+        address: "terraform_data.imported_one",
+        mode: "managed",
+        change: { actions: ["no-op"], importing: { id: "existing-one" } },
+      }, {
+        address: "terraform_data.imported_two",
+        mode: "managed",
+        change: { actions: ["no-op"], importing: { id: "existing-two" } },
+      }],
+    },
   });
   expect(["agent-a", "agent-b"]).toContain(result.finalRunAgentId as string);
   expect(result.runRelationshipAgent).toBe(result.finalRunAgentId);
@@ -709,6 +841,7 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
     completedRunStatus: "policy_soft_failed",
     statusKeys: [
       "planning-at",
+      "planned-at",
       "policy-checking-at",
       "policy-override-at",
       "policy-soft-failed-at",

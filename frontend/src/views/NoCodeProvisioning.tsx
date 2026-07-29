@@ -132,7 +132,8 @@ export function NoCodeProvisioning(): React.JSX.Element {
     Promise.all([
       fetchApi(`/organizations/${encodedOrg}/no-code-modules`) as Promise<{ data?: NoCodeModule[] }>,
       fetchApi(`/organizations/${encodedOrg}/registry-modules`) as Promise<{ data?: RegistryModule[] }>,
-      fetchApi(`/organizations/${encodedOrg}/projects`) as Promise<{ data?: Project[] }>,
+      fetchApi(`/organizations/${encodedOrg}/projects`)
+        .catch((): { data: Project[] } => ({ data: [] })) as Promise<{ data?: Project[] }>,
     ])
       .then(([noCodeResponse, registryResponse, projectResponse]): void => {
         if (!active) return;

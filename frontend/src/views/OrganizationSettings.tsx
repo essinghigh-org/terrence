@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -9,12 +9,23 @@ import { Select } from "../components/ui/select";
 import { Checkbox } from "../components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { HelpCircle, MailPlus, Settings, Trash2, UserMinus, Users } from "lucide-react";
+import { HelpCircle, MailPlus, Trash2, UserMinus, Users } from "lucide-react";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Membership = Readonly<{
   id: string;
   attributes: Readonly<{ email?: string | null; role?: string; status?: string }>;
+}>;
+type OrganizationPermissions = Readonly<{
+  "can-update"?: boolean;
+  "can-destroy"?: boolean;
+  "can-create-team"?: boolean;
+  "can-manage-users"?: boolean;
+  "can-update-organization-access"?: boolean;
+}>;
+type Organization = Readonly<{
+  id: string;
+  attributes: Readonly<Record<string, unknown> & { permissions?: OrganizationPermissions }>;
 }>;
 
 const organizationPermissions = [
@@ -58,14 +69,20 @@ function permissionLabel(permission: OrganizationPermission): string {
 export function OrganizationSettings(): React.JSX.Element {
   const { orgName } = useParams<{ orgName: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const orgNameParam = orgName ?? "";
-  const [org, setOrg] = useState<{ id: string; attributes: Record<string, unknown> } | null>(null);
+  const encodedOrgName = encodeURIComponent(orgNameParam);
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [name, setName] = useState("");
   const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsError, setTeamsError] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [membershipsError, setMembershipsError] = useState("");
   const [newTeamName, setNewTeamName] = useState("");
   const [editingTeamId, setEditingTeamId] = useState("");
   const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
@@ -76,32 +93,56 @@ export function OrganizationSettings(): React.JSX.Element {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteTeamId, setInviteTeamId] = useState("");
   const [inviting, setInviting] = useState(false);
-  const [activeTab, setActiveTab] = useState("general");
+  const activeOrganizationName = useRef(orgNameParam);
+  activeOrganizationName.current = orgNameParam;
+  const activeTab = searchParams.get("tab") === "teams" ? "teams" : "general";
+  const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
+  const permissions = orgIsCurrent ? org.attributes.permissions : undefined;
+  const canUpdateOrganization = permissions?.["can-update"] === true;
+  const canDestroyOrganization = permissions?.["can-destroy"] === true;
+  const canCreateTeam = permissions?.["can-create-team"] === true;
+  const canManageUsers = permissions?.["can-manage-users"] === true;
+  const canUpdateOrganizationAccess = permissions?.["can-update-organization-access"] === true;
 
   useEffect((): void => {
+    setTeams([]);
+    setTeamsError("");
+    setMemberships([]);
+    setMembershipsError("");
     void loadOrg();
     void loadTeams();
     void loadMemberships();
   }, [orgName]);
 
   const loadOrg = async (): Promise<void> => {
+    setOrg(null);
+    setLoading(true);
+    setLoadError("");
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgName ?? ""}`) as { data: { id: string; attributes: Record<string, unknown> } };
+      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`) as { data: Organization };
+      if (activeOrganizationName.current !== orgNameParam) return;
       setOrg(res.data);
       setName(res.data.attributes["name"] as string);
       setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "tofu");
       setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
     } catch (err: unknown) {
-      console.error("Failed to load organization", err);
+      if (activeOrganizationName.current !== orgNameParam) return;
+      setLoadError(err instanceof Error ? err.message : "Could not load organization settings");
+    } finally {
+      if (activeOrganizationName.current === orgNameParam) setLoading(false);
     }
   };
 
   const loadTeams = async (): Promise<void> => {
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`) as { data?: Team[] };
+      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}/teams`) as { data?: Team[] };
+      if (activeOrganizationName.current !== orgNameParam) return;
       setTeams(Array.isArray(res.data) ? res.data : []);
-    } catch {
-      setTeams([]);
+      setTeamsError("");
+    } catch (error: unknown) {
+      if (activeOrganizationName.current === orgNameParam) {
+        setTeamsError(error instanceof Error ? error.message : "Could not load teams");
+      }
     }
   };
 
@@ -110,17 +151,22 @@ export function OrganizationSettings(): React.JSX.Element {
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`,
       ) as { data?: Membership[] };
+      if (activeOrganizationName.current !== orgNameParam) return;
       setMemberships(Array.isArray(response.data) ? response.data : []);
-    } catch {
-      setMemberships([]);
+      setMembershipsError("");
+    } catch (error: unknown) {
+      if (activeOrganizationName.current === orgNameParam) {
+        setMembershipsError(error instanceof Error ? error.message : "Could not load organization members");
+      }
     }
   };
 
   const saveSettings = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
+    if (!canUpdateOrganization) return;
     setSaving(true);
     try {
-      const res = await fetchApi(`/api/v2/organizations/${orgNameParam}`, {
+      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -131,10 +177,14 @@ export function OrganizationSettings(): React.JSX.Element {
             },
           },
         }),
-      }) as { data: { id: string; attributes: Record<string, unknown> } };
+      }) as { data: Organization };
       setOrg(res.data);
-      if (name !== orgNameParam) {
-        void navigate(`/app/${name}/settings`);
+      const updatedName = typeof res.data.attributes["name"] === "string"
+        ? res.data.attributes["name"]
+        : name.trim();
+      setName(updatedName);
+      if (updatedName !== orgNameParam) {
+        void navigate(`/app/${encodeURIComponent(updatedName)}/settings`);
       }
       toast.add({ title: "Organization settings saved", type: "success" });
     } catch (err: unknown) {
@@ -146,9 +196,10 @@ export function OrganizationSettings(): React.JSX.Element {
   };
 
   const deleteOrg = async (): Promise<void> => {
+    if (!canDestroyOrganization) return;
     if (!confirm(`Are you sure you want to delete organization "${orgName ?? ""}"? This will remove all workspaces, runs, and data.`)) return;
     try {
-      await fetchApi(`/api/v2/organizations/${orgNameParam}`, { method: "DELETE" });
+      await fetchApi(`/api/v2/organizations/${encodedOrgName}`, { method: "DELETE" });
       void navigate("/app");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete organization";
@@ -158,9 +209,10 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const createTeam = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
+    if (!canCreateTeam) return;
     if (newTeamName.trim() === "") return;
     try {
-      await fetchApi(`/api/v2/organizations/${orgNameParam}/teams`, {
+      await fetchApi(`/api/v2/organizations/${encodedOrgName}/teams`, {
         method: "POST",
         body: JSON.stringify({
           data: { attributes: { name: newTeamName.trim() } },
@@ -176,6 +228,7 @@ export function OrganizationSettings(): React.JSX.Element {
   };
 
   const editTeamPermissions = (team: Team): void => {
+    if (!canUpdateOrganizationAccess) return;
     setEditingTeamId(team.id);
     setTeamPermissions(teamOrganizationAccess(team));
   };
@@ -193,6 +246,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const saveTeamPermissions = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canUpdateOrganizationAccess) return;
     if (editingTeamId === "") return;
     setSavingTeamPermissions(true);
     try {
@@ -222,6 +276,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const inviteMember = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canManageUsers) return;
     const email = inviteEmail.trim();
     if (email === "") return;
     setInviting(true);
@@ -254,6 +309,7 @@ export function OrganizationSettings(): React.JSX.Element {
   };
 
   const removeMembership = async (membership: Membership): Promise<void> => {
+    if (!canManageUsers) return;
     if (!window.confirm(`Remove ${membership.attributes.email ?? "this member"} from the organization?`)) return;
     try {
       await fetchApi(`/organization-memberships/${membership.id}`, { method: "DELETE" });
@@ -268,8 +324,21 @@ export function OrganizationSettings(): React.JSX.Element {
     }
   };
 
-  if (org == null) {
+  if (loading || (org !== null && !orgIsCurrent)) {
     return <div className="p-8 text-center text-gray-500">Loading organization settings...</div>;
+  }
+  if (org === null) {
+    return (
+      <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-red-200 bg-red-50 p-5 text-red-900">
+        <div>
+          <h1 className="font-semibold">Could not load organization settings</h1>
+          <p className="mt-1 text-sm">{loadError !== "" ? loadError : "The organization could not be loaded."}</p>
+        </div>
+        <Button type="button" variant="outline" onClick={(): void => { void loadOrg(); }}>
+          Try again
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -278,7 +347,7 @@ export function OrganizationSettings(): React.JSX.Element {
       <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
         <Link to={`/app`} className="hover:underline">Dashboard</Link>
         <span className="text-gray-300">/</span>
-        <Link to={"/app/" + (orgNameParam)} className="hover:underline">{orgName}</Link>
+        <Link to={`/app/${encodedOrgName}`} className="hover:underline">{orgName}</Link>
         <span className="text-gray-300">/</span>
         <span className="text-gray-900">Settings</span>
       </div>
@@ -287,51 +356,7 @@ export function OrganizationSettings(): React.JSX.Element {
         <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Organization Settings</h1>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-8">
-        <aside className="w-full md:w-56 flex-shrink-0">
-          <nav className="flex flex-col gap-1">
-            <button
-              onClick={(): void => { setActiveTab("general"); }}
-              className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "general" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              <Settings className="w-4 h-4 mr-2" /> General
-            </button>
-
-            <button
-              onClick={(): void => { setActiveTab("teams"); }}
-              className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "teams" ? "bg-[#e0eaff] text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              <Users className="w-4 h-4 mr-2" /> Teams
-            </button>
-
-            <Link
-              to={"/app/" + (orgNameParam) + "/variable-sets"}
-              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              Variable Sets
-            </Link>
-
-            <Link
-              to={"/app/" + (orgNameParam) + "/settings/vcs"}
-              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              VCS Providers
-            </Link>
-
-            <Link
-              to={"/app/" + (orgNameParam) + "/settings/agents"}
-              className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              Agent Pools
-            </Link>
-          </nav>
-        </aside>
-
-        <div className="flex-1 space-y-6">
+      <div className="space-y-6">
           {activeTab === "general" && (
             <>
               <Card className="border-gray-200 shadow-sm rounded-md">
@@ -340,12 +365,16 @@ export function OrganizationSettings(): React.JSX.Element {
                 </CardHeader>
                 <CardContent className="p-5">
                   <form onSubmit={saveSettings} className="space-y-6 max-w-lg">
+                    {!canUpdateOrganization && (
+                      <p className="text-sm text-gray-500">Organization owner access is required to change these settings.</p>
+                    )}
                     <div className="space-y-1.5">
                       <label htmlFor="org-name" className="text-sm font-semibold text-gray-900">Organization Name</label>
                       <Input
                         id="org-name"
                         value={name}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
+                        disabled={!canUpdateOrganization}
                         required
                         className="h-9"
                       />
@@ -360,6 +389,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                         value={defaultIacBinary}
                         onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
+                        disabled={!canUpdateOrganization}
                       >
                         <option value="tofu">OpenTofu (tofu)</option>
                         <option value="terraform">Terraform (terraform)</option>
@@ -375,11 +405,12 @@ export function OrganizationSettings(): React.JSX.Element {
                         id="org-version"
                         value={defaultTerraformVersion}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
+                        disabled={!canUpdateOrganization}
                         placeholder="latest"
                         className="h-9"
                       />
                     </div>
-                    <Button type="submit" disabled={saving} className="bg-[#2962ff] hover:bg-[#1a4bcf] h-9">
+                    <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-[#2962ff] hover:bg-[#1a4bcf] h-9">
                       {saving ? "Saving..." : "Save settings"}
                     </Button>
                   </form>
@@ -395,7 +426,12 @@ export function OrganizationSettings(): React.JSX.Element {
                   <p className="text-sm text-gray-700 mb-4">
                     Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
                   </p>
-                  <Button variant="outline" onClick={deleteOrg} className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 h-9">
+                  <Button
+                    variant="outline"
+                    disabled={!canDestroyOrganization}
+                    onClick={deleteOrg}
+                    className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 h-9"
+                  >
                     <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
                   </Button>
                 </CardContent>
@@ -416,14 +452,27 @@ export function OrganizationSettings(): React.JSX.Element {
                       placeholder="New team name"
                       value={newTeamName}
                       onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTeamName(event.target.value); }}
+                      disabled={!canCreateTeam}
                       className="h-9"
                     />
-                    <Button type="submit" className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 h-9 shadow-sm">
+                    <Button
+                      type="submit"
+                      disabled={!canCreateTeam || newTeamName.trim() === ""}
+                      className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 h-9 shadow-sm"
+                    >
                       Create team
                     </Button>
                   </form>
                 </div>
                 <div className="divide-y divide-gray-100">
+                  {teamsError !== "" && (
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-red-50 p-4 text-sm text-red-800">
+                      <span>Could not load teams. {teamsError}</span>
+                      <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadTeams(); }}>
+                        Retry teams
+                      </Button>
+                    </div>
+                  )}
                   {teams.map((team): React.JSX.Element => {
                     const teamName = team.attributes["name"] as string;
                     return (
@@ -449,6 +498,7 @@ export function OrganizationSettings(): React.JSX.Element {
                               variant="outline"
                               size="sm"
                               aria-label={`Manage permissions for ${teamName}`}
+                              disabled={!canUpdateOrganizationAccess}
                               onClick={(): void => { editTeamPermissions(team); }}
                             >
                               Permissions
@@ -472,7 +522,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                       id={id}
                                       checked={teamPermissions[permission]}
                                       onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
-                                      disabled={savingTeamPermissions}
+                                      disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
                                     />
                                     <label htmlFor={id} className="text-sm text-gray-700">{permissionLabel(permission)}</label>
                                   </div>
@@ -488,7 +538,7 @@ export function OrganizationSettings(): React.JSX.Element {
                               >
                                 Cancel
                               </Button>
-                              <Button type="submit" disabled={savingTeamPermissions}>
+                              <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
                                 {savingTeamPermissions ? "Saving…" : "Save permissions"}
                               </Button>
                             </div>
@@ -497,7 +547,7 @@ export function OrganizationSettings(): React.JSX.Element {
                       </div>
                     );
                   })}
-                  {teams.length === 0 && (
+                  {teamsError === "" && teams.length === 0 && (
                     <p className="p-8 text-sm text-gray-500 text-center">No teams created yet.</p>
                   )}
                 </div>
@@ -517,12 +567,13 @@ export function OrganizationSettings(): React.JSX.Element {
                           type="email"
                           value={inviteEmail}
                           onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }}
+                          disabled={!canManageUsers}
                           required
                         />
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="member-team">Team</FieldLabel>
-                        <Select id="member-team" value={inviteTeamId} onValueChange={setInviteTeamId}>
+                        <Select id="member-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
                           <option value="">No team</option>
                           {teams.map((team): React.JSX.Element => (
                             <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
@@ -530,13 +581,21 @@ export function OrganizationSettings(): React.JSX.Element {
                         </Select>
                       </Field>
                       <Field className="justify-end">
-                        <Button type="submit" disabled={inviting || inviteEmail.trim() === ""}>
+                        <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
                           <MailPlus data-icon="inline-start" />
                           {inviting ? "Inviting" : "Invite"}
                         </Button>
                       </Field>
                     </FieldGroup>
                   </form>
+                  {membershipsError !== "" && (
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <span>Could not load organization members. {membershipsError}</span>
+                      <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>
+                        Retry members
+                      </Button>
+                    </div>
+                  )}
                   <Table>
                     <TableHeader>
                       <TableRow><TableHead>Email</TableHead><TableHead>Status</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
@@ -552,7 +611,7 @@ export function OrganizationSettings(): React.JSX.Element {
                               variant="ghost"
                               size="icon-sm"
                               aria-label={`Remove ${membership.attributes.email ?? "member"}`}
-                              disabled={membership.attributes.role === "owner"}
+                              disabled={!canManageUsers || membership.attributes.role === "owner"}
                               onClick={(): void => { void removeMembership(membership); }}
                             >
                               <UserMinus />
@@ -560,7 +619,7 @@ export function OrganizationSettings(): React.JSX.Element {
                           </TableCell>
                         </TableRow>
                       ))}
-                      {memberships.length === 0 && (
+                      {membershipsError === "" && memberships.length === 0 && (
                         <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization members found.</TableCell></TableRow>
                       )}
                     </TableBody>
@@ -569,7 +628,6 @@ export function OrganizationSettings(): React.JSX.Element {
               </CardContent>
             </Card>
           )}
-        </div>
       </div>
     </div>
   );

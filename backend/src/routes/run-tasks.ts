@@ -1,7 +1,15 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { runTasks, workspaceRunTasks, runTaskResults, taskStages, organizations, type users } from "../db/schema";
-import { eq, and } from "drizzle-orm";
+import {
+  runTasks,
+  workspaceRunTasks,
+  runTaskResults,
+  taskStages,
+  organizations,
+  type users,
+  type workspaces,
+} from "../db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
 
@@ -24,6 +32,29 @@ type BindingItem = Readonly<{
 }>;
 
 type ResultItem = Readonly<typeof runTaskResults.$inferSelect>;
+
+async function findManageableWorkspace(
+  workspaceId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<typeof workspaces.$inferSelect | undefined> {
+  const workspace = await findAuthorizedWorkspace(
+    workspaceId,
+    userId,
+    tokenOrgId,
+    tokenTeamId,
+    "run-tasks",
+  );
+  if (workspace === undefined) return undefined;
+  return await checkOrganizationPermission(
+    workspace.orgId,
+    userId,
+    tokenOrgId,
+    tokenTeamId,
+    "manage-run-tasks",
+  ) ? workspace : undefined;
+}
 
 type CallbackCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -105,7 +136,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const stages = await db.query.taskStages.findMany({ where: eq(taskStages.runId, runId) });
     return {
-      data: stages.map((s) => ({
+      data: stages.map((s): Record<string, unknown> => ({
         id: s.id,
         type: "task-stages",
         attributes: {
@@ -137,7 +168,9 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
         },
         relationships: {
           run: { data: { id: stage.runId, type: "runs" } },
-          "task-results": { data: results.map((r) => ({ id: r.id, type: "task-results" })) },
+          "task-results": {
+            data: results.map((r): Record<string, string> => ({ id: r.id, type: "task-results" })),
+          },
         },
       },
     };
@@ -152,7 +185,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
     }
-    const timestamps = { ...((stage.statusTimestamps as Record<string, string>) ?? {}), "overridden-at": new Date().toISOString() };
+    const timestamps = { ...(stage.statusTimestamps ?? {}), "overridden-at": new Date().toISOString() };
     await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps }).where(eq(taskStages.id, stage.id));
     return {
       data: {
@@ -172,7 +205,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
     return {
-      data: tasksList.map((t) => ({
+      data: tasksList.map((t): Record<string, unknown> => ({
         id: t.id,
         type: "run-tasks",
         attributes: {
@@ -293,11 +326,35 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspaceId) });
-    return { data: bindings.map((b: BindingItem): Record<string, unknown> => ({ id: b.id, type: "workspace-run-tasks", attributes: { stage: b.stage, "enforcement-level": b.enforcementLevel }, relationships: { "run-task": { data: { id: b.runTaskId, type: "run-tasks" } } } })) };
+    const attachedTasks = bindings.length === 0
+      ? []
+      : await db.query.runTasks.findMany({
+          where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
+        });
+    const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
+    return {
+      data: bindings.map((binding: BindingItem): Record<string, unknown> => {
+        const task = tasksById.get(binding.runTaskId);
+        return {
+          id: binding.id,
+          type: "workspace-run-tasks",
+          attributes: {
+            stage: binding.stage,
+            "enforcement-level": binding.enforcementLevel,
+            "run-task-name": task?.name ?? binding.runTaskId,
+            "run-task-description": task?.description ?? null,
+            "run-task-enabled": task?.enabled ?? false,
+          },
+          relationships: {
+            "run-task": { data: { id: binding.runTaskId, type: "run-tasks" } },
+          },
+        };
+      }),
+    };
   })
   .post("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin");
+    const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
@@ -323,7 +380,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
   .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const workspaceId = params.workspace_id ?? "";
     const taskId = params.task_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin");
+    const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)));
     (set as { status: number }).status = 204;

@@ -101,6 +101,8 @@ describe("TFE API v2 - Runs", () => {
     expect(data.data.attributes.status).toBe("pending");
     expect(data.data.attributes.message).toBe("Custom run message");
     expect(data.data.attributes["auto-apply"]).toBe(true);
+    expect(data.data.attributes.actions["is-force-cancelable"]).toBe(false);
+    expect(data.data.attributes.permissions["can-force-cancel"]).toBe(false);
 
     const runInDb = await db.query.runs.findFirst({
       where: eq(runs.id, data.data.id),
@@ -108,5 +110,62 @@ describe("TFE API v2 - Runs", () => {
     expect(runInDb).toBeDefined();
     expect(runInDb?.status).toBe("pending");
     expect(runInDb?.autoApply).toBe(true);
+  });
+
+  it("rejects destroy runs when destroy plans are disabled", async () => {
+    const body = JSON.stringify({
+      data: {
+        type: "runs",
+        attributes: {
+          "is-destroy": true,
+          message: "Destroy plan",
+        },
+        relationships: {
+          workspace: {
+            data: {
+              id: workspaceId,
+              type: "workspaces",
+            },
+          },
+        },
+      },
+    });
+    const createDestroyRun = (path: string): Promise<Response> => app.handle(
+      new Request(`http://localhost${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`,
+        },
+        body,
+      }),
+    );
+
+    await db.update(workspaces)
+      .set({ allowDestroyPlan: false })
+      .where(eq(workspaces.id, workspaceId));
+
+    for (const path of ["/api/v2/runs", `/api/v2/workspaces/${workspaceId}/runs`]) {
+      const response = await createDestroyRun(path);
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({
+        errors: [{
+          status: "422",
+          title: "Unprocessable Entity",
+          detail: "Destroy plans are disabled for this workspace",
+        }],
+      });
+    }
+
+    await db.update(workspaces)
+      .set({ allowDestroyPlan: true })
+      .where(eq(workspaces.id, workspaceId));
+    const response = await createDestroyRun("/api/v2/runs");
+    expect(response.status).toBe(201);
+    const document = await response.json() as { data: { id: string; attributes: { "is-destroy": boolean } } };
+    expect(document.data.attributes["is-destroy"]).toBe(true);
+    expect(await db.query.runs.findFirst({ where: eq(runs.id, document.data.id) })).toMatchObject({
+      isDestroy: true,
+    });
   });
 });

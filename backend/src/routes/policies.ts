@@ -37,6 +37,23 @@ type ParamItem = DeepReadonly<typeof policySetParameters.$inferSelect>;
 type PolicySetVersionItem = DeepReadonly<typeof policySetVersions.$inferSelect>;
 type PolicySetVcsRepo = NonNullable<typeof policySets.$inferSelect.vcsRepo>;
 
+function policyCheckResource(
+  check: PcItem,
+  policy: PolItem | undefined,
+): Record<string, unknown> {
+  return {
+    id: check.id,
+    type: "policy-checks",
+    attributes: {
+      status: check.status,
+      result: check.result,
+      "policy-name": policy?.name ?? null,
+      "enforcement-level": policy?.enforcementLevel ?? null,
+      "created-at": new Date(check.createdAt).toISOString(),
+    },
+  };
+}
+
 function vcsRepoResource(vcsRepo: DeepReadonly<PolicySetVcsRepo> | null): Record<string, unknown> | null {
   if (vcsRepo === null) return null;
   return {
@@ -706,7 +723,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
-    return { data: pcList.map((pc: PcItem): Record<string, unknown> => ({ id: pc.id, type: "policy-checks", attributes: { status: pc.status, result: pc.result, "created-at": new Date(pc.createdAt).toISOString() } })) };
+    const policyIds = [...new Set(pcList.flatMap((check): string[] =>
+      check.policyId === null ? [] : [check.policyId]))];
+    const policyList = policyIds.length === 0
+      ? []
+      : await db.query.policies.findMany({ where: inArray(policies.id, policyIds) });
+    const policiesById = new Map(policyList.map((policy): [string, PolItem] => [policy.id, policy]));
+    return {
+      data: pcList.map((check: PcItem): Record<string, unknown> =>
+        policyCheckResource(check, check.policyId === null ? undefined : policiesById.get(check.policyId))),
+    };
   })
   .get("/api/v2/policy-checks/:check_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const checkId = params.check_id ?? "";
@@ -716,7 +742,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: pc.id, type: "policy-checks", attributes: { status: pc.status, result: pc.result, "created-at": new Date(pc.createdAt).toISOString() } } };
+    const policy = pc.policyId === null
+      ? undefined
+      : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
+    return { data: policyCheckResource(pc, policy) };
   })
   .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const checkId = params.check_id ?? "";

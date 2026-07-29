@@ -46,9 +46,12 @@ function restoreEnvironment(): void {
   }
 }
 
-function request(path: string, token: string | null = apiToken): Promise<Response> {
+function request(path: string, token: string | null = apiToken, accept?: string): Promise<Response> {
   return app.handle(new Request(`http://terrence.test${path}`, {
-    headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+    headers: {
+      ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
+      ...(accept === undefined ? {} : { Accept: accept }),
+    },
   }));
 }
 
@@ -193,6 +196,26 @@ describe("GitHub App installation setup", () => {
     expect(location.pathname).toBe("/apps/terrence-test/installations/new");
     expect(state).not.toBeEmpty();
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  test("returns the one-time setup URL as JSON for authenticated SPAs", async () => {
+    const response = await request(
+      `/api/v2/organizations/${orgName}/github-app/installations/setup`,
+      apiToken,
+      "application/vnd.api+json",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("location")).toBeNull();
+
+    const body = await response.json();
+    expect(body.data.type).toBe("vcs-authorization-requests");
+    const location = new URL(body.data.attributes["authorization-url"]);
+    expect(location.origin).toBe("https://github.com");
+    expect(location.pathname).toBe("/apps/terrence-test/installations/new");
+    expect(location.searchParams.get("state")).toBe(body.data.id);
+    expect(location.toString()).not.toContain(apiToken);
   });
 
   test("rejects invalid and replayed callback state before contacting GitHub", async () => {

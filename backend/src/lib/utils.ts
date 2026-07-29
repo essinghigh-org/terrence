@@ -119,9 +119,9 @@ export async function checkOrganizationPermission(
   tokenTeamId: string | null | undefined,
   required: OrganizationPermission,
 ): Promise<boolean> {
-  if (tokenOrgId !== null) return tokenOrgId === orgId;
-  if (tokenTeamId !== null) {
-    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId!) });
+  if (tokenOrgId !== null && tokenOrgId !== undefined) return tokenOrgId === orgId;
+  if (tokenTeamId !== null && tokenTeamId !== undefined) {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
     return team?.orgId === orgId && teamOrganizationAllows(team.organizationAccess, required);
   }
   if (userId === undefined) return false;
@@ -138,12 +138,34 @@ export async function checkOrganizationPermission(
   return userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, required));
 }
 
+export async function checkOrganizationVcsReadPermission(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+): Promise<boolean> {
+  return await checkOrganizationPermission(
+    orgId,
+    userId,
+    tokenOrgId,
+    tokenTeamId,
+    "manage-vcs-settings",
+  ) || await checkOrganizationPermission(
+    orgId,
+    userId,
+    tokenOrgId,
+    tokenTeamId,
+    "manage-workspaces",
+  );
+}
+
 export type WorkspacePermission =
   | "read"
   | "plan"
   | "apply"
   | "lock"
   | "admin"
+  | "run-tasks"
   | "policy-override"
   | "variables-read"
   | "variables-write"
@@ -168,6 +190,7 @@ function teamWorkspaceAllows(
   if (required === "read") return ["read", "plan", "apply"].includes(runs);
   if (required === "plan") return runs === "plan" || runs === "apply";
   if (required === "apply") return runs === "apply";
+  if (required === "run-tasks") return permissions["run-tasks"] === true;
   if (required === "lock") return permissions["workspace-locking"] === true;
   const variableAccess = typeof permissions.variables === "string" ? permissions.variables : "none";
   if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";

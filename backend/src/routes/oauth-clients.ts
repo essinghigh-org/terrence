@@ -4,7 +4,7 @@ import { db } from "../db";
 import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { encryptSecret } from "../lib/secrets";
-import { apiURL, checkOrganizationPermission, serviceProviderDisplayName } from "../lib/utils";
+import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -13,7 +13,7 @@ type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   query?: Readonly<Record<string, unknown>>;
   body?: unknown;
-  request: Readonly<{ url: string }>;
+  request: Readonly<{ headers: Readonly<Headers>; url: string }>;
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
@@ -438,6 +438,33 @@ function redirect(location: string, status: 302 | 303): Response {
   });
 }
 
+function authorizationResponse(
+  request: Readonly<{ headers: Readonly<Headers> }>,
+  state: string,
+  location: string,
+): Response {
+  const acceptsJson = (request.headers.get("accept") ?? "")
+    .split(",")
+    .some((value: string): boolean => {
+      const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
+      return mediaType === "application/json" || mediaType === "application/vnd.api+json";
+    });
+  if (!acceptsJson) return redirect(location, 302);
+  return Response.json({
+    data: {
+      id: state,
+      type: "vcs-authorization-requests",
+      attributes: { "authorization-url": location },
+    },
+  }, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/vnd.api+json",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
+}
+
 async function completeOAuthHandshake(
   oc: OcItem,
   storedToken: string,
@@ -454,7 +481,7 @@ async function completeOAuthHandshake(
   });
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, oc.orgId) });
   const destination = new URL(
-    `/app/organizations/${encodeURIComponent(org?.name ?? oc.orgId)}/settings/vcs`,
+    `/app/${encodeURIComponent(org?.name ?? oc.orgId)}/settings/vcs`,
     request.url,
   );
   destination.searchParams.set("oauth_token_id", tokenId);
@@ -466,7 +493,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
     return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request))) };
   })
@@ -656,7 +683,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
         userId: user?.id ?? null,
       });
       oauth1.authorization.searchParams.set("oauth_token", requestToken.token);
-      return redirect(oauth1.authorization.toString(), 302);
+      return authorizationResponse(request, state, oauth1.authorization.toString());
     }
     if (oauth2 === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
@@ -675,7 +702,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     oauth2.authorization.searchParams.set("response_type", "code");
     oauth2.authorization.searchParams.set("state", state);
     if (oauth2.scope !== undefined) oauth2.authorization.searchParams.set("scope", oauth2.scope);
-    return redirect(oauth2.authorization.toString(), 302);
+    return authorizationResponse(request, state, oauth2.authorization.toString());
   })
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
     pruneOAuthStates();
@@ -776,7 +803,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (oc === undefined || !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tokenList = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, ocId) });
     return { data: tokenList.map((ot): Record<string, unknown> => ({ id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } })) };
   })

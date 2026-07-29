@@ -361,10 +361,11 @@ export function WorkspaceHealth({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
-  const canUpdate = workspace.attributes.permissions?.["can-update"] !== false;
+  const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
 
   const save = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canUpdate) return;
     setSaving(true);
     setError("");
     setSaved(false);

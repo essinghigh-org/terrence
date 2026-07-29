@@ -3,7 +3,7 @@ import { db } from "../db";
 import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, apiTokens, samlSettings, teams, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { organizationResource } from "../lib/response";
-import { applyDataRetentionGarbageCollection, auditLog, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
+import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermission, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 
@@ -14,11 +14,71 @@ type ParamCtx = Readonly<{
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId?: string | null;
+  teamId?: string | null;
   request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
 
 type ReservedTagKey = Readonly<typeof reservedTagKeys.$inferSelect>;
+type OrganizationItem = Readonly<typeof organizations.$inferSelect>;
+
+const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin"]);
+
+function organizationNameError(name: string): string | null {
+  if (RESERVED_ORGANIZATION_NAMES.has(name.toLowerCase())) return "Organization name is reserved";
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    return "Organization name can only include letters, numbers, hyphens, and underscores";
+  }
+  return null;
+}
+
+async function organizationResourceForPrincipal(
+  org: OrganizationItem,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+): Promise<Record<string, unknown>> {
+  const [
+    canManageOrganization,
+    canManageWorkspaces,
+    canReadProjects,
+    canManageProjects,
+    canManageVcsSettings,
+    canManageAgentPools,
+    canCreateTeam,
+    canManageUsers,
+    canUpdateOrganizationAccess,
+  ] = await Promise.all([
+    checkOrgPermission(userId, org.id, "owner", tokenOrgId ?? null, tokenTeamId ?? null),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-workspaces"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "read-projects"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-projects"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-vcs-settings"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-agent-pools"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-teams"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-membership"),
+    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-organization-access"),
+  ]);
+  const resource = organizationResource(org);
+  return {
+    ...resource,
+    attributes: {
+      ...(resource.attributes as Record<string, unknown>),
+      permissions: {
+        "can-update": canManageOrganization,
+        "can-destroy": canManageOrganization,
+        "can-create-team": canCreateTeam,
+        "can-manage-users": canManageUsers,
+        "can-update-organization-access": canUpdateOrganizationAccess,
+        "can-manage-workspaces": canManageWorkspaces,
+        "can-read-projects": canReadProjects,
+        "can-manage-projects": canManageProjects,
+        "can-manage-vcs-settings": canManageVcsSettings,
+        "can-manage-agent-pools": canManageAgentPools,
+      },
+    },
+  };
+}
 
 function reservedTagKeyInput(body: unknown): Readonly<{ key: string; disableOverrides: boolean }> | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
@@ -68,6 +128,11 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     if (name === "") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
     }
+    const nameError = organizationNameError(name);
+    if (nameError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] };
+    }
     if (user === null || user === undefined) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
@@ -115,7 +180,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       ? [orgId]
       : user !== null && user !== undefined
         ? [...new Set((await db.query.organizationMemberships.findMany({
-            where: eq(organizationMemberships.userId, user.id),
+            where: and(
+              eq(organizationMemberships.userId, user.id),
+              eq(organizationMemberships.status, "active"),
+            ),
           })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))]
         : [];
     if (organizationIds.length === 0) {
@@ -224,14 +292,14 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null, teamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: organizationResource(org) };
+    return { data: await organizationResourceForPrincipal(org, user?.id, orgId, teamId) };
   })
   .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -349,7 +417,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .patch("/api/v2/organizations/:org_name", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .patch("/api/v2/organizations/:org_name", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
@@ -374,6 +442,11 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     if (newName === "" || !["tofu", "terraform"].includes(defaultIacBinary) || defaultTerraformVersion.trim() === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const nameError = organizationNameError(newName);
+    if (nameError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] };
     }
     if (ownersTeamSamlRoleId === undefined) {
       (set as { status: number }).status = 422;
@@ -404,7 +477,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         assessmentsEnforced: updated.assessmentsEnforced,
         ownersTeamSamlRoleId: updated.ownersTeamSamlRoleId,
       }).where(eq(organizations.id, org.id));
-      return { data: organizationResource(updated) };
+      return { data: await organizationResourceForPrincipal(updated, user?.id, orgId, teamId) };
     } catch (e: unknown) {
       if (isUniqueConstraintError(e)) {
         (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };

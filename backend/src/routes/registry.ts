@@ -1559,7 +1559,22 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (workspace === undefined) throw new Error("Unable to create the no-code workspace");
-    const resource = await workspaceResource(workspace, details.org.defaultIacBinary, true);
+    const resource = await workspaceResource(workspace, details.org.defaultIacBinary, {
+      canAdmin: true,
+      canApply: true,
+      canLock: true,
+      canManageRunTasks: await checkOrganizationPermission(
+        details.org.id,
+        user?.id,
+        tokenOrgId,
+        teamId ?? null,
+        "manage-run-tasks",
+      ),
+      canPlan: true,
+      canReadStateVersions: true,
+      canReadVariables: true,
+      canWriteVariables: true,
+    });
     return {
       data: {
         ...resource,

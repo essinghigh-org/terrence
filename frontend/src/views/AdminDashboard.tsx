@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
+import { Navigate, useOutletContext } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import type { LayoutOutletContext } from "../components/Layout";
 import {
   Shield,
   Users,
@@ -20,6 +22,7 @@ import { Input } from "../components/ui/input";
 import { toast } from "../components/ui/toast";
 
 export function AdminDashboard(): React.JSX.Element {
+  const { accountLoaded, siteAdmin } = useOutletContext<LayoutOutletContext>();
   type ItemAttrs = {
     username?: string;
     email?: string | null;
@@ -38,7 +41,10 @@ export function AdminDashboard(): React.JSX.Element {
 
     "has-changes"?: boolean;
 
-    actions?: { "is-cancelable"?: boolean };
+    actions?: {
+      "is-cancelable"?: boolean;
+      "is-force-cancelable"?: boolean;
+    };
     version?: string;
     url?: string | null;
     sha?: string | null;
@@ -99,8 +105,8 @@ export function AdminDashboard(): React.JSX.Element {
   };
 
   useEffect((): void => {
-    void loadAdminData();
-  }, [activeTab]);
+    if (siteAdmin) void loadAdminData();
+  }, [activeTab, siteAdmin]);
 
   const handleAddVersion = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
@@ -154,6 +160,9 @@ export function AdminDashboard(): React.JSX.Element {
     }
   };
 
+  if (!accountLoaded) return <p className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
+  if (!siteAdmin) return <Navigate to="/app" replace />;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       <div className="flex items-center justify-between border-b pb-4">
@@ -193,7 +202,7 @@ export function AdminDashboard(): React.JSX.Element {
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
-              {tab.icon({ className: "h-4 w-4" })}
+              <tab.icon className="h-4 w-4" />
               {tab.label}
             </button>
           );
@@ -216,7 +225,7 @@ export function AdminDashboard(): React.JSX.Element {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Registered Users</CardTitle>
-                <CardDescription>Manage user accounts across the TFE instance</CardDescription>
+                <CardDescription>View user accounts across the TFE instance</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="rounded-md border overflow-hidden">
@@ -393,14 +402,18 @@ export function AdminDashboard(): React.JSX.Element {
                             </td>
                             <td className="px-4 py-3 text-gray-600">{r.attributes.message ?? "—"}</td>
                             <td className="px-4 py-3">
-                              {r.attributes.actions?.["is-cancelable"] === true && (
+                              {r.attributes.actions !== undefined && (
                                 <div className="flex gap-2">
-                                  <Button size="sm" variant="outline" onClick={(): void => { void handleCancelRun(r.id, false); }}>
-                                    Cancel
-                                  </Button>
-                                  <Button size="sm" variant="destructive" onClick={(): void => { void handleCancelRun(r.id, true); }}>
-                                    Force Cancel
-                                  </Button>
+                                  {r.attributes.actions["is-cancelable"] === true && (
+                                    <Button size="sm" variant="outline" onClick={(): void => { void handleCancelRun(r.id, false); }}>
+                                      Cancel
+                                    </Button>
+                                  )}
+                                  {r.attributes.actions["is-force-cancelable"] === true && (
+                                    <Button size="sm" variant="destructive" onClick={(): void => { void handleCancelRun(r.id, true); }}>
+                                      Force Cancel
+                                    </Button>
+                                  )}
                                 </div>
                               )}
                             </td>

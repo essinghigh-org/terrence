@@ -1,14 +1,34 @@
 import { useState, useEffect } from "react";
+import { useLocation, useOutletContext } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import type { LayoutOutletContext } from "../components/Layout";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
+import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { KeyRound, User, Lock, Trash2, Plus, ShieldCheck } from "lucide-react";
+import { KeyRound, Lock, MonitorSmartphone, Plus, ShieldCheck, Trash2, User } from "lucide-react";
+
+type BrowserSession = Readonly<{
+  readonly id: string;
+  readonly attributes: Readonly<{
+    readonly "created-at": string;
+    readonly "last-rotated-at": string | null;
+    readonly "expires-at": string;
+    readonly current: boolean;
+  }>;
+}>;
+
+function formatSessionDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+}
 
 export function AccountSettings(): React.JSX.Element {
   type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean } };
+  const location = useLocation();
+  const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [tokens, setTokens] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
@@ -32,12 +52,29 @@ export function AccountSettings(): React.JSX.Element {
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
 
+  // Browser Sessions
+  const [sessions, setSessions] = useState<BrowserSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState("");
+  const [revokingSessionId, setRevokingSessionId] = useState<string | null>(null);
+
   /* ---- Data Loading ---- */
   useEffect((): void => {
     void loadAccount();
   }, []);
 
+  useEffect((): void => {
+    if (loading || location.hash === "") return;
+    document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+  }, [loading, location.hash]);
+
   async function loadAccount(): Promise<void> {
+    setAccount(null);
+    setTokens([]);
+    setSessions([]);
+    setSessionsError("");
+    setLoading(true);
+    setError("");
     try {
       const details = await fetchApi("/account/details") as { data: Account };
       const me = details.data;
@@ -46,8 +83,10 @@ export function AccountSettings(): React.JSX.Element {
       setEmail(me.attributes.email ?? "");
       const requiresChange = me.attributes["must-change-password"] === true;
       setMustChangePassword(requiresChange);
+      layoutContext?.setMustChangePassword(requiresChange);
 
       if (!requiresChange) {
+        void loadSessions();
         const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
         setTokens(tokensRes.data);
       }
@@ -56,6 +95,20 @@ export function AccountSettings(): React.JSX.Element {
       setError(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadSessions(): Promise<void> {
+    setSessionsLoading(true);
+    setSessionsError("");
+    try {
+      const response = await fetchApi("/account/sessions") as { data?: BrowserSession[] };
+      setSessions(Array.isArray(response.data) ? response.data : []);
+    } catch (err: unknown) {
+      setSessions([]);
+      setSessionsError(err instanceof Error ? err.message : "Could not load browser sessions.");
+    } finally {
+      setSessionsLoading(false);
     }
   }
 
@@ -159,8 +212,39 @@ export function AccountSettings(): React.JSX.Element {
     }
   }
 
+  async function handleRevokeSession(session: BrowserSession): Promise<void> {
+    if (session.attributes.current) return;
+    if (!window.confirm("Revoke this browser session?")) return;
+    setRevokingSessionId(session.id);
+    setSessionsError("");
+    setSuccessMsg("");
+    try {
+      await fetchApi(`/account/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      setSessions((current): BrowserSession[] =>
+        current.filter((candidate): boolean => candidate.id !== session.id));
+      setSuccessMsg("Session revoked");
+    } catch (err: unknown) {
+      setSessionsError(err instanceof Error ? err.message : "Could not revoke browser session.");
+    } finally {
+      setRevokingSessionId(null);
+    }
+  }
+
   if (loading) {
     return <Spinner className="mx-auto mt-16" />;
+  }
+  if (account === null) {
+    return (
+      <div role="alert" className="mx-auto mt-16 flex max-w-lg flex-col items-start gap-3 rounded-md border border-red-200 bg-red-50 p-5 text-red-900">
+        <div>
+          <h1 className="font-semibold">Could not load account settings</h1>
+          <p className="mt-1 text-sm">{error !== "" ? error : "Your account details could not be loaded."}</p>
+        </div>
+        <Button type="button" variant="outline" onClick={(): void => { void loadAccount(); }}>
+          Try again
+        </Button>
+      </div>
+    );
   }
 
   /* ── Render ─────────────────────────────────────── */
@@ -180,7 +264,7 @@ export function AccountSettings(): React.JSX.Element {
       )}
 
       {/* ── 1. Profile ── */}
-      <Card className={mustChangePassword ? "hidden" : undefined}>
+      <Card id="profile" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <User className="w-4 h-4" />
@@ -208,7 +292,7 @@ export function AccountSettings(): React.JSX.Element {
       </Card>
 
       {/* ── 2. Password ── */}
-      <Card>
+      <Card id="password" className="scroll-mt-20">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Lock className="w-4 h-4" />
@@ -257,8 +341,91 @@ export function AccountSettings(): React.JSX.Element {
         </CardFooter>
       </Card>
 
-      {/* ── 3. Tokens ── */}
-      <Card className={mustChangePassword ? "hidden" : undefined}>
+      {/* ── 3. Sessions ── */}
+      <Card id="sessions" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <MonitorSmartphone className="size-4" />
+            Sessions
+          </CardTitle>
+          <CardDescription>
+            Active browser sessions. Device and location details are not recorded.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {sessionsLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Spinner className="size-4" />
+              Loading sessions…
+            </div>
+          ) : sessionsError !== "" ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive">
+              <span>Could not load browser sessions. {sessionsError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadSessions(); }}>
+                Retry sessions
+              </Button>
+            </div>
+          ) : sessions.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No active browser sessions. API tokens are listed separately.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Session</TableHead>
+                  <TableHead>Activity</TableHead>
+                  <TableHead className="text-right">Revoke</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sessions.map((session): React.JSX.Element => (
+                  <TableRow key={session.id}>
+                    <TableCell>
+                      <code className="text-xs">{session.id}</code>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Created {formatSessionDate(session.attributes["created-at"])}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      {session.attributes.current && <Badge variant="secondary">Current</Badge>}
+                      <p className={session.attributes.current ? "mt-1 text-xs text-muted-foreground" : "text-xs text-muted-foreground"}>
+                        {session.attributes["last-rotated-at"] === null
+                          ? "Not rotated yet"
+                          : `Last rotated ${formatSessionDate(session.attributes["last-rotated-at"])}`}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Expires {formatSessionDate(session.attributes["expires-at"])}
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {!session.attributes.current && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          disabled={revokingSessionId === session.id}
+                          aria-label={`Revoke session ${session.id}`}
+                          onClick={(): void => { void handleRevokeSession(session); }}
+                        >
+                          {revokingSessionId === session.id
+                            ? <Spinner data-icon="inline-start" />
+                            : <Trash2 data-icon="inline-start" />}
+                          {revokingSessionId === session.id ? "Revoking…" : "Revoke session"}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── 4. Tokens ── */}
+      <Card id="api-tokens" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <KeyRound className="w-4 h-4" />
@@ -294,7 +461,11 @@ export function AccountSettings(): React.JSX.Element {
           )}
 
           {/* Token list */}
-          {tokens.length > 0 && (
+          {tokens.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No personal API tokens.
+            </p>
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -307,13 +478,26 @@ export function AccountSettings(): React.JSX.Element {
               <TableBody>
                 {tokens.map((token): React.JSX.Element => (
                   <TableRow key={token.id}>
-                    <TableCell className="font-medium">{token.attributes["description"] as string}</TableCell>
-                    <TableCell className="text-muted-foreground">{token.attributes["created-at"] as string}</TableCell>
-                    <TableCell className="text-muted-foreground">{(token.attributes["last-used-at"] as string | null) ?? "—"}</TableCell>
+                    <TableCell className="font-medium">
+                      {typeof token.attributes["description"] === "string" && token.attributes["description"].trim() !== ""
+                        ? token.attributes["description"]
+                        : "No description"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {typeof token.attributes["created-at"] === "string"
+                        ? formatSessionDate(token.attributes["created-at"])
+                        : "Unknown"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {typeof token.attributes["last-used-at"] === "string"
+                        ? formatSessionDate(token.attributes["last-used-at"])
+                        : "Never"}
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="destructive"
                         size="sm"
+                        aria-label={`Delete token ${token.id}`}
                         disabled={deletingTokenId === token.id}
                         onClick={(): void => { void handleDeleteToken(token.id); }}
                       >

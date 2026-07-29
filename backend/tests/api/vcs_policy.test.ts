@@ -161,6 +161,8 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     await db.insert(policyChecks).values({
       id: pcId,
       runId,
+      policyId: polId,
+      policySetId: psId,
       status: "soft_failed",
       result: { passed: false, policy: "No Public S3 Buckets" },
       createdAt: Date.now(),
@@ -171,6 +173,8 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     expect(getRunPcRes.status).toBe(200);
     const getRunPcBody = await getRunPcRes.json();
     expect(getRunPcBody.data[0].attributes.status).toBe("soft_failed");
+    expect(getRunPcBody.data[0].attributes["policy-name"]).toBe("No Public S3 Buckets");
+    expect(getRunPcBody.data[0].attributes["enforcement-level"]).toBe("soft-mandatory");
 
     // 6. Override policy check
     const overrideRes = await request(`/api/v2/policy-checks/${pcId}/actions/override`, "POST");

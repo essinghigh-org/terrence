@@ -1,0 +1,636 @@
+import { afterEach, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+
+import { Layout } from "../src/components/Layout";
+import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+
+const originalFetch = globalThis.fetch;
+
+const json = (data: unknown): Response =>
+  new Response(JSON.stringify(data), {
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
+
+function deferred<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete): void => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+function CurrentLocation(): React.JSX.Element {
+  const location = useLocation();
+  return (
+    <output aria-label="Current location">
+      {location.pathname}{location.search}{location.hash}
+    </output>
+  );
+}
+
+afterEach((): void => {
+  cleanup();
+  localStorage.clear();
+  globalThis.fetch = originalFetch;
+});
+
+test("uses a persisted, route-aware workspace settings sidebar", async () => {
+  const view = render(
+    <MemoryRouter
+      initialEntries={["/app/acme/workspaces/production/settings/general"]}
+    >
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<Layout />}
+        >
+          <Route index element={<div>Overview content</div>} />
+          <Route path="runs" element={<div>Runs content</div>} />
+          <Route
+            path="settings/general"
+            element={<div>General settings content</div>}
+          />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(view.getByRole("link", { name: "Skip to main content" }).getAttribute("href"))
+    .toBe("#main-content");
+  expect(view.getByRole("link", { name: "General" }).getAttribute("aria-current"))
+    .toBe("page");
+  expect(view.getByRole("link", { name: "production" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/production");
+  expect(view.getByRole("link", { name: "Run Tasks" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/production/settings/tasks");
+  expect(view.getByRole("link", { name: "Destruction and deletion" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/production/settings/delete");
+  fireEvent.click(view.getByRole("button", { name: "Help and support" }));
+  await waitFor((): void => {
+    expect(view.getByRole("menuitem", { name: "Documentation" }).getAttribute("target"))
+      .toBe("_blank");
+    expect(view.getByRole("menuitem", { name: "Tutorials" })).toBeTruthy();
+    expect(view.getByRole("menuitem", { name: "Support" })).toBeTruthy();
+    expect(view.getByRole("menuitem", { name: "Status" })).toBeTruthy();
+  });
+
+  const collapse = view.getByRole("button", { name: "Collapse sidebar" });
+  expect(collapse.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(collapse);
+  expect(localStorage.getItem("terrence-sidebar-collapsed")).toBe("true");
+  expect(view.getByRole("button", { name: "Expand sidebar" }).getAttribute("aria-expanded"))
+    .toBe("false");
+
+  fireEvent.click(view.getByRole("link", { name: "production" }));
+  await waitFor((): void => {
+    expect(view.getByText("Overview content")).toBeTruthy();
+  });
+  expect(view.getByRole("link", { name: "Overview" }).getAttribute("aria-current"))
+    .toBe("page");
+});
+
+test("ignores an aborted workspace response after the route changes", async () => {
+  const production = deferred<Response>();
+  const staging = deferred<Response>();
+  let productionSignal: AbortSignal | null = null;
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      productionSignal = init?.signal ?? null;
+      return production.promise;
+    }
+    if (url === "/api/v2/organizations/acme/workspaces/staging") return staging.promise;
+    if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Link to="/app/acme/workspaces/staging">Open staging</Link>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(productionSignal).not.toBeNull(); });
+  fireEvent.click(view.getByRole("link", { name: "Open staging" }));
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]): boolean =>
+      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+        === "/api/v2/organizations/acme/workspaces/staging")).toBe(true);
+  });
+  await act(async (): Promise<void> => {
+    staging.resolve(json({ data: { id: "ws-staging", attributes: { name: "staging" } } }));
+  });
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "staging" })).toBeTruthy();
+  });
+  expect(productionSignal?.aborted).toBe(true);
+
+  await act(async (): Promise<void> => {
+    production.resolve(json({ data: { id: "ws-production", attributes: { name: "production" } } }));
+    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+  });
+  expect(view.getByRole("heading", { name: "staging" })).toBeTruthy();
+  expect(view.queryByRole("heading", { name: "production" })).toBeNull();
+});
+
+test("renders before the latest run finishes and ignores an aborted run response", async () => {
+  const productionRun = deferred<Response>();
+  const stagingRun = deferred<Response>();
+  let productionRunSignal: AbortSignal | null = null;
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({ data: { id: "ws-production", attributes: { name: "production" } } });
+    }
+    if (url === "/api/v2/organizations/acme/workspaces/staging") {
+      return json({ data: { id: "ws-staging", attributes: { name: "staging" } } });
+    }
+    if (url === "/api/v2/workspaces/ws-production/runs?page[size]=1") {
+      productionRunSignal = init?.signal ?? null;
+      return productionRun.promise;
+    }
+    if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return stagingRun.promise;
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Link to="/app/acme/workspaces/staging">Open staging</Link>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "production" })).toBeTruthy();
+    expect(productionRunSignal).not.toBeNull();
+  });
+  expect(view.getByText("Loading run history…")).toBeTruthy();
+  expect(view.getByRole("link", { name: "View runs" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/production/runs");
+
+  fireEvent.click(view.getByRole("link", { name: "Open staging" }));
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "staging" })).toBeTruthy();
+  });
+  expect(productionRunSignal?.aborted).toBe(true);
+
+  await act(async (): Promise<void> => {
+    stagingRun.resolve(json({
+      data: [{ id: "run-staging", attributes: { status: "planned_and_finished" } }],
+    }));
+  });
+  await waitFor((): void => {
+    expect(view.getByRole("link", { name: "Latest run: planned and finished" })).toBeTruthy();
+  });
+
+  await act(async (): Promise<void> => {
+    productionRun.resolve(json({
+      data: [{ id: "run-production", attributes: { status: "applied" } }],
+    }));
+    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+  });
+  expect(view.getByRole("link", { name: "Latest run: planned and finished" })).toBeTruthy();
+  expect(view.queryByRole("link", { name: "Latest run: applied" })).toBeNull();
+});
+
+test("blocks update-only settings when can-update is false", async () => {
+  const requestedUrls: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    requestedUrls.push(url);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            permissions: { "can-update": false },
+          },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const settings = [
+    { section: "notifications", control: "Add notification" },
+    { section: "run-triggers", control: "Add trigger" },
+    { section: "ssh-key", control: "Save assignment" },
+    { section: "team-access", control: "Add team" },
+  ] as const;
+  for (const setting of settings) {
+    const view = render(
+      <MemoryRouter initialEntries={[`/app/acme/workspaces/production/settings/${setting.section}`]}>
+        <Routes>
+          <Route
+            path="/app/:orgName/workspaces/:workspaceName/settings/:setting"
+            element={<WorkspaceDetail section={setting.section} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor((): void => {
+      expect(view.getByText("Workspace administrator access required")).toBeTruthy();
+    });
+    expect(view.queryByRole("button", { name: setting.control })).toBeNull();
+    view.unmount();
+  }
+
+  expect(requestedUrls).toEqual(
+    settings.map((): string => "/api/v2/organizations/acme/workspaces/production"),
+  );
+});
+
+test("fails closed when update permission is missing from readable settings", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: { name: "production", permissions: {} },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  for (const setting of [
+    { section: "health", control: "Save health settings" },
+    { section: "vcs", control: "Connect repository" },
+  ] as const) {
+    const view = render(
+      <MemoryRouter initialEntries={[`/app/acme/workspaces/production/settings/${setting.section}`]}>
+        <Routes>
+          <Route
+            path="/app/:orgName/workspaces/:workspaceName/settings/:setting"
+            element={<WorkspaceDetail section={setting.section} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor((): void => {
+      expect(view.getByRole("button", { name: setting.control }).disabled)
+        .toBe(true);
+    });
+    view.unmount();
+  }
+});
+
+test("keeps workspace variables readable without mutation permission", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            permissions: {
+              "can-read-variable": true,
+              "can-update-variable": false,
+            },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/vars?page[size]=100") {
+      return json({
+        data: [{
+          id: "var-1",
+          attributes: {
+            key: "region",
+            value: "eu-west-2",
+            category: "env",
+            sensitive: false,
+            hcl: false,
+            description: "Deployment region",
+          },
+        }],
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/variables"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/variables"
+          element={<WorkspaceDetail section="variables" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("region")).toBeTruthy(); });
+  expect(view.getByText("You can view variables, but you do not have permission to change them.")).toBeTruthy();
+  expect(view.queryByRole("button", { name: "Add variable" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Delete" })).toBeNull();
+  expect(view.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+});
+
+test("keeps the current settings route in sync after renaming a workspace", async () => {
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const workspace = {
+      id: "ws-1",
+      attributes: {
+        name: url.endsWith("/renamed") ? "renamed" : "production",
+        permissions: { "can-update": true },
+      },
+    };
+    if (
+      url === "/api/v2/organizations/acme/workspaces/production"
+      || url === "/api/v2/organizations/acme/workspaces/renamed"
+    ) {
+      return json({ data: workspace });
+    }
+    if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+      const body = JSON.parse(init.body as string) as {
+        data: { attributes: Record<string, unknown> };
+      };
+      return json({
+        data: {
+          ...workspace,
+          attributes: { ...workspace.attributes, ...body.data.attributes },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general?from=test#advanced"]}>
+      <CurrentLocation />
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/settings/general"
+          element={<WorkspaceDetail section="settings" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("General settings")).toBeTruthy(); });
+  fireEvent.input(view.getByLabelText("Name"), { target: { value: "renamed" } });
+  await act(async (): Promise<void> => {
+    const form = view.getByRole("button", { name: "Save settings" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]): boolean =>
+      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+        === "/api/v2/organizations/acme/workspaces/renamed")).toBe(true);
+  });
+  expect(view.getByRole("link", { name: "renamed" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/renamed");
+  expect(view.getByLabelText("Current location").textContent)
+    .toBe("/app/acme/workspaces/renamed/settings/general?from=test#advanced");
+});
+
+test("renders controlled workspace sections with current resources and project context", async () => {
+  const project = deferred<Response>();
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            locked: false,
+            "terraform-version": "1.9.3",
+            permissions: {
+              "can-queue-run": true,
+              "can-read-state-versions": true,
+            },
+          },
+          relationships: {
+            project: { data: { id: "prj-1", type: "projects" } },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
+      return json({
+        data: [{
+          id: "run-1",
+          attributes: {
+            status: "planned_and_finished",
+          },
+        }],
+      });
+    }
+    if (url === "/api/v2/projects/prj-1") {
+      return project.promise;
+    }
+    if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
+      return json({
+        data: [{
+          id: "resource-1",
+          attributes: {
+            address: "aws_instance.web",
+            provider: "aws",
+            "provider-type": "aws_instance",
+          },
+        }],
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/current-state-version-outputs") {
+      return json({ data: [] });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Workspace details")).toBeTruthy();
+  });
+  expect(view.queryByRole("navigation", { name: "Workspace sections" })).toBeNull();
+  expect(view.getByRole("link", { name: "Workspaces" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces");
+  expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/production/runs?new-run=true");
+  expect(view.getByText("Loading project…")).toBeTruthy();
+  await act(async (): Promise<void> => {
+    project.resolve(json({ data: { id: "prj-1", attributes: { name: "Platform foundation" } } }));
+  });
+  await waitFor((): void => {
+    expect(view.getByText("aws_instance.web")).toBeTruthy();
+    expect(view.getByRole("link", { name: "Platform foundation" }).getAttribute("href"))
+      .toBe("/app/acme/projects");
+  });
+});
+
+test("passes workspace run-task permission into the routed settings section", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            permissions: { "can-manage-run-tasks": true },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/run-tasks") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1/run-tasks") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/tasks"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/settings/tasks"
+          element={<WorkspaceDetail section="run-tasks" />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Attach run task" })).toBeTruthy();
+  });
+  expect(fetchMock.mock.calls.some(([input]): boolean =>
+    (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      === "/api/v2/organizations/acme/run-tasks")).toBe(true);
+});
+
+test("returns to the organization workspace list after deleting a workspace", async () => {
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            permissions: { "can-force-delete": true },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1" && init?.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/delete"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/settings/delete"
+          element={<WorkspaceDetail section="destruction" />}
+        />
+        <Route path="/app/:orgName/workspaces" element={<p>Organization workspaces</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Delete workspace" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Delete workspace" }));
+  fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "production" } });
+  await act(async (): Promise<void> => {
+    fireEvent.click(view.getByRole("button", { name: "Delete workspace permanently" }));
+  });
+
+  await waitFor((): void => {
+    expect(view.getByText("Organization workspaces")).toBeTruthy();
+  });
+  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+    (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      === "/api/v2/workspaces/ws-1"
+    && init?.method === "DELETE")).toBe(true);
+});

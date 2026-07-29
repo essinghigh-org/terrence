@@ -326,9 +326,11 @@ export const runs = sqliteTable("runs", {
   planResourceAdditions: integer("plan_resource_additions"),
   planResourceChanges: integer("plan_resource_changes"),
   planResourceDestructions: integer("plan_resource_destructions"),
+  planResourceImports: integer("plan_resource_imports"),
   applyResourceAdditions: integer("apply_resource_additions"),
   applyResourceChanges: integer("apply_resource_changes"),
   applyResourceDestructions: integer("apply_resource_destructions"),
+  applyResourceImports: integer("apply_resource_imports"),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   appliedAt: integer("applied_at"),
   softDeletedAt: integer("soft_deleted_at"),
@@ -1070,4 +1072,3 @@ export const user2FA = sqliteTable("user_2fa", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
-

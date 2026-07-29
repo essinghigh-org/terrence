@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Pencil, Plus, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
@@ -19,15 +19,22 @@ import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
-import { fetchApi } from "@/lib/api";
+import { fetchAllApiPages, fetchApi } from "@/lib/api";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
+
+type Organization = Readonly<{
+  attributes: Readonly<{
+    permissions?: Readonly<{ "can-manage-workspaces"?: boolean }>;
+  }>;
+}>;
 
 type Workspace = Readonly<{
   id: string;
   attributes: Readonly<{
     name: string;
     locked?: boolean;
+    permissions?: Readonly<{ "can-update"?: boolean }>;
     "tag-names"?: readonly string[];
     "vcs-repo"?: Readonly<{ identifier: string }> | null;
   }>;
@@ -39,21 +46,34 @@ type TagBinding = Readonly<{
   attributes: Readonly<{ key: string; value?: string }>;
 }>;
 
+type RunSummary = Readonly<{
+  attributes: Readonly<{
+    "created-at"?: string;
+    message?: string | null;
+    status: string;
+  }>;
+  relationships: Readonly<{ workspace: Readonly<{ data: Readonly<{ id: string }> }> }>;
+}>;
+
 const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
   errored: ["errored"],
   running: ["pending", "fetching", "planning", "cost_estimating", "policy_checking", "applying"],
   "on-hold": ["planned", "planned_and_saved"],
-  completed: ["applied", "discarded", "canceled"],
+  completed: ["applied", "planned_and_finished", "discarded", "canceled"],
 };
 
 export function Workspaces(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
-  const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectDataError, setProjectDataError] = useState(false);
+  const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
+  const [runStatusError, setRunStatusError] = useState(false);
+  const [canManageWorkspaces, setCanManageWorkspaces] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
@@ -65,32 +85,62 @@ export function Workspaces(): React.JSX.Element {
   const [editingTagKey, setEditingTagKey] = useState<string | null>(null);
   const [savingTag, setSavingTag] = useState(false);
 
-  const loadData = useCallback(async (): Promise<void> => {
+  const loadData = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     setLoading(true);
+    setLoadError("");
+    setCanManageWorkspaces(false);
     try {
       const statuses = runStatusFilters[statusFilter];
       const query = statuses === undefined
         ? "?page%5Bsize%5D=100"
         : `?page%5Bsize%5D=100&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
-      const [workspaceResponse, projectResponse] = await Promise.all([
-        fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`) as Promise<{ data?: Workspace[] }>,
-        fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects`) as Promise<{ data?: Project[] }>,
+      const [workspaceData, projectResult, runResult, canManage] = await Promise.all([
+        fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
+        fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
+          .then((data): Readonly<{ data: Project[]; failed: false }> => ({ data, failed: false }))
+          .catch((): Readonly<{ data: Project[]; failed: true }> => ({ data: [], failed: true })),
+        fetchAllApiPages<RunSummary>(`/organizations/${encodeURIComponent(orgName)}/runs?page%5Bsize%5D=100`, signal)
+          .then((data): Readonly<{ data: RunSummary[]; failed: false }> => ({ data, failed: false }))
+          .catch((): Readonly<{ data: RunSummary[]; failed: true }> => ({ data: [], failed: true })),
+        fetchApi(
+          `/organizations/${encodeURIComponent(orgName)}`,
+          signal === undefined ? {} : { signal },
+        )
+          .then((response): boolean =>
+            (response as { data?: Organization }).data?.attributes.permissions?.["can-manage-workspaces"] === true)
+          .catch((): false => false),
       ]);
-      setWorkspaces(Array.isArray(workspaceResponse.data) ? workspaceResponse.data : []);
-      setProjects(Array.isArray(projectResponse.data) ? projectResponse.data : []);
+      if (signal?.aborted === true) return;
+      setWorkspaces(workspaceData);
+      setProjects(projectResult.data);
+      setProjectDataError(projectResult.failed);
+      setCanManageWorkspaces(canManage);
+      const byWorkspace = new Map<string, RunSummary>();
+      for (const run of runResult.data) {
+        const workspaceId = run.relationships.workspace.data.id;
+        if (!byWorkspace.has(workspaceId)) byWorkspace.set(workspaceId, run);
+      }
+      setLatestRuns(byWorkspace);
+      setRunStatusError(runResult.failed);
     } catch (error: unknown) {
+      if (signal?.aborted === true) return;
+      setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
       toast.add({
         title: "Could not load workspaces",
         description: error instanceof Error ? error.message : "Unknown error",
         type: "error",
       });
     } finally {
-      setLoading(false);
+      if (signal?.aborted !== true) setLoading(false);
     }
   }, [orgName, statusFilter]);
 
-  useEffect((): void => {
-    if (orgName !== "") void loadData();
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    if (orgName !== "") void loadData(controller.signal);
+    return (): void => {
+      controller.abort();
+    };
   }, [loadData, orgName]);
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
@@ -181,6 +231,20 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
+  const statusLabel = (status: string): string =>
+    status.replace(/_/g, " ").replace(/\b\w/g, (letter: string): string => letter.toUpperCase());
+  const statusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
+    if (["errored", "canceled", "policy_hard_failed"].includes(status)) return "destructive";
+    if (["applied", "planned_and_finished", "planned_and_saved"].includes(status)) return "secondary";
+    if (["discarded"].includes(status)) return "outline";
+    return "default";
+  };
+  const runDate = (run: RunSummary | undefined): string => {
+    const value = run?.attributes["created-at"];
+    if (value === undefined) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
+  };
 
   return (
     <div className="flex w-full flex-col gap-6">
@@ -189,10 +253,12 @@ export function Workspaces(): React.JSX.Element {
           <p className="text-xs text-muted-foreground">{orgName} / Workspaces</p>
           <h1 className="text-3xl font-bold tracking-tight">Workspaces</h1>
         </div>
-        <Button onClick={(): void => { setCreateOpen(true); }}>
-          <Plus data-icon="inline-start" />
-          New workspace
-        </Button>
+        {canManageWorkspaces && (
+          <Button onClick={(): void => { setCreateOpen(true); }}>
+            <Plus data-icon="inline-start" />
+            New workspace
+          </Button>
+        )}
       </header>
 
       <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto]">
@@ -230,6 +296,23 @@ export function Workspaces(): React.JSX.Element {
         </Button>
       </section>
 
+      {runStatusError && (
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Run statuses could not be refreshed. Workspace results and filters are still available.
+        </p>
+      )}
+      {projectDataError && (
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Projects could not be refreshed. Workspace results are still available.
+        </p>
+      )}
+      {loadError !== "" && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          <span>Could not refresh workspaces. {loadError}</span>
+          <Button size="sm" variant="outline" onClick={(): void => { void loadData(); }}>Try again</Button>
+        </div>
+      )}
+
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
@@ -238,31 +321,47 @@ export function Workspaces(): React.JSX.Element {
               <TableHead>Repository</TableHead>
               <TableHead>Tags</TableHead>
               <TableHead>Project</TableHead>
+              <TableHead>Latest change</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Manage</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={6} className="py-12 text-center"><Spinner /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="py-12 text-center"><Spinner /></TableCell></TableRow>
+            ) : loadError !== "" && workspaces.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
+                  Workspace data is unavailable. Use Try again above to retry.
+                </TableCell>
+              </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-12 text-center text-muted-foreground">
-                  <p className="font-medium text-foreground">No workspaces found</p>
-                  <p>Try adjusting the filters.</p>
+                <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    {hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
+                  </p>
+                  <p>
+                    {hasFilters
+                      ? "Clear or adjust the filters to see more workspaces."
+                      : canManageWorkspaces
+                        ? "Create your first workspace to get started."
+                        : "No workspaces are available in this organization."}
+                  </p>
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.map((workspace): React.JSX.Element => (
               <TableRow key={workspace.id}>
                 <TableCell>
-                  <button
-                    className="font-medium hover:underline"
-                    onClick={(): void => {
-                      void navigate(`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspace.attributes.name)}`);
-                    }}
-                  >
-                    {workspace.attributes.name}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspace.attributes.name)}`}
+                      className="font-semibold text-primary hover:underline"
+                    >
+                      {workspace.attributes.name}
+                    </Link>
+                    {workspace.attributes.locked === true && <Badge variant="outline">Locked</Badge>}
+                  </div>
                 </TableCell>
                 <TableCell>{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
                 <TableCell>
@@ -275,20 +374,41 @@ export function Workspaces(): React.JSX.Element {
                 </TableCell>
                 <TableCell>{projectName(workspace)}</TableCell>
                 <TableCell>
-                  <Badge variant={workspace.attributes.locked === true ? "outline" : "secondary"}>
-                    {workspace.attributes.locked === true ? "Locked" : "Available"}
-                  </Badge>
+                  {latestRuns.get(workspace.id) === undefined ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <div className="max-w-56">
+                      <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
+                      {runDate(latestRuns.get(workspace.id)) !== "" && (
+                        <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id))}</p>
+                      )}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {latestRuns.get(workspace.id) === undefined ? (
+                    <span className="text-muted-foreground">No runs</span>
+                  ) : (
+                    <Badge
+                      variant={statusVariant(latestRuns.get(workspace.id)?.attributes.status ?? "")}
+                      className={latestRuns.get(workspace.id)?.attributes.status === "applied" ? "bg-emerald-50 text-emerald-800" : ""}
+                    >
+                      {statusLabel(latestRuns.get(workspace.id)?.attributes.status ?? "")}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Manage tags for ${workspace.attributes.name}`}
-                    onClick={(): void => { openTags(workspace); }}
-                  >
-                    <Tags data-icon="inline-start" />
-                    Tags
-                  </Button>
+                  {workspace.attributes.permissions?.["can-update"] === true ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Manage tags for ${workspace.attributes.name}`}
+                      onClick={(): void => { openTags(workspace); }}
+                    >
+                      <Tags data-icon="inline-start" />
+                      Tags
+                    </Button>
+                  ) : <span className="text-muted-foreground">—</span>}
                 </TableCell>
               </TableRow>
             ))}
@@ -296,12 +416,14 @@ export function Workspaces(): React.JSX.Element {
         </Table>
       </div>
 
-      <CreateWorkspaceModal
-        orgName={orgName}
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={(): void => { void loadData(); }}
-      />
+      {canManageWorkspaces && (
+        <CreateWorkspaceModal
+          orgName={orgName}
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={(): void => { void loadData(); }}
+        />
+      )}
 
       <Dialog open={tagWorkspace !== null} onOpenChange={(open: boolean): void => { if (!open) setTagWorkspace(null); }}>
         <DialogContent>

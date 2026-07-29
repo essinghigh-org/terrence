@@ -83,9 +83,17 @@ test("logs in, stores the token, and navigates home", async () => {
 });
 
 test("creates a workspace from the modal", async () => {
-  const fetchMock = mock(async (): Promise<Response> =>
-    json({ data: { id: "ws-1", attributes: { name: "production" } } }),
-  );
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/github-app/installations") {
+      return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
+    }
+    if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
+      return json({ data: { id: "ws-1", attributes: { name: "production" } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
   const onCreated = mock((): void => {
     // Intentional callback mock
   });
@@ -105,9 +113,10 @@ test("creates a workspace from the modal", async () => {
   changeInput(asElement(view.getByLabelText("Execution Engine")), "terraform");
   changeInput(asElement(view.getByLabelText(/Engine Version/)), "1.9.3");
   // Switch source to VCS so Repository Identifier fields appear
-  changeInput(asElement(view.getByLabelText("Workspace Source")), "vcs");
+  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
+  await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
-  changeInput(asElement(view.getByLabelText("GitHub App Installation ID")), "ghain-123");
+  fireEvent.change(view.getByLabelText("VCS Connection"), { target: { value: "github-app:ghain-123" } });
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
@@ -115,9 +124,12 @@ test("creates a workspace from the modal", async () => {
   });
 
   await waitFor((): void => { expect(onCreated).toHaveBeenCalledTimes(1); });
-  const [workspaceUrl, workspaceOptions] = fetchMock.mock.calls[0]!;
+  const workspaceCall = fetchMock.mock.calls.find(([input, init]): boolean =>
+    getUrlString(input) === "/api/v2/organizations/acme/workspaces" && init?.method === "POST");
+  if (workspaceCall === undefined) throw new Error("Expected workspace create request");
+  const [workspaceUrl, workspaceOptions] = workspaceCall;
   expect(getUrlString(workspaceUrl)).toBe("/api/v2/organizations/acme/workspaces");
-  expect(JSON.parse((workspaceOptions as RequestInit).body as string)).toEqual({
+  expect(JSON.parse(workspaceOptions!.body as string)).toEqual({
     data: {
       attributes: {
         name: "production",
@@ -133,12 +145,23 @@ test("creates a workspace from the modal", async () => {
       type: "workspaces",
     },
   });
-  expect(view.getByLabelText("Repository Identifier").value).toBe("");
-  expect(view.getByLabelText("GitHub App Installation ID").value).toBe("");
+  expect(view.queryByLabelText("Repository Identifier")).toBeNull();
+  expect(view.queryByLabelText("VCS Connection")).toBeNull();
 });
 
 test("opens workspace creation from the workspace list", async () => {
-  globalThis.fetch = mock(async (): Promise<Response> => json({ data: [] })) as typeof fetch;
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    if (getUrlString(input) === "/api/v2/organizations/acme") {
+      return json({
+        data: {
+          attributes: {
+            permissions: { "can-manage-workspaces": true },
+          },
+        },
+      });
+    }
+    return json({ data: [] });
+  }) as typeof fetch;
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
       <Routes>
@@ -147,14 +170,21 @@ test("opens workspace creation from the workspace list", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("No workspaces found")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New workspace" }));
   expect(view.getByRole("heading", { name: "New Workspace" })).toBeTruthy();
   expect(view.getByLabelText("Execution Engine")).toBeTruthy();
 });
 
 test("rejects a partially configured workspace VCS connection", async () => {
-  const fetchMock = mock(async (): Promise<Response> => json({ data: { id: "unexpected" } }));
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme/github-app/installations") {
+      return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
+    }
+    if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
   globalThis.fetch = fetchMock as typeof fetch;
   const view = render(
     <>
@@ -172,13 +202,14 @@ test("rejects a partially configured workspace VCS connection", async () => {
     </>,
   );
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
-  changeInput(asElement(view.getByLabelText("Workspace Source")), "vcs");
+  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
+  await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
     if (form !== null) fireEvent.submit(form);
   });
-  expect(fetchMock).toHaveBeenCalledTimes(0);
+  expect(fetchMock.mock.calls.some(([, init]): boolean => init?.method === "POST")).toBe(false);
   await waitFor((): void => {
     expect(view.getByText("Incomplete VCS connection")).toBeTruthy();
   });
@@ -188,7 +219,12 @@ test("does not report a successful latest run for a workspace with no runs", asy
   globalThis.fetch = mock(async (input: unknown): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
-      return json({ data: { id: "ws-1", attributes: { name: "production" } } });
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: { name: "production" },
+        },
+      });
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     return json({ data: [] });
@@ -223,6 +259,10 @@ test("creates, edits, and deletes a workspace variable", async () => {
             "iac-binary": "tofu",
             "terraform-version": "latest",
             locked: false,
+            permissions: {
+              "can-read-variable": true,
+              "can-update-variable": true,
+            },
           },
         },
       });
@@ -308,10 +348,15 @@ test("updates workspace execution and auto-apply settings", async () => {
       id: "ws-1",
       attributes: {
         name: "production",
+        description: "Production infrastructure",
         "auto-apply": false,
         "auto-apply-run-trigger": false,
+        "execution-mode": "remote",
+        "global-remote-state": false,
         "iac-binary": "tofu",
+        "project-remote-state": false,
         "terraform-version": "latest",
+        "working-directory": null,
         locked: false,
         permissions: { "can-update": true },
       },
@@ -344,8 +389,12 @@ test("updates workspace execution and auto-apply settings", async () => {
 
   await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "settings" }));
+  changeInput(asElement(view.getByLabelText("Description")), "Primary production stack");
+  fireEvent.change(view.getByLabelText("Execution mode"), { target: { value: "local" } });
   fireEvent.change(view.getByLabelText("Execution engine"), { target: { value: "terraform" } });
   changeInput(asElement(view.getByLabelText("Engine version")), "1.9.3");
+  changeInput(asElement(view.getByLabelText("Terraform working directory")), "environments/production");
+  fireEvent.change(view.getByLabelText("Remote state sharing"), { target: { value: "project" } });
   fireEvent.click(view.getByLabelText("Auto-apply API, UI, and VCS runs"));
   fireEvent.click(view.getByLabelText("Auto-apply run-triggered runs"));
   await act(async () => {
@@ -364,6 +413,12 @@ test("updates workspace execution and auto-apply settings", async () => {
       id: "ws-1",
       type: "workspaces",
       attributes: {
+        name: "production",
+        description: "Primary production stack",
+        "execution-mode": "local",
+        "working-directory": "environments/production",
+        "global-remote-state": false,
+        "project-remote-state": true,
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
         "auto-apply": true,
@@ -472,7 +527,16 @@ test("manages workspace run triggers and custom team access", async () => {
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
-      return json({ data: { id: "ws-1", attributes: { name: "production", locked: false } } });
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            locked: false,
+            permissions: { "can-update": true },
+          },
+        },
+      });
     }
     if (url.includes("/organizations/acme/workspaces?")) {
       return json({
@@ -603,7 +667,16 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
-      return json({ data: { id: "ws-1", attributes: { name: "production", locked: false } } });
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            locked: false,
+            permissions: { "can-update": true },
+          },
+        },
+      });
     }
     if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === undefined) {
       return json({ data: configurations });
@@ -822,6 +895,7 @@ test("displays run cost and policy check results", async () => {
           attributes: {
             message: "Review production changes",
             status: "policy_soft_failed",
+            permissions: { "can-override-policy-check": true },
             "created-at": "2026-07-28T12:00:00.000Z",
           },
         },
@@ -858,9 +932,6 @@ test("displays run cost and policy check results", async () => {
         }],
       });
     }
-    if (url === "/api/v2/runs/run-policy/actions/override-policy" && init?.method === "POST") {
-      return new Response(null, { status: 202 });
-    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as typeof fetch;
@@ -884,13 +955,104 @@ test("displays run cost and policy check results", async () => {
   expect(view.getByText("2 of 3")).toBeTruthy();
   expect(view.getByText("Restrict regions — 1 violation: eu-west-3")).toBeTruthy();
   expect(view.getByText("polchk-regions")).toBeTruthy();
-  fireEvent.click(view.getByRole("button", { name: "Override policy" }));
-  await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      getUrlString(input) === "/api/v2/runs/run-policy/actions/override-policy"
-      && init?.method === "POST"
-    )).toBeTrue();
-  });
+  expect(view.getByRole("button", { name: "Override policy" })).toBeTruthy();
+  expect(view.queryByRole("button", { name: "Confirm & Apply" })).toBeNull();
+});
+
+test("keeps advisory policy failures non-blocking and names the policy", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/runs/run-advisory") {
+      return json({
+        data: {
+          id: "run-advisory",
+          attributes: {
+            message: "Review advisory policy",
+            status: "planned",
+            source: "github",
+            "trigger-reason": "pull_request",
+            permissions: {},
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/runs/run-advisory/plan") {
+      return json({ data: { attributes: { status: "finished" } } });
+    }
+    if (url === "/api/v2/applies/apply-run-advisory") {
+      return json({ data: { attributes: { status: "pending" } } });
+    }
+    if (url === "/api/v2/plans/plan-run-advisory/json-output") {
+      return json({ resource_changes: [] });
+    }
+    if (url === "/api/v2/runs/run-advisory/policy-checks") {
+      return json({
+        data: [
+          {
+            id: "pchk-advisory",
+            attributes: {
+              status: "failed",
+              "policy-name": "Tag recommendations",
+              "enforcement-level": "advisory",
+              result: {
+                "total-failed": 1,
+                "hard-failed": 0,
+                "soft-failed": 0,
+                "advisory-failed": 1,
+              },
+            },
+          },
+          {
+            id: "pchk-advisory-error",
+            attributes: {
+              status: "errored",
+              "policy-name": "Optional naming advice",
+              "enforcement-level": "advisory",
+              result: { error: "Advisory service unavailable" },
+            },
+          },
+        ],
+      });
+    }
+    if (url === "/api/v2/runs/run-advisory/run-events") {
+      return json({
+        data: [{
+          id: "event-advisory-created",
+          attributes: {
+            action: "create",
+            details: { source: "github", triggerReason: "pull_request" },
+          },
+        }],
+      });
+    }
+    if (url.endsWith("/logs") || url.endsWith("/comments")) {
+      return json({ data: [] });
+    }
+    if (url.endsWith("/cost-estimate")) return json({ data: null });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-advisory"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
+          element={<RunDetail />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await view.findByText("Tag recommendations");
+  expect(view.getByText(/Pull request · GitHub · Created/)).toBeTruthy();
+  expect(view.getByText("Pull request from GitHub")).toBeTruthy();
+  expect(view.getByText("Optional naming advice")).toBeTruthy();
+  expect(view.getByText("passed · 2 advisory issues")).toBeTruthy();
+  expect(view.getByText("1 advisory failure")).toBeTruthy();
+  expect(view.getByText("advisory failed")).toBeTruthy();
+  expect(view.getByText("advisory errored")).toBeTruthy();
+  expect(view.getByText("Advisory service unavailable")).toBeTruthy();
+  expect(view.getByText("pchk-advisory")).toBeTruthy();
 });
 
 test("queues a run, displays its logs, and applies it", async () => {
@@ -916,7 +1078,12 @@ test("queues a run, displays its logs, and applies it", async () => {
       return json({
         data: {
           id: "run-12345678",
-          attributes: { message: "Queued manually via UI", status: "planned" },
+          attributes: {
+            message: "Queued manually via UI",
+            status: "planned",
+            actions: { "is-confirmable": true },
+            permissions: { "can-apply": true },
+          },
         },
       });
     }
@@ -1019,6 +1186,9 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
+    if (url === "/api/v2/organizations/acme" && init?.method === undefined) {
+      return json({ data: { attributes: { permissions: { "can-manage-workspaces": true } } } });
+    }
     if (url.includes("/organizations/acme/varsets?") && init?.method === undefined) {
       return json({ data: sets });
     }
@@ -1116,6 +1286,70 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
 
   return { fetchMock, variableSet, shared };
 };
+
+test("keeps variable sets readable without workspace management permission", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url.includes("/organizations/acme/varsets?")) {
+      return json({
+        data: [{
+          id: "varset-shared",
+          attributes: {
+            name: "Shared credentials",
+            description: null,
+            global: false,
+            "var-count": 1,
+            "workspace-count": 0,
+          },
+          relationships: { workspaces: { data: [] } },
+        }],
+      });
+    }
+    if (url.includes("/organizations/acme/workspaces?")) return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
+    }
+    if (url.includes("/varsets/varset-shared/relationships/vars?")) {
+      return json({
+        data: [{
+          id: "var-token",
+          attributes: {
+            key: "API_TOKEN",
+            value: null,
+            category: "env",
+            sensitive: true,
+            hcl: false,
+            description: null,
+          },
+        }],
+      });
+    }
+    throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
+      <Routes>
+        <Route path="/app/:orgName/variable-sets" element={<VariableSets />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await view.findByText("Shared credentials");
+  expect(view.queryByRole("button", { name: "New variable set" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Workspaces" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Delete" })).toBeNull();
+
+  fireEvent.click(view.getByRole("button", { name: "Variables" }));
+  const body = within(asElement(window.document.body));
+  await body.findByText("API_TOKEN");
+  expect(body.queryByRole("button", { name: "Add variable" })).toBeNull();
+  expect(body.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(body.queryByRole("button", { name: "Delete" })).toBeNull();
+  expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
+});
 
 test("creates variable sets and toggles global scope", async () => {
   const { fetchMock } = createVarsetsFetchMock();

@@ -57,6 +57,8 @@ type AuthReqCtx = Readonly<{
   orgId?: string | null;
   teamId?: string | null;
   tokenError?: string | null;
+  params?: Readonly<Record<string, string | undefined>>;
+  request?: RequestInfo;
   body?: unknown;
   set: SetObj;
 }>;
@@ -123,21 +125,80 @@ function accessTokenDocument(
   };
 }
 
-async function revokeRefreshFamily(familyId: string, revokedAt = Date.now()): Promise<void> {
-  await db.transaction(async (tx: unknown): Promise<void> => {
+async function revokeRefreshFamily(
+  familyId: string,
+  userId: string,
+  revokedAt = Date.now(),
+): Promise<boolean> {
+  return db.transaction(async (tx: unknown): Promise<boolean> => {
     const t = tx as typeof db;
     const family = await t.query.refreshSessions.findMany({
-      where: eq(refreshSessions.familyId, familyId),
+      where: and(
+        eq(refreshSessions.familyId, familyId),
+        eq(refreshSessions.userId, userId),
+      ),
       columns: { accessTokenId: true },
     });
+    if (family.length === 0) return false;
     await t.update(refreshSessions)
       .set({ revokedAt })
-      .where(eq(refreshSessions.familyId, familyId));
+      .where(and(
+        eq(refreshSessions.familyId, familyId),
+        eq(refreshSessions.userId, userId),
+      ));
     const accessTokenIds = [...new Set(family.map((session): string => session.accessTokenId))];
     if (accessTokenIds.length > 0) {
-      await t.delete(apiTokens).where(inArray(apiTokens.id, accessTokenIds));
+      await t.delete(apiTokens).where(and(
+        inArray(apiTokens.id, accessTokenIds),
+        eq(apiTokens.userId, userId),
+      ));
     }
+    return true;
   });
+}
+
+function browserSessionResources(
+  sessions: readonly Readonly<typeof refreshSessions.$inferSelect>[],
+  currentAccessTokenId: string | null,
+): Record<string, unknown>[] {
+  const families = new Map<string, {
+    active: boolean;
+    createdAt: number;
+    current: boolean;
+    expiresAt: number;
+    lastRotatedAt: number | null;
+  }>();
+  for (const session of sessions) {
+    const existing = families.get(session.familyId);
+    families.set(session.familyId, {
+      active: (existing?.active ?? false) || session.rotatedAt === null,
+      createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
+      current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId,
+      expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
+      lastRotatedAt: session.rotatedAt === null
+        ? existing?.lastRotatedAt ?? null
+        : Math.max(existing?.lastRotatedAt ?? session.rotatedAt, session.rotatedAt),
+    });
+  }
+
+  return [...families.entries()]
+    .filter(([, family]): boolean => family.active)
+    .sort(([, left], [, right]): number => {
+      if (left.current !== right.current) return right.current ? 1 : -1;
+      return (right.lastRotatedAt ?? right.createdAt) - (left.lastRotatedAt ?? left.createdAt);
+    })
+    .map(([familyId, family]): Record<string, unknown> => ({
+      id: familyId,
+      type: "browser-sessions",
+      attributes: {
+        "created-at": new Date(family.createdAt).toISOString(),
+        "last-rotated-at": family.lastRotatedAt === null
+          ? null
+          : new Date(family.lastRotatedAt).toISOString(),
+        "expires-at": new Date(family.expiresAt).toISOString(),
+        current: family.current,
+      },
+    }));
 }
 
 function refreshUnauthorized(
@@ -315,7 +376,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
       const now = Date.now();
       if (current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= now) {
-        await revokeRefreshFamily(current.familyId, now);
+        await revokeRefreshFamily(current.familyId, current.userId, now);
         return refreshUnauthorized(
           set,
           request,
@@ -324,7 +385,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       }
       const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
       if (user === undefined) {
-        await revokeRefreshFamily(current.familyId, now);
+        await revokeRefreshFamily(current.familyId, current.userId, now);
         return refreshUnauthorized(set, request, "Refresh session is invalid");
       }
 
@@ -365,7 +426,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         return true;
       });
       if (!rotated) {
-        await revokeRefreshFamily(current.familyId, now);
+        await revokeRefreshFamily(current.familyId, current.userId, now);
         return refreshUnauthorized(set, request, "Refresh token reuse detected");
       }
 
@@ -380,7 +441,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const current = await db.query.refreshSessions.findFirst({
           where: eq(refreshSessions.tokenHash, tokenHash(presentedToken)),
         });
-        if (current !== undefined) await revokeRefreshFamily(current.familyId);
+        if (current !== undefined) await revokeRefreshFamily(current.familyId, current.userId);
       });
     }
     clearRefreshCookie(set, request);
@@ -471,6 +532,51 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     const synthetic = { id: `service-user-${org.id}`, username: `${org.name}-service-user` };
     return { data: userResource(synthetic, { id: org.id, type: "organizations" }) };
+  })
+  .get("/api/v2/account/sessions", async ({ user, token, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    (set.headers as Record<string, string | number>)["Cache-Control"] = "no-store";
+    const sessions = await db.query.refreshSessions.findMany({
+      where: and(
+        eq(refreshSessions.userId, user.id),
+        isNull(refreshSessions.revokedAt),
+        gt(refreshSessions.expiresAt, Date.now()),
+      ),
+    });
+    return { data: browserSessionResources(sessions, token?.id ?? null) };
+  })
+  .delete("/api/v2/account/sessions/:family_id", async ({ params, request, user, token, set }: AuthReqCtx): Promise<unknown> => {
+    const familyId = params?.family_id ?? "";
+    if (user === null || user === undefined || familyId === "") {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const current = await withRefreshRotationLock(async (): Promise<boolean | null> => {
+      const activeFamily = await db.query.refreshSessions.findMany({
+        where: and(
+          eq(refreshSessions.familyId, familyId),
+          eq(refreshSessions.userId, user.id),
+          isNull(refreshSessions.revokedAt),
+          gt(refreshSessions.expiresAt, Date.now()),
+        ),
+        columns: { accessTokenId: true, rotatedAt: true },
+      });
+      if (!activeFamily.some((session): boolean => session.rotatedAt === null)) return null;
+      const isCurrent = token !== null
+        && token !== undefined
+        && activeFamily.some((session): boolean => session.accessTokenId === token.id);
+      return await revokeRefreshFamily(familyId, user.id) ? isCurrent : null;
+    });
+    if (current === null) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (current) clearRefreshCookie(set, request);
+    (set as { status: number }).status = 204;
+    return undefined;
   })
   .patch("/api/v2/account/update", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {

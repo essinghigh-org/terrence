@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +23,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
 
@@ -50,6 +52,76 @@ export type VcsWorkspace = {
   };
 };
 
+type GitHubAppInstallation = Readonly<{
+  id: string;
+  attributes: Readonly<{ name: string }>;
+}>;
+
+type OAuthClient = Readonly<{
+  id: string;
+  attributes: Readonly<{
+    name: string;
+    "service-provider"?: string;
+    "service-provider-display-name"?: string;
+  }>;
+}>;
+
+type OAuthToken = Readonly<{
+  id: string;
+  attributes: Readonly<{ "service-provider-user"?: string | null }>;
+}>;
+
+export type VcsConnection = Readonly<{
+  id: string;
+  kind: "github-app" | "oauth-token";
+  label: string;
+  value: string;
+}>;
+
+// oxlint-disable-next-line react/only-export-components -- shared by the create and settings forms without adding a third file
+export async function loadOrganizationVcsConnections(
+  orgName: string,
+  signal?: AbortSignal,
+): Promise<VcsConnection[]> {
+  const options = signal === undefined ? {} : { signal };
+  const [githubResponse, oauthResponse] = await Promise.all([
+    fetchApi(`/organizations/${encodeURIComponent(orgName)}/github-app/installations`, options),
+    fetchApi(`/organizations/${encodeURIComponent(orgName)}/oauth-clients`, options),
+  ]) as [
+    { data?: GitHubAppInstallation[] },
+    { data?: OAuthClient[] },
+  ];
+  const installations = Array.isArray(githubResponse.data) ? githubResponse.data : [];
+  const clients = Array.isArray(oauthResponse.data) ? oauthResponse.data : [];
+  const oauthConnections = await Promise.all(clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
+    const response = await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, options) as {
+      data?: OAuthToken[];
+    };
+    const tokens = Array.isArray(response.data) ? response.data : [];
+    const provider = client.attributes["service-provider-display-name"]
+      ?? client.attributes["service-provider"]
+      ?? "OAuth";
+    return tokens.map((token: OAuthToken): VcsConnection => {
+      const user = token.attributes["service-provider-user"];
+      return {
+        id: token.id,
+        kind: "oauth-token",
+        label: `${client.attributes.name} — ${provider}${typeof user === "string" && user !== "" ? ` (${user})` : ""}`,
+        value: `oauth-token:${token.id}`,
+      };
+    });
+  }));
+  return [
+    ...installations.map((installation: GitHubAppInstallation): VcsConnection => ({
+      id: installation.id,
+      kind: "github-app",
+      label: `${installation.attributes.name} — GitHub App`,
+      value: `github-app:${installation.id}`,
+    })),
+    ...oauthConnections.flat(),
+  ];
+}
+
 const entries = (value: string): string[] =>
   value.split(/[\r\n,]+/).map((entry: string): string => entry.trim()).filter(Boolean);
 
@@ -60,14 +132,30 @@ export function WorkspaceVcs({
   workspace: VcsWorkspace;
   onSaved: (workspace: VcsWorkspace) => void;
 }>): React.JSX.Element {
+  const { orgName = "" } = useParams<{ orgName?: string }>();
   const initialRepo = workspace.attributes["vcs-repo"] ?? null;
+  const initialConnection: VcsConnection | null = initialRepo?.githubAppInstallationId != null
+    ? {
+        id: initialRepo.githubAppInstallationId,
+        kind: "github-app",
+        label: "Current GitHub App connection",
+        value: `github-app:${initialRepo.githubAppInstallationId}`,
+      }
+    : initialRepo?.oauthTokenId != null
+      ? {
+          id: initialRepo.oauthTokenId,
+          kind: "oauth-token",
+          label: "Current OAuth connection",
+          value: `oauth-token:${initialRepo.oauthTokenId}`,
+        }
+      : null;
   const [connected, setConnected] = useState(initialRepo !== null);
   const [identifier, setIdentifier] = useState(initialRepo?.identifier ?? "");
   const [branch, setBranch] = useState(initialRepo?.branch ?? "");
-  const [githubAppInstallationId, setGithubAppInstallationId] = useState(
-    initialRepo?.githubAppInstallationId ?? "",
-  );
-  const [oauthTokenId, setOauthTokenId] = useState(initialRepo?.oauthTokenId ?? "");
+  const [connectionValue, setConnectionValue] = useState(initialConnection?.value ?? "");
+  const [connections, setConnections] = useState<VcsConnection[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState("");
   const [workingDirectory, setWorkingDirectory] = useState(
     workspace.attributes["working-directory"] ?? "",
   );
@@ -91,19 +179,49 @@ export function WorkspaceVcs({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
-  const canUpdate = workspace.attributes.permissions?.["can-update"] !== false;
+  const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
+  const displayedConnections = initialConnection !== null
+    && !connections.some((connection: VcsConnection): boolean => connection.value === initialConnection.value)
+    ? [initialConnection, ...connections]
+    : connections;
+
+  useEffect((): (() => void) | undefined => {
+    if (!canUpdate || orgName === "") return undefined;
+    const controller = new AbortController();
+    setConnectionsLoading(true);
+    setConnectionsError("");
+    void loadOrganizationVcsConnections(orgName, controller.signal)
+      .then((loaded: VcsConnection[]): void => {
+        if (!controller.signal.aborted) setConnections(loaded);
+      })
+      .catch((caught: unknown): void => {
+        if (!controller.signal.aborted) {
+          setConnectionsError(
+            caught instanceof Error ? caught.message : "Registered VCS connections could not be loaded.",
+          );
+        }
+      })
+      .finally((): void => {
+        if (!controller.signal.aborted) setConnectionsLoading(false);
+      });
+    return (): void => {
+      controller.abort();
+    };
+  }, [canUpdate, orgName]);
 
   const save = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canUpdate) return;
     const normalizedIdentifier = identifier.trim();
-    const normalizedInstallationId = githubAppInstallationId.trim();
-    const normalizedOauthTokenId = oauthTokenId.trim();
+    const selectedConnection = displayedConnections.find(
+      (connection: VcsConnection): boolean => connection.value === connectionValue,
+    );
     if (normalizedIdentifier === "") {
       setError("Repository identifier is required.");
       return;
     }
-    if ((normalizedInstallationId === "") === (normalizedOauthTokenId === "")) {
-      setError("Provide exactly one GitHub App installation ID or OAuth token ID.");
+    if (selectedConnection === undefined) {
+      setError("Select a registered VCS connection.");
       return;
     }
 
@@ -121,8 +239,12 @@ export function WorkspaceVcs({
               "vcs-repo": {
                 identifier: normalizedIdentifier,
                 branch: branch.trim() === "" ? null : branch.trim(),
-                "github-app-installation-id": normalizedInstallationId === "" ? null : normalizedInstallationId,
-                "oauth-token-id": normalizedOauthTokenId === "" ? null : normalizedOauthTokenId,
+                "github-app-installation-id": selectedConnection.kind === "github-app"
+                  ? selectedConnection.id
+                  : null,
+                "oauth-token-id": selectedConnection.kind === "oauth-token"
+                  ? selectedConnection.id
+                  : null,
                 "ingress-submodules": ingressSubmodules,
                 "tags-regex": tagsRegex.trim() === "" ? null : tagsRegex.trim(),
               },
@@ -147,7 +269,7 @@ export function WorkspaceVcs({
   };
 
   const disconnect = async (): Promise<void> => {
-    if (!window.confirm("Disconnect this workspace from version control?")) return;
+    if (!canUpdate || !window.confirm("Disconnect this workspace from version control?")) return;
     setSaving(true);
     setSaved(false);
     setError("");
@@ -204,42 +326,35 @@ export function WorkspaceVcs({
               />
               <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
             </Field>
-            <FieldSet disabled={!canUpdate}>
-              <FieldLegend variant="label">VCS connection</FieldLegend>
-              <FieldDescription>Provide exactly one registered VCS connection ID.</FieldDescription>
-              <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
-                <Field data-disabled={!canUpdate}>
-                  <FieldLabel htmlFor="vcs-github-app">GitHub App installation ID</FieldLabel>
-                  <Input
-                    id="vcs-github-app"
-                    value={githubAppInstallationId}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                      setGithubAppInstallationId(event.target.value);
-                    }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                      setGithubAppInstallationId(event.currentTarget.value);
-                    }}
-                    placeholder="ghain-..."
-                    disabled={!canUpdate}
-                  />
-                </Field>
-                <Field data-disabled={!canUpdate}>
-                  <FieldLabel htmlFor="vcs-oauth-token">OAuth token ID</FieldLabel>
-                  <Input
-                    id="vcs-oauth-token"
-                    value={oauthTokenId}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                      setOauthTokenId(event.target.value);
-                    }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                      setOauthTokenId(event.currentTarget.value);
-                    }}
-                    placeholder="ot-..."
-                    disabled={!canUpdate}
-                  />
-                </Field>
-              </FieldGroup>
-            </FieldSet>
+            <Field data-disabled={!canUpdate}>
+              <FieldLabel htmlFor="vcs-connection">VCS connection</FieldLabel>
+              <Select
+                id="vcs-connection"
+                value={connectionValue}
+                onValueChange={setConnectionValue}
+                disabled={!canUpdate || connectionsLoading}
+              >
+                <SelectItem value="">
+                  {connectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
+                </SelectItem>
+                {displayedConnections.map((connection: VcsConnection): React.JSX.Element => (
+                  <SelectItem key={connection.value} value={connection.value}>
+                    {connection.label}
+                  </SelectItem>
+                ))}
+              </Select>
+              {connectionsError !== "" ? (
+                <p role="alert" className="text-sm text-destructive">
+                  Registered VCS connections could not be loaded. The current connection can still be preserved.
+                </p>
+              ) : (
+                <FieldDescription>
+                  {displayedConnections.length === 0 && !connectionsLoading
+                    ? "No registered connections are available. Add one in organization VCS settings."
+                    : "Choose a registered GitHub App or OAuth connection."}
+                </FieldDescription>
+              )}
+            </Field>
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>
                 <FieldLabel htmlFor="vcs-branch">VCS branch</FieldLabel>

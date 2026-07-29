@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { userResource } from "../../src/lib/response";
+import { applyResource, planResource, userResource } from "../../src/lib/response";
 
 describe("userResource", () => {
   it("serializes a full user", () => {
@@ -54,13 +54,13 @@ describe("userResource", () => {
 
   it("generates avatar URL from email hash", () => {
     const result = userResource({ id: "u-1", username: "x", email: "test@test.com" });
-    const avatarUrl = result.attributes["avatar-url"] as string;
+    const avatarUrl = result.attributes["avatar-url"];
     expect(avatarUrl).toInclude("gravatar.com/avatar/");
   });
 
   it("falls back to user id for avatar when email is empty", () => {
     const result = userResource({ id: "user-fallback", username: "y", email: "" });
-    const avatarUrl = result.attributes["avatar-url"] as string;
+    const avatarUrl = result.attributes["avatar-url"];
     expect(avatarUrl).toInclude("user-fallback");
   });
 
@@ -94,5 +94,68 @@ describe("userResource", () => {
     expect((rel.links as Record<string, string>).related).toBe(
       "/api/v2/users/user-rel/authentication-tokens",
     );
+  });
+});
+
+describe("run phase resources", () => {
+  it("keeps resource counts unknown until a phase reports them", () => {
+    const request = { url: "http://terrence.test/api/v2/runs/run-pending/plan" };
+    const pending = {
+      id: "run-pending",
+      status: "pending",
+      planResourceAdditions: null,
+      planResourceChanges: null,
+      planResourceDestructions: null,
+      applyResourceAdditions: null,
+      applyResourceChanges: null,
+      applyResourceDestructions: null,
+    } as unknown as Parameters<typeof planResource>[0];
+    const finished = {
+      ...pending,
+      id: "run-finished",
+      status: "applied",
+      planResourceAdditions: 0,
+      planResourceChanges: 0,
+      planResourceDestructions: 0,
+      applyResourceAdditions: 0,
+      applyResourceChanges: 0,
+      applyResourceDestructions: 0,
+    } as unknown as Parameters<typeof planResource>[0];
+
+    const pendingPlan = planResource(pending, request).attributes as Record<string, unknown>;
+    const pendingApply = applyResource(pending, request).attributes as Record<string, unknown>;
+    const finishedPlan = planResource(finished, request).attributes as Record<string, unknown>;
+    const finishedApply = applyResource(finished, request).attributes as Record<string, unknown>;
+    expect(pendingPlan["resource-additions"]).toBeNull();
+    expect(pendingApply["resource-additions"]).toBeNull();
+    expect(finishedPlan["resource-additions"]).toBe(0);
+    expect(finishedApply["resource-additions"]).toBe(0);
+  });
+
+  it("attributes terminal failures to the phase that actually started", () => {
+    const request = { url: "http://terrence.test/api/v2/runs/run-phase/plan" };
+    const failedPlan = {
+      id: "run-plan-failed",
+      status: "errored",
+      statusTimestamps: {
+        "planning-at": "2026-07-29T09:00:00.000Z",
+        "errored-at": "2026-07-29T09:00:01.000Z",
+      },
+    } as unknown as Parameters<typeof planResource>[0];
+    const failedApply = {
+      id: "run-apply-failed",
+      status: "errored",
+      statusTimestamps: {
+        "planning-at": "2026-07-29T09:00:00.000Z",
+        "planned-at": "2026-07-29T09:00:01.000Z",
+        "applying-at": "2026-07-29T09:00:02.000Z",
+        "errored-at": "2026-07-29T09:00:03.000Z",
+      },
+    } as unknown as Parameters<typeof planResource>[0];
+
+    expect((planResource(failedPlan, request).attributes as Record<string, unknown>).status).toBe("errored");
+    expect((applyResource(failedPlan, request).attributes as Record<string, unknown>).status).toBe("pending");
+    expect((planResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("finished");
+    expect((applyResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("errored");
   });
 });

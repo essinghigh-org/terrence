@@ -13,12 +13,12 @@ export type BadgeProps = Readonly<{
 }> & DeepReadonly<HTMLAttributes<HTMLDivElement>>;
 
 export function Badge({ className = "", variant = "default", ...props }: BadgeProps): JSX.Element {
-  const baseStyle = "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
+  const baseStyle = "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold leading-5 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
   const variantStyles = {
-    default: "bg-blue-600 text-white hover:bg-blue-700",
-    secondary: "bg-gray-100 text-gray-900 hover:bg-gray-200",
-    destructive: "bg-red-500 text-white hover:bg-red-600",
-    outline: "text-gray-900 border border-gray-200",
+    default: "bg-primary text-primary-foreground",
+    secondary: "bg-secondary text-secondary-foreground",
+    destructive: "bg-destructive text-destructive-foreground",
+    outline: "border border-border text-foreground",
   };
 
   const styleClass = variantStyles[variant];

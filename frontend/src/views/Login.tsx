@@ -1,76 +1,99 @@
 import { useState } from "react";
-import { fetchApi, setAuthToken } from "../lib/api";
-import { useNavigate, Link } from "react-router-dom";
-import { Button } from "../components/ui/button";
-import { toast } from "../components/ui/toast";
+import { Link, useNavigate } from "react-router-dom";
+
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { fetchApi, setAuthToken } from "@/lib/api";
 
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
-  async function handleLogin(e: React.SyntheticEvent): Promise<void> {
-    e.preventDefault();
+  const handleLogin = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
     try {
-      const data = await fetchApi("/users/login", {
+      const response = await fetchApi("/users/login", {
         method: "POST",
         body: JSON.stringify({
-          data: { attributes: { username, password, "browser-session": true } }
-        })
-      }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
-      setAuthToken(data.data.attributes.token, data.data.attributes["expired-at"], true);
-      await navigate(data.data.attributes["must-change-password"] === true ? "/app/account" : "/app");
-    } catch (_err: unknown) {
-      toast.add({ title: "Login failed", description: "Check your username and password.", type: "error" });
+          data: { attributes: { username, password, "browser-session": true } },
+        }),
+      }) as {
+        data: {
+          attributes: {
+            token: string;
+            "expired-at"?: string | null;
+            "must-change-password"?: boolean;
+          };
+        };
+      };
+      setAuthToken(response.data.attributes.token, response.data.attributes["expired-at"], true);
+      await navigate(response.data.attributes["must-change-password"] === true ? "/app/account" : "/app");
+    } catch (_error: unknown) {
+      setError("Check your username and password, then try again.");
+    } finally {
+      setSubmitting(false);
     }
-  }
+  };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 font-sans">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-        <div className="text-center mb-8">
-          <div className="mx-auto w-12 h-12 bg-[#111315] rounded mb-4 flex items-center justify-center">
-             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="white" />
-              <path d="M12 22V12" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M12 12L22 7" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M2 7L12 12" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+    <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      <Card className="w-full max-w-sm shadow-sm">
+        <CardHeader>
+          <div aria-hidden="true" className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground text-lg font-bold text-background">
+            T
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Sign in to Terrence</h2>
-        </div>
-
-        <form onSubmit={handleLogin} noValidate className="space-y-4">
-          <div>
-            <label htmlFor="username" className="block text-sm font-semibold text-gray-700 mb-1.5">Username</label>
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="password" className="block text-sm font-semibold text-gray-700 mb-1.5">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-            />
-          </div>
-          <Button type="submit" className="w-full bg-[#2962ff] hover:bg-[#1a4bcf] text-white font-semibold py-2 h-10 shadow-sm">
-            Sign in
-          </Button>
+          <CardTitle>Sign in to Terrence</CardTitle>
+          <CardDescription>Continue to your organizations and workspaces.</CardDescription>
+        </CardHeader>
+        <form onSubmit={handleLogin}>
+          <CardContent>
+            <FieldGroup>
+              <Field data-invalid={error !== ""}>
+                <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                <Input
+                  id="login-username"
+                  value={username}
+                  autoComplete="username"
+                  autoFocus
+                  required
+                  aria-invalid={error !== ""}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
+                />
+              </Field>
+              <Field data-invalid={error !== ""}>
+                <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                <Input
+                  id="login-password"
+                  type="password"
+                  value={password}
+                  autoComplete="current-password"
+                  required
+                  aria-invalid={error !== ""}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
+                />
+              </Field>
+              <FieldError>{error}</FieldError>
+            </FieldGroup>
+          </CardContent>
+          <CardFooter className="flex flex-col gap-2">
+            <Button type="submit" className="w-full" disabled={submitting || username === "" || password === ""}>
+              {submitting && <Spinner data-icon="inline-start" />}
+              Sign in
+            </Button>
+            <Link to="/register" className={buttonVariants({ variant: "link" })}>
+              Create account
+            </Link>
+          </CardFooter>
         </form>
-        <p className="mt-6 text-center text-sm text-gray-600">
-          Don't have an account? <Link to="/register" className="text-blue-600 hover:underline font-medium">Create account</Link>
-        </p>
-      </div>
-    </div>
+      </Card>
+    </main>
   );
 }

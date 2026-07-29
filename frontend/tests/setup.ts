@@ -50,6 +50,11 @@ elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
 (globalThis as MutableGlobal)["sessionStorage"] = win.sessionStorage;
 (globalThis as MutableGlobal)["confirm"] = win.confirm;
 (globalThis as MutableGlobal)["alert"] = win.alert;
+(globalThis as MutableGlobal)["requestAnimationFrame"] = (callback: FrameRequestCallback): number =>
+  win.setTimeout((): void => callback(Date.now()), 0);
+(globalThis as MutableGlobal)["cancelAnimationFrame"] = (handle: number): void => {
+  win.clearTimeout(handle);
+};
 
 class DummyMutationObserver {
   public observe(): void {

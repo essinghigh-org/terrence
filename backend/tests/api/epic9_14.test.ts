@@ -117,6 +117,25 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const listBody = await listRes.json();
     expect(listBody.data.length).toBe(1);
     expect(listBody.data[0].attributes.body).toBe("Approved by SRE on call");
+    expect(listBody.data[0].attributes["actor-username"]).toBe("epic914_owner");
+
+    const commentRes = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}/comments`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: { type: "comments", attributes: { body: "Ready to continue" } },
+        }),
+      }),
+    );
+    expect(commentRes.status).toBe(201);
+    expect((await commentRes.json()).data.attributes).toMatchObject({
+      body: "Ready to continue",
+      "actor-username": "epic914_owner",
+    });
 
     // Fetch plan JSON output
     const planRes = await app.handle(
@@ -200,6 +219,16 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       })
     );
     expect(bindTask.status).toBe(201);
+    const bindingsResponse = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/run-tasks`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(bindingsResponse.status).toBe(200);
+    expect((await bindingsResponse.json()).data[0].attributes).toMatchObject({
+      "run-task-name": "Security Vulnerability Scanner",
+      "run-task-enabled": true,
+    });
 
     await db.insert(runTaskResults).values({
       id: `taskrs-${crypto.randomUUID()}`,

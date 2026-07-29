@@ -13,6 +13,8 @@ describe("organization API contract", () => {
   const createdName = `${prefix}-alpha`;
   const betaName = `${prefix}-beta`;
   const gammaName = `${prefix}-gamma`;
+  const inactiveName = `${prefix}-inactive`;
+  const pendingName = `${prefix}-pending`;
   const privateName = `${prefix}-private`;
 
   const request = (path: string, auth = token, method = "GET", body?: unknown) =>
@@ -106,17 +108,23 @@ describe("organization API contract", () => {
     const createdId = crypto.randomUUID();
     const betaId = crypto.randomUUID();
     const gammaId = crypto.randomUUID();
+    const inactiveId = crypto.randomUUID();
+    const pendingId = crypto.randomUUID();
     const privateId = crypto.randomUUID();
     await db.insert(organizations).values([
       { id: createdId, name: createdName },
       { id: betaId, name: betaName },
       { id: gammaId, name: gammaName },
+      { id: inactiveId, name: inactiveName },
+      { id: pendingId, name: pendingName },
       { id: privateId, name: privateName },
     ]);
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId: createdId, role: "owner" },
       { id: crypto.randomUUID(), userId, orgId: betaId, role: "member" },
       { id: crypto.randomUUID(), userId, orgId: gammaId, role: "member" },
+      { id: crypto.randomUUID(), userId, orgId: inactiveId, role: "member", status: "inactive" },
+      { id: crypto.randomUUID(), userId, orgId: pendingId, role: "member", status: "pending" },
       { id: crypto.randomUUID(), userId: otherUserId, orgId: privateId, role: "owner" },
     ]);
     await db.insert(apiTokens).values({
@@ -145,6 +153,13 @@ describe("organization API contract", () => {
       next: expect.stringContaining("page%5Bnumber%5D=2"),
       last: expect.stringContaining("page%5Bnumber%5D=2"),
     });
+
+    const allActive = await request(`/api/v2/organizations?q=${prefix}&page[size]=100`);
+    expect((await allActive.json()).data.map((item: any) => item.attributes.name)).toEqual([
+      createdName,
+      betaName,
+      gammaName,
+    ]);
 
     const byName = await request(`/api/v2/organizations?q[name]=${betaName}`);
     expect((await byName.json()).data.map((item: any) => item.attributes.name)).toEqual([betaName]);

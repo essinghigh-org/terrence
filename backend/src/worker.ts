@@ -47,7 +47,12 @@ import {
   writeCostEstimateArtifact,
   type CostEstimateTimestamps,
 } from "./lib/cost-estimate";
-import { readPlanJsonArtifact, writePlanJsonArtifact } from "./lib/plan-json";
+import {
+  planJsonResourceCounts,
+  readPlanJsonArtifact,
+  writePlanJsonArtifact,
+  type PlanResourceCounts,
+} from "./lib/plan-json";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { recoverStaleAgentJobs } from "./lib/agent-jobs";
@@ -109,9 +114,11 @@ type RunStatusExtra = Readonly<Partial<Pick<
   | "planResourceAdditions"
   | "planResourceChanges"
   | "planResourceDestructions"
+  | "planResourceImports"
   | "applyResourceAdditions"
   | "applyResourceChanges"
   | "applyResourceDestructions"
+  | "applyResourceImports"
 >>>;
 
 async function updateRunStatus(runId: string, status: string, extra?: RunStatusExtra): Promise<void> {
@@ -146,15 +153,18 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
   void reportRunVcsStatus(runId, status);
 }
 
-/** Parse Terraform plan output to extract resource change counts (1 to add, 0 to change, 1 to destroy) */
-function parseResourceCounts(output: string): { additions: number; changes: number; destructions: number } {
-  const additions = /Plan:\s+(\d+)\s+to add/.exec(output);
-  const changes = /(\d+)\s+to change/.exec(output);
-  const destructions = /(\d+)\s+to destroy/.exec(output);
+/** Parse Terraform/OpenTofu plan and apply summaries into persisted resource counts. */
+function parseResourceCounts(output: string): PlanResourceCounts {
+  const plan = /(?:^|\n)Plan:\s*([^\n]+)/.exec(output)?.[1];
+  const apply = /Apply complete!\s+Resources:\s*([^\n]+)/.exec(output)?.[1];
+  const summary = plan ?? apply ?? "";
+  const count = (pattern: RegExp): number =>
+    Number.parseInt(pattern.exec(summary)?.[1] ?? "0", 10);
   return {
-    additions: additions !== null ? Number.parseInt(additions[1] ?? "0", 10) : 0,
-    changes: changes !== null ? Number.parseInt(changes[1] ?? "0", 10) : 0,
-    destructions: destructions !== null ? Number.parseInt(destructions[1] ?? "0", 10) : 0,
+    additions: count(plan === undefined ? /(\d+)\s+added\b/ : /(\d+)\s+to add\b/),
+    changes: count(plan === undefined ? /(\d+)\s+changed\b/ : /(\d+)\s+to change\b/),
+    destructions: count(plan === undefined ? /(\d+)\s+destroyed\b/ : /(\d+)\s+to destroy\b/),
+    imports: count(plan === undefined ? /(\d+)\s+imported\b/ : /(\d+)\s+to import\b/),
   };
 }
 
@@ -940,12 +950,15 @@ export async function executeRun(runId: string): Promise<void> {
       where: and(eq(logs.runId, runId), eq(logs.phase, "plan")),
       orderBy: [asc(logs.createdAt)],
     });
-    const resourceCounts = parseResourceCounts(planLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
+    const resourceCounts =
+      (planJson === undefined ? undefined : planJsonResourceCounts(planJson))
+      ?? parseResourceCounts(planLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
 
     await updateRunStatus(runId, "planned", {
       planResourceAdditions: resourceCounts.additions,
       planResourceChanges: resourceCounts.changes,
       planResourceDestructions: resourceCounts.destructions,
+      planResourceImports: resourceCounts.imports,
     });
     await writeLog(runId, "plan", `[terrence] Plan completed successfully.`);
 
@@ -1191,6 +1204,7 @@ export async function executeApply(runId: string): Promise<void> {
       applyResourceAdditions: applyResourceCounts.additions,
       applyResourceChanges: applyResourceCounts.changes,
       applyResourceDestructions: applyResourceCounts.destructions,
+      applyResourceImports: applyResourceCounts.imports,
     });
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);

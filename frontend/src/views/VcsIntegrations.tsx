@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -8,7 +8,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { GitBranch, Plus, Trash2, CheckCircle } from "lucide-react";
+import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
 
 type OAuthClient = Readonly<{
   readonly id: string;
@@ -17,10 +17,21 @@ type OAuthClient = Readonly<{
     readonly "service-provider": string;
     readonly "http-url"?: string;
     readonly "api-url"?: string;
-    readonly "oauth-token-ids"?: readonly string[];
+    readonly "connect-path"?: string;
+  }>;
+  readonly relationships?: Readonly<{
+    readonly "oauth-tokens"?: Readonly<{
+      readonly links?: Readonly<{ readonly related?: string }>;
+    }>;
   }>;
 }>;
 
+type OAuthToken = Readonly<{
+  readonly id: string;
+  readonly attributes: Readonly<{
+    readonly "service-provider-user"?: string | null;
+  }>;
+}>;
 
 type GitHubAppInstallation = Readonly<{
   readonly id: string;
@@ -33,63 +44,255 @@ type GitHubAppInstallation = Readonly<{
   }>;
 }>;
 
-export function VcsIntegrations(): React.JSX.Element {
+type AuthorizationDocument = Readonly<{
+  readonly data?: Readonly<{
+    readonly attributes?: Readonly<{ readonly "authorization-url"?: unknown }>;
+  }>;
+}>;
+
+const providerDefaults = {
+  github: {
+    httpUrl: "https://github.com",
+    apiUrl: "https://api.github.com",
+  },
+  github_enterprise: {
+    httpUrl: "",
+    apiUrl: "",
+  },
+  gitlab: {
+    httpUrl: "https://gitlab.com",
+    apiUrl: "https://gitlab.com/api/v4",
+  },
+  bitbucket: {
+    httpUrl: "https://bitbucket.org",
+    apiUrl: "https://api.bitbucket.org/2.0",
+  },
+} as const;
+
+type ServiceProvider = keyof typeof providerDefaults;
+type VcsAccess = "allowed" | "denied" | "error";
+
+function authorizationUrl(payload: AuthorizationDocument): string {
+  const rawUrl = payload.data?.attributes?.["authorization-url"];
+  if (typeof rawUrl !== "string" || rawUrl === "") throw new Error("The server did not return an authorization URL.");
+  let destination: URL;
+  try {
+    destination = new URL(rawUrl);
+  } catch {
+    throw new Error("The server returned an invalid authorization URL.");
+  }
+  if (
+    (destination.protocol !== "https:" && destination.protocol !== "http:")
+    || destination.username !== ""
+    || destination.password !== ""
+  ) throw new Error("The server returned an unsafe authorization URL.");
+  return destination.toString();
+}
+
+function navigateBrowser(url: string): void {
+  window.location.assign(url);
+}
+
+export function VcsIntegrations({
+  navigateExternal = navigateBrowser,
+}: Readonly<{
+  navigateExternal?: (url: string) => void;
+}> = {}): React.JSX.Element {
   const { orgName } = useParams<{ orgName?: string }>();
   const [clients, setClients] = useState<OAuthClient[]>([]);
+  const [oauthTokensByClient, setOauthTokensByClient] = useState<Record<string, readonly OAuthToken[]>>({});
   const [ghApps, setGhApps] = useState<GitHubAppInstallation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [connectingClientId, setConnectingClientId] = useState("");
+  const [startingGitHubSetup, setStartingGitHubSetup] = useState(false);
+  const [access, setAccess] = useState<Readonly<{ orgName: string; status: VcsAccess }> | null>(null);
+  const loadRequest = useRef<AbortController | null>(null);
+  const currentOrgName = orgName ?? "";
+  const currentOrgNameRef = useRef(currentOrgName);
+  currentOrgNameRef.current = currentOrgName;
+  const accessStatus: VcsAccess | "loading" = access?.orgName === currentOrgName
+    ? access.status
+    : "loading";
+  const canManageVcsSettings = accessStatus === "allowed";
 
   // Create Modal OAuth
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
-  const [serviceProvider, setServiceProvider] = useState("github");
-  const [httpUrl, setHttpUrl] = useState("https://github.com");
-  const [apiUrl, setApiUrl] = useState("https://api.github.com");
+  const [serviceProvider, setServiceProvider] = useState<ServiceProvider>("github");
+  const [httpUrl, setHttpUrl] = useState<string>(providerDefaults.github.httpUrl);
+  const [apiUrl, setApiUrl] = useState<string>(providerDefaults.github.apiUrl);
   const [key, setKey] = useState("");
   const [secret, setSecret] = useState("");
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
 
-  // Create Modal GH App
-  const [ghDialogOpen, setGhDialogOpen] = useState(false);
-  const [ghName, setGhName] = useState("");
-  const [ghInstallationId, setGhInstallationId] = useState("");
-  const [ghCreating, setGhCreating] = useState(false);
-  const [ghFormError, setGhFormError] = useState("");
+  const loadIntegrations = useCallback(async (): Promise<void> => {
+    loadRequest.current?.abort();
+    const controller = new AbortController();
+    loadRequest.current = controller;
+    const requestIsCurrent = (): boolean =>
+      !controller.signal.aborted && loadRequest.current === controller;
 
-
-  useEffect((): void => {
-    if (orgName != null) void loadIntegrations();
-  }, [orgName]);
-
-  const loadIntegrations = async (): Promise<void> => {
     setLoading(true);
     setError("");
-    try {
-      const ghRes = await fetchApi(`/organizations/${orgName ?? ""}/github-app/installations`) as { data: GitHubAppInstallation[] };
-      setGhApps(ghRes.data);
-    } catch {
-      setError("Failed to load GitHub App installations.");
-    }
+    setAccess(null);
+    setClients([]);
+    setOauthTokensByClient({});
+    setGhApps([]);
 
     try {
-      const res = await fetchApi(`/organizations/${orgName ?? ""}/oauth-clients`) as { data: OAuthClient[] };
-      setClients(res.data);
-    } catch {
-      // Ignore oauth errors for now // Oauth-clients 404s when empty/no org right now, just ignore it and display what we can.
+      if (currentOrgName === "") throw new Error("Organization not found.");
+      const encodedOrgName = encodeURIComponent(currentOrgName);
+      const organizationResponse = await fetchApi(
+        `/organizations/${encodedOrgName}`,
+        { signal: controller.signal },
+      ) as {
+        data?: {
+          attributes?: {
+            permissions?: { "can-manage-vcs-settings"?: boolean };
+          };
+        };
+      };
+      if (!requestIsCurrent()) return;
+      const allowed =
+        organizationResponse.data?.attributes?.permissions?.["can-manage-vcs-settings"] === true;
+      setAccess({ orgName: currentOrgName, status: allowed ? "allowed" : "denied" });
+      if (!allowed) return;
+
+      const [installationResult, clientResult] = await Promise.allSettled([
+        fetchApi(
+          `/organizations/${encodedOrgName}/github-app/installations`,
+          { signal: controller.signal },
+        ),
+        fetchApi(
+          `/organizations/${encodedOrgName}/oauth-clients`,
+          { signal: controller.signal },
+        ),
+      ]);
+      if (!requestIsCurrent()) return;
+      const errors: string[] = [];
+
+      if (installationResult.status === "fulfilled") {
+        const data = (installationResult.value as { data?: GitHubAppInstallation[] }).data;
+        setGhApps(Array.isArray(data) ? data : []);
+      } else {
+        errors.push("Failed to load GitHub App installations.");
+      }
+
+      if (clientResult.status === "rejected") {
+        errors.push("Failed to load OAuth clients.");
+      } else {
+        const data = (clientResult.value as { data?: OAuthClient[] }).data;
+        const loadedClients = Array.isArray(data) ? data : [];
+        setClients(loadedClients);
+        const tokenResults = await Promise.allSettled(loadedClients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
+          const related = client.relationships?.["oauth-tokens"]?.links?.related;
+          const response = await fetchApi(
+            related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
+            { signal: controller.signal },
+          ) as { data?: OAuthToken[] };
+          return [client.id, Array.isArray(response.data) ? response.data : []] as const;
+        }));
+        if (!requestIsCurrent()) return;
+        setOauthTokensByClient(Object.fromEntries(
+          tokenResults
+            .filter((result): result is PromiseFulfilledResult<readonly [string, readonly OAuthToken[]]> =>
+              result.status === "fulfilled")
+            .map((result): readonly [string, readonly OAuthToken[]] => result.value),
+        ));
+        if (tokenResults.some((result): boolean => result.status === "rejected")) {
+          errors.push("Some OAuth connection statuses could not be loaded.");
+        }
+      }
+
+      setError(errors.join(" "));
+    } catch (caught: unknown) {
+      if (!requestIsCurrent()) return;
+      setAccess({ orgName: currentOrgName, status: "error" });
+      setError(caught instanceof Error ? caught.message : "Failed to load VCS permissions.");
     } finally {
-      setLoading(false);
+      if (requestIsCurrent()) {
+        loadRequest.current = null;
+        setLoading(false);
+      }
+    }
+  }, [currentOrgName]);
+
+  useEffect((): (() => void) => {
+    setDialogOpen(false);
+    setFormError("");
+    setConnectingClientId("");
+    setStartingGitHubSetup(false);
+    setCreating(false);
+    setName("");
+    setServiceProvider("github");
+    setHttpUrl(providerDefaults.github.httpUrl);
+    setApiUrl(providerDefaults.github.apiUrl);
+    setKey("");
+    setSecret("");
+    void loadIntegrations();
+    return (): void => {
+      loadRequest.current?.abort();
+    };
+  }, [loadIntegrations]);
+
+  const requestAuthorization = async (endpoint: string): Promise<string> => {
+    const response = await fetchApi(endpoint, {
+      headers: { Accept: "application/vnd.api+json" },
+    }) as AuthorizationDocument;
+    return authorizationUrl(response);
+  };
+
+  const handleConnect = async (client: OAuthClient): Promise<void> => {
+    if (!canManageVcsSettings) return;
+    const actionOrgName = currentOrgName;
+    setConnectingClientId(client.id);
+    setError("");
+    try {
+      const connectPath = client.attributes["connect-path"]
+        ?? `/oauth-clients/${encodeURIComponent(client.id)}/connect`;
+      const destination = await requestAuthorization(connectPath);
+      if (currentOrgNameRef.current === actionOrgName) navigateExternal(destination);
+    } catch (caught: unknown) {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setError(caught instanceof Error ? caught.message : "Failed to start VCS authorization.");
+      }
+    } finally {
+      if (currentOrgNameRef.current === actionOrgName) setConnectingClientId("");
+    }
+  };
+
+  const handleGitHubSetup = async (): Promise<void> => {
+    if (!canManageVcsSettings || currentOrgName === "") return;
+    const actionOrgName = currentOrgName;
+    setStartingGitHubSetup(true);
+    setError("");
+    try {
+      const endpoint = `/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/setup`;
+      const destination = await requestAuthorization(endpoint);
+      if (currentOrgNameRef.current === actionOrgName) navigateExternal(destination);
+    } catch (caught: unknown) {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setError(caught instanceof Error ? caught.message : "Failed to start GitHub App setup.");
+      }
+    } finally {
+      if (currentOrgNameRef.current === actionOrgName) setStartingGitHubSetup(false);
     }
   };
 
   const handleCreate = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (orgName == null) return;
+    if (!canManageVcsSettings || currentOrgName === "") return;
+    if (httpUrl.trim() === "" || apiUrl.trim() === "") {
+      setFormError("HTTP URL and API URL are required.");
+      return;
+    }
+    const actionOrgName = currentOrgName;
     setCreating(true);
     setFormError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/oauth-clients`, {
+      const res = await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/oauth-clients`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -105,64 +308,42 @@ export function VcsIntegrations(): React.JSX.Element {
           },
         }),
       }) as { data: OAuthClient };
+      if (currentOrgNameRef.current !== actionOrgName) return;
       setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
+      setOauthTokensByClient((previous): Record<string, readonly OAuthToken[]> => ({
+        ...previous,
+        [res.data.id]: [],
+      }));
       setDialogOpen(false);
       setName("");
       setKey("");
       setSecret("");
+      await handleConnect(res.data);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create VCS OAuth client";
-      setFormError(msg);
+      if (currentOrgNameRef.current === actionOrgName) {
+        const msg = err instanceof Error ? err.message : "Failed to create VCS OAuth client";
+        setFormError(msg);
+      }
     } finally {
-      setCreating(false);
+      if (currentOrgNameRef.current === actionOrgName) setCreating(false);
     }
   };
-
-
-  const handleCreateGhApp = async (e: React.SyntheticEvent): Promise<void> => {
-    e.preventDefault();
-    const installationId = Number(ghInstallationId);
-    if (!Number.isSafeInteger(installationId) || installationId <= 0) {
-      setGhFormError("Installation ID must be a positive integer.");
-      return;
-    }
-    setGhCreating(true);
-    setGhFormError("");
-    try {
-      const res = await fetchApi(`/organizations/${orgName ?? ""}/github-app/installations`, {
-        method: "POST",
-        body: JSON.stringify({
-          data: {
-            type: "github-app-installations",
-            attributes: {
-              name: ghName,
-              "installation-id": installationId,
-            }
-          }
-        })
-      }) as { data: GitHubAppInstallation };
-      setGhApps((previous: readonly GitHubAppInstallation[]): GitHubAppInstallation[] => [...previous, res.data]);
-      setGhDialogOpen(false);
-      setGhName("");
-      setGhInstallationId("");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to register GitHub App Installation";
-      setGhFormError(msg);
-    } finally {
-      setGhCreating(false);
-    }
-  };
-
 
   const handleDelete = async (client: OAuthClient): Promise<void> => {
+    if (!canManageVcsSettings) return;
     if (!window.confirm(`Delete VCS OAuth client "${client.attributes.name}"?`)) return;
+    const actionOrgName = currentOrgName;
     setError("");
     try {
-      await fetchApi(`/oauth-clients/${client.id}`, { method: "DELETE" });
-      setClients((prev: readonly OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
+      await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}`, { method: "DELETE" });
+      if (currentOrgNameRef.current === actionOrgName) {
+        setClients((prev: readonly OAuthClient[]): OAuthClient[] => prev.filter((c: OAuthClient): boolean => c.id !== client.id));
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to delete OAuth Client";
-      setError(msg);
+      if (currentOrgNameRef.current === actionOrgName) {
+        const msg = err instanceof Error ? err.message : "Failed to delete OAuth Client";
+        setError(msg);
+      }
     }
   };
 
@@ -175,12 +356,42 @@ export function VcsIntegrations(): React.JSX.Element {
         </div>
       </div>
 
-      {error !== "" && (
-        <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
-          {error}
+      {accessStatus === "loading" && (
+        <Card>
+          <CardContent className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+            <Spinner className="size-5" />
+            Checking VCS access…
+          </CardContent>
+        </Card>
+      )}
+
+      {accessStatus === "denied" && (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            You do not have permission to manage VCS settings for this organization.
+          </CardContent>
+        </Card>
+      )}
+
+      {accessStatus === "error" && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
+          <span>{error}</span>
+          <Button size="sm" variant="outline" onClick={(): void => { void loadIntegrations(); }}>
+            Try again
+          </Button>
         </div>
       )}
 
+      {accessStatus === "allowed" && (
+        <>
+          {error !== "" && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
+              <span>{error}</span>
+              <Button size="sm" variant="outline" onClick={(): void => { void loadIntegrations(); }}>
+                Try again
+              </Button>
+            </div>
+          )}
 
         {/* GitHub App Installations Section */}
         <div className="mb-8">
@@ -189,8 +400,11 @@ export function VcsIntegrations(): React.JSX.Element {
               <h2 className="text-xl font-semibold">GitHub App Installations</h2>
               <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
             </div>
-            <Button onClick={(): void => { setGhDialogOpen(true); }}>
-              <Plus className="mr-1.5 size-4" /> Register GitHub App
+            <Button disabled={startingGitHubSetup} onClick={(): void => { void handleGitHubSetup(); }}>
+              {startingGitHubSetup
+                ? <Spinner data-icon="inline-start" />
+                : <Plus data-icon="inline-start" />}
+              {startingGitHubSetup ? "Opening GitHub…" : "Install GitHub App"}
             </Button>
           </div>
 
@@ -202,12 +416,19 @@ export function VcsIntegrations(): React.JSX.Element {
                     <TableHead>Name</TableHead>
                     <TableHead>Installation ID</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {ghApps.length === 0 ? (
+                  {loading ? (
                     <TableRow>
-                      <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
+                      <TableCell colSpan={4} className="h-24 text-center">
+                        <Spinner className="mx-auto size-6 text-primary" />
+                      </TableCell>
+                    </TableRow>
+                  ) : ghApps.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
                         No GitHub App installations registered.
                       </TableCell>
                     </TableRow>
@@ -215,11 +436,23 @@ export function VcsIntegrations(): React.JSX.Element {
                     ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
                       <TableRow key={app.id}>
                         <TableCell className="font-medium flex items-center gap-2">
-                          {typeof app.attributes["icon-url"] === "string" && app.attributes["icon-url"] !== "" && <img src={app.attributes["icon-url"]} className="w-6 h-6 rounded-full" alt="icon" />}
+                          {typeof app.attributes["icon-url"] === "string" && app.attributes["icon-url"] !== "" && (
+                            <img
+                              src={app.attributes["icon-url"]}
+                              className="size-6 rounded-full"
+                              alt=""
+                            />
+                          )}
                           {app.attributes.name}
                         </TableCell>
                         <TableCell>{app.attributes["installation-id"]}</TableCell>
                         <TableCell><Badge variant="outline">{app.attributes["installation-type"] ?? "Organization"}</Badge></TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">
+                            <CheckCircle data-icon="inline-start" />
+                            Connected
+                          </Badge>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -268,34 +501,64 @@ export function VcsIntegrations(): React.JSX.Element {
                   </TableCell>
                 </TableRow>
               ) : (
-                clients.map((client: OAuthClient): React.JSX.Element => (
-                  <TableRow key={client.id}>
-                    <TableCell className="font-semibold">
-                      <div className="flex items-center gap-2">
-                        <GitBranch className="size-4 text-primary" />
-                        {client.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="capitalize font-mono text-xs">
-                        {client.attributes["service-provider"]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground font-mono">
-                      {client.attributes["http-url"] ?? "https://github.com"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                        <CheckCircle className="size-3.5" /> Connected
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm" variant="destructive" onClick={(): void => { void handleDelete(client); }}>
-                        <Trash2 className="size-3.5 mr-1" /> Delete
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
+                clients.map((client: OAuthClient): React.JSX.Element => {
+                  const statusKnown = Object.prototype.hasOwnProperty.call(oauthTokensByClient, client.id);
+                  const tokens = oauthTokensByClient[client.id] ?? [];
+                  const connected = statusKnown && tokens.length > 0;
+                  const providerUser = tokens
+                    .map((token): string | null | undefined => token.attributes["service-provider-user"])
+                    .find((value): value is string => typeof value === "string" && value !== "");
+                  const connecting = connectingClientId === client.id;
+                  return (
+                    <TableRow key={client.id}>
+                      <TableCell className="font-semibold">
+                        <div className="flex items-center gap-2">
+                          <GitBranch className="size-4 text-primary" />
+                          {client.attributes.name}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="capitalize font-mono text-xs">
+                          {client.attributes["service-provider"]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground font-mono">
+                        {client.attributes["http-url"] ?? "https://github.com"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={connected ? "secondary" : "outline"}>
+                          {connected && <CheckCircle data-icon="inline-start" />}
+                          {!statusKnown
+                            ? "Status unavailable"
+                            : connected
+                              ? providerUser === undefined ? "Connected" : `Connected as ${providerUser}`
+                              : "Not connected"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-2">
+                          {statusKnown && !connected && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={connecting}
+                              onClick={(): void => { void handleConnect(client); }}
+                            >
+                              {connecting
+                                ? <Spinner data-icon="inline-start" />
+                                : <ExternalLink data-icon="inline-start" />}
+                              {connecting ? "Opening…" : "Connect"}
+                            </Button>
+                          )}
+                          <Button size="sm" variant="destructive" onClick={(): void => { void handleDelete(client); }}>
+                            <Trash2 data-icon="inline-start" />
+                            Delete
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -338,14 +601,10 @@ export function VcsIntegrations(): React.JSX.Element {
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
                 value={serviceProvider}
                 onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-                  setServiceProvider(event.target.value);
-                  if (event.target.value === "gitlab") {
-                    setHttpUrl("https://gitlab.com");
-                    setApiUrl("https://gitlab.com/api/v4");
-                  } else {
-                    setHttpUrl("https://github.com");
-                    setApiUrl("https://api.github.com");
-                  }
+                  const provider = event.target.value as ServiceProvider;
+                  setServiceProvider(provider);
+                  setHttpUrl(providerDefaults[provider].httpUrl);
+                  setApiUrl(providerDefaults[provider].apiUrl);
                 }}
               >
                 <option value="github">GitHub.com</option>
@@ -362,7 +621,10 @@ export function VcsIntegrations(): React.JSX.Element {
                   id="vcs-http-url"
                   value={httpUrl}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setHttpUrl(event.target.value); }}
-                  placeholder="https://github.com"
+                  placeholder={serviceProvider === "github_enterprise"
+                    ? "https://github.example.com"
+                    : providerDefaults[serviceProvider].httpUrl}
+                  required
                 />
               </div>
               <div className="space-y-1.5">
@@ -371,7 +633,10 @@ export function VcsIntegrations(): React.JSX.Element {
                   id="vcs-api-url"
                   value={apiUrl}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setApiUrl(event.target.value); }}
-                  placeholder="https://api.github.com"
+                  placeholder={serviceProvider === "github_enterprise"
+                    ? "https://github.example.com/api/v3"
+                    : providerDefaults[serviceProvider].apiUrl}
+                  required
                 />
               </div>
             </div>
@@ -407,56 +672,8 @@ export function VcsIntegrations(): React.JSX.Element {
           </form>
         </DialogContent>
       </Dialog>
-      <Dialog open={ghDialogOpen} onOpenChange={setGhDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <form onSubmit={handleCreateGhApp}>
-            <DialogHeader>
-              <DialogTitle>Register GitHub App Installation</DialogTitle>
-              <DialogDescription>
-                Register an installation ID of the Terrence GitHub App.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              {ghFormError !== "" && (
-                <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
-                  {ghFormError}
-                </div>
-              )}
-
-              <div className="grid gap-2">
-                <label htmlFor="gh-name" className="text-sm font-medium">Name (e.g. Org Name)</label>
-                <Input
-                  id="gh-name"
-                  value={ghName}
-                  onChange={(e): void => { setGhName(e.target.value); }}
-                  placeholder="my-github-org"
-                  required
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <label htmlFor="gh-id" className="text-sm font-medium">Installation ID</label>
-                <Input
-                  id="gh-id"
-                  type="number"
-                  value={ghInstallationId}
-                  onChange={(e): void => { setGhInstallationId(e.target.value); }}
-                  placeholder="12345678"
-                  required
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={(): void => { setGhDialogOpen(false); }} disabled={ghCreating}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={ghCreating}>
-                {ghCreating ? <Spinner className="size-4" /> : "Register"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+        </>
+      )}
     </div>
   );
 }

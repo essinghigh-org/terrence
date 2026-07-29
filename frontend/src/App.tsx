@@ -1,15 +1,15 @@
-import { useEffect, type JSX, type ReactElement } from "react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Register } from "./views/Register";
 import { Dashboard } from "./views/Dashboard";
 import { Workspaces } from "./views/Workspaces";
 import { WorkspaceDetail } from "./views/WorkspaceDetail";
-import { RunDetail } from "./views/RunDetail";
 import { VariableSets } from "./views/VariableSets";
 import { OrganizationSettings } from "./views/OrganizationSettings";
 import { AccountSettings } from "./views/AccountSettings";
 import { Projects } from "./views/Projects";
+import { Registry } from "./views/Registry";
 import { VcsIntegrations } from "./views/VcsIntegrations";
 import { AgentPools } from "./views/AgentPools";
 import { AdminDashboard } from "./views/AdminDashboard";
@@ -27,23 +27,12 @@ import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Toaster, toast } from "./components/ui/toast";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
-
-type ChildNode = DeepReadonly<ReactElement> | string | number | null | undefined;
-
-function ProtectedRoute({ children }: Readonly<{ readonly children?: ChildNode }>): JSX.Element {
+function ProtectedRoute({ children }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
   const token = getAuthToken();
   if (token === null || token === "") {
     return <Navigate to="/login" replace />;
   }
-  return <Layout>{children}</Layout>;
-
+  return <>{children}</>;
 }
 
 function AuthSessionManager(): null {
@@ -106,18 +95,89 @@ function App(): JSX.Element {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/" element={<Navigate to="/app" replace />} />
-          <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/app/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/app/account" element={<ProtectedRoute><AccountSettings /></ProtectedRoute>} />
-          <Route path="/app/:orgName" element={<ProtectedRoute><Workspaces /></ProtectedRoute>} />
-          <Route path="/app/:orgName/no-code" element={<ProtectedRoute><NoCodeProvisioning /></ProtectedRoute>} />
-          <Route path="/app/:orgName/projects" element={<ProtectedRoute><Projects /></ProtectedRoute>} />
-          <Route path="/app/:orgName/settings/vcs" element={<ProtectedRoute><VcsIntegrations /></ProtectedRoute>} />
-          <Route path="/app/:orgName/settings/agents" element={<ProtectedRoute><AgentPools /></ProtectedRoute>} />
-          <Route path="/app/:orgName/variable-sets" element={<ProtectedRoute><VariableSets /></ProtectedRoute>} />
-          <Route path="/app/:orgName/settings" element={<ProtectedRoute><OrganizationSettings /></ProtectedRoute>} />
-          <Route path="/app/:orgName/workspaces/:workspaceName" element={<ProtectedRoute><WorkspaceDetail /></ProtectedRoute>} />
-          <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<ProtectedRoute><RunDetail /></ProtectedRoute>} />
+          <Route path="/app" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+            <Route index element={<Dashboard />} />
+            <Route path="admin" element={<AdminDashboard />} />
+            <Route path="account" element={<AccountSettings />} />
+            <Route path=":orgName" element={<Workspaces />} />
+            <Route path=":orgName/workspaces" element={<Workspaces />} />
+            <Route path=":orgName/registry" element={<Registry />} />
+            <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
+            <Route path=":orgName/projects" element={<Projects />} />
+            <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
+            <Route path=":orgName/settings/agents" element={<AgentPools />} />
+            <Route path=":orgName/variable-sets" element={<VariableSets />} />
+            <Route path=":orgName/settings" element={<OrganizationSettings />} />
+
+            <Route
+              path=":orgName/workspaces/:workspaceName"
+              element={<WorkspaceDetail section="overview" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/runs"
+              element={<WorkspaceDetail section="runs" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/states"
+              element={<WorkspaceDetail section="states" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/variables"
+              element={<WorkspaceDetail section="variables" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings"
+              element={<WorkspaceDetail section="settings" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/general"
+              element={<WorkspaceDetail section="settings" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/lock"
+              element={<WorkspaceDetail section="locking" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/notifications"
+              element={<WorkspaceDetail section="notifications" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/policies"
+              element={<WorkspaceDetail section="policy-sets" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/tasks"
+              element={<WorkspaceDetail section="run-tasks" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/run-triggers"
+              element={<WorkspaceDetail section="run-triggers" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/ssh"
+              element={<WorkspaceDetail section="ssh-key" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/version-control"
+              element={<WorkspaceDetail section="vcs" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/team-access"
+              element={<WorkspaceDetail section="team-access" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/health"
+              element={<WorkspaceDetail section="health" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/delete"
+              element={<WorkspaceDetail section="destruction" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/runs/:runId"
+              element={<WorkspaceDetail section="run-detail" />}
+            />
+          </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <Toaster />

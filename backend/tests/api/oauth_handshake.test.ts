@@ -82,9 +82,16 @@ describe("VCS OAuth handshakes", () => {
   let provider: ReturnType<typeof Bun.serve>;
   let clientId = "";
 
-  const request = (path: string, auth: string | null = apiToken): Promise<Response> =>
+  const request = (
+    path: string,
+    auth: string | null = apiToken,
+    accept?: string,
+  ): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
-      headers: auth === null ? {} : { Authorization: `Bearer ${auth}` },
+      headers: {
+        ...(auth === null ? {} : { Authorization: `Bearer ${auth}` }),
+        ...(accept === undefined ? {} : { Accept: accept }),
+      },
     }));
 
   beforeAll(async () => {
@@ -234,6 +241,29 @@ describe("VCS OAuth handshakes", () => {
     expect(location.searchParams.get("state")).not.toBeEmpty();
   });
 
+  test("returns the same one-time authorization URL as JSON for authenticated SPAs", async () => {
+    const response = await request(
+      `/api/v2/oauth-clients/${clientId}/connect?project_id=${projectId}`,
+      apiToken,
+      "application/vnd.api+json",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("location")).toBeNull();
+
+    const body = await response.json();
+    expect(body.data.type).toBe("vcs-authorization-requests");
+    const location = new URL(body.data.attributes["authorization-url"]);
+    expect(location.pathname).toBe("/login/oauth/authorize");
+    expect(location.searchParams.get("client_id")).toBe("client-key");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      `http://terrence.test/api/v2/oauth-clients/${clientId}/callback`,
+    );
+    expect(location.searchParams.get("state")).toBe(body.data.id);
+    expect(location.toString()).not.toContain(apiToken);
+  });
+
   test("uses the shared OAuth2 flow only for compatible providers", async () => {
     const clients = [
       {
@@ -311,7 +341,7 @@ describe("VCS OAuth handshakes", () => {
     expect(callback.status).toBe(303);
     const destination = new URL(callback.headers.get("location")!);
     const tokenId = destination.searchParams.get("oauth_token_id")!;
-    expect(destination.pathname).toBe(`/app/organizations/${orgName}/settings/vcs`);
+    expect(destination.pathname).toBe(`/app/${orgName}/settings/vcs`);
     expect(destination.toString()).not.toContain("access-token");
     expect(destination.toString()).not.toContain("access-secret");
 
@@ -341,7 +371,7 @@ describe("VCS OAuth handshakes", () => {
     const callback = await request(callbackPath, null);
     expect(callback.status).toBe(303);
     const destination = new URL(callback.headers.get("location")!);
-    expect(destination.pathname).toBe(`/app/organizations/${orgName}/settings/vcs`);
+    expect(destination.pathname).toBe(`/app/${orgName}/settings/vcs`);
     const tokenId = destination.searchParams.get("oauth_token_id")!;
     expect(destination.toString()).not.toContain(providerToken);
 

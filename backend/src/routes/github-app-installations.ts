@@ -4,13 +4,13 @@ import jwt from "jsonwebtoken";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { apiTokens, githubAppInstallations, organizations, type users } from "../db/schema";
-import { apiURL, checkOrganizationPermission } from "../lib/utils";
+import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   query?: Readonly<Record<string, unknown>>;
-  request?: Readonly<{ url: string }>;
+  request?: Readonly<{ headers: Readonly<Headers>; url: string }>;
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
   token?: Readonly<{ id: string }> | null;
@@ -98,6 +98,33 @@ function redirect(location: string, status: 302 | 303): Response {
     headers: {
       "Cache-Control": "no-store",
       Location: location,
+      "Referrer-Policy": "no-referrer",
+    },
+  });
+}
+
+function authorizationResponse(
+  request: Readonly<{ headers: Readonly<Headers> }>,
+  state: string,
+  location: string,
+): Response {
+  const acceptsJson = (request.headers.get("accept") ?? "")
+    .split(",")
+    .some((value: string): boolean => {
+      const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
+      return mediaType === "application/json" || mediaType === "application/vnd.api+json";
+    });
+  if (!acceptsJson) return redirect(location, 302);
+  return Response.json({
+    data: {
+      id: state,
+      type: "vcs-authorization-requests",
+      attributes: { "authorization-url": location },
+    },
+  }, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/vnd.api+json",
       "Referrer-Policy": "no-referrer",
     },
   });
@@ -205,7 +232,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/github-app/installations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+    if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -281,7 +308,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     });
     const installUrl = new URL(config.installUrl);
     installUrl.searchParams.set("state", stateId);
-    return redirect(installUrl.toString(), 302);
+    return authorizationResponse(request, stateId, installUrl.toString());
   })
   .get("/api/v2/github-app/installations/callback", async ({ query, request, set }: ParamCtx): Promise<unknown> => {
     pruneSetupStates();

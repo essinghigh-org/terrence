@@ -246,7 +246,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
     await db.delete(runs).where(eq(runs.id, runId));
   });
 
-  it("apply resource status is 'unreachable' when run is unreachable", async () => {
+  it("apply resource stays pending when the run becomes unreachable before apply", async () => {
     const runId = `run-ur-apply-${suffix}`;
     await db.insert(runs).values({
       id: runId,
@@ -258,7 +258,7 @@ describe("TFE API v2 - Plan/Apply status mapping", () => {
     const res = await req(`/api/v2/applies/apply-${runId}`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.data.attributes.status).toBe("unreachable");
+    expect(body.data.attributes.status).toBe("pending");
 
     await db.delete(runs).where(eq(runs.id, runId));
   });

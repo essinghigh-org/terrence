@@ -14,6 +14,7 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
+import { auditLog } from "./utils";
 
 type DeepReadonly<T> = T extends null | undefined
   ? T
@@ -641,6 +642,12 @@ async function handleOAuthProviderWebhook(
       logToken: crypto.randomUUID(),
       createdAt: Date.now(),
     });
+    await auditLog("create", "runs", runId, null, workspace.orgId, {
+      workspaceId: workspace.id,
+      status: "pending",
+      source: provider,
+      triggerReason: kind,
+    });
     void reportRunVcsStatus(runId, "pending");
 
     downloads.push(fetchAndSaveProviderTarball(
@@ -744,6 +751,12 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       statusTimestamps: { "pending-at": new Date().toISOString() },
       logToken: crypto.randomUUID(),
       createdAt: Date.now(),
+    });
+    await auditLog("create", "runs", runId, null, workspace.orgId, {
+      workspaceId: workspace.id,
+      status: "pending",
+      source: "github",
+      triggerReason: isSpeculative ? "pull_request" : "push",
     });
     void reportRunVcsStatus(runId, "pending");
     configurationVersionIds.push(configurationVersionId);

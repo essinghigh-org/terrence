@@ -7,6 +7,7 @@ import {
   apiTokens,
   organizationMemberships,
   organizations,
+  runs,
   users,
   workspaces,
 } from "../../src/db/schema";
@@ -18,6 +19,8 @@ describe("Admin Operations API contract", () => {
   const orgName = `admin-org-${suffix}`;
   const token = `admin-token-${suffix}`;
   const workspaceId = `admin-ws-${suffix}`;
+  const activeRunId = `admin-active-run-${suffix}`;
+  const finishedRunId = `admin-finished-run-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -39,9 +42,26 @@ describe("Admin Operations API contract", () => {
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: tokenHash, userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
+    await db.insert(runs).values([
+      {
+        id: activeRunId,
+        workspaceId,
+        status: "planning",
+        message: "Admin-visible active run",
+        createdAt: Date.now(),
+      },
+      {
+        id: finishedRunId,
+        workspaceId,
+        status: "applied",
+        message: "Finished run",
+        createdAt: Date.now(),
+      },
+    ]);
   });
 
   afterAll(async () => {
+    await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
@@ -50,7 +70,7 @@ describe("Admin Operations API contract", () => {
     await db.delete(users).where(eq(users.username, userId));
   });
 
-  it("lists all users, orgs, workspaces, and runs via site admin endpoints", async () => {
+  it("lists site admin resources and active runs", async () => {
     // 1. Admin Users list
     const getUsersRes = await request("/api/v2/admin/users");
     expect(getUsersRes.status).toBe(200);
@@ -75,7 +95,22 @@ describe("Admin Operations API contract", () => {
     const getWsBody = await getWsRes.json();
     expect(getWsBody.data.some((w: any) => w.id === workspaceId)).toBeTrue();
 
-    // 5. Admin Terraform versions - create, list, show, update, delete
+    // 5. Admin active runs list
+    const getRunsRes = await request("/api/v2/admin/runs");
+    expect(getRunsRes.status).toBe(200);
+    const getRunsBody = await getRunsRes.json();
+    const activeRun = getRunsBody.data.find((run: Readonly<{ id: string }>): boolean => run.id === activeRunId);
+    expect(activeRun?.attributes).toMatchObject({
+      status: "planning",
+      message: "Admin-visible active run",
+      actions: {
+        "is-cancelable": true,
+        "is-force-cancelable": true,
+      },
+    });
+    expect(getRunsBody.data.some((run: Readonly<{ id: string }>): boolean => run.id === finishedRunId)).toBeFalse();
+
+    // 6. Admin Terraform versions - create, list, show, update, delete
     const createTfRes = await request("/api/v2/admin/terraform-versions", "POST", {
       data: { attributes: { version: "1.10.5", url: "https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip", deprecated: false } },
     });
@@ -104,7 +139,7 @@ describe("Admin Operations API contract", () => {
     const delTfRes = await request(`/api/v2/admin/terraform-versions/${tfVersionId}`, "DELETE");
     expect(delTfRes.status).toBe(204);
 
-    // 6. Admin Sentinel versions CRUD
+    // 7. Admin Sentinel versions CRUD
     const createSRes = await request("/api/v2/admin/sentinel-versions", "POST", {
       data: { attributes: { version: "0.24.0" } },
     });
@@ -118,7 +153,7 @@ describe("Admin Operations API contract", () => {
     const delSRes = await request(`/api/v2/admin/sentinel-versions/${sId}`, "DELETE");
     expect(delSRes.status).toBe(204);
 
-    // 7. Admin OPA versions CRUD
+    // 8. Admin OPA versions CRUD
     const opaVer = `0.68.0-${suffix}`;
     const createORes = await request("/api/v2/admin/opa-versions", "POST", {
       data: { attributes: { version: opaVer } },

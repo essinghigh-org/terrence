@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, type users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
 import { runResource, planResource, applyResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
@@ -33,8 +33,67 @@ type DeepReadonly<T> = T extends (infer R)[]
 
 
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
+type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
+type RunOrigin = Readonly<{ source: string; triggerReason: string }>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
+type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
+const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
+
+function originForConfiguration(
+  configuration: ConfigurationVersionItem | undefined,
+): RunOrigin | undefined {
+  if (configuration === undefined) return undefined;
+  const source = configuration.source ?? "tfe-api";
+  const ingress = configuration.ingressAttributes;
+  const triggerReason = !VCS_RUN_SOURCES.has(source)
+    ? "manual"
+    : typeof ingress?.pullRequestNumber === "number"
+      ? "pull_request"
+      : typeof ingress?.tag === "string" && ingress.tag !== ""
+        ? "tag"
+        : "push";
+  return { source, triggerReason };
+}
+
+async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {
+  const configurationIds = [...new Set(runList.flatMap((run): string[] =>
+    run.configurationVersionId === null ? [] : [run.configurationVersionId]))];
+  if (configurationIds.length === 0) return new Map();
+  const configurations = await db.query.configurationVersions.findMany({
+    where: inArray(configurationVersions.id, configurationIds),
+  });
+  const byId = new Map(configurations.map((configuration): [string, ConfigurationVersionItem] =>
+    [configuration.id, configuration]));
+  return new Map(runList.flatMap((run): [string, RunOrigin][] => {
+    const configuration = run.configurationVersionId === null
+      ? undefined
+      : byId.get(run.configurationVersionId);
+    const origin = originForConfiguration(configuration);
+    return origin === undefined ? [] : [[run.id, origin]];
+  }));
+}
+
+async function usernamesById(userIds: readonly (string | null)[]): Promise<ReadonlyMap<string, string>> {
+  const ids = [...new Set(userIds.filter((id): id is string => id !== null))];
+  if (ids.length === 0) return new Map();
+  const actors = await db.query.users.findMany({
+    where: inArray(users.id, ids),
+    columns: { id: true, username: true },
+  });
+  return new Map(actors.map((actor): [string, string] => [actor.id, actor.username]));
+}
+
+function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
+  const { details } = event;
+  if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
+  const source = details as Readonly<Record<string, unknown>>;
+  return Object.fromEntries(
+    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason"].flatMap((key): readonly [string, string][] =>
+      typeof source[key] === "string" ? [[key, source[key]]] : [],
+    ),
+  );
+}
 
 async function authorizedOrgWorkspaces(
   organizationId: string,
@@ -84,6 +143,10 @@ async function createRun(
   if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
   if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  if (isDestroy && workspace.allowDestroyPlan === false) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
+  }
   const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
   if (!canApply && (requestedAutoApply === true || allowEmptyApply)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
   const autoApply = canApply && (requestedAutoApply ?? workspace.autoApply === true);
@@ -99,10 +162,17 @@ async function createRun(
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : "Queued manually";
+  const origin = originForConfiguration(configurationVersion);
   await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+  await auditLog("create", "runs", id, user?.id ?? null, workspace.orgId, {
+    workspaceId,
+    status: "pending",
+    source: origin?.source ?? "tfe-api",
+    triggerReason: origin?.triggerReason ?? "manual",
+  });
   queueRunNotification(id, "run:created", "pending");
   (set as { status: number }).status = 201;
-  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, appliedAt: null, softDeletedAt: null, createdAt }, canApply) };
+  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
 }
 
 export const runRoutes = new Elysia({ name: "runs" })
@@ -119,7 +189,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply)), ...pagination(request, number, size, totalCount) };
+    const origins = await originsForRuns(workspaceRuns);
+    return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id))), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -138,7 +209,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const applySet = new Set(applyIds ?? []);
-    return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId))), ...pagination(request, number, size, totalCount) };
+    const origins = await originsForRuns(orgRuns);
+    return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id))), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -156,8 +228,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     let position = queue.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length;
     const applySet = new Set(applyIds ?? []);
+    const origins = await originsForRuns(queue);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
-      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId));
+      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id));
       const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
@@ -204,8 +277,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const canApply = await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
-    return { data: runResource(authorized.run, canApply) };
+    const [canApply, canOverridePolicy, origins] = await Promise.all([
+      checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply"),
+      checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"),
+      originsForRuns([authorized.run]),
+    ]);
+    return { data: runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id)) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const runId = params.run_id ?? "";
@@ -241,7 +318,23 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: [] };
+    const events = await db.query.auditLogs.findMany({
+      where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, runId)),
+      orderBy: [asc(auditLogs.createdAt), asc(auditLogs.id)],
+    });
+    const usernames = await usernamesById(events.map((event: AuditItem): string | null => event.userId));
+    return {
+      data: events.map((event: AuditItem): Record<string, unknown> => ({
+        id: event.id,
+        type: "run-events",
+        attributes: {
+          action: event.action,
+          "created-at": new Date(event.createdAt).toISOString(),
+          "actor-username": event.userId === null ? null : usernames.get(event.userId) ?? null,
+          details: safeRunEventDetails(event),
+        },
+      })),
+    };
   })
   .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -300,7 +393,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved", "policy_soft_failed"])) });
+    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
     let agentPoolId: string | null = null;
     if (authorized.workspace.executionMode === "agent") {
@@ -334,10 +427,6 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "confirmed",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    if (before.status === "policy_soft_failed") {
-      const failedChecks = await db.query.policyChecks.findMany({ where: and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed", "errored", "unreachable"])) });
-      for (const check of failedChecks) await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, check.id));
-    }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -415,6 +504,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
     await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
+    await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: "policy_soft_failed",
+      toStatus: "planned",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
     queueRunNotification(runId, "run:needs_attention", "planned");
     return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
   })
@@ -423,8 +518,22 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const commentsList = await db.query.runComments.findMany({ where: eq(runComments.runId, runId) });
-    return { data: commentsList.map((c: CommentItem): Record<string, unknown> => ({ id: c.id, type: "comments", attributes: { body: c.body, "created-at": new Date(c.createdAt).toISOString() } })) };
+    const commentsList = await db.query.runComments.findMany({
+      where: eq(runComments.runId, runId),
+      orderBy: [asc(runComments.createdAt), asc(runComments.id)],
+    });
+    const usernames = await usernamesById(commentsList.map((comment: CommentItem): string | null => comment.userId));
+    return {
+      data: commentsList.map((comment: CommentItem): Record<string, unknown> => ({
+        id: comment.id,
+        type: "comments",
+        attributes: {
+          body: comment.body,
+          "created-at": new Date(comment.createdAt).toISOString(),
+          "actor-username": comment.userId === null ? null : usernames.get(comment.userId) ?? null,
+        },
+      })),
+    };
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -437,9 +546,20 @@ export const runRoutes = new Elysia({ name: "runs" })
     const text = typeof textVal === "string" ? textVal : "";
     if (text === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const id = `rc-${crypto.randomUUID()}`;
-    await db.insert(runComments).values({ id, runId, userId: user?.id ?? null, body: text, createdAt: Date.now() });
+    const createdAt = Date.now();
+    await db.insert(runComments).values({ id, runId, userId: user?.id ?? null, body: text, createdAt });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "comments", attributes: { body: text, "created-at": new Date().toISOString() } } };
+    return {
+      data: {
+        id,
+        type: "comments",
+        attributes: {
+          body: text,
+          "created-at": new Date(createdAt).toISOString(),
+          "actor-username": user?.username ?? null,
+        },
+      },
+    };
   })
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const commentId = params.comment_id ?? "";

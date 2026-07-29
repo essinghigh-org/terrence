@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useState, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
-import { fetchApi } from "../lib/api";
-import { PlanOutput } from "../components/PlanOutput";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  Clock,
+  History,
+  MessageSquare,
+  XCircle,
+} from "lucide-react";
+import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { toast } from "../components/ui/toast";
 import {
   Table,
   TableBody,
@@ -13,11 +21,93 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table";
-import { CheckCircle2, XCircle, Clock, AlertCircle, ChevronDown, ExternalLink } from "lucide-react";
+import { toast } from "../components/ui/toast";
+import { ApiError, fetchApi } from "../lib/api";
+
+type RunActions = {
+  "is-cancelable"?: boolean;
+  "is-confirmable"?: boolean;
+  "is-discardable"?: boolean;
+  "is-force-cancelable"?: boolean;
+};
+
+type RunPermissions = {
+  "can-apply"?: boolean;
+  "can-cancel"?: boolean;
+  "can-comment"?: boolean;
+  "can-discard"?: boolean;
+  "can-force-cancel"?: boolean;
+  "can-override-policy-check"?: boolean;
+};
+
+type RunAttributes = {
+  actions?: RunActions;
+  "allow-empty-apply"?: boolean;
+  "auto-apply"?: boolean;
+  "created-at"?: string;
+  "has-changes"?: boolean;
+  "is-destroy"?: boolean;
+  message?: string | null;
+  operation?: string;
+  permissions?: RunPermissions;
+  "plan-only"?: boolean;
+  "resource-additions"?: number;
+  "resource-changes"?: number;
+  "resource-destructions"?: number;
+  "resource-imports"?: number;
+  source?: string;
+  status: string;
+  "status-timestamps"?: Record<string, string> | null;
+  "terraform-version"?: string | null;
+  "trigger-reason"?: string;
+};
 
 type RunResource = {
   id: string;
-  attributes: Record<string, unknown>;
+  attributes: RunAttributes;
+};
+
+type PhaseResource = {
+  attributes: {
+    "log-read-url"?: string | null;
+    status: string;
+    "resource-additions"?: number | null;
+    "resource-changes"?: number | null;
+    "resource-destructions"?: number | null;
+    "resource-imports"?: number | null;
+    "status-timestamps"?: Record<string, string> | null;
+  };
+};
+
+type LogItem = {
+  attributes?: {
+    phase?: string;
+    "output-text"?: string;
+  };
+};
+
+type RunComment = {
+  id: string;
+  attributes: {
+    "actor-username"?: string | null;
+    body: string;
+    "created-at"?: string;
+  };
+};
+
+type RunEvent = {
+  id: string;
+  attributes: {
+    action: string;
+    "actor-username"?: string | null;
+    "created-at"?: string;
+    details?: {
+      fromStatus?: string;
+      source?: string;
+      toStatus?: string;
+      triggerReason?: string;
+    };
+  };
 };
 
 type CostEstimate = {
@@ -39,9 +129,101 @@ type PolicyCheck = {
   attributes: {
     status: string;
     result?: unknown;
+    "policy-name"?: string | null;
+    "enforcement-level"?: string | null;
     "created-at"?: string;
   };
 };
+
+const TERMINAL_STATUSES = new Set([
+  "applied",
+  "canceled",
+  "discarded",
+  "errored",
+  "failed",
+  "force_canceled",
+  "planned_and_finished",
+  "unreachable",
+]);
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  fetching: "Fetching configuration",
+  fetching_completed: "Configuration fetched",
+  pre_plan_running: "Running pre-plan tasks",
+  pre_plan_completed: "Pre-plan tasks completed",
+  queuing: "Queuing plan",
+  plan_queued: "Plan queued",
+  planning: "Planning",
+  planned: "Needs confirmation",
+  cost_estimating: "Estimating cost",
+  cost_estimated: "Cost estimated",
+  policy_checking: "Checking policies",
+  policy_override: "Policy override required",
+  policy_checked: "Policy checks passed",
+  policy_soft_failed: "Policy override required",
+  post_plan_running: "Running post-plan tasks",
+  post_plan_completed: "Post-plan tasks completed",
+  planned_and_finished: "Planned and finished",
+  planned_and_saved: "Plan saved",
+  confirmed: "Confirmed",
+  apply_queued: "Apply queued",
+  applying: "Applying",
+  applied: "Applied",
+  errored: "Errored",
+  failed: "Failed",
+  canceled: "Canceled",
+  discarded: "Discarded",
+  force_canceled: "Force canceled",
+  unreachable: "Unreachable",
+  manual: "Manual",
+  pull_request: "Pull request",
+  push: "Push",
+  tag: "Tag",
+};
+
+const RUN_EVENT_LABELS: Readonly<Record<string, string>> = {
+  apply: "Run confirmed",
+  cancel: "Run canceled",
+  create: "Run created",
+  discard: "Run discarded",
+  "force-cancel": "Run force canceled",
+  "override-policy": "Policy check overridden",
+};
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+}
+
+function sourceLabel(source: string | undefined): string {
+  if (source === undefined || source === "") return "Unknown source";
+  const labels: Readonly<Record<string, string>> = {
+    bitbucket: "Bitbucket",
+    github: "GitHub",
+    gitlab: "GitLab",
+    "tfe-api": "TFE API",
+    "tfe-no-code": "No-code provisioning",
+  };
+  return labels[source] ?? statusLabel(source);
+}
+
+function formatDate(value: string | undefined): string {
+  if (value === undefined || value === "") return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+}
+
+function formatDuration(start: string | undefined, end: string | undefined): string {
+  if (start === undefined || end === undefined) return "Unavailable";
+  const milliseconds = Date.parse(end) - Date.parse(start);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "Unavailable";
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 1) return "Less than a minute";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${hours} hour${hours === 1 ? "" : "s"}${remainder === 0 ? "" : ` ${remainder} min`}`;
+}
 
 function formatMonthlyCost(value: string | undefined): string {
   const amount = Number(value);
@@ -69,372 +251,1022 @@ function policyResultText(result: unknown): string {
       violations.length > 0 ? `: ${violations.map(String).join(", ")}` : ""
     }`);
   }
+  for (const [key, label] of [
+    ["hard-failed", "hard failure"],
+    ["soft-failed", "soft failure"],
+    ["advisory-failed", "advisory failure"],
+  ] as const) {
+    const count = details[key];
+    if (typeof count === "number" && count > 0) {
+      summary.push(`${count} ${label}${count === 1 ? "" : "s"}`);
+    }
+  }
   return summary.length > 0 ? summary.join(" — ") : JSON.stringify(result);
 }
 
-export function RunDetail(): React.JSX.Element {
-  const { orgName: rawOrgName, workspaceName: rawWorkspaceName, runId: rawRunId } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
+function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
+  const failureLike = ["failed", "errored", "unreachable"].includes(check.attributes.status);
+  if (!failureLike) return false;
+  if (check.attributes["enforcement-level"] === "advisory") return true;
+  if (check.attributes.status !== "failed") return false;
+  const result = check.attributes.result;
+  return result !== null
+    && typeof result === "object"
+    && !Array.isArray(result)
+    && typeof (result as Record<string, unknown>)["advisory-failed"] === "number"
+    && ((result as Record<string, unknown>)["advisory-failed"] as number) > 0;
+}
+
+function phaseStatusFromRun(
+  status: string,
+  phase: "plan" | "apply",
+  timestamps: Readonly<Record<string, string>>,
+): string {
+  const planStarted = typeof timestamps["planning-at"] === "string";
+  const planFinished = typeof timestamps["planned-at"] === "string"
+    || typeof timestamps["planned-and-finished-at"] === "string"
+    || typeof timestamps["planned-and-saved-at"] === "string";
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
+    .some((key: string): boolean => typeof timestamps[key] === "string");
+  if (phase === "apply") {
+    if (status === "applied") return "finished";
+    if (status === "applying") return "running";
+    if (["confirmed", "apply_queued"].includes(status)) return "queued";
+    if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : "pending";
+    if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
+    return "pending";
+  }
+  if (status === "planning") return "running";
+  if (["queuing", "plan_queued"].includes(status)) return "queued";
+  if ([
+    "planned",
+    "cost_estimating",
+    "cost_estimated",
+    "policy_checking",
+    "policy_override",
+    "policy_checked",
+    "policy_soft_failed",
+    "post_plan_running",
+    "post_plan_completed",
+    "planned_and_finished",
+    "planned_and_saved",
+    "confirmed",
+    "apply_queued",
+    "applying",
+    "applied",
+  ].includes(status)) return "finished";
+  if (["errored", "failed", "unreachable"].includes(status)) return planFinished ? "finished" : "errored";
+  if (["canceled", "discarded", "force_canceled"].includes(status)) {
+    return planFinished ? "finished" : planStarted ? "canceled" : "pending";
+  }
+  return "pending";
+}
+
+function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
+  if (status === "finished") return <CheckCircle2 className="size-5 text-emerald-600" aria-hidden="true" />;
+  if (status === "errored" || status === "unreachable") return <XCircle className="size-5 text-red-600" aria-hidden="true" />;
+  if (status === "canceled") return <AlertCircle className="size-5 text-gray-500" aria-hidden="true" />;
+  if (status === "running" || status === "queued") return <Clock className="size-5 text-blue-600" aria-hidden="true" />;
+  return <Circle className="size-5 text-gray-300" aria-hidden="true" />;
+}
+
+function ResourceCounts({
+  additions,
+  changes,
+  destructions,
+  imports,
+  status,
+}: Readonly<{
+  additions: number | null | undefined;
+  changes: number | null | undefined;
+  destructions: number | null | undefined;
+  imports?: number | null;
+  status: string;
+}>): React.JSX.Element {
+  const pending = ["pending", "queued", "running"].includes(status);
+  if (pending
+    || typeof additions !== "number"
+    || typeof changes !== "number"
+    || typeof destructions !== "number") {
+    return (
+      <span className="text-xs font-medium text-gray-500">
+        {pending ? "Resources pending" : "Resources unavailable"}
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
+      {typeof imports === "number" && imports > 0 && <span className="text-gray-950">&amp;{imports} to import</span>}
+      <span className="text-emerald-700">+{additions} to add</span>
+      <span className="text-blue-700">~{changes} to change</span>
+      <span className="text-red-700">−{destructions} to destroy</span>
+    </div>
+  );
+}
+
+function PhaseMeta({
+  phase,
+  status,
+  timestamps,
+  logUrl,
+}: Readonly<{
+  phase: "plan" | "apply";
+  status: string;
+  timestamps: Readonly<Record<string, string>>;
+  logUrl: string | null | undefined;
+}>): React.JSX.Element {
+  const started = timestamps[phase === "plan" ? "planning-at" : "applying-at"];
+  const completed = (phase === "plan"
+    ? timestamps["planned-at"]
+      ?? timestamps["planned-and-finished-at"]
+      ?? timestamps["planned-and-saved-at"]
+    : timestamps["applied-at"])
+    ?? timestamps["errored-at"]
+    ?? timestamps["unreachable-at"]
+    ?? timestamps["canceled-at"]
+    ?? timestamps["force-canceled-at"];
+  const completedLabel = ["errored", "unreachable"].includes(status)
+    ? "Errored"
+    : status === "canceled"
+      ? "Canceled"
+      : "Finished";
+  const hasLogUrl = logUrl !== null && logUrl !== undefined && logUrl !== "";
+  if (started === undefined && completed === undefined && !hasLogUrl) return <></>;
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-gray-500">
+      {started !== undefined && <span>Started <time dateTime={started}>{formatDate(started)}</time></span>}
+      {completed !== undefined && (
+        <span>{completedLabel} <time dateTime={completed}>{formatDate(completed)}</time></span>
+      )}
+      {hasLogUrl && (
+        <a href={logUrl} download className="font-medium text-blue-700 hover:underline">
+          Download raw log
+        </a>
+      )}
+    </div>
+  );
+}
+
+export function RunDetail({
+  showBreadcrumb = true,
+}: Readonly<{ readonly showBreadcrumb?: boolean }>): React.JSX.Element {
+  const {
+    orgName: rawOrgName,
+    workspaceName: rawWorkspaceName,
+    runId: rawRunId,
+  } = useParams<{ orgName: string; workspaceName: string; runId: string }>();
   const orgName = rawOrgName ?? "";
   const workspaceName = rawWorkspaceName ?? "";
   const runId = rawRunId ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
+  const workspacePath = `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`;
   const [run, setRun] = useState<RunResource | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [logs, setLogs] = useState<string>("");
+  const [plan, setPlan] = useState<PhaseResource | null>(null);
+  const [apply, setApply] = useState<PhaseResource | null>(null);
+  const [planLogs, setPlanLogs] = useState("");
+  const [applyLogs, setApplyLogs] = useState("");
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
-  const logsRef = useRef<HTMLPreElement>(null);
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [comments, setComments] = useState<RunComment[]>([]);
+  const [commentBody, setCommentBody] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [auxiliaryError, setAuxiliaryError] = useState(false);
+  const [fresh, setFresh] = useState(false);
+  const [pendingAction, setPendingAction] = useState("");
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [planSummary, setPlanSummary] = useState<Readonly<{
+    runId: string;
+    summary: PlanOutputSummary;
+  }> | null>(null);
+  const activeRunId = useRef<string | null>(null);
+  const handlePlanSummaryChange = useCallback((summary: PlanOutputSummary | null): void => {
+    setPlanSummary(summary === null ? null : { runId, summary });
+  }, [runId]);
 
-  const loadRun = useCallback(async (signal: AbortSignal): Promise<void> => {
+  useEffect((): void => {
+    setRunEvents([]);
+  }, [runId]);
+
+  const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
-      const data = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource };
-      signal.throwIfAborted();
-      setRun(data.data);
+      const response = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource };
+      if (signal.aborted) return null;
+      setRun(response.data);
+      setFresh(true);
+      setLoadError("");
 
-      const [logResult, costResult, policyResult] = await Promise.allSettled([
-        data.data.attributes["status"] === "pending"
-          ? Promise.resolve(null)
-          : fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
+      const [logResult, planResult, applyResult, costResult, policyResult, eventResult, commentResult] = await Promise.allSettled([
+        fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
+        fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
       ]);
       signal.throwIfAborted();
-      if (logResult.status === "fulfilled" && logResult.value !== null) {
+      setAuxiliaryError([
+        logResult,
+        planResult,
+        applyResult,
+        costResult,
+        policyResult,
+        eventResult,
+        commentResult,
+      ].some((result): boolean => result.status === "rejected"));
+
+      if (logResult.status === "fulfilled") {
         const logData = logResult.value as {
-          data?: { attributes?: { "output-text"?: string } }[];
-          logs?: { message: string }[];
+          data?: LogItem[];
+          logs?: { message: string; phase?: string }[];
         };
-        setLogs(
-          logData.logs?.map((log): string => log.message).join("")
-          ?? logData.data?.map((log): string => log.attributes?.["output-text"] ?? "").join("")
-          ?? "",
-        );
+        if (Array.isArray(logData.data)) {
+          setPlanLogs(logData.data
+            .filter((entry: LogItem): boolean => (entry.attributes?.phase ?? "plan") === "plan")
+            .map((entry: LogItem): string => entry.attributes?.["output-text"] ?? "")
+            .join("\n"));
+          setApplyLogs(logData.data
+            .filter((entry: LogItem): boolean => entry.attributes?.phase === "apply")
+            .map((entry: LogItem): string => entry.attributes?.["output-text"] ?? "")
+            .join("\n"));
+        } else if (Array.isArray(logData.logs)) {
+          setPlanLogs(logData.logs
+            .filter((entry): boolean => (entry.phase ?? "plan") === "plan")
+            .map((entry): string => entry.message)
+            .join("\n"));
+          setApplyLogs(logData.logs
+            .filter((entry): boolean => entry.phase === "apply")
+            .map((entry): string => entry.message)
+            .join("\n"));
+        }
+      }
+      if (planResult.status === "fulfilled") {
+        setPlan((planResult.value as { data?: PhaseResource }).data ?? null);
+      }
+      if (applyResult.status === "fulfilled") {
+        setApply((applyResult.value as { data?: PhaseResource }).data ?? null);
       }
       if (costResult.status === "fulfilled") {
-        const costData = costResult.value as { data?: CostEstimate };
-        setCostEstimate(costData.data ?? null);
+        setCostEstimate((costResult.value as { data?: CostEstimate }).data ?? null);
       }
       if (policyResult.status === "fulfilled") {
-        const policyData = policyResult.value as { data?: PolicyCheck[] };
-        setPolicyChecks(Array.isArray(policyData.data) ? policyData.data : []);
+        const data = (policyResult.value as { data?: PolicyCheck[] }).data;
+        setPolicyChecks(Array.isArray(data) ? data : []);
       }
-    } catch (err: unknown) {
-      if (!signal.aborted) console.error(err);
+      if (eventResult.status === "fulfilled") {
+        const data = (eventResult.value as { data?: RunEvent[] }).data;
+        setRunEvents(Array.isArray(data) ? data : []);
+      }
+      if (commentResult.status === "fulfilled") {
+        const data = (commentResult.value as { data?: RunComment[] }).data;
+        setComments(Array.isArray(data) ? data : []);
+      }
+      return response.data.attributes.status;
+    } catch (error: unknown) {
+      if (signal.aborted) return null;
+      setFresh(false);
+      setLoadError(error instanceof Error ? error.message : "Could not load run");
+      if (error instanceof ApiError && error.status === 404) {
+        setRun(null);
+        return "not_found";
+      }
+      return null;
     } finally {
       if (!signal.aborted) setLoading(false);
     }
   }, [runId]);
 
   useEffect((): (() => void) => {
-    let active = true;
-    const controllers = new Set<AbortController>();
-    const refresh = (): void => {
-      if (!active) return;
-      const controller = new AbortController();
-      controllers.add(controller);
-      void loadRun(controller.signal).finally((): void => { controllers.delete(controller); });
+    let stopped = false;
+    let timer: number | undefined;
+    const controller = new AbortController();
+    const runChanged = activeRunId.current !== runId;
+    activeRunId.current = runId;
+    if (runChanged) {
+      setRun(null);
+      setPlan(null);
+      setApply(null);
+      setPlanLogs("");
+      setApplyLogs("");
+      setCostEstimate(null);
+      setPolicyChecks([]);
+      setComments([]);
+      setAuxiliaryError(false);
+      setCommentBody("");
+      setLoading(true);
+    }
+    setLoadError("");
+    setFresh(false);
+
+    const refresh = async (): Promise<void> => {
+      const status = await loadRun(controller.signal);
+      if (!stopped && !controller.signal.aborted && status !== "not_found"
+        && (status === null || !TERMINAL_STATUSES.has(status))) {
+        timer = window.setTimeout((): void => { void refresh(); }, 3000);
+      }
     };
-    refresh();
-    const interval = window.setInterval(refresh, 3000);
+    void refresh();
+
     return (): void => {
-      active = false;
-      window.clearInterval(interval);
-      controllers.forEach((controller): void => { controller.abort(); });
+      stopped = true;
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loadRun]);
+  }, [loadRun, refreshVersion]);
 
-  useEffect((): void => {
-    if (logsRef.current != null) {
-      logsRef.current.scrollTop = logsRef.current.scrollHeight;
-    }
-  }, [logs]);
-
-  async function handleApply(): Promise<void> {
+  async function performRunAction(
+    action: "apply" | "cancel" | "discard" | "force-cancel" | "override-policy",
+    successTitle: string,
+  ): Promise<void> {
+    setPendingAction(action);
     try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/apply`, { method: "POST" });
-      toast.add({ title: "Run queued for apply", type: "success" });
-    } catch {
-      toast.add({ title: "Failed to apply run", type: "error" });
+      await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, { method: "POST" });
+      toast.add({ title: successTitle, type: "success" });
+      setRefreshVersion((value: number): number => value + 1);
+    } catch (error: unknown) {
+      toast.add({
+        title: error instanceof Error ? error.message : `Failed to ${action.replace("-", " ")} run`,
+        type: "error",
+      });
+    } finally {
+      setPendingAction("");
     }
   }
 
-  async function handleDiscard(): Promise<void> {
+  async function handleCommentSubmit(event: React.SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const body = commentBody.trim();
+    if (body === "") return;
+    setPendingAction("comment");
     try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/discard`, { method: "POST" });
-      toast.add({ title: "Run discarded", type: "success" });
-    } catch {
-      toast.add({ title: "Failed to discard run", type: "error" });
+      await fetchApi(`/api/v2/runs/${runId}/comments`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "comments",
+            attributes: { body },
+          },
+        }),
+      });
+      setCommentBody("");
+      toast.add({ title: "Comment added", type: "success" });
+      setRefreshVersion((value: number): number => value + 1);
+    } catch (error: unknown) {
+      toast.add({
+        title: error instanceof Error ? error.message : "Failed to add comment",
+        type: "error",
+      });
+    } finally {
+      setPendingAction("");
     }
   }
 
-  async function handleOverridePolicy(): Promise<void> {
-    try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/override-policy`, { method: "POST" });
-      toast.add({ title: "Policy override accepted", type: "success" });
-    } catch {
-      toast.add({ title: "Failed to override policy", type: "error" });
-    }
-  }
-
+  if (run !== null && run.id !== runId) return <div className="p-8 text-gray-500">Loading run...</div>;
   if (loading && run === null) return <div className="p-8 text-gray-500">Loading run...</div>;
-  if (run === null) return <div className="p-8 text-gray-500">Run not found</div>;
+  if (run === null) {
+    return (
+      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+        <p className="font-medium">{loadError !== "" ? loadError : "Run not found"}</p>
+        <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
 
-  const status = run.attributes["status"] as string;
-  const isPending = status === 'pending';
-  const isPlanning = status === 'planning';
-  const isPlanned = status === 'planned' || status === "planned_and_saved";
-  const isApplying = status === 'applying';
-  const isApplied = status === 'applied';
-  const isErrored = status === 'errored' || status === 'failed';
+  const attributes = run.attributes;
+  const { actions, permissions, status } = attributes;
+  const canApply = fresh
+    && actions?.["is-confirmable"] === true
+    && permissions?.["can-apply"] === true;
+  const canDiscard = fresh
+    && actions?.["is-discardable"] === true
+    && permissions?.["can-discard"] === true;
+  const canCancel = fresh
+    && actions?.["is-cancelable"] === true
+    && permissions?.["can-cancel"] === true;
+  const canForceCancel = fresh
+    && actions?.["is-force-cancelable"] === true
+    && permissions?.["can-force-cancel"] === true;
+  const canOverridePolicy = fresh
+    && status === "policy_soft_failed"
+    && permissions?.["can-override-policy-check"] === true;
+  const canComment = fresh && permissions?.["can-comment"] === true;
+
+  const timestamps = attributes["status-timestamps"] ?? {};
+  const planStatus = plan?.attributes.status ?? phaseStatusFromRun(status, "plan", timestamps);
+  const applyStatus = apply?.attributes.status ?? phaseStatusFromRun(status, "apply", timestamps);
+  const planActionCount = planSummary?.runId === runId ? planSummary.summary.actionCount : null;
+  const artifactImportCount = planSummary?.runId === runId ? planSummary.summary.importCount : null;
+  const planCounts = plan?.attributes ?? {
+    "resource-additions": attributes["resource-additions"],
+    "resource-changes": attributes["resource-changes"],
+    "resource-destructions": attributes["resource-destructions"],
+    "resource-imports": attributes["resource-imports"],
+  };
+  const backendPlanImportCount = planCounts["resource-imports"];
+  const planImportCount = typeof backendPlanImportCount === "number"
+    ? typeof artifactImportCount === "number"
+      ? Math.max(backendPlanImportCount, artifactImportCount)
+      : backendPlanImportCount
+    : artifactImportCount;
+  const applyCounts = apply?.attributes;
+  const timestampEntries = Object.entries(timestamps);
+  const validTimestampValues = Object.values(timestamps)
+    .filter((value: string): boolean => Number.isFinite(Date.parse(value)))
+    .sort((left: string, right: string): number => Date.parse(left) - Date.parse(right));
+  const durationStart = validTimestampValues[0] ?? attributes["created-at"];
+  const durationEnd = TERMINAL_STATUSES.has(status)
+    ? validTimestampValues[validTimestampValues.length - 1]
+    : undefined;
+  const duration = TERMINAL_STATUSES.has(status)
+    ? formatDuration(durationStart, durationEnd)
+    : "In progress";
+  const summaryCounts = applyStatus === "finished" ? applyCounts : planCounts;
+  const summaryImportCount = applyStatus === "finished"
+    ? applyCounts?.["resource-imports"] ?? planImportCount
+    : planImportCount;
   const costAttributes = costEstimate?.attributes;
   const costStatus = costAttributes?.status ?? "unavailable";
-  const costPending = costStatus === "queued" || costStatus === "pending";
-  const costFailed = costStatus === "errored" || costStatus === "canceled";
+  const costPending = ["queued", "pending"].includes(costStatus);
+  const costFailed = ["errored", "canceled"].includes(costStatus);
+  const showCostEstimate = costEstimate !== null
+    || ["cost_estimating", "cost_estimated"].includes(status);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
-  const hasFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
-    ["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status),
+  const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
+    ["failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status)
+      && !isAdvisoryPolicyIssue(check),
   );
+  const hasFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
+    ["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status)
+      && !isAdvisoryPolicyIssue(check),
+  );
+  const advisoryIssues = policyChecks.filter(isAdvisoryPolicyIssue);
   const policySummary = policyChecks.length === 0
     ? status === "policy_checking" ? "checking" : "not required"
-    : hasFailedPolicy ? hasSoftFailedPolicy ? "soft failed" : "failed"
+    : hasHardFailedPolicy ? "failed"
+    : hasSoftFailedPolicy ? "soft failed"
+    : status === "policy_checking"
+      || policyChecks.some((check: PolicyCheck): boolean =>
+        ["pending", "queued", "running"].includes(check.attributes.status),
+      ) ? "checking"
     : policyChecks.every((check: PolicyCheck): boolean => check.attributes.status === "overridden")
       ? "overridden"
-      : "passed";
+      : advisoryIssues.length > 0
+        ? `passed · ${advisoryIssues.length} advisory ${
+            advisoryIssues.every((check): boolean => check.attributes.status === "failed")
+              ? "failed"
+              : advisoryIssues.length === 1 ? "issue" : "issues"
+          }`
+        : "passed";
+  const showPolicyChecks = policyChecks.length > 0 || [
+    "policy_checking",
+    "policy_override",
+    "policy_checked",
+    "policy_soft_failed",
+  ].includes(status);
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
+    .some((key: string): boolean => typeof timestamps[key] === "string");
+  const terminatedBeforeApply = [
+    "canceled",
+    "discarded",
+    "errored",
+    "failed",
+    "force_canceled",
+    "unreachable",
+  ].includes(status) && !applyStarted;
+  const showApply = attributes["plan-only"] !== true
+    && status !== "planned_and_finished"
+    && !terminatedBeforeApply;
+  const successfulStatus = ["applied", "planned_and_finished"].includes(status);
 
   return (
-    <div className="max-w-full w-full">
-      {/* Breadcrumbs */}
-      <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
-        <Link to={`/app/${orgName}`} className="hover:underline">{orgName}</Link>
-        <span className="text-gray-300">/</span>
-        <Link to={`/app/${orgName}/workspaces/${workspaceName}`} className="hover:underline">{workspaceName}</Link>
-        <span className="text-gray-300">/</span>
+    <div className="w-full">
+      {showBreadcrumb && <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap items-center gap-1.5 text-xs font-medium text-gray-500">
+        <Link to={orgPath} className="hover:text-gray-900 hover:underline">{orgName}</Link>
+        <span aria-hidden="true" className="text-gray-300">/</span>
+        <Link to={workspacePath} className="hover:text-gray-900 hover:underline">
+          {workspaceName}
+        </Link>
+        <span aria-hidden="true" className="text-gray-300">/</span>
         <span className="text-gray-900">Runs</span>
-        <span className="text-gray-300">/</span>
-        <span className="text-gray-900 font-mono">{runId}</span>
-      </div>
+        <span aria-hidden="true" className="text-gray-300">/</span>
+        <span className="font-mono text-gray-900">{runId}</span>
+      </nav>}
 
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight mb-2">
-            {(run.attributes["message"] as string | null) ?? "Manual run"}
-          </h1>
-          <div className="flex items-center gap-4 text-[13px] text-gray-600">
-             <div className="flex items-center gap-1.5">
-               <div className="h-5 w-5 rounded bg-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-600">U</div>
-               <span>User triggered</span>
-             </div>
-             <span>•</span>
-              <span>Created {new Date(run.attributes["created-at"] as string).toLocaleString()}</span>
-          </div>
+      {!fresh && loadError !== "" && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>Run data may be out of date. Actions are disabled until it refreshes.</span>
+          <Button variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
+            Try again
+          </Button>
         </div>
+      )}
+      {fresh && auxiliaryError && (
+        <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>Some run details could not be refreshed.</span>
+          <Button variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
+            Try again
+          </Button>
+        </div>
+      )}
 
-        {isPlanned && (
-          <div className="flex gap-3">
-            <Button variant="outline" onClick={handleDiscard} className="bg-white">Discard run</Button>
-            <Button onClick={handleApply} className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white">Confirm & Apply</Button>
+      <header className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Badge
+              variant={["errored", "failed", "unreachable"].includes(status) ? "destructive" : "secondary"}
+              className={successfulStatus ? "rounded bg-emerald-100 text-emerald-800" : "rounded"}
+            >
+              {statusLabel(status)}
+            </Badge>
+            {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
+            {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
+          </div>
+          <h1 className="break-words text-3xl font-bold tracking-tight text-gray-950">
+            {attributes.message ?? "Manual run"}
+          </h1>
+          <p className="mt-2 text-[13px] text-gray-600">
+            {statusLabel(attributes["trigger-reason"] ?? "manual")} · {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
+          </p>
+        </div>
+        {(canCancel || canForceCancel || canOverridePolicy) && (
+          <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
+            {canCancel && (
+              <Button
+                variant="outline"
+                disabled={pendingAction !== ""}
+                onClick={(): void => { void performRunAction("cancel", "Run canceled"); }}
+              >
+                Cancel run
+              </Button>
+            )}
+            {canForceCancel && (
+              <Button
+                variant="destructive"
+                disabled={pendingAction !== ""}
+                onClick={(): void => { void performRunAction("force-cancel", "Run force canceled"); }}
+              >
+                Force cancel
+              </Button>
+            )}
+            {canOverridePolicy && (
+              <Button
+                className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
+                disabled={pendingAction !== ""}
+                onClick={(): void => { void performRunAction("override-policy", "Policy check overridden"); }}
+              >
+                Override policy
+              </Button>
+            )}
           </div>
         )}
-      </div>
+      </header>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2">
-          {/* Run timeline UI mimicking screenshot */}
-          <div className="bg-white border border-gray-200 rounded-md shadow-sm mb-6 overflow-hidden">
-             {/* Plan step */}
-             <div className="border-b border-gray-200">
-                <div className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50">
-                   <div className="flex items-center gap-3">
-                      {isPending ? <Clock className="h-5 w-5 text-gray-400" /> :
-                       isPlanning ? <Clock className="h-5 w-5 text-blue-500" /> :
-                       isErrored && !isApplying ? <XCircle className="h-5 w-5 text-red-500" /> :
-                       <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
-                      <span className="font-semibold text-gray-900">Plan</span>
-                   </div>
-                   <div className="flex items-center gap-4">
-                      {run.attributes["has-changes"] !== undefined && (
-                        <span className="text-sm text-gray-600">
-                       {(run.attributes["has-changes"] as boolean | undefined) === true ? "Changes to apply" : "No changes"}
-                        </span>
-                      )}
-                      <ChevronDown className="h-4 w-4 text-gray-400" />
-                   </div>
-                </div>
-
-                {/* Embedded Terminal for Plan */}
-                {(!isPending) && (
-                  <div className="bg-[#111315] p-4 text-gray-300 font-mono text-[13px] leading-relaxed border-t border-gray-200 relative overflow-hidden">
-                       <pre ref={logsRef} className="max-h-[400px] overflow-y-auto whitespace-pre-wrap">{logs !== "" ? logs : "Initializing..."}</pre>
-                     <div className="absolute top-4 right-4 flex gap-2">
-                        <button className="bg-white/10 hover:bg-white/20 text-white rounded p-1.5 transition-colors">
-                           <ExternalLink className="h-3.5 w-3.5" />
-                        </button>
-                     </div>
-                  </div>
-                )}
-
-                {/* Structured Plan Output */}
-                {(!isPending) && <PlanOutput runId={runId} />}
-             </div>
-
-             {/* Cost Estimation step */}
-             <div className="border-b border-gray-200">
-                <div className="flex items-center justify-between px-5 py-4">
-                   <div className="flex items-center gap-3">
-                      {costPending ? (
-                        <Clock className="h-5 w-5 text-muted-foreground" />
-                      ) : costFailed ? (
-                        <XCircle className="h-5 w-5 text-destructive" />
-                      ) : (
-                        <CheckCircle2 className="h-5 w-5 text-muted-foreground" />
-                      )}
-                      <span className="font-semibold text-gray-900">Cost estimation</span>
-                   </div>
-                   <div className="flex items-center gap-3">
-                      <Badge variant={costFailed ? "destructive" : costPending ? "outline" : "secondary"}>
-                        {costStatus.replace(/_/g, " ")}
-                      </Badge>
-                      {costAttributes != null && (
-                        <span className="font-mono text-sm font-medium">
-                          {formatMonthlyCost(costAttributes["delta-monthly-cost"])}
-                        </span>
-                      )}
-                   </div>
-                </div>
-                {costAttributes != null && (
-                  <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 px-5 pb-4 text-sm md:grid-cols-4">
-                    <div className="flex flex-col gap-1">
-                      <dt className="text-muted-foreground">Prior monthly</dt>
-                      <dd className="font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <dt className="text-muted-foreground">Proposed monthly</dt>
-                      <dd className="font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <dt className="text-muted-foreground">Monthly delta</dt>
-                      <dd className="font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <dt className="text-muted-foreground">Priced resources</dt>
-                      <dd className="font-medium">
-                        {costAttributes["matched-resources-count"] ?? 0} of {costAttributes["resources-count"] ?? 0}
-                      </dd>
-                    </div>
-                    {costAttributes["error-message"] != null && (
-                      <div className="col-span-full text-destructive">
-                        {costAttributes["error-message"]}
-                      </div>
-                    )}
-                  </dl>
-                )}
-             </div>
-
-             {/* Policy Check step */}
-             <div className="border-b border-gray-200">
-                <div className="flex items-center justify-between px-5 py-4">
-                   <div className="flex items-center gap-3">
-                      {hasFailedPolicy ? (
-                        <AlertCircle className="h-5 w-5 text-destructive" />
-                      ) : policySummary === "checking" ? (
-                        <Clock className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <CheckCircle2 className="h-5 w-5 text-muted-foreground" />
-                      )}
-                      <span className="font-semibold text-gray-900">Policy check</span>
-                   </div>
-                   {hasSoftFailedPolicy ? (
-                      <div className="flex items-center gap-2">
-                        <Badge variant="destructive">Soft failed</Badge>
-                        <Button size="sm" variant="outline" onClick={(): void => { void handleOverridePolicy(); }}>
-                          Override policy
-                        </Button>
-                      </div>
-                   ) : (
-                      <Badge variant={hasFailedPolicy ? "destructive" : policySummary === "passed" ? "default" : "secondary"}>
-                        {policySummary}
-                      </Badge>
-                   )}
-                </div>
-                {policyChecks.length > 0 && (
-                  <div className="px-5 pb-4">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Check</TableHead>
-                          <TableHead>Result</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {policyChecks.map((check: PolicyCheck): React.JSX.Element => (
-                          <TableRow key={check.id}>
-                            <TableCell className="font-mono text-xs">{check.id}</TableCell>
-                            <TableCell className="whitespace-normal">
-                              {policyResultText(check.attributes.result)}
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                variant={
-                                  ["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status)
-                                    ? "destructive"
-                                    : check.attributes.status === "passed" ? "default" : "secondary"
-                                }
-                              >
-                                {check.attributes.status.replace(/_/g, " ")}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-             </div>
-
-             {/* Apply step */}
-             <div>
-                <div className="flex items-center justify-between px-5 py-4">
-                   <div className="flex items-center gap-3">
-                      {isApplied ? <CheckCircle2 className="h-5 w-5 text-emerald-500" /> :
-                       isApplying ? <Clock className="h-5 w-5 text-blue-500" /> :
-                       isPlanned ? <AlertCircle className="h-5 w-5 text-orange-500" /> :
-                       <div className="h-5 w-5 rounded-full border-2 border-gray-300 flex items-center justify-center" />}
-                      <span className={`font-semibold ${isApplied || isApplying || isPlanned ? 'text-gray-900' : 'text-gray-500'}`}>Apply</span>
-                   </div>
-                   {isPlanned && <span className="text-sm text-orange-600 font-medium bg-orange-50 px-2 py-0.5 rounded border border-orange-200">Needs confirmation</span>}
-                </div>
-             </div>
-          </div>
+      <dl className="mb-5 grid overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
+        <div className="border-b border-gray-200 px-5 py-4 sm:border-b-0 sm:border-r">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            {attributes["plan-only"] === true ? "Plan duration" : "Plan & apply duration"}
+          </dt>
+          <dd className="mt-1 text-sm font-semibold text-gray-950">{duration}</dd>
         </div>
-
-        <div className="col-span-1">
-          <div className="bg-white border border-gray-200 rounded-md shadow-sm">
-            <div className="px-4 py-3 border-b border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-900">Run Details</h3>
-            </div>
-            <div className="p-4 space-y-4">
-              <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</div>
-                <div className="text-[13px] text-gray-900 font-medium capitalize">
-                   {status.replace(/_/g, ' ')}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Workspace</div>
-                <div className="text-[13px] text-blue-600 hover:underline cursor-pointer font-medium">
-                   {workspaceName}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Auto-apply</div>
-                <div className="text-[13px] text-gray-900">
-                   {(run.attributes["auto-apply"] as boolean | undefined) === true ? "Enabled" : "Disabled"}
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="border-b border-gray-200 px-5 py-4 sm:border-b-0 sm:border-r">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Resources changed</dt>
+          <dd className="mt-1">
+            <ResourceCounts
+              additions={summaryCounts?.["resource-additions"]}
+              changes={summaryCounts?.["resource-changes"]}
+              destructions={summaryCounts?.["resource-destructions"]}
+              imports={summaryImportCount}
+              status={applyStatus === "finished" ? applyStatus : planStatus}
+            />
+          </dd>
         </div>
+        <div className="px-5 py-4">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</dt>
+          <dd className="mt-1 text-sm font-semibold text-gray-950">
+            {planActionCount === null
+              ? "Unavailable"
+              : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`}
+          </dd>
+        </div>
+      </dl>
+
+      <details className="mb-5 overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+        <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-gray-950 hover:bg-gray-50">
+          Run details
+        </summary>
+        <dl className="grid gap-4 border-t border-gray-200 px-5 py-4 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</dt>
+            <dd className="mt-1 font-medium text-gray-950">{statusLabel(status)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Workspace</dt>
+            <dd className="mt-1">
+              <Link to={workspacePath} className="font-medium text-blue-700 hover:underline">
+                {workspaceName}
+              </Link>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Operation</dt>
+            <dd className="mt-1 capitalize text-gray-900">{statusLabel(attributes.operation ?? "plan_and_apply")}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Auto apply</dt>
+            <dd className="mt-1 text-gray-900">{attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Terraform version</dt>
+            <dd className="mt-1 text-gray-900">{attributes["terraform-version"] ?? "Workspace default"}</dd>
+          </div>
+        </dl>
+        {timestampEntries.length > 0 && (
+          <div className="border-t border-gray-200 px-5 py-4">
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Run timeline</h2>
+            <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+              {timestampEntries.map(([key, value]): React.JSX.Element => (
+                <div key={key}>
+                  <dt className="capitalize text-gray-500">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
+                  <dd className="mt-0.5 text-gray-900">{formatDate(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+      </details>
+
+      <div className="min-w-0 space-y-5">
+          <details
+            aria-labelledby="plan-heading"
+            className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
+            open={["running", "finished", "errored", "unreachable"].includes(planStatus) || undefined}
+          >
+            <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <ChevronDown className="size-4 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+                  <PhaseIcon status={planStatus} />
+                  <h2 id="plan-heading" className="font-semibold capitalize text-gray-950">
+                    Plan {planStatus.replace(/_/g, " ")}
+                  </h2>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-4">
+                  <PhaseMeta
+                    phase="plan"
+                    status={planStatus}
+                    timestamps={plan?.attributes["status-timestamps"] ?? timestamps}
+                    logUrl={plan?.attributes["log-read-url"]}
+                  />
+                  <ResourceCounts
+                    additions={planCounts["resource-additions"]}
+                    changes={planCounts["resource-changes"]}
+                    destructions={planCounts["resource-destructions"]}
+                    imports={planImportCount}
+                    status={planStatus}
+                  />
+                  {planActionCount !== null && (
+                    <span className="text-xs text-gray-500">
+                      <span className="font-semibold text-gray-700">Actions:</span> {planActionCount} to invoke
+                    </span>
+                  )}
+                </div>
+              </div>
+            </summary>
+
+            <PlanOutput
+              runId={runId}
+              status={status}
+              planStatus={planStatus}
+              onSummaryChange={handlePlanSummaryChange}
+            />
+
+            <details
+              className="group border-t border-gray-200"
+              open={["running", "errored", "unreachable"].includes(planStatus) || undefined}
+            >
+              <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+                Raw plan log
+              </summary>
+              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-gray-800 bg-[#111315] p-4 font-mono text-xs leading-5 text-gray-200">
+                {planLogs !== "" ? planLogs : "Plan output is not available yet."}
+              </pre>
+            </details>
+          </details>
+
+          {showCostEstimate && (
+          <section aria-labelledby="cost-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between gap-4 px-5 py-4">
+              <div className="flex items-center gap-3">
+                {costPending ? (
+                  <Clock className="size-5 text-blue-600" aria-hidden="true" />
+                ) : costFailed ? (
+                  <XCircle className="size-5 text-red-600" aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
+                )}
+                <h2 id="cost-heading" className="font-semibold text-gray-950">Cost estimation</h2>
+              </div>
+              <Badge variant={costFailed ? "destructive" : "secondary"} className="rounded capitalize">{costStatus}</Badge>
+            </div>
+            {costAttributes !== undefined && (
+              <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 border-t border-gray-200 px-5 py-4 text-sm md:grid-cols-4">
+                <div>
+                  <dt className="text-xs text-gray-500">Prior monthly</dt>
+                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Proposed monthly</dt>
+                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Monthly delta</dt>
+                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Priced resources</dt>
+                  <dd className="mt-1 font-medium">
+                    {costAttributes["matched-resources-count"] ?? 0} of {costAttributes["resources-count"] ?? 0}
+                  </dd>
+                </div>
+                {costAttributes["error-message"] !== null && costAttributes["error-message"] !== undefined && (
+                  <div className="col-span-full text-red-700">{costAttributes["error-message"]}</div>
+                )}
+              </dl>
+            )}
+          </section>
+          )}
+
+          {showPolicyChecks && (
+          <section aria-labelledby="policy-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+              <div className="flex items-center gap-3">
+                {hasFailedPolicy ? (
+                  <AlertCircle className="size-5 text-red-600" aria-hidden="true" />
+                ) : policySummary === "checking" ? (
+                  <Clock className="size-5 text-blue-600" aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
+                )}
+                <h2 id="policy-heading" className="font-semibold text-gray-950">Policy check</h2>
+              </div>
+              <Badge variant={hasFailedPolicy ? "destructive" : "secondary"} className="rounded capitalize">
+                {policySummary}
+              </Badge>
+            </div>
+            {policyChecks.length > 0 && (
+              <div className="border-t border-gray-200 px-5 py-3">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Check</TableHead>
+                      <TableHead>Result</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {policyChecks.map((check: PolicyCheck): React.JSX.Element => (
+                      <TableRow key={check.id}>
+                        <TableCell>
+                          <div className="text-sm font-medium">
+                            {check.attributes["policy-name"] ?? check.id}
+                          </div>
+                          {check.attributes["policy-name"] !== null
+                            && check.attributes["policy-name"] !== undefined && (
+                            <code className="text-[11px] text-gray-500">{check.id}</code>
+                          )}
+                        </TableCell>
+                        <TableCell className="whitespace-normal">{policyResultText(check.attributes.result)}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={["failed", "soft_failed", "hard_failed", "errored", "unreachable"].includes(check.attributes.status)
+                              && !isAdvisoryPolicyIssue(check)
+                              ? "destructive"
+                              : "secondary"}
+                            className="rounded capitalize"
+                          >
+                            {isAdvisoryPolicyIssue(check)
+                              ? `advisory ${check.attributes.status === "failed"
+                                  ? "failed"
+                                  : check.attributes.status.replace(/_/g, " ")}`
+                              : check.attributes.status.replace(/_/g, " ")}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </section>
+          )}
+
+          {showApply && (
+          <details
+            aria-labelledby="apply-heading"
+            className={`overflow-hidden rounded-md border bg-white shadow-sm ${
+              ["errored", "unreachable"].includes(applyStatus) ? "border-red-300" : "border-gray-200"
+            }`}
+            open={["running", "errored", "unreachable"].includes(applyStatus) || undefined}
+          >
+            <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <ChevronDown className="size-4 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+                  <PhaseIcon status={applyStatus} />
+                  <h2 id="apply-heading" className="font-semibold capitalize text-gray-950">
+                    Apply {canApply ? "needs confirmation" : applyStatus.replace(/_/g, " ")}
+                  </h2>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-4">
+                  <PhaseMeta
+                    phase="apply"
+                    status={applyStatus}
+                    timestamps={apply?.attributes["status-timestamps"] ?? timestamps}
+                    logUrl={apply?.attributes["log-read-url"]}
+                  />
+                  <ResourceCounts
+                    additions={applyCounts?.["resource-additions"]}
+                    changes={applyCounts?.["resource-changes"]}
+                    destructions={applyCounts?.["resource-destructions"]}
+                    imports={applyCounts?.["resource-imports"] ?? planImportCount}
+                    status={applyStatus}
+                  />
+                  {planActionCount !== null && (
+                    <span className="text-xs text-gray-500">
+                      <span className="font-semibold text-gray-700">Actions:</span> {planActionCount}{" "}
+                      {applyStatus === "finished" ? "invoked" : "to invoke"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </summary>
+            {["errored", "unreachable"].includes(applyStatus) && (
+              <section aria-labelledby="apply-diagnostics-heading" className="border-t border-red-200 bg-red-50/70 px-5 py-4">
+                <h3 id="apply-diagnostics-heading" className="text-sm font-semibold text-red-900">Diagnostics</h3>
+                <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white p-4 font-mono text-xs leading-5 text-red-900">
+                  {applyLogs !== "" ? applyLogs : "The apply failed before diagnostic output became available."}
+                </pre>
+              </section>
+            )}
+            <details className="group" open={applyStatus === "running" || undefined}>
+              <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+                Raw apply log
+              </summary>
+              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-gray-800 bg-[#111315] p-4 font-mono text-xs leading-5 text-gray-200">
+                {applyLogs !== "" ? applyLogs : "Apply output is not available yet."}
+              </pre>
+            </details>
+          </details>
+          )}
+
+          {(canApply || canDiscard) && (
+            <section
+              aria-labelledby="run-confirmation-heading"
+              className="mx-auto w-full max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-5 py-4 shadow-sm"
+            >
+              <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                Please review the planned changes before continuing
+              </h2>
+              <div className="mt-3">
+                <ResourceCounts
+                  additions={planCounts["resource-additions"]}
+                  changes={planCounts["resource-changes"]}
+                  destructions={planCounts["resource-destructions"]}
+                  imports={planImportCount}
+                  status={planStatus}
+                />
+              </div>
+              <p className="mt-3 text-sm text-amber-900">
+                Confirming will execute the plan shown above against this workspace.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {canApply && (
+                  <Button
+                    className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
+                    disabled={pendingAction !== ""}
+                    onClick={(): void => { void performRunAction("apply", "Run queued for apply"); }}
+                  >
+                    Confirm &amp; Apply
+                  </Button>
+                )}
+                {canDiscard && (
+                  <Button
+                    variant="outline"
+                    disabled={pendingAction !== ""}
+                    onClick={(): void => { void performRunAction("discard", "Run discarded"); }}
+                  >
+                    Discard run
+                  </Button>
+                )}
+                {canComment && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={(): void => { document.getElementById("run-comment")?.focus(); }}
+                  >
+                    Add comment
+                  </Button>
+                )}
+              </div>
+            </section>
+          )}
+
+          <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
+            <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
+              <History className="size-5 text-gray-400" aria-hidden="true" />
+              <h2 id="activity-heading" className="font-semibold text-gray-950">Activity</h2>
+              <span className="text-xs text-gray-500">{runEvents.length}</span>
+            </div>
+            {runEvents.length === 0 ? (
+              <p className="px-5 py-3 text-xs text-gray-500">No run activity yet.</p>
+            ) : (
+              <ol className="divide-y divide-gray-100">
+                {runEvents.map((event: RunEvent): React.JSX.Element => {
+                  const actor = event.attributes["actor-username"] ?? "System";
+                  const fromStatus = event.attributes.details?.fromStatus;
+                  const toStatus = event.attributes.details?.toStatus;
+                  const eventSource = event.attributes.details?.source;
+                  const triggerReason = event.attributes.details?.triggerReason;
+                  return (
+                    <li key={event.id} className="flex gap-3 px-5 py-3">
+                      <span
+                        aria-hidden="true"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-600"
+                      >
+                        {actor.slice(0, 1).toUpperCase()}
+                      </span>
+                      <div className="min-w-0 flex-1 text-sm">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                          <p className="text-gray-800">
+                            <span className="font-semibold text-gray-950">{actor}</span>{" "}
+                            {RUN_EVENT_LABELS[event.attributes.action] ?? statusLabel(event.attributes.action)}
+                          </p>
+                          <time
+                            className="text-xs text-gray-500"
+                            dateTime={event.attributes["created-at"]}
+                          >
+                            {formatDate(event.attributes["created-at"])}
+                          </time>
+                        </div>
+                        {fromStatus !== undefined && toStatus !== undefined && (
+                          <p className="mt-0.5 text-xs text-gray-500">
+                            {statusLabel(fromStatus)} → {statusLabel(toStatus)}
+                          </p>
+                        )}
+                        {event.attributes.action === "create" && eventSource !== undefined && (
+                          <p className="mt-0.5 text-xs text-gray-500">
+                            {statusLabel(triggerReason ?? "manual")} from {sourceLabel(eventSource)}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </section>
+
+          <section aria-labelledby="comments-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
+            <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
+              <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
+              <h2 id="comments-heading" className="font-semibold text-gray-950">Comments</h2>
+              <span className="text-xs text-gray-500">{comments.length}</span>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {comments.length === 0 ? (
+                <p className="px-5 py-4 text-sm text-gray-500">No comments yet.</p>
+              ) : comments.map((comment: RunComment): React.JSX.Element => (
+                <article key={comment.id} className="px-5 py-4">
+                  <div className="mb-1 flex items-center justify-between gap-3 text-xs text-gray-500">
+                    <span className="font-medium text-gray-700">{comment.attributes["actor-username"] ?? "System"}</span>
+                    <time dateTime={comment.attributes["created-at"]}>{formatDate(comment.attributes["created-at"])}</time>
+                  </div>
+                  <p className="whitespace-pre-wrap text-sm text-gray-800">{comment.attributes.body}</p>
+                </article>
+              ))}
+            </div>
+            {canComment && (
+              <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-gray-200 p-5">
+                <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-gray-900">Add a comment</label>
+                <textarea
+                  id="run-comment"
+                  rows={3}
+                  value={commentBody}
+                  onChange={(event): void => { setCommentBody(event.target.value); }}
+                  className="w-full resize-y rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                  placeholder="Share context about this run"
+                />
+                <div className="mt-2 flex justify-end">
+                  <Button type="submit" disabled={commentBody.trim() === "" || pendingAction !== ""}>Add comment</Button>
+                </div>
+              </form>
+            )}
+          </section>
       </div>
     </div>
   );

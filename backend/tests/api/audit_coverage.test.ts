@@ -22,6 +22,7 @@ const runIds = {
   discard: `audit-discard-${suffix}`,
   cancel: `audit-cancel-${suffix}`,
   forceCancel: `audit-force-cancel-${suffix}`,
+  override: `audit-override-${suffix}`,
 } as const;
 
 let orgId = "";
@@ -85,6 +86,7 @@ beforeAll(async () => {
     { id: runIds.discard, workspaceId, status: "pending", createdAt: Date.now() },
     { id: runIds.cancel, workspaceId, status: "planning", createdAt: Date.now() },
     { id: runIds.forceCancel, workspaceId, status: "applying", createdAt: Date.now() },
+    { id: runIds.override, workspaceId, status: "policy_soft_failed", createdAt: Date.now() },
   ]);
 });
 
@@ -134,12 +136,40 @@ describe("audit coverage", () => {
     expect(JSON.stringify([organizationAudit?.details, workspaceAudit?.details])).not.toContain(secretMarker);
   });
 
-  it("audits successful apply, discard, cancel, and force-cancel transitions", async () => {
+  it("audits run creation with safe actor-aware activity details", async () => {
+    const response = await request(`/api/v2/workspaces/${workspaceId}/runs`, "POST", {
+      data: {
+        type: "runs",
+        attributes: { message: "Audit creation activity" },
+      },
+    });
+    expect(response.status).toBe(201);
+    const runId = ((await response.json()) as { data: { id: string } }).data.id;
+
+    const eventsResponse = await request(`/api/v2/runs/${runId}/run-events`);
+    expect(eventsResponse.status).toBe(200);
+    const events = (await eventsResponse.json()) as {
+      data: { attributes: Record<string, unknown> }[];
+    };
+    expect(events.data).toHaveLength(1);
+    expect(events.data[0]?.attributes).toMatchObject({
+      action: "create",
+      "actor-username": `audit-user-${suffix}`,
+      details: {
+        workspaceId,
+        status: "pending",
+        source: "tfe-api",
+      },
+    });
+  });
+
+  it("audits successful run transitions and exposes safe actor-aware run events", async () => {
     const transitions = [
       { action: "apply", runId: runIds.apply, fromStatus: "planned", toStatus: "confirmed" },
       { action: "discard", runId: runIds.discard, fromStatus: "pending", toStatus: "discarded" },
       { action: "cancel", runId: runIds.cancel, fromStatus: "planning", toStatus: "canceled" },
       { action: "force-cancel", runId: runIds.forceCancel, fromStatus: "applying", toStatus: "force_canceled" },
+      { action: "override-policy", runId: runIds.override, fromStatus: "policy_soft_failed", toStatus: "planned" },
     ] as const;
 
     for (const transition of transitions) {
@@ -177,5 +207,39 @@ describe("audit coverage", () => {
     expect((await db.query.auditLogs.findMany({
       where: and(eq(auditLogs.action, "discard"), eq(auditLogs.resourceId, runIds.discard)),
     }))).toHaveLength(1);
+
+    await db.insert(auditLogs).values({
+      id: `audit-run-created-${suffix}`,
+      orgId,
+      userId,
+      action: "create",
+      resourceType: "runs",
+      resourceId: runIds.override,
+      details: {
+        fromStatus: "pending",
+        toStatus: "planned",
+        unsafe: secretMarker,
+      },
+      createdAt: 0,
+    });
+    const runEventsResponse = await request(`/api/v2/runs/${runIds.override}/run-events`);
+    expect(runEventsResponse.status).toBe(200);
+    const runEvents = (await runEventsResponse.json()) as {
+      data: {
+        type: string;
+        attributes: Record<string, unknown>;
+      }[];
+    };
+    expect(runEvents.data.map(({ attributes }): unknown => attributes.action)).toEqual(["create", "override-policy"]);
+    expect(runEvents.data[0]).toMatchObject({
+      type: "run-events",
+      attributes: {
+        action: "create",
+        "actor-username": `audit-user-${suffix}`,
+        details: { fromStatus: "pending", toStatus: "planned" },
+      },
+    });
+    expect(runEvents.data[0]?.attributes["created-at"]).toBeString();
+    expect(JSON.stringify(runEvents.data)).not.toContain(secretMarker);
   });
 });

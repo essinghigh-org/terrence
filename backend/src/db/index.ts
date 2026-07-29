@@ -39,9 +39,11 @@ const runsAdditions: [string, string][] = [
   ["plan_resource_additions", "integer DEFAULT 0"],
   ["plan_resource_changes", "integer DEFAULT 0"],
   ["plan_resource_destructions", "integer DEFAULT 0"],
+  ["plan_resource_imports", "integer DEFAULT 0"],
   ["apply_resource_additions", "integer DEFAULT 0"],
   ["apply_resource_changes", "integer DEFAULT 0"],
   ["apply_resource_destructions", "integer DEFAULT 0"],
+  ["apply_resource_imports", "integer DEFAULT 0"],
   ["applied_at", "integer"],
 ];
 for (const [col, def] of runsAdditions) {

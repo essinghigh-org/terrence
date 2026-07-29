@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { loadOrganizationVcsConnections, type VcsConnection } from "@/components/WorkspaceVcs";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 
 type CreateWorkspaceModalProps = {
@@ -28,18 +30,52 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [terraformVersion, setTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(false);
   const [vcsIdentifier, setVcsIdentifier] = useState("");
-  const [ghAppInstallationId, setGhAppInstallationId] = useState("");
+  const [vcsConnections, setVcsConnections] = useState<VcsConnection[]>([]);
+  const [vcsConnectionValue, setVcsConnectionValue] = useState("");
+  const [vcsConnectionsLoading, setVcsConnectionsLoading] = useState(false);
+  const [vcsConnectionsError, setVcsConnectionsError] = useState("");
   const [sourceType, setSourceType] = useState("tfe-api");
 
+  useEffect((): (() => void) | undefined => {
+    if (!open || sourceType !== "vcs") return undefined;
+    const controller = new AbortController();
+    setVcsConnectionsLoading(true);
+    setVcsConnectionsError("");
+    void loadOrganizationVcsConnections(orgName, controller.signal)
+      .then((connections: VcsConnection[]): void => {
+        if (!controller.signal.aborted) {
+          setVcsConnections(connections);
+          setVcsConnectionValue((current: string): string =>
+            connections.some((connection: VcsConnection): boolean => connection.value === current) ? current : "");
+        }
+      })
+      .catch((): void => {
+        if (!controller.signal.aborted) {
+          setVcsConnections([]);
+          setVcsConnectionValue("");
+          setVcsConnectionsError("Registered VCS connections could not be loaded.");
+        }
+      })
+      .finally((): void => {
+        if (!controller.signal.aborted) setVcsConnectionsLoading(false);
+      });
+    return (): void => {
+      controller.abort();
+    };
+  }, [open, orgName, sourceType]);
 
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
+    const workspaceName = name.trim();
+    if (workspaceName === "") return;
     const normalizedVcsIdentifier = vcsIdentifier.trim();
-    const normalizedInstallationId = ghAppInstallationId.trim();
-    if ((normalizedVcsIdentifier === "") !== (normalizedInstallationId === "")) {
+    const selectedConnection = vcsConnections.find(
+      (connection: VcsConnection): boolean => connection.value === vcsConnectionValue,
+    );
+    if (sourceType === "vcs" && (normalizedVcsIdentifier === "" || selectedConnection === undefined)) {
       toast.add({
         title: "Incomplete VCS connection",
-        description: "Provide both a repository identifier and GitHub App installation ID.",
+        description: "Choose a registered VCS connection and enter a repository identifier.",
         type: "error",
       });
       return;
@@ -48,16 +84,21 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     const normalizedVersion = terraformVersion.trim() !== "" ? terraformVersion.trim() : "latest";
     try {
 
-      const vcsRepo = sourceType === "vcs" && normalizedVcsIdentifier !== ""
-        ? { identifier: normalizedVcsIdentifier, "github-app-installation-id": normalizedInstallationId }
+      const vcsRepo = sourceType === "vcs" && selectedConnection !== undefined
+        ? {
+            identifier: normalizedVcsIdentifier,
+            ...(selectedConnection.kind === "github-app"
+              ? { "github-app-installation-id": selectedConnection.id }
+              : { "oauth-token-id": selectedConnection.id }),
+          }
         : undefined;
 
-      const res = await fetchApi(`/organizations/${orgName}/workspaces`, {
+      const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces`, {
         method: "POST",
         body: JSON.stringify({
           data: {
             attributes: {
-              name: name.trim(),
+              name: workspaceName,
               "auto-apply": autoApply,
               "iac-binary": iacBinary,
               "terraform-version": normalizedVersion,
@@ -75,7 +116,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setIacBinary("tofu");
       setTerraformVersion("latest");
       setVcsIdentifier("");
-      setGhAppInstallationId("");
+      setVcsConnectionValue("");
+      setSourceType("tfe-api");
       toast.add({ title: "Workspace created", type: "success" });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create workspace";
@@ -87,7 +129,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>New Workspace</DialogTitle>
           <DialogDescription>Create a new workspace under {orgName}.</DialogDescription>
@@ -166,17 +208,35 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="gh-app-id" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                    GitHub App Installation ID
+                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    VCS Connection
                   </label>
-                  <Input
-                    id="gh-app-id"
-                    value={ghAppInstallationId}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setGhAppInstallationId(event.currentTarget.value); }}
-                    placeholder="e.g. ghain-xxxxxxxx"
-                    disabled={loading}
-                  />
-                  <p className="text-xs text-gray-500">Provide both Identifier and Installation ID to connect this workspace to GitHub.</p>
+                  <select
+                    id="vcs-connection"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                    value={vcsConnectionValue}
+                    onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+                      setVcsConnectionValue(event.target.value);
+                    }}
+                    disabled={loading || vcsConnectionsLoading}
+                  >
+                    <option value="">
+                      {vcsConnectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
+                    </option>
+                    {vcsConnections.map((connection: VcsConnection): React.JSX.Element => (
+                      <option key={connection.value} value={connection.value}>{connection.label}</option>
+                    ))}
+                  </select>
+                  <p
+                    role={vcsConnectionsError === "" ? undefined : "alert"}
+                    className={vcsConnectionsError === "" ? "text-xs text-gray-500" : "text-xs text-destructive"}
+                  >
+                    {vcsConnectionsError !== ""
+                      ? vcsConnectionsError
+                      : vcsConnections.length === 0 && !vcsConnectionsLoading
+                        ? "No registered connections are available. Add one in organization VCS settings."
+                        : "Choose a registered GitHub App or OAuth connection."}
+                  </p>
                 </div>
               </div>
             )}
@@ -188,8 +248,12 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             )}
           </div>
           <DialogFooter className="mt-4">
-            <Button type="submit" disabled={loading}>
-              {loading ? "Creating..." : "Create Workspace"}
+            <Button type="button" variant="outline" disabled={loading} onClick={(): void => { onOpenChange(false); }}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={loading || name.trim() === ""}>
+              {loading && <Spinner data-icon="inline-start" />}
+              Create Workspace
             </Button>
           </DialogFooter>
         </form>

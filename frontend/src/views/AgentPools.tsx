@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -32,8 +32,10 @@ type AgentToken = {
 }
 
 export function AgentPools(): React.JSX.Element {
-  const { orgName } = useParams<{ orgName: string }>();
+  const { orgName: rawOrgName } = useParams<{ orgName: string }>();
+  const orgName = rawOrgName ?? "";
   const [pools, setPools] = useState<AgentPool[]>([]);
+  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -51,32 +53,57 @@ export function AgentPools(): React.JSX.Element {
   const [loadingTokens, setLoadingTokens] = useState(false);
   const [creatingToken, setCreatingToken] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const activeOrganizationName = useRef(orgName);
+  const selectedPoolId = useRef<string | null>(null);
+  activeOrganizationName.current = orgName;
+  const canManage = orgName !== "" && manageableOrganizationName === orgName;
 
   useEffect((): void => {
-    if (orgName != null) void loadAgentPools();
+    setPools([]);
+    setManageableOrganizationName("");
+    setPoolDialogOpen(false);
+    setTokensDialogOpen(false);
+    selectedPoolId.current = null;
+    if (orgName !== "") void loadAgentPools();
   }, [orgName]);
 
   const loadAgentPools = async (): Promise<void> => {
+    const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName ?? ""}/agent-pools`) as { data: AgentPool[] };
-      setPools(res.data);
+      const organizationResponse = await fetchApi(
+        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
+      ) as {
+        data?: { attributes?: { permissions?: { "can-manage-agent-pools"?: boolean } } };
+      };
+      if (activeOrganizationName.current !== requestedOrganizationName) return;
+      if (organizationResponse.data?.attributes?.permissions?.["can-manage-agent-pools"] !== true) {
+        setError("You do not have permission to manage agent pools for this organization.");
+        return;
+      }
+      setManageableOrganizationName(requestedOrganizationName);
+      const response = await fetchApi(
+        `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
+      ) as { data?: AgentPool[] };
+      if (activeOrganizationName.current !== requestedOrganizationName) return;
+      setPools(Array.isArray(response.data) ? response.data : []);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load agent pools";
-      setError(msg);
+      if (activeOrganizationName.current === requestedOrganizationName) {
+        setError(err instanceof Error ? err.message : "Failed to load agent pools");
+      }
     } finally {
-      setLoading(false);
+      if (activeOrganizationName.current === requestedOrganizationName) setLoading(false);
     }
   };
 
   const handleCreatePool = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (orgName == null) return;
+    if (!canManage) return;
     setCreatingPool(true);
     setPoolFormError("");
     try {
-      const res = await fetchApi(`/organizations/${orgName}/agent-pools`, {
+      const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/agent-pools`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -87,6 +114,7 @@ export function AgentPools(): React.JSX.Element {
           },
         }),
       }) as { data: AgentPool };
+      if (activeOrganizationName.current !== orgName) return;
       setPools((prev: AgentPool[]): AgentPool[] => [...prev, res.data]);
       setPoolDialogOpen(false);
       setPoolName("");
@@ -99,10 +127,11 @@ export function AgentPools(): React.JSX.Element {
   };
 
   const handleDeletePool = async (pool: AgentPool): Promise<void> => {
-    if (!window.confirm(`Delete agent pool "${pool.attributes.name}"?`)) return;
+    if (!canManage || !window.confirm(`Delete agent pool "${pool.attributes.name}"?`)) return;
     setError("");
     try {
-      await fetchApi(`/agent-pools/${pool.id}`, { method: "DELETE" });
+      await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}`, { method: "DELETE" });
+      if (activeOrganizationName.current !== orgName) return;
       setPools((prev: AgentPool[]): AgentPool[] => prev.filter((p: AgentPool): boolean => p.id !== pool.id));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete agent pool";
@@ -111,6 +140,8 @@ export function AgentPools(): React.JSX.Element {
   };
 
   const openTokensModal = async (pool: AgentPool): Promise<void> => {
+    if (!canManage) return;
+    selectedPoolId.current = pool.id;
     setSelectedPool(pool);
     setTokens([]);
     setCreatedSecret(null);
@@ -118,23 +149,27 @@ export function AgentPools(): React.JSX.Element {
     setTokensDialogOpen(true);
     setLoadingTokens(true);
     try {
-      const res = await fetchApi(`/agent-pools/${pool.id}/authentication-tokens`) as { data: AgentToken[] };
-      setTokens(res.data);
+      const res = await fetchApi(
+        `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
+      ) as { data?: AgentToken[] };
+      if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
+      setTokens(Array.isArray(res.data) ? res.data : []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load agent pool tokens";
       setError(msg);
     } finally {
-      setLoadingTokens(false);
+      if (selectedPoolId.current === pool.id) setLoadingTokens(false);
     }
   };
 
   const handleCreateToken = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (selectedPool == null) return;
+    if (!canManage || selectedPool == null) return;
+    const pool = selectedPool;
     setCreatingToken(true);
     setCreatedSecret(null);
     try {
-      const res = await fetchApi(`/agent-pools/${selectedPool.id}/authentication-tokens`, {
+      const res = await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -145,11 +180,15 @@ export function AgentPools(): React.JSX.Element {
           },
         }),
       }) as { data: { attributes: { token?: string; secret?: string } } };
+      if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
       const attrs = res.data.attributes;
       setCreatedSecret(attrs.token ?? attrs.secret ?? "Token created successfully");
       setTokenDesc("");
-      const tokensRes = await fetchApi(`/agent-pools/${selectedPool.id}/authentication-tokens`) as { data: AgentToken[] };
-      setTokens(tokensRes.data);
+      const tokensRes = await fetchApi(
+        `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
+      ) as { data?: AgentToken[] };
+      if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
+      setTokens(Array.isArray(tokensRes.data) ? tokensRes.data : []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to create agent token";
       setError(msg);
@@ -159,9 +198,10 @@ export function AgentPools(): React.JSX.Element {
   };
 
   const handleDeleteToken = async (tokenId: string): Promise<void> => {
-    if (!window.confirm("Revoke this agent token?")) return;
+    if (!canManage || !window.confirm("Revoke this agent token?")) return;
     try {
-      await fetchApi(`/authentication-tokens/${tokenId}`, { method: "DELETE" });
+      await fetchApi(`/authentication-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" });
+      if (activeOrganizationName.current !== orgName) return;
       setTokens((prev: AgentToken[]): AgentToken[] => prev.filter((t: AgentToken): boolean => t.id !== tokenId));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to revoke token";
@@ -176,14 +216,17 @@ export function AgentPools(): React.JSX.Element {
           <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
           <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>
         </div>
-        <Button onClick={(): void => { setPoolDialogOpen(true); }}>
+        {canManage && <Button onClick={(): void => { setPoolDialogOpen(true); }}>
           <Plus className="mr-1.5 size-4" /> Create Agent Pool
-        </Button>
+        </Button>}
       </div>
 
       {error !== "" && (
-        <div className="rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
-          {error}
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
+          <span>{error}</span>
+          <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadAgentPools(); }}>
+            Try again
+          </Button>
         </div>
       )}
 
@@ -203,6 +246,12 @@ export function AgentPools(): React.JSX.Element {
                 <TableRow>
                   <TableCell colSpan={4} className="h-24 text-center">
                     <Spinner className="mx-auto size-6 text-primary" />
+                  </TableCell>
+                </TableRow>
+              ) : !canManage ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                    Agent pool access is unavailable.
                   </TableCell>
                 </TableRow>
               ) : pools.length === 0 ? (

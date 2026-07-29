@@ -49,9 +49,12 @@ export function Register(): React.JSX.Element {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-sm">
+    <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      <Card className="w-full max-w-sm shadow-sm">
         <CardHeader>
+          <div aria-hidden="true" className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground text-lg font-bold text-background">
+            T
+          </div>
           <CardTitle>Create your account</CardTitle>
           <CardDescription>Start a self-hosted Terrence instance with a local user.</CardDescription>
         </CardHeader>
@@ -97,6 +100,6 @@ export function Register(): React.JSX.Element {
           </CardFooter>
         </form>
       </Card>
-    </div>
+    </main>
   );
 }

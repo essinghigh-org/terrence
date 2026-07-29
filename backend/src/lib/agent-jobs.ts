@@ -20,6 +20,11 @@ import {
 } from "../db/schema";
 import { queueRunNotification } from "./notifications";
 import { reportRunVcsStatus } from "./webhooks";
+import {
+  planJsonResourceCounts,
+  writePlanJsonArtifact,
+  type PlanJson,
+} from "./plan-json";
 
 export type AgentJobPhase = "plan" | "apply";
 
@@ -29,6 +34,8 @@ export type AgentJobCompletion = Readonly<{
   resourceAdditions: number | null;
   resourceChanges: number | null;
   resourceDestructions: number | null;
+  resourceImports: number | null;
+  planJson: PlanJson | null;
   statePayload: string | null;
   jsonState: string | null;
   jsonStateOutputs: string | null;
@@ -539,14 +546,25 @@ export async function appendAgentJobLog(
     ),
   });
   if (job === undefined) return false;
-  await db.insert(logs).values({
+  await insertAgentJobLog(db, job, outputText, Date.now());
+  return true;
+}
+
+async function insertAgentJobLog(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: Pick<AgentJob, "phase" | "runId">,
+  outputText: string,
+  createdAt: number,
+): Promise<void> {
+  await database.insert(logs).values({
     id: crypto.randomUUID(),
     runId: job.runId,
     phase: job.phase,
     outputText,
-    createdAt: Date.now(),
+    createdAt,
   });
-  return true;
 }
 
 export async function findClaimedAgentJob(
@@ -615,8 +633,20 @@ export async function completeAgentJob(
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     if (run?.status !== expectedRunStatus) return undefined;
+    if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
+      return undefined;
+    }
+    if (completion.planJson !== null) {
+      await writePlanJsonArtifact(run.id, completion.planJson);
+    }
+    const structuredPlanCounts = job.phase === "plan" && completion.planJson !== null
+      ? planJsonResourceCounts(completion.planJson)
+      : undefined;
 
     const now = Date.now();
+    if (completion.status === "errored" && completion.errorMessage !== null && completion.errorMessage !== "") {
+      await insertAgentJobLog(tx, job, `[agent error] ${completion.errorMessage}`, now);
+    }
     const jobStatus = completion.status === "completed" ? "completed" : "errored";
     const updatedJobs = await tx.update(agentJobs).set({
       status: jobStatus,
@@ -665,6 +695,9 @@ export async function completeAgentJob(
     }
 
     let statusTimestamps = run.statusTimestamps;
+    if (completion.status === "completed" && job.phase === "plan") {
+      statusTimestamps = timestampsWithStatus(statusTimestamps, "planned");
+    }
     if (policyOutcome.evaluated) {
       statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checking");
       if (policyOutcome.softFailed && !policyOutcome.hardFailed) {
@@ -678,14 +711,16 @@ export async function completeAgentJob(
       statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
       ...(job.phase === "plan"
         ? {
-            planResourceAdditions: completion.resourceAdditions,
-            planResourceChanges: completion.resourceChanges,
-            planResourceDestructions: completion.resourceDestructions,
+            planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
+            planResourceChanges: structuredPlanCounts?.changes ?? completion.resourceChanges,
+            planResourceDestructions: structuredPlanCounts?.destructions ?? completion.resourceDestructions,
+            planResourceImports: structuredPlanCounts?.imports ?? completion.resourceImports,
           }
         : {
             applyResourceAdditions: completion.resourceAdditions,
             applyResourceChanges: completion.resourceChanges,
             applyResourceDestructions: completion.resourceDestructions,
+            applyResourceImports: completion.resourceImports,
           }),
     }).where(and(
       eq(runs.id, run.id),

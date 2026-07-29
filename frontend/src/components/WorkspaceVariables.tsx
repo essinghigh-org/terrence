@@ -61,7 +61,11 @@ const messageFrom = (error: unknown, fallback: string): string =>
 
 export function WorkspaceVariables({
   workspaceId,
-}: Readonly<{ workspaceId: string }>): React.JSX.Element {
+  canUpdate,
+}: Readonly<{
+  workspaceId: string;
+  canUpdate: boolean;
+}>): React.JSX.Element {
   const [variables, setVariables] = useState<WorkspaceVariable[]>([]);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState("");
@@ -100,6 +104,7 @@ export function WorkspaceVariables({
   }, [workspaceId]);
 
   const openEditor = (variable?: WorkspaceVariable): void => {
+    if (!canUpdate) return;
     setEditing(variable ?? null);
     setKey(variable?.attributes.key ?? "");
     setValue(variable?.attributes.sensitive === true ? "" : variable?.attributes.value ?? "");
@@ -113,6 +118,7 @@ export function WorkspaceVariables({
 
   const saveVariable = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canUpdate) return;
     if (key.trim() === "") {
       setEditorError("Key is required.");
       return;
@@ -161,6 +167,7 @@ export function WorkspaceVariables({
   };
 
   const deleteVariable = async (variable: WorkspaceVariable): Promise<void> => {
+    if (!canUpdate) return;
     if (!window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
     setPageError("");
     try {
@@ -184,14 +191,19 @@ export function WorkspaceVariables({
           <CardDescription>
             Terraform and environment variables defined here override matching values from variable sets.
           </CardDescription>
-          <CardAction>
+          {canUpdate && <CardAction>
             <Button onClick={(): void => { openEditor(); }}>
               <Plus data-icon="inline-start" />
               Add variable
             </Button>
-          </CardAction>
+          </CardAction>}
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {!canUpdate && (
+            <p className="text-sm text-muted-foreground">
+              You can view variables, but you do not have permission to change them.
+            </p>
+          )}
           {pageError !== "" && (
             <p role="alert" className="text-sm text-destructive">
               {pageError}
@@ -205,13 +217,13 @@ export function WorkspaceVariables({
                   <TableHead>Value</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  {canUpdate && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading && (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={canUpdate ? 5 : 4} className="h-20 text-center text-muted-foreground">
                       Loading variables…
                     </TableCell>
                   </TableRow>
@@ -238,7 +250,7 @@ export function WorkspaceVariables({
                     <TableCell className="max-w-48 truncate text-muted-foreground">
                       {variable.attributes.description ?? "—"}
                     </TableCell>
-                    <TableCell>
+                    {canUpdate && <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={(): void => { openEditor(variable); }}>
                           Edit
@@ -251,12 +263,12 @@ export function WorkspaceVariables({
                           Delete
                         </Button>
                       </div>
-                    </TableCell>
+                    </TableCell>}
                   </TableRow>
                 ))}
                 {!loading && variables.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={canUpdate ? 5 : 4} className="h-20 text-center text-muted-foreground">
                       No workspace variables have been added.
                     </TableCell>
                   </TableRow>

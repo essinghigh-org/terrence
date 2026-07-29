@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -10,6 +10,8 @@ describe("browser refresh sessions", () => {
   const suffix = crypto.randomUUID();
   const userId = `user-refresh-${suffix}`;
   const username = `refresh-${suffix}`;
+  const otherUserId = `user-refresh-other-${suffix}`;
+  const otherUsername = `refresh-other-${suffix}`;
   const password = "correct horse battery staple";
 
   const request = (
@@ -25,16 +27,20 @@ describe("browser refresh sessions", () => {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }));
 
-  const login = (browserSession: boolean): Promise<Response> => request("/api/v2/users/login", {
+  const loginAs = (
+    loginUsername: string,
+    browserSession: boolean,
+  ): Promise<Response> => request("/api/v2/users/login", {
     data: {
       type: "users",
       attributes: {
-        username,
+        username: loginUsername,
         password,
         ...(browserSession ? { "browser-session": true } : {}),
       },
     },
   });
+  const login = (browserSession: boolean): Promise<Response> => loginAs(username, browserSession);
 
   const cookie = (response: Readonly<Response>): string => {
     const header = response.headers.get("set-cookie");
@@ -49,16 +55,25 @@ describe("browser refresh sessions", () => {
     { headers: { Authorization: `Bearer ${token}` } },
   ));
 
+  const authenticatedRequest = (
+    path: string,
+    token: string,
+    method = "GET",
+  ): Promise<Response> => app.handle(new Request(`http://terrence.test${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}` },
+  }));
+
   beforeAll(async () => {
-    await db.insert(users).values({
-      id: userId,
-      username,
-      passwordHash: await bcrypt.hash(password, 10),
-    });
+    const passwordHash = await bcrypt.hash(password, 10);
+    await db.insert(users).values([
+      { id: userId, username, passwordHash },
+      { id: otherUserId, username: otherUsername, passwordHash },
+    ]);
   });
 
   afterAll(async () => {
-    await db.delete(users).where(eq(users.id, userId));
+    await db.delete(users).where(inArray(users.id, [userId, otherUserId]));
   });
 
   test("keeps API login tokens unchanged", async () => {
@@ -177,6 +192,154 @@ describe("browser refresh sessions", () => {
     expect((await db.query.refreshSessions.findMany({
       where: eq(refreshSessions.familyId, session?.familyId ?? ""),
     })).every((row): boolean => row.revokedAt !== null)).toBeTrue();
+  });
+
+  test("lists only safe own-session metadata and revokes whole families", async () => {
+    type TokenDocument = {
+      data: { id: string; attributes: { token: string } };
+    };
+
+    const firstLogin = await login(true);
+    const firstCookie = cookie(firstLogin);
+    const firstDocument = await firstLogin.json() as TokenDocument;
+    const secondLogin = await login(true);
+    const secondDocument = await secondLogin.json() as TokenDocument;
+    const otherLogin = await loginAs(otherUsername, true);
+    const otherDocument = await otherLogin.json() as TokenDocument;
+
+    const firstSession = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.accessTokenId, firstDocument.data.id),
+    });
+    const secondSession = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.accessTokenId, secondDocument.data.id),
+    });
+    const otherSession = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.accessTokenId, otherDocument.data.id),
+    });
+    if (firstSession === undefined || secondSession === undefined || otherSession === undefined) {
+      throw new Error("Expected browser session families");
+    }
+
+    const rotationResponse = await request("/api/v2/users/refresh", undefined, {
+      Cookie: firstCookie,
+    });
+    const rotatedDocument = await rotationResponse.json() as TokenDocument;
+    const listResponse = await authenticatedRequest(
+      "/api/v2/account/sessions",
+      rotatedDocument.data.attributes.token,
+    );
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.headers.get("cache-control")).toBe("no-store");
+    const listDocument = await listResponse.json() as {
+      data: {
+        id: string;
+        type: string;
+        attributes: Record<string, unknown>;
+      }[];
+    };
+    expect(listDocument.data.map((session): string => session.id).sort()).toEqual(
+      [firstSession.familyId, secondSession.familyId].sort(),
+    );
+    expect(listDocument.data).not.toContainEqual(expect.objectContaining({ id: otherSession.familyId }));
+    expect(listDocument.data.find((session): boolean => session.id === firstSession.familyId)).toMatchObject({
+      type: "browser-sessions",
+      attributes: {
+        current: true,
+        "created-at": expect.any(String),
+        "last-rotated-at": expect.any(String),
+        "expires-at": expect.any(String),
+      },
+    });
+    expect(listDocument.data.find((session): boolean => session.id === secondSession.familyId)).toMatchObject({
+      type: "browser-sessions",
+      attributes: {
+        current: false,
+        "last-rotated-at": null,
+      },
+    });
+    for (const session of listDocument.data) {
+      expect(Object.keys(session.attributes).sort()).toEqual([
+        "created-at",
+        "current",
+        "expires-at",
+        "last-rotated-at",
+      ]);
+    }
+    const serialized = JSON.stringify(listDocument);
+    for (const stored of await db.query.refreshSessions.findMany()) {
+      expect(serialized).not.toContain(stored.tokenHash);
+      expect(serialized).not.toContain(stored.accessTokenId);
+      expect(serialized).not.toContain(stored.id);
+    }
+
+    const nullDescriptionTokenId = `null-description-${suffix}`;
+    await db.insert(apiTokens).values({
+      id: nullDescriptionTokenId,
+      token: `unused-${suffix}`,
+      userId,
+      description: null,
+    });
+    const personalTokensResponse = await authenticatedRequest(
+      `/api/v2/users/${userId}/authentication-tokens`,
+      rotatedDocument.data.attributes.token,
+    );
+    expect(personalTokensResponse.status).toBe(200);
+    const personalTokensDocument = await personalTokensResponse.json() as {
+      data: { id: string; attributes: { description: string | null } }[];
+      meta: { pagination: { "total-count": number } };
+    };
+    expect(personalTokensDocument.data.map((token): string => token.id)).toContain(nullDescriptionTokenId);
+    expect(personalTokensDocument.data.map((token): string => token.id)).not.toContain(secondDocument.data.id);
+    expect(personalTokensDocument.data.map((token): string => token.id)).not.toContain(rotatedDocument.data.id);
+    expect(personalTokensDocument.data.map((token) => token.attributes.description))
+      .not.toContain("Browser session access token");
+    expect(personalTokensDocument.meta.pagination["total-count"]).toBe(personalTokensDocument.data.length);
+
+    const crossUserRevoke = await authenticatedRequest(
+      `/api/v2/account/sessions/${otherSession.familyId}`,
+      rotatedDocument.data.attributes.token,
+      "DELETE",
+    );
+    expect(crossUserRevoke.status).toBe(404);
+    expect(await accountStatus(otherDocument.data.attributes.token).then((response): number => response.status)).toBe(200);
+    expect((await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, otherSession.familyId),
+    })).every((session): boolean => session.revokedAt === null)).toBeTrue();
+
+    const revokeOtherSession = await authenticatedRequest(
+      `/api/v2/account/sessions/${secondSession.familyId}`,
+      rotatedDocument.data.attributes.token,
+      "DELETE",
+    );
+    expect(revokeOtherSession.status).toBe(204);
+    expect(revokeOtherSession.headers.get("set-cookie")).toBeNull();
+    expect(await accountStatus(secondDocument.data.attributes.token).then((response): number => response.status)).toBe(401);
+    expect(await accountStatus(rotatedDocument.data.attributes.token).then((response): number => response.status)).toBe(200);
+    expect((await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, secondSession.familyId),
+    })).every((session): boolean => session.revokedAt !== null)).toBeTrue();
+    expect(await db.query.apiTokens.findFirst({
+      where: eq(apiTokens.id, secondDocument.data.id),
+    })).toBeUndefined();
+
+    const currentFamily = await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, firstSession.familyId),
+    });
+    const revokeCurrent = await authenticatedRequest(
+      `/api/v2/account/sessions/${firstSession.familyId}`,
+      rotatedDocument.data.attributes.token,
+      "DELETE",
+    );
+    expect(revokeCurrent.status).toBe(204);
+    expect(revokeCurrent.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(await accountStatus(rotatedDocument.data.attributes.token).then((response): number => response.status)).toBe(401);
+    expect((await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, firstSession.familyId),
+    })).every((session): boolean => session.revokedAt !== null)).toBeTrue();
+    expect(await db.query.apiTokens.findMany({
+      where: inArray(apiTokens.id, currentFamily.map((session): string => session.accessTokenId)),
+    })).toHaveLength(0);
+    expect(await accountStatus(otherDocument.data.attributes.token).then((response): number => response.status)).toBe(200);
   });
 
   test("treats concurrent use of one refresh token as family reuse", async () => {

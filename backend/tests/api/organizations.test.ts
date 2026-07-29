@@ -56,6 +56,46 @@ describe("TFE API v2 - Organizations", () => {
     expect(orgInDb).toBeDefined();
   });
 
+  it("rejects reserved and path-unsafe organization names on create and rename", async () => {
+    const invalidNames = ["account", "ADMIN", "nested/name", "contains space", "contains.dot"];
+    for (const name of invalidNames) {
+      const res = await app.handle(
+        new Request("http://localhost/api/v2/organizations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`
+          },
+          body: JSON.stringify({
+            data: { type: "organizations", attributes: { name } }
+          })
+        })
+      );
+      expect(res.status).toBe(422);
+    }
+
+    for (const name of invalidNames) {
+      const res = await app.handle(
+        new Request(`http://localhost/api/v2/organizations/${orgName}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`
+          },
+          body: JSON.stringify({
+            data: { type: "organizations", attributes: { name } }
+          })
+        })
+      );
+      expect(res.status).toBe(422);
+    }
+
+    const unchanged = await db.query.organizations.findFirst({
+      where: eq(organizations.name, orgName),
+    });
+    expect(unchanged).toBeDefined();
+  });
+
   it("should get an organization by name", async () => {
     const res = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}`, {

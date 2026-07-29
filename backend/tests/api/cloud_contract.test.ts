@@ -93,6 +93,7 @@ describe("Terraform cloud protocol contract", () => {
     const workspace = (await workspaceResponse.json()).data;
     expect(workspace.attributes["execution-mode"]).toBe("remote");
     expect(workspace.attributes["iac-binary"]).toBe("tofu");
+    expect(workspace.attributes["structured-run-output-enabled"]).toBe(true);
     expect(workspace.attributes.permissions).toMatchObject({
       "can-queue-apply": true,
       "can-queue-run": true,
@@ -275,6 +276,13 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports run resource management, logs, plan/apply resources, and run actions", async () => {
+    await db.update(configurationVersions).set({
+      source: "github",
+      ingressAttributes: {
+        branch: "feature/structured-output",
+        pullRequestNumber: 10,
+      },
+    }).where(eq(configurationVersions.id, configurationVersionId));
     await db.insert(runs).values({
       id: runId,
       workspaceId,
@@ -284,6 +292,13 @@ describe("Terraform cloud protocol contract", () => {
       isDestroy: false,
       logToken: runId,
       createdAt: Date.now(),
+    });
+    await db.insert(runs).values({
+      id: `historical-run-${suffix}`,
+      workspaceId,
+      status: "errored",
+      message: "Historical run",
+      createdAt: Date.now() - 1_000,
     });
     await db.insert(logs).values([
       {
@@ -310,6 +325,8 @@ describe("Terraform cloud protocol contract", () => {
       "is-discardable": true,
     }));
     expect(run.attributes["has-changes"]).toBe(true);
+    expect(run.attributes.source).toBe("github");
+    expect(run.attributes["trigger-reason"]).toBe("pull_request");
     expect(new Date(run.attributes["created-at"]).toISOString()).toBe(run.attributes["created-at"]);
     expect(run.attributes.permissions["can-apply"]).toBe(true);
     expect(run.relationships.workspace.data.id).toBe(workspaceId);
@@ -320,6 +337,17 @@ describe("Terraform cloud protocol contract", () => {
     expect(run.relationships["run-events"].links.related).toBe(
       `/api/v2/runs/${runId}/run-events`,
     );
+
+    const historicalStatusFilter = await request(
+      `/api/v2/organizations/${orgName}/workspaces?filter[current-run][status]=errored`,
+      { headers: authHeaders },
+    );
+    expect((await historicalStatusFilter.json()).data).toHaveLength(0);
+    const currentStatusFilter = await request(
+      `/api/v2/organizations/${orgName}/workspaces?filter[current-run][status]=planned`,
+      { headers: authHeaders },
+    );
+    expect((await currentStatusFilter.json()).data.map((item: any) => item.id)).toContain(workspaceId);
 
     const planResponse = await request(`/api/v2/plans/plan-${runId}`, { headers: authHeaders });
     expect(planResponse.status).toBe(200);
@@ -360,6 +388,8 @@ describe("Terraform cloud protocol contract", () => {
     expect(organizationRunsResponse.status).toBe(200);
     const organizationRuns = await organizationRunsResponse.json();
     expect(organizationRuns.data.map((item: any) => item.id)).toContain(runId);
+    expect(organizationRuns.data.find((item: any) => item.id === runId).attributes)
+      .toMatchObject({ source: "github", "trigger-reason": "pull_request" });
 
     for (const [action, status] of [
       ["discard", "discarded"],

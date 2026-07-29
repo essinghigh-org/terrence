@@ -22,10 +22,12 @@ type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | bo
 type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
+// Keep the precise nested response type available to callers and contract tests.
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type, @typescript-eslint/explicit-module-boundary-types
 export function userResource(
   user: UserParam,
   authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
-): Record<string, unknown> {
+) {
   const avatarUrl = typeof user.email === "string" && user.email !== ""
     ? `https://www.gravatar.com/avatar/${Bun.hash(user.email)}?d=identicon`
     : `https://www.gravatar.com/avatar/${user.id}?d=identicon`;
@@ -156,10 +158,21 @@ export function organizationResource(org: OrganizationParam): Record<string, unk
 
 type WorkspaceParam = DeepReadonly<typeof workspaces.$inferSelect>;
 
+export type WorkspaceResourcePermissions = Readonly<{
+  canAdmin: boolean;
+  canApply: boolean;
+  canLock: boolean;
+  canManageRunTasks: boolean;
+  canPlan: boolean;
+  canReadStateVersions: boolean;
+  canReadVariables: boolean;
+  canWriteVariables: boolean;
+}>;
+
 export async function workspaceResource(
   workspace: WorkspaceParam,
   defaultIacBinary: string | null | undefined,
-  canRun: boolean,
+  permissions: WorkspaceResourcePermissions,
 ): Promise<Record<string, unknown>> {
   const tags = await db.query.workspaceTags.findMany({
     where: eq(workspaceTags.workspaceId, workspace.id),
@@ -172,7 +185,7 @@ export async function workspaceResource(
     id: workspace.id,
     type: "workspaces",
     attributes: {
-      actions: { "is-destroyable": canRun },
+      actions: { "is-destroyable": permissions.canPlan },
       "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
       name: workspace.name,
       description: workspace.description,
@@ -203,24 +216,24 @@ export async function workspaceResource(
       "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
       operations: true,
       permissions: {
-        "can-destroy": canRun,
-        "can-force-unlock": canRun,
-        "can-lock": canRun,
-        "can-manage-run-tasks": false,
-        "can-queue-apply": canRun,
-        "can-queue-destroy": canRun,
-        "can-queue-run": canRun,
+        "can-destroy": permissions.canPlan,
+        "can-force-unlock": permissions.canAdmin,
+        "can-lock": permissions.canLock,
+        "can-manage-run-tasks": permissions.canManageRunTasks,
+        "can-queue-apply": permissions.canApply,
+        "can-queue-destroy": permissions.canPlan,
+        "can-queue-run": permissions.canPlan,
         "can-read-settings": true,
-        "can-read-state-versions": true,
-        "can-read-variable": true,
-        "can-unlock": canRun,
-        "can-update": canRun,
-        "can-update-variable": canRun,
-        "can-force-delete": canRun,
+        "can-read-state-versions": permissions.canReadStateVersions,
+        "can-read-variable": permissions.canReadVariables,
+        "can-unlock": permissions.canLock,
+        "can-update": permissions.canAdmin,
+        "can-update-variable": permissions.canWriteVariables,
+        "can-force-delete": permissions.canAdmin,
       },
       "created-at": new Date(workspace.createdAt).toISOString(),
       source: workspace.source ?? "tfe-api",
-      "structured-run-output-enabled": false,
+      "structured-run-output-enabled": true,
     },
     relationships: {
       organization: {
@@ -416,9 +429,18 @@ export function workspaceVariableResource(v: WorkspaceVarParam): Record<string, 
 }
 
 type RunParam = DeepReadonly<typeof runs.$inferSelect>;
+type RunOrigin = Readonly<{
+  source?: string | null;
+  triggerReason?: string | null;
+}>;
 
 function runHasChanges(run: RunParam): boolean {
-  const counts = [run.planResourceAdditions, run.planResourceChanges, run.planResourceDestructions];
+  const counts = [
+    run.planResourceAdditions,
+    run.planResourceChanges,
+    run.planResourceDestructions,
+    run.planResourceImports,
+  ];
   if (counts.some((count): boolean => count !== null)) {
     return counts.reduce((total: number, count): number => total + (count ?? 0), 0) > 0;
   }
@@ -429,8 +451,14 @@ function runHasChanges(run: RunParam): boolean {
   ].includes(run.status);
 }
 
-export function runResource(run: RunParam, canRun: boolean): Record<string, unknown> {
+export function runResource(
+  run: RunParam,
+  canApply: boolean,
+  canOverridePolicy = false,
+  origin?: RunOrigin,
+): Record<string, unknown> {
   const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
+  const isConfirmable = ["planned", "planned_and_saved"].includes(run.status);
   const isRunning = [
     "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
     "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
@@ -444,10 +472,10 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
     type: "runs",
     attributes: {
       actions: {
-        "is-cancelable": canRun && isRunning,
-        "is-confirmable": canRun && isPlanned,
-        "is-discardable": canRun && isPlanned,
-        "is-force-cancelable": canRun && isRunning,
+        "is-cancelable": canApply && isRunning,
+        "is-confirmable": canApply && isConfirmable,
+        "is-discardable": canApply && isPlanned,
+        "is-force-cancelable": false,
       },
       "allow-empty-apply": run.allowEmptyApply,
       "auto-apply": run.autoApply,
@@ -466,7 +494,7 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
       "replace-addrs": run.replaceAddrs,
       "save-plan": run.savePlan,
       "allow-config-generation": run.allowConfigGeneration,
-      source: "tfe-api",
+      source: origin?.source ?? "tfe-api",
       status: run.status,
       "status-timestamps": run.statusTimestamps ?? null,
       "target-addrs": run.targetAddrs,
@@ -474,19 +502,20 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
       "debugging-mode": run.debuggingMode,
       "is-destroy": run.isDestroy === true,
       "created-at": new Date(run.createdAt).toISOString(),
-      "trigger-reason": "manual",
+      "trigger-reason": origin?.triggerReason ?? "manual",
       variables: run.variables ?? [],
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,
       "resource-destructions": run.planResourceDestructions ?? 0,
+      "resource-imports": run.planResourceImports ?? 0,
       permissions: {
-        "can-apply": canRun && isPlanned,
-        "can-cancel": canRun && isRunning,
-        "can-discard": canRun && isPlanned,
-        "can-force-cancel": canRun && isRunning,
+        "can-apply": canApply && isConfirmable,
+        "can-cancel": canApply && isRunning,
+        "can-discard": canApply && isPlanned,
+        "can-force-cancel": false,
         "can-force-execute": false,
-        "can-override-policy-check": canRun && run.status === "policy_soft_failed",
-        "can-comment": canRun,
+        "can-override-policy-check": canOverridePolicy && run.status === "policy_soft_failed",
+        "can-comment": true,
       },
     },
     relationships: {
@@ -544,6 +573,11 @@ export function runResource(run: RunParam, canRun: boolean): Record<string, unkn
 type RequestParam = Readonly<{ readonly url: string }>;
 
 export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+  const timestamps = run.statusTimestamps ?? {};
+  const planStarted = typeof timestamps["planning-at"] === "string";
+  const planFinished = typeof timestamps["planned-at"] === "string"
+    || typeof timestamps["planned-and-finished-at"] === "string"
+    || typeof timestamps["planned-and-saved-at"] === "string";
   const status = run.status === "planning"
     ? "running"
     : run.status === "plan_queued" || run.status === "queuing"
@@ -555,11 +589,11 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
         ].includes(run.status)
         ? "finished"
         : run.status === "errored"
-          ? "errored"
+          ? planFinished ? "finished" : "errored"
           : ["canceled", "discarded", "force_canceled"].includes(run.status)
-            ? "canceled"
+            ? planFinished ? "finished" : planStarted ? "canceled" : "pending"
             : run.status === "unreachable"
-              ? "unreachable"
+              ? planFinished ? "finished" : "unreachable"
               : "pending";
 
   return {
@@ -568,10 +602,10 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
     attributes: {
       status,
       "has-changes": runHasChanges(run),
-      "resource-additions": run.planResourceAdditions ?? 0,
-      "resource-changes": run.planResourceChanges ?? 0,
-      "resource-destructions": run.planResourceDestructions ?? 0,
-      "resource-imports": 0,
+      "resource-additions": run.planResourceAdditions ?? null,
+      "resource-changes": run.planResourceChanges ?? null,
+      "resource-destructions": run.planResourceDestructions ?? null,
+      "resource-imports": run.planResourceImports ?? null,
       "generated-configuration": false,
       "execution-details": { mode: "remote" },
       "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/plan/log/${run.logToken}`) : null,
@@ -586,6 +620,9 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
 }
 
 export function applyResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+  const timestamps = run.statusTimestamps ?? {};
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
+    .some((key: string): boolean => typeof timestamps[key] === "string");
   const status = run.status === "applying"
     ? "running"
     : run.status === "confirmed" || run.status === "apply_queued"
@@ -593,11 +630,11 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
       : run.status === "applied"
         ? "finished"
         : run.status === "errored"
-          ? "errored"
+          ? applyStarted ? "errored" : "pending"
           : ["canceled", "discarded", "force_canceled"].includes(run.status)
-            ? "canceled"
+            ? applyStarted ? "canceled" : "pending"
             : run.status === "unreachable"
-              ? "unreachable"
+              ? applyStarted ? "unreachable" : "pending"
               : "pending";
 
   return {
@@ -605,10 +642,10 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
     type: "applies",
     attributes: {
       status,
-      "resource-additions": run.applyResourceAdditions ?? 0,
-      "resource-changes": run.applyResourceChanges ?? 0,
-      "resource-destructions": run.applyResourceDestructions ?? 0,
-      "resource-imports": 0,
+      "resource-additions": run.applyResourceAdditions ?? null,
+      "resource-changes": run.applyResourceChanges ?? null,
+      "resource-destructions": run.applyResourceDestructions ?? null,
+      "resource-imports": run.applyResourceImports ?? null,
       "log-read-url": typeof run.logToken === "string" && run.logToken !== "" ? apiURL(request, `/api/v2/runs/${run.id}/apply/log/${run.logToken}`) : null,
       "status-timestamps": run.statusTimestamps ?? null,
     },
@@ -734,6 +771,7 @@ export function stateVersionResource(
       status: state.status ?? "finalized",
       intermediate: state.intermediate,
       size: Buffer.byteLength(payload),
+      "created-at": new Date(state.createdAt).toISOString(),
       "vcs-commit-sha": state.vcsCommitSha,
       "vcs-commit-url": state.vcsCommitUrl,
       "hosted-state-download-url": rawStateAvailable

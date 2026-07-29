@@ -7,6 +7,34 @@ const planJsonDirectory = resolve(
 );
 
 export type PlanJson = Readonly<Record<string, unknown>>;
+export type PlanResourceCounts = Readonly<{
+  additions: number;
+  changes: number;
+  destructions: number;
+  imports: number;
+}>;
+
+function asObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : undefined;
+}
+
+export function planJsonResourceCounts(planJson: PlanJson): PlanResourceCounts | undefined {
+  if (!Array.isArray(planJson.resource_changes)) return undefined;
+  const counts = { additions: 0, changes: 0, destructions: 0, imports: 0 };
+  for (const rawResourceChange of planJson.resource_changes) {
+    const resourceChange = asObject(rawResourceChange);
+    if (resourceChange?.mode === "data") continue;
+    const change = asObject(resourceChange?.change);
+    const actions = Array.isArray(change?.actions) ? change.actions : [];
+    if (change?.importing !== undefined && change.importing !== null) counts.imports += 1;
+    if (actions.includes("create")) counts.additions += 1;
+    if (actions.includes("update")) counts.changes += 1;
+    if (actions.includes("delete")) counts.destructions += 1;
+  }
+  return counts;
+}
 
 function artifactPath(runId: string): string {
   return join(planJsonDirectory, `${runId}.json`);

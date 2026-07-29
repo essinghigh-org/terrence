@@ -28,6 +28,16 @@ type ReadonlyRequestInit = Readonly<{
   readonly signal?: AbortSignal;
 }>;
 
+export class ApiError extends Error {
+  public readonly status: number;
+
+  public constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 
 export function getAuthToken(): string | null {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -149,7 +159,17 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
       headers,
     });
   };
-  const token = getAuthToken();
+  let token = getAuthToken();
+  const expiresAt = getAuthTokenExpiry();
+  if (
+    token !== null
+    && token !== ""
+    && expiresAt !== null
+    && expiresAt <= Date.now()
+    && isRefreshableSession()
+  ) {
+    token = await refreshAccessToken().catch((): null => null) ?? token;
+  }
   let response = await send(token);
   const canRefresh = response.status === 401
     && token !== null
@@ -175,10 +195,39 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     const firstErr = errors[0];
     const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
     const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
-    throw new Error(detail ?? title ?? "API Error");
+    throw new ApiError(response.status, detail ?? title ?? `API request failed (${response.status})`);
   }
 
   return readResponseBody(response);
+}
+
+export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {
+  const data: T[] = [];
+  const visited = new Set<string>();
+  let pageEndpoint: string | null = endpoint;
+
+  while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
+    visited.add(pageEndpoint);
+    const response = await fetchApi(
+      pageEndpoint,
+      signal === undefined ? {} : { signal },
+    ) as {
+      data?: T[];
+      meta?: { pagination?: Record<string, unknown> };
+    };
+    if (Array.isArray(response.data)) data.push(...response.data);
+
+    const nextPage = response.meta?.pagination?.["next-page"];
+    if (typeof nextPage !== "number" || !Number.isSafeInteger(nextPage) || nextPage < 1) {
+      pageEndpoint = null;
+      continue;
+    }
+    const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
+    nextUrl.searchParams.set("page[number]", String(nextPage));
+    pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
+  }
+
+  return data;
 }
 
 export function removeAuthToken(): void {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { fetchApi } from "@/lib/api";
+import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -13,25 +14,51 @@ import {
 type StateItem = {
   id: string;
   attributes: Record<string, unknown>;
+  relationships?: {
+    run?: { data: { id: string; type: string } | null };
+  };
 };
 
 type StateHistoryProps = {
   workspaceId: string;
 }
 
+type LoadState =
+  | Readonly<{ kind: "loading" }>
+  | Readonly<{ kind: "error"; message: string }>
+  | Readonly<{ kind: "ready"; states: StateItem[] }>;
+
+function formatDate(value: unknown): string {
+  if (typeof value !== "string" || value === "") return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+}
+
 export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Element {
-  const [states, setStates] = useState<StateItem[]>([]);
+  const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
+  const [retry, setRetry] = useState(0);
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [loadingStateId, setLoadingStateId] = useState<string | null>(null);
 
-  useEffect((): void => {
-    fetchApi(`/workspaces/${workspaceId}/state-versions`)
-      .then((res: unknown): void => {
-        const data = res as { data?: StateItem[] };
-        if (data.data != null) setStates(data.data);
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setLoadState({ kind: "loading" });
+    void fetchAllApiPages<StateItem>(`/workspaces/${workspaceId}/state-versions`, controller.signal)
+      .then((states: StateItem[]): void => {
+        if (!controller.signal.aborted) setLoadState({ kind: "ready", states });
       })
-      .catch((err: unknown): void => { console.error(err); });
-  }, [workspaceId]);
+      .catch((error: unknown): void => {
+        if (!controller.signal.aborted) {
+          setLoadState({
+            kind: "error",
+            message: error instanceof Error ? error.message : "Failed to load state version history",
+          });
+        }
+      });
+    return (): void => {
+      controller.abort();
+    };
+  }, [retry, workspaceId]);
 
   const handleViewJson = async (s: StateItem): Promise<void> => {
     const stateStr = s.attributes["state"] as string | undefined;
@@ -86,22 +113,71 @@ export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Elem
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-xl font-semibold">State Version History</h2>
+      <h2 className="text-xl font-semibold">State version history</h2>
 
       <div className="border rounded-md">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Serial</TableHead>
-              <TableHead>State Version ID</TableHead>
+              <TableHead>Version</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead>Run</TableHead>
+              <TableHead>Commit</TableHead>
               <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {states.map((s: StateItem): React.JSX.Element => (
+            {loadState.kind === "loading" && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-8">
+                  <div role="status" className="flex items-center justify-center gap-2 text-muted-foreground">
+                    <Spinner />
+                    Loading state versions…
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+            {loadState.kind === "error" && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-8">
+                  <div role="alert" className="mx-auto max-w-md text-center">
+                    <p className="font-medium text-destructive">Could not load state version history</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{loadState.message}</p>
+                    <Button
+                      className="mt-3"
+                      variant="outline"
+                      onClick={(): void => { setRetry((value: number): number => value + 1); }}
+                    >
+                      Try again
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+            {loadState.kind === "ready" && loadState.states.map((s: StateItem): React.JSX.Element => (
               <TableRow key={s.id}>
-                <TableCell className="font-bold">#{s.attributes["serial"] as number}</TableCell>
-                <TableCell className="font-mono text-xs">{s.id}</TableCell>
+                <TableCell>
+                  <p className="font-bold">#{s.attributes["serial"] as number}</p>
+                  <p className="font-mono text-xs text-muted-foreground">{s.id}</p>
+                </TableCell>
+                <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  {s.relationships?.run?.data?.id ?? "—"}
+                </TableCell>
+                <TableCell className="font-mono text-xs">
+                  {typeof s.attributes["vcs-commit-sha"] === "string" ? (
+                    typeof s.attributes["vcs-commit-url"] === "string" ? (
+                      <a
+                        href={s.attributes["vcs-commit-url"]}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        {s.attributes["vcs-commit-sha"].slice(0, 8)}
+                      </a>
+                    ) : s.attributes["vcs-commit-sha"].slice(0, 8)
+                  ) : "—"}
+                </TableCell>
                 <TableCell className="flex items-center gap-2">
                   <Button
                     variant="outline"
@@ -112,14 +188,14 @@ export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Elem
                     {loadingStateId === s.id ? "Loading..." : "View JSON"}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={(): void => { void handleDownload(s); }}>
-                    Download State
+                    Download state
                   </Button>
                 </TableCell>
               </TableRow>
             ))}
-            {states.length === 0 && (
+            {loadState.kind === "ready" && loadState.states.length === 0 && (
               <TableRow>
-                <TableCell colSpan={3} className="text-center text-gray-500 py-8">
+                <TableCell colSpan={5} className="text-center text-gray-500 py-8">
                   No state versions recorded yet.
                 </TableCell>
               </TableRow>

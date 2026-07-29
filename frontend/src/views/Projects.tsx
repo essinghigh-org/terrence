@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FolderKanban, Layers, Pencil, Plus, Trash2 } from "lucide-react";
 
@@ -37,7 +37,9 @@ export function Projects(): React.JSX.Element {
   const orgName = rawOrgName ?? "";
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -46,32 +48,50 @@ export function Projects(): React.JSX.Element {
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null);
+  const activeOrganizationName = useRef(orgName);
+  activeOrganizationName.current = orgName;
+  const canManageProjects = orgName !== "" && manageableOrganizationName === orgName;
 
   const loadData = useCallback(async (): Promise<void> => {
+    const requestedOrganizationName = orgName;
     setLoading(true);
+    setLoadError("");
+    setProjects([]);
+    setWorkspaces([]);
+    setManageableOrganizationName("");
     try {
-      const [projectResponse, workspaceResponse] = await Promise.all([
-        fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects`) as Promise<{ data?: Project[] }>,
-        fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100`) as Promise<{ data?: Workspace[] }>,
+      const [projectResponse, workspaceResponse, organizationResponse] = await Promise.all([
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data?: Project[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/workspaces?page%5Bsize%5D=100`) as Promise<{ data?: Workspace[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}`) as Promise<{
+          data?: { attributes?: { permissions?: { "can-manage-projects"?: boolean } } };
+        }>,
       ]);
+      if (activeOrganizationName.current !== requestedOrganizationName) return;
       setProjects(Array.isArray(projectResponse.data) ? projectResponse.data : []);
       setWorkspaces(Array.isArray(workspaceResponse.data) ? workspaceResponse.data : []);
+      setManageableOrganizationName(
+        organizationResponse.data?.attributes?.permissions?.["can-manage-projects"] === true
+          ? requestedOrganizationName
+          : "",
+      );
     } catch (error: unknown) {
-      toast.add({
-        title: "Could not load projects",
-        description: error instanceof Error ? error.message : "Unknown error",
-        type: "error",
-      });
+      if (activeOrganizationName.current === requestedOrganizationName) {
+        setLoadError(error instanceof Error ? error.message : "Could not load projects");
+      }
     } finally {
-      setLoading(false);
+      if (activeOrganizationName.current === requestedOrganizationName) setLoading(false);
     }
   }, [orgName]);
 
   useEffect((): void => {
+    setDialogOpen(false);
+    setAssignmentsOpen(false);
     if (orgName !== "") void loadData();
   }, [loadData, orgName]);
 
   const openProjectDialog = (project: Project | null): void => {
+    if (!canManageProjects) return;
     setEditingProject(project);
     setName(project?.attributes.name ?? "");
     setDescription(project?.attributes.description ?? "");
@@ -81,6 +101,7 @@ export function Projects(): React.JSX.Element {
 
   const saveProject = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!canManageProjects) return;
     if (name.trim() === "") {
       setFormError("Name is required");
       return;
@@ -106,8 +127,10 @@ export function Projects(): React.JSX.Element {
           }),
         },
       );
+      if (activeOrganizationName.current !== orgName) return;
       setDialogOpen(false);
       await loadData();
+      if (activeOrganizationName.current !== orgName) return;
       toast.add({ title: editingProject === null ? "Project created" : "Project updated", type: "success" });
     } catch (error: unknown) {
       setFormError(error instanceof Error ? error.message : "Failed to save project");
@@ -117,10 +140,12 @@ export function Projects(): React.JSX.Element {
   };
 
   const deleteProject = async (project: Project): Promise<void> => {
+    if (!canManageProjects) return;
     if (!window.confirm(`Delete project "${project.attributes.name}"?`)) return;
     try {
       await fetchApi(`/projects/${project.id}`, { method: "DELETE" });
       await loadData();
+      if (activeOrganizationName.current !== orgName) return;
       toast.add({ title: "Project deleted", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -132,6 +157,7 @@ export function Projects(): React.JSX.Element {
   };
 
   const assignWorkspace = async (workspace: Workspace, projectId: string): Promise<void> => {
+    if (!canManageProjects) return;
     setAssigningWorkspaceId(workspace.id);
     try {
       await fetchApi(`/workspaces/${workspace.id}`, {
@@ -144,6 +170,7 @@ export function Projects(): React.JSX.Element {
           },
         }),
       });
+      if (activeOrganizationName.current !== orgName) return;
       setWorkspaces((current): Workspace[] => current.map((item): Workspace =>
         item.id === workspace.id
           ? { ...item, relationships: { ...item.relationships, project: { data: { id: projectId } } } }
@@ -170,7 +197,7 @@ export function Projects(): React.JSX.Element {
           <h1 className="text-2xl font-bold">Projects</h1>
           <p className="text-sm text-muted-foreground">Organize workspaces under {orgName}.</p>
         </div>
-        <div className="flex gap-2">
+        {canManageProjects && <div className="flex gap-2">
           <Button variant="outline" onClick={(): void => { setAssignmentsOpen(true); }}>
             <Layers data-icon="inline-start" />
             Assign workspaces
@@ -179,8 +206,17 @@ export function Projects(): React.JSX.Element {
             <Plus data-icon="inline-start" />
             Create project
           </Button>
-        </div>
+        </div>}
       </header>
+
+      {loadError !== "" && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <span>Could not load projects: {loadError}</span>
+          <Button type="button" variant="outline" onClick={(): void => { void loadData(); }}>
+            Try again
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -197,7 +233,7 @@ export function Projects(): React.JSX.Element {
                   <TableHead>Name</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Workspaces</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  {canManageProjects && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -206,7 +242,7 @@ export function Projects(): React.JSX.Element {
                     <TableCell className="font-medium">{project.attributes.name}</TableCell>
                     <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
                     <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
-                    <TableCell>
+                    {canManageProjects && <TableCell>
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="ghost"
@@ -225,12 +261,12 @@ export function Projects(): React.JSX.Element {
                           <Trash2 />
                         </Button>
                       </div>
-                    </TableCell>
+                    </TableCell>}
                   </TableRow>
                 ))}
                 {projects.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                    <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
                       <FolderKanban className="mx-auto mb-2 size-8 opacity-50" />
                       No projects yet
                     </TableCell>

@@ -60,7 +60,12 @@ test("migrates a fresh database on startup", async () => {
         "runs",
         "variable_sets",
       ]),
-      runColumns: expect.arrayContaining(["agent_id", "agent_pool_id"]),
+      runColumns: expect.arrayContaining([
+        "agent_id",
+        "agent_pool_id",
+        "plan_resource_imports",
+        "apply_resource_imports",
+      ]),
       organizationColumns: expect.arrayContaining(["saml_enabled", "owners_team_saml_role_id"]),
       oauthClientColumns: expect.arrayContaining(["agent_pool_id"]),
       foreignKeys: 1,

@@ -8,6 +8,7 @@ import {
   assessmentResults,
   changeRequests,
   organizations,
+  runTasks,
   runs,
   teams,
   teamWorkspaces,
@@ -23,6 +24,7 @@ describe("team token workspace authorization", () => {
   const workspaceName = `assigned-${suffix}`;
   const unassignedWorkspaceId = `ws-team-unassigned-${suffix}`;
   const createdWorkspaceName = `managed-${suffix}`;
+  const runTaskId = `task-team-auth-${suffix}`;
   const assessmentIds = {
     assigned: `asmtres-assigned-${suffix}`,
     unassigned: `asmtres-unassigned-${suffix}`,
@@ -33,6 +35,7 @@ describe("team token workspace authorization", () => {
     write: `team-write-${suffix}`,
     admin: `team-admin-${suffix}`,
     custom: `team-custom-${suffix}`,
+    noState: `team-no-state-${suffix}`,
     manager: `team-manager-${suffix}`,
   };
   const tokens = Object.fromEntries(
@@ -90,15 +93,21 @@ describe("team token workspace authorization", () => {
     ]);
     await db.insert(teams).values([
       { id: teamIds.read, orgId, name: `read-${suffix}` },
-      { id: teamIds.plan, orgId, name: `plan-${suffix}` },
+      {
+        id: teamIds.plan,
+        orgId,
+        name: `plan-${suffix}`,
+        organizationAccess: { "manage-run-tasks": true },
+      },
       { id: teamIds.write, orgId, name: `write-${suffix}` },
       { id: teamIds.admin, orgId, name: `admin-${suffix}` },
       { id: teamIds.custom, orgId, name: `custom-${suffix}` },
+      { id: teamIds.noState, orgId, name: `no-state-${suffix}` },
       {
         id: teamIds.manager,
         orgId,
         name: `manager-${suffix}`,
-        organizationAccess: { "manage-workspaces": true },
+        organizationAccess: { "manage-run-tasks": true, "manage-workspaces": true },
       },
     ]);
     await db.insert(teamWorkspaces).values([
@@ -116,6 +125,18 @@ describe("team token workspace authorization", () => {
           variables: "read",
           "state-versions": "read",
           "workspace-locking": true,
+          "run-tasks": true,
+        },
+      },
+      {
+        id: `tw-no-state-${suffix}`,
+        teamId: teamIds.noState,
+        workspaceId,
+        access: "custom",
+        permissions: {
+          runs: "read",
+          variables: "none",
+          "state-versions": "none",
         },
       },
     ]);
@@ -131,6 +152,12 @@ describe("team token workspace authorization", () => {
         orgId,
       },
     ]);
+    await db.insert(runTasks).values({
+      id: runTaskId,
+      orgId,
+      name: `task-${suffix}`,
+      url: "https://example.test/run-task",
+    });
     await db.insert(runs).values(Object.values(applyRunIds).map((id, index) => ({
       id,
       workspaceId,
@@ -169,7 +196,14 @@ describe("team token workspace authorization", () => {
       type: "teams",
     });
 
-    for (const token of [tokens.read, tokens.plan, tokens.write, tokens.admin, tokens.custom]) {
+    for (const token of [
+      tokens.read,
+      tokens.plan,
+      tokens.write,
+      tokens.admin,
+      tokens.custom,
+      tokens.noState,
+    ]) {
       expect((await request(`/api/v2/workspaces/${workspaceId}`, token)).status).toBe(200);
       expect((await request(`/api/v2/workspaces/${unassignedWorkspaceId}`, token)).status).toBe(404);
       expect((await request("/api/v2/runs", token, "POST", {
@@ -206,6 +240,79 @@ describe("team token workspace authorization", () => {
     expect((await db.query.runs.findFirst({ where: eq(runs.id, planRunId) }))?.status).toBe("planned");
     expect((await request(`/api/v2/runs/${applyRunIds.plan}/actions/apply`, tokens.plan, "POST")).status).toBe(403);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.plan, "POST")).status).toBe(403);
+  });
+
+  it("reports the same workspace capabilities enforced by the API", async () => {
+    const permissionsFor = async (token: string): Promise<Record<string, boolean>> => {
+      const response = await request(`/api/v2/workspaces/${workspaceId}`, token);
+      const workspace = await responseData<{ attributes: { permissions: Record<string, boolean> } }>(response);
+      return workspace.attributes.permissions;
+    };
+
+    expect(await permissionsFor(tokens.read)).toMatchObject({
+      "can-force-delete": false,
+      "can-lock": false,
+      "can-manage-run-tasks": false,
+      "can-queue-apply": false,
+      "can-queue-run": false,
+      "can-update": false,
+      "can-update-variable": false,
+    });
+    expect(await permissionsFor(tokens.plan)).toMatchObject({
+      "can-force-delete": false,
+      "can-lock": false,
+      "can-manage-run-tasks": false,
+      "can-queue-apply": false,
+      "can-queue-run": true,
+      "can-update": false,
+    });
+    expect(await permissionsFor(tokens.write)).toMatchObject({
+      "can-force-delete": false,
+      "can-lock": true,
+      "can-queue-apply": true,
+      "can-queue-run": true,
+      "can-update": false,
+      "can-update-variable": true,
+    });
+    expect(await permissionsFor(tokens.admin)).toMatchObject({
+      "can-force-delete": true,
+      "can-lock": true,
+      "can-manage-run-tasks": false,
+      "can-queue-apply": true,
+      "can-queue-run": true,
+      "can-update": true,
+      "can-update-variable": true,
+    });
+    expect(await permissionsFor(tokens.manager)).toMatchObject({
+      "can-force-delete": true,
+      "can-manage-run-tasks": true,
+      "can-update": true,
+    });
+    expect(await permissionsFor(tokens.custom)).toMatchObject({
+      "can-manage-run-tasks": false,
+      "can-read-state-versions": true,
+      "can-read-variable": true,
+    });
+    expect(await permissionsFor(tokens.noState)).toMatchObject({
+      "can-read-state-versions": false,
+      "can-read-variable": false,
+    });
+    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.custom)).status)
+      .toBe(200);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.noState)).status)
+      .toBe(404);
+
+    const bindingBody = {
+      data: {
+        type: "workspace-run-tasks",
+        attributes: { stage: "post_plan", "enforcement-level": "advisory" },
+        relationships: { "run-task": { data: { id: runTaskId, type: "run-tasks" } } },
+      },
+    };
+    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.plan, "POST", bindingBody)).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.custom, "POST", bindingBody)).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.manager, "POST", bindingBody)).status).toBe(201);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks/${runTaskId}`, tokens.manager, "DELETE")).status).toBe(204);
   });
 
   it("allows write and custom roles to plan/apply and lock, but not administer", async () => {

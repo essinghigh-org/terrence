@@ -5,8 +5,9 @@ import { NoCodeProvisioning } from "../src/views/NoCodeProvisioning";
 
 const originalFetch = globalThis.fetch;
 const originalAlert = globalThis.alert;
-const json = (data: unknown): Response =>
+const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
+    status,
     headers: { "Content-Type": "application/vnd.api+json" },
   });
 
@@ -225,4 +226,41 @@ test("explains when the organization has no enabled no-code modules", async () =
     expect(view.getByText("No no-code modules are enabled.")).toBeTruthy();
   });
   expect(view.getByRole("button", { name: "Create workspace" }).hasAttribute("disabled")).toBeTrue();
+});
+
+test("keeps no-code provisioning available when projects are not readable", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrl(input);
+    if (url.endsWith("/no-code-modules")) {
+      return json({
+        data: [{
+          id: "nocode-1",
+          attributes: { enabled: true, "version-pin": "1.4.0" },
+          relationships: { "registry-module": { data: { id: "mod-1" } } },
+        }],
+      });
+    }
+    if (url.endsWith("/registry-modules")) {
+      return json({
+        data: [{ id: "mod-1", attributes: { name: "network", namespace: "acme", provider: "aws" } }],
+      });
+    }
+    if (url.endsWith("/projects")) return json({ errors: [{ title: "Forbidden" }] }, 403);
+    if (url.endsWith("/input-variables")) return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/no-code"]}>
+      <Routes>
+        <Route path="/app/:orgName/no-code" element={<NoCodeProvisioning />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("option", { name: "acme/network/aws" })).toBeTruthy();
+  });
+  expect(view.getByRole("option", { name: "No project" })).toBeTruthy();
+  expect(view.queryByText("Forbidden")).toBeNull();
 });

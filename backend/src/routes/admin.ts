@@ -3,7 +3,7 @@ import { db } from "../db";
 import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings } from "../db/schema";
 import { eq, and, or, desc, count, notInArray, like, SQL } from "drizzle-orm";
 import { runResource } from "../lib/response";
-import { apiURL, pageRequest, pagination } from "../lib/utils";
+import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -513,8 +513,25 @@ export const adminRoutes = new Elysia({ name: "admin" })
   })
   .get("/api/v2/admin/runs", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const allRuns = await db.query.runs.findMany();
-    return { data: allRuns.map((r: RunItem): Record<string, unknown> => ({ id: r.id, type: "runs", attributes: { status: r.status, "created-at": new Date(r.createdAt).toISOString() } })) };
+    const activeRuns = await db.query.runs.findMany({
+      where: notInArray(runs.status, FINAL_RUN_STATUSES),
+      orderBy: [desc(runs.createdAt)],
+    });
+    return {
+      data: activeRuns.map((r: RunItem): Record<string, unknown> => ({
+        id: r.id,
+        type: "runs",
+        attributes: {
+          status: r.status,
+          message: r.message,
+          "created-at": new Date(r.createdAt).toISOString(),
+          actions: {
+            "is-cancelable": true,
+            "is-force-cancelable": true,
+          },
+        },
+      })),
+    };
   })
   .get("/api/v2/admin/runs/:run_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -528,7 +545,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, FINAL_RUN_STATUSES))).returning();
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
     return { data: runResource(updated[0], true) };
   })
@@ -537,7 +554,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, FINAL_RUN_STATUSES))).returning();
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
     return { data: runResource(updated[0], true) };
   })

@@ -1,49 +1,343 @@
-import type { JSX, ReactElement } from "react";
-import { Link, useLocation, useParams, useNavigate } from "react-router-dom";
+import { createElement, useEffect, useState, type JSX, type ReactNode } from "react";
 import {
-  Building2,
-  HelpCircle,
-  FolderGit2,
+  Link,
+  matchPath,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import {
+  Activity,
+  ArrowLeft,
+  Bell,
   Box,
-  Settings,
-  ChevronRight,
+  Building2,
   ChevronDown,
-  ChevronsLeftRight,
+  ChevronRight,
+  Database,
+  FolderGit2,
+  GitBranch,
+  GitPullRequest,
+  HelpCircle,
+  KeyRound,
+  LayoutDashboard,
+  ListChecks,
+  Lock,
   LogOut,
-  PackageOpen
+  Menu,
+  MonitorSmartphone,
+  Package,
+  PackageOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+  ShieldCheck,
+  ListTodo,
+  Trash2,
+  UserRound,
+  Users,
+  Variable,
+  type LucideIcon,
 } from "lucide-react";
 
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "./ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
-import { logoutAuthSession } from "../lib/api";
+import { Avatar, AvatarFallback } from "./ui/avatar";
+import { Button, buttonVariants } from "./ui/button";
+import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
+import { cn } from "../lib/utils";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
+const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
 
-type ChildNode = DeepReadonly<ReactElement> | string | number | null | undefined;
+export type LayoutOutletContext = Readonly<{
+  accountLoaded: boolean;
+  setMustChangePassword: (required: boolean) => void;
+  siteAdmin: boolean;
+}>;
 
-export function Layout({ children }: Readonly<{ readonly children?: ChildNode }>): JSX.Element {
-  const { orgName } = useParams();
+type OrganizationPermissions = Readonly<{
+  "can-manage-agent-pools"?: boolean;
+  "can-manage-projects"?: boolean;
+  "can-manage-vcs-settings"?: boolean;
+  "can-manage-workspaces"?: boolean;
+  "can-read-projects"?: boolean;
+}>;
+
+type SidebarNavLinkProps = Readonly<{
+  active: boolean;
+  collapsed: boolean;
+  icon: LucideIcon;
+  label: string;
+  onNavigate: () => void;
+  to: string;
+  trailing?: boolean;
+}>;
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
+  } catch {
+    // The sidebar still works when browser storage is unavailable.
+  }
+}
+
+function readableRouteParam(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isActivePath(pathname: string, path: string, exact = false): boolean {
+  return exact
+    ? pathname === path
+    : pathname === path || pathname.startsWith(`${path}/`);
+}
+
+function SidebarNavLink({
+  active,
+  collapsed,
+  icon,
+  label,
+  onNavigate,
+  to,
+  trailing = false,
+}: SidebarNavLinkProps): JSX.Element {
+  return (
+    <Link
+      to={to}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
+      title={collapsed ? label : undefined}
+      className={cn(
+        "group flex min-h-9 items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        active
+          ? "border-primary bg-primary/10 text-primary"
+          : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      {createElement(icon, {
+        "aria-hidden": true,
+        className: "size-4 shrink-0",
+      })}
+      <span className={cn("truncate", collapsed && "lg:sr-only")}>{label}</span>
+      {trailing && (
+        <ChevronRight
+          aria-hidden="true"
+          className={cn("ml-auto size-4", collapsed && "lg:hidden")}
+        />
+      )}
+    </Link>
+  );
+}
+
+export function Layout({
+  children,
+}: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
+  const organizationRouteKey = location.pathname.split("/").slice(0, 3).join("/");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [accountLoaded, setAccountLoaded] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState<boolean | null>(null);
+  const [siteAdmin, setSiteAdmin] = useState(false);
+  const [accountName, setAccountName] = useState("");
+  const [organizationNames, setOrganizationNames] = useState<string[]>([]);
+  const [organizationPermissions, setOrganizationPermissions] =
+    useState<OrganizationPermissions | null>(null);
+  const [organizationPermissionPath, setOrganizationPermissionPath] = useState("");
+  const [canReadStateVersions, setCanReadStateVersions] = useState(false);
+  const [canReadVariable, setCanReadVariable] = useState(false);
+  const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
 
-  const isRouteActive = (path: string, exact = false): boolean => {
-    if (exact) {
-      return location.pathname === path;
-    }
-    return location.pathname.startsWith(path);
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    void Promise.allSettled([
+      fetchApi("/api/v2/account/details", { signal: controller.signal }),
+      fetchAllApiPages<{ attributes: { name: string } }>(
+        "/organizations?page[size]=100",
+        controller.signal,
+      ),
+    ]).then(([accountResult, organizationsResult]): void => {
+      if (controller.signal.aborted) return;
+      if (accountResult.status === "fulfilled") {
+        const attributes = (accountResult.value as {
+          data?: {
+            attributes?: {
+              "is-site-admin"?: boolean;
+              "must-change-password"?: boolean;
+              username?: string;
+            };
+          };
+        }).data?.attributes;
+        setSiteAdmin(attributes?.["is-site-admin"] === true);
+        setMustChangePassword(attributes?.["must-change-password"] === true);
+        setAccountName(attributes?.username ?? "");
+      }
+      if (organizationsResult.status === "fulfilled") {
+        setOrganizationNames(
+          organizationsResult.value.map((organization): string => organization.attributes.name),
+        );
+      }
+    }).finally((): void => {
+      if (!controller.signal.aborted) {
+        setAccountLoaded(true);
+      }
+    });
+    return (): void => {
+      controller.abort();
+    };
+  }, [organizationRouteKey]);
+
+  const workspaceMatch =
+    matchPath(
+      {
+        path: "/app/:orgName/workspaces/:workspaceName/*",
+        end: false,
+      },
+      location.pathname,
+    ) ??
+    matchPath(
+      {
+        path: "/app/:orgName/workspaces/:workspaceName",
+        end: true,
+      },
+      location.pathname,
+    );
+  const organizationMatch =
+    workspaceMatch ??
+    matchPath({ path: "/app/:orgName/*", end: false }, location.pathname) ??
+    matchPath({ path: "/app/:orgName", end: true }, location.pathname);
+  const routeOrgName = readableRouteParam(organizationMatch?.params.orgName);
+  const orgName =
+    routeOrgName === "account" || routeOrgName === "admin"
+      ? undefined
+      : routeOrgName;
+  const workspaceName = readableRouteParam(workspaceMatch?.params.workspaceName);
+  const hasOrg = orgName !== undefined && orgName !== "";
+  const hasWorkspace = hasOrg && workspaceName !== undefined && workspaceName !== "";
+  const inAccountSettings = location.pathname === "/app/account";
+  const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
+  const workspacePath = hasWorkspace
+    ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
+    : "";
+  const settingsPath = `${workspacePath}/settings`;
+  const inWorkspaceSettings =
+    hasWorkspace && isActivePath(location.pathname, settingsPath);
+  const organizationSettingsPath = `${orgPath}/settings`;
+  const organizationSettingsTab = new URLSearchParams(location.search).get("tab");
+  const inOrganizationSettings = hasOrg
+    && !hasWorkspace
+    && (
+      isActivePath(location.pathname, organizationSettingsPath)
+      || location.pathname === `${orgPath}/variable-sets`
+    );
+  const currentOrgName = orgName ?? "Choose an organization";
+  const hasCurrentOrganizationPermissions = organizationPermissionPath === orgPath;
+  const canManageWorkspaces =
+    hasCurrentOrganizationPermissions
+    && organizationPermissions?.["can-manage-workspaces"] === true;
+  const canManageVcsSettings =
+    hasCurrentOrganizationPermissions
+    && organizationPermissions?.["can-manage-vcs-settings"] === true;
+  const canManageAgentPools =
+    hasCurrentOrganizationPermissions
+    && organizationPermissions?.["can-manage-agent-pools"] === true;
+  const canReadProjects =
+    hasCurrentOrganizationPermissions
+    && organizationPermissions?.["can-read-projects"] === true;
+  const hasCurrentWorkspacePermissions = workspacePermissionPath === workspacePath;
+
+  useEffect((): (() => void) | undefined => {
+    setOrganizationPermissions(null);
+    setOrganizationPermissionPath("");
+    if (!hasOrg) return undefined;
+
+    const controller = new AbortController();
+    void fetchApi(`/organizations/${encodeURIComponent(orgName)}`, {
+      signal: controller.signal,
+    }).then((response: unknown): void => {
+      if (controller.signal.aborted) return;
+      const permissions = (response as {
+        data?: { attributes?: { permissions?: OrganizationPermissions } };
+      }).data?.attributes?.permissions;
+      setOrganizationPermissions(permissions ?? null);
+      setOrganizationPermissionPath(orgPath);
+    }).catch((): void => {
+      // Keep management navigation hidden when permissions cannot be loaded.
+    });
+
+    return (): void => {
+      controller.abort();
+    };
+  }, [hasOrg, orgName, orgPath]);
+
+  useEffect((): (() => void) | undefined => {
+    setCanReadStateVersions(false);
+    setCanReadVariable(false);
+    setWorkspacePermissionPath("");
+    if (!hasWorkspace) return undefined;
+
+    const controller = new AbortController();
+    void fetchApi(
+      `/organizations/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`,
+      { signal: controller.signal },
+    ).then((response: unknown): void => {
+      if (controller.signal.aborted) return;
+      const permissions = (response as {
+        data?: {
+          attributes?: {
+            permissions?: {
+              "can-read-state-versions"?: boolean;
+              "can-read-variable"?: boolean;
+            };
+          };
+        };
+      }).data?.attributes?.permissions;
+      setCanReadStateVersions(permissions?.["can-read-state-versions"] === true);
+      setCanReadVariable(permissions?.["can-read-variable"] === true);
+      setWorkspacePermissionPath(workspacePath);
+    }).catch((): void => {
+      // Keep state-derived navigation hidden when its permissions cannot be loaded.
+    });
+
+    return (): void => { controller.abort(); };
+  }, [hasWorkspace, orgName, workspaceName, workspacePath]);
+
+  const closeMobileNavigation = (): void => {
+    setMobileNavigationOpen(false);
+  };
+
+  const toggleSidebar = (): void => {
+    setSidebarCollapsed((collapsed: boolean): boolean => {
+      const next = !collapsed;
+      writeSidebarCollapsed(next);
+      return next;
+    });
   };
 
   const handleLogout = (): void => {
@@ -52,120 +346,559 @@ export function Layout({ children }: Readonly<{ readonly children?: ChildNode }>
     });
   };
 
-  const currentOrgName = orgName ?? "Choose an organization";
-  const hasOrg = orgName !== undefined && orgName !== "";
+  const renderNavigation = (): JSX.Element => {
+    if (inAccountSettings) {
+      const links = mustChangePassword === false ? [
+        {
+          active: location.hash === "" || location.hash === "#profile",
+          icon: UserRound,
+          label: "Profile",
+          to: "/app/account#profile",
+        },
+        {
+          active: location.hash === "#sessions",
+          icon: MonitorSmartphone,
+          label: "Sessions",
+          to: "/app/account#sessions",
+        },
+        {
+          active: location.hash === "#password",
+          icon: Lock,
+          label: "Password",
+          to: "/app/account#password",
+        },
+        {
+          active: location.hash === "#api-tokens",
+          icon: KeyRound,
+          label: "API tokens",
+          to: "/app/account#api-tokens",
+        },
+      ] as const : [
+        {
+          active: true,
+          icon: Lock,
+          label: "Password",
+          to: "/app/account#password",
+        },
+      ] as const;
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label="Organizations"
+            onNavigate={closeMobileNavigation}
+            to="/app"
+          />
+          <div
+            className={cn(
+              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+          >
+            Account settings
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={link.active}
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+            />
+          ))}
+        </>
+      );
+    }
+
+    if (hasWorkspace && inWorkspaceSettings) {
+      const links = [
+        { label: "General", to: `${settingsPath}/general`, icon: Settings },
+        { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
+        { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
+        { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
+        { label: "Run Tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
+        { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
+        { label: "SSH Key", to: `${settingsPath}/ssh`, icon: KeyRound },
+        { label: "Version Control", to: `${settingsPath}/version-control`, icon: GitBranch },
+        { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
+        { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
+        { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
+      ] as const;
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label={workspaceName}
+            onNavigate={closeMobileNavigation}
+            to={workspacePath}
+          />
+          <div
+            className={cn(
+              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+          >
+            Workspace settings
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={
+                link.label === "General"
+                  ? location.pathname === settingsPath ||
+                    isActivePath(location.pathname, link.to)
+                  : isActivePath(location.pathname, link.to)
+              }
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+            />
+          ))}
+        </>
+      );
+    }
+
+    if (hasWorkspace) {
+      const links = ([
+        { label: "Overview", to: workspacePath, icon: LayoutDashboard, exact: true },
+        { label: "Runs", to: `${workspacePath}/runs`, icon: ListChecks },
+        { label: "States", to: `${workspacePath}/states`, icon: Database },
+        { label: "Variables", to: `${workspacePath}/variables`, icon: Variable },
+        { label: "Settings", to: `${settingsPath}/general`, icon: Settings, trailing: true },
+      ] as const).filter((link): boolean =>
+        (link.label !== "States" || (hasCurrentWorkspacePermissions && canReadStateVersions))
+        && (link.label !== "Variables" || (hasCurrentWorkspacePermissions && canReadVariable)));
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label="Workspaces"
+            onNavigate={closeMobileNavigation}
+            to={`${orgPath}/workspaces`}
+          />
+          <div
+            className={cn(
+              "truncate px-3 pb-2 pt-4 text-xs font-semibold text-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+            title={workspaceName}
+          >
+            {workspaceName}
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={isActivePath(
+                location.pathname,
+                link.to,
+                "exact" in link && link.exact,
+              )}
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+              trailing={"trailing" in link && link.trailing}
+            />
+          ))}
+        </>
+      );
+    }
+
+    if (inOrganizationSettings) {
+      const links = ([
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab !== "teams",
+          icon: Settings,
+          label: "General",
+          to: organizationSettingsPath,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "teams",
+          icon: Users,
+          label: "Teams",
+          to: `${organizationSettingsPath}?tab=teams`,
+        },
+        {
+          active: location.pathname === `${orgPath}/variable-sets`,
+          icon: Variable,
+          label: "Variable sets",
+          to: `${orgPath}/variable-sets`,
+        },
+        {
+          active: location.pathname === `${organizationSettingsPath}/vcs`,
+          icon: GitBranch,
+          label: "VCS providers",
+          to: `${organizationSettingsPath}/vcs`,
+        },
+        {
+          active: location.pathname === `${organizationSettingsPath}/agents`,
+          icon: Activity,
+          label: "Agent pools",
+          to: `${organizationSettingsPath}/agents`,
+        },
+      ] as const).filter((link): boolean =>
+        (link.label !== "Variable sets" || canManageWorkspaces)
+        && (link.label !== "VCS providers" || canManageVcsSettings)
+        && (link.label !== "Agent pools" || canManageAgentPools));
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label={currentOrgName}
+            onNavigate={closeMobileNavigation}
+            to={`${orgPath}/workspaces`}
+          />
+          <div
+            className={cn(
+              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+          >
+            Organization settings
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={link.active}
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+            />
+          ))}
+        </>
+      );
+    }
+
+    if (hasOrg) {
+      const links = ([
+        { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
+        { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
+        { label: "Registry", to: `${orgPath}/registry`, icon: Package },
+        { label: "No-code modules", to: `${orgPath}/no-code`, icon: PackageOpen },
+        { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
+      ] as const).filter((link): boolean =>
+        (link.label !== "Projects" || canReadProjects)
+        && (link.label !== "No-code modules" || canManageWorkspaces));
+
+      return (
+        <>
+          <div
+            className={cn(
+              "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+          >
+            Manage
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={
+                link.label === "Workspaces"
+                  ? location.pathname === orgPath ||
+                    location.pathname === link.to
+                  : isActivePath(location.pathname, link.to)
+              }
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+              trailing={"trailing" in link && link.trailing}
+            />
+          ))}
+        </>
+      );
+    }
+
+    return (
+      <SidebarNavLink
+        active={location.pathname === "/app"}
+        collapsed={sidebarCollapsed}
+        icon={Building2}
+        label="Organizations"
+        onNavigate={closeMobileNavigation}
+        to="/app"
+      />
+    );
+  };
 
   return (
-    <div className="flex h-screen w-full flex-col font-sans">
-      {/* Topbar */}
-      <header className="flex h-[52px] shrink-0 items-center justify-between bg-[#111315] px-4 text-white">
-        <div className="flex items-center gap-4">
-          <Link to="/app" className="flex items-center justify-center hover:opacity-80 transition-opacity">
-            {/* Minimal logo placeholder mimicking the screenshot */}
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="white" />
-              <path d="M12 22V12" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M12 12L22 7" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M2 7L12 12" stroke="#111315" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    <div className="flex h-dvh w-full flex-col bg-background font-sans text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only focus:fixed focus:left-4 focus:top-2 focus:z-50 focus:not-sr-only focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
+
+      <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+          <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-background hover:bg-background/10 hover:text-background lg:hidden"
+                aria-label="Open navigation"
+                aria-controls="mobile-app-sidebar"
+              >
+                <Menu data-icon="inline-start" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent
+              id="mobile-app-sidebar"
+              aria-describedby={undefined}
+              className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:rounded-none lg:hidden"
+            >
+              <DialogTitle className="sr-only">Application navigation</DialogTitle>
+              <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">
+                {renderNavigation()}
+              </nav>
+            </DialogContent>
+          </Dialog>
+
+          <Link
+            to="/app"
+            aria-label="Home"
+            className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background"
+          >
+            <svg
+              aria-hidden="true"
+              className="size-7"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
+              <path d="M12 22V12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M12 12L22 7" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 7L12 12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </Link>
 
-          <div className="h-5 w-px bg-white/20 ml-2" />
+          <div aria-hidden="true" className="hidden h-5 w-px bg-background/20 sm:block" />
 
-          <button className="flex items-center gap-2 rounded border border-white/20 bg-transparent px-3 py-1.5 text-sm font-medium hover:bg-white/10 transition-colors h-8 ml-2">
-            <Building2 className="h-4 w-4 opacity-70" />
-            <span>{currentOrgName}</span>
-            <ChevronDown className="h-3.5 w-3.5 opacity-70 ml-1" />
-          </button>
+          {hasOrg ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={(
+                  <Button
+                    variant="ghost"
+                    className="min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56"
+                    aria-label={`Organization menu for ${currentOrgName}`}
+                  />
+                )}
+              >
+                <Building2 data-icon="inline-start" />
+                <span className="truncate">{currentOrgName}</span>
+                <ChevronDown data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Organization</DropdownMenuLabel>
+                  <DropdownMenuItem
+                    onClick={(): void => {
+                      void navigate(`${orgPath}/workspaces`);
+                    }}
+                  >
+                    Workspaces
+                  </DropdownMenuItem>
+                  {organizationNames.some((name): boolean => name !== orgName) && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
+                      {organizationNames
+                        .filter((name): boolean => name !== orgName)
+                        .map((name): JSX.Element => (
+                          <DropdownMenuItem
+                            key={name}
+                            onClick={(): void => {
+                              void navigate(`/app/${encodeURIComponent(name)}/workspaces`);
+                            }}
+                          >
+                            {name}
+                          </DropdownMenuItem>
+                        ))}
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={(): void => {
+                      void navigate("/app");
+                    }}
+                  >
+                    All organizations
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Link
+              to="/app"
+              className={cn(
+                buttonVariants({ variant: "ghost" }),
+                "min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56",
+              )}
+            >
+              <Building2 data-icon="inline-start" />
+              <span className="truncate">{currentOrgName}</span>
+            </Link>
+          )}
         </div>
 
-        <div className="flex items-center gap-1">
-          <button className="flex items-center gap-1 rounded px-2 py-1.5 text-sm hover:bg-white/10 transition-colors h-8 text-gray-300 hover:text-white">
-            <HelpCircle className="h-4 w-4" />
-            <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-          </button>
-
+        <div className="flex shrink-0 items-center gap-1">
           <DropdownMenu>
-            <DropdownMenuTrigger className="ml-2 flex items-center gap-1 rounded px-2 py-1 hover:bg-white/10 transition-colors h-10 outline-none">
-                <Avatar className="h-7 w-7 rounded">
-                  <AvatarImage src="" />
-                  <AvatarFallback className="rounded bg-gray-600 text-xs text-white">U</AvatarFallback>
-                </Avatar>
-                <ChevronDown className="h-3.5 w-3.5 opacity-70 text-gray-300" />
+            <DropdownMenuTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  className="text-background hover:bg-background/10 hover:text-background"
+                  aria-label="Help and support"
+                />
+              )}
+            >
+              <HelpCircle data-icon="inline-start" />
+              <ChevronDown className="size-3.5" data-icon="inline-end" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>My Account</DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Help and support</DropdownMenuLabel>
+                {[
+                  ["Documentation", "https://developer.hashicorp.com/terraform/cloud-docs"],
+                  ["Tutorials", "https://developer.hashicorp.com/terraform/tutorials/cloud"],
+                  ["Support", "https://support.hashicorp.com/"],
+                  ["Status", "https://status.hashicorp.com/"],
+                ].map(([label, href]): JSX.Element => (
+                  <DropdownMenuItem
+                    key={href}
+                    render={<a href={href} target="_blank" rel="noreferrer" />}
+                  >
+                    {label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  className="text-background hover:bg-background/10 hover:text-background"
+                  aria-label="Account menu"
+                />
+              )}
+            >
+              <Avatar className="size-7 rounded">
+                <AvatarFallback className="rounded bg-background/15 text-background">
+                  {accountName === ""
+                    ? <UserRound aria-hidden="true" />
+                    : accountName.slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <ChevronDown className="size-3.5" data-icon="inline-end" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{accountName === "" ? "My account" : accountName}</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={(): void => {
+                    void navigate("/app/account");
+                  }}
+                >
+                  Account settings
+                </DropdownMenuItem>
+                {siteAdmin && (
+                  <DropdownMenuItem
+                    onClick={(): void => {
+                      void navigate("/app/admin");
+                    }}
+                  >
+                    Site administration
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer" onClick={(): void => { void navigate("/app/account"); }}>User Settings</DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer" onClick={(): void => { void navigate("/app/account"); }}>Tokens</DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer font-medium text-blue-600" onClick={(): void => { void navigate("/app/admin"); }}>Site Administration</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout} className="text-red-600 cursor-pointer">
-                <LogOut className="mr-2 h-4 w-4" />
-                <span>Log out</span>
-              </DropdownMenuItem>
+              <DropdownMenuGroup>
+                <DropdownMenuItem variant="destructive" onClick={handleLogout}>
+                  <LogOut />
+                  Log out
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex flex-1 overflow-hidden bg-white">
-        {/* Sidebar */}
-        <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 bg-[#f9fafb] overflow-y-auto pb-4 flex flex-col">
-          <nav className="flex flex-col gap-0.5 p-3">
-            {hasOrg ? (
-              <>
-                <div className="px-3 pb-2 pt-3 text-xs font-semibold text-gray-500">Manage</div>
-
-                <Link to={`/app/${orgName}/projects`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}/projects`) ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <FolderGit2 className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}/projects`) ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
-                  Projects
-                </Link>
-
-                <Link to={`/app/${orgName}`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}`, true) || location.pathname.includes('/workspaces/') ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <Box className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}`, true) || location.pathname.includes('/workspaces/') ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
-                  Workspaces
-                </Link>
-
-                <Link to={`/app/${orgName}/no-code`} className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}/no-code`) ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <PackageOpen className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}/no-code`) ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
-                  No-code modules
-                </Link>
-
-                <Link to={`/app/${orgName}/settings`} className={`group flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${isRouteActive(`/app/${orgName}/settings`) ? 'bg-[#e0eaff] text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <div className="flex items-center gap-3">
-                    <Settings className={`h-[18px] w-[18px] ${isRouteActive(`/app/${orgName}/settings`) ? 'text-blue-700' : 'text-gray-500 group-hover:text-gray-700'}`} />
-                    Settings
-                  </div>
-                  <ChevronRight className="h-4 w-4 opacity-50" />
-                </Link>
-
-              </>
-            ) : (
-              <>
-                <Link to="/app" className={`group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${isRouteActive("/app", true) ? 'bg-[#e0eaff] text-blue-700' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'}`}>
-                  <Building2 className={`h-[18px] w-[18px] ${isRouteActive("/app", true) ? 'text-blue-700' : 'text-blue-600'}`} />
-                  Organizations
-                </Link>
-              </>
-            )}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <aside
+          id="app-sidebar"
+          aria-label="Application navigation"
+          className={cn(
+            "hidden w-[280px] shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
+            sidebarCollapsed ? "lg:w-16" : "lg:w-[280px]",
+          )}
+        >
+          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
+            {renderNavigation()}
           </nav>
+
+          <div className="hidden border-t p-3 lg:block">
+            <Button
+              variant="ghost"
+              size={sidebarCollapsed ? "icon" : "default"}
+              className={cn("w-full", !sidebarCollapsed && "justify-start")}
+              aria-controls="app-sidebar"
+              aria-expanded={!sidebarCollapsed}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={toggleSidebar}
+            >
+              {sidebarCollapsed
+                ? <PanelLeftOpen data-icon="inline-start" />
+                : <PanelLeftClose data-icon="inline-start" />}
+              {!sidebarCollapsed && <span>Collapse sidebar</span>}
+            </Button>
+          </div>
         </aside>
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-white flex flex-col relative">
-          {/* TFE style left border toggle placeholder */}
-          <div className="absolute left-0 top-0 bottom-0 w-8 flex flex-col items-center py-4 z-10 pointer-events-none">
-             <button className="h-6 w-6 rounded flex items-center justify-center pointer-events-auto group mt-[-10px] ml-[-12px]">
-                <div className="bg-white border border-gray-200 rounded p-0.5 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
-                  <ChevronsLeftRight className="h-3 w-3 text-gray-400" />
-                </div>
-             </button>
-          </div>
-
-          <div className="flex-1 px-8 py-8 w-full">
-            {children as React.ReactNode}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="relative flex min-w-0 flex-1 flex-col overflow-auto bg-background outline-none"
+        >
+          <div className="w-full flex-1 px-4 py-6 sm:px-6 lg:px-8">
+            {children ?? (
+              <Outlet
+                context={{
+                  accountLoaded,
+                  setMustChangePassword,
+                  siteAdmin,
+                } satisfies LayoutOutletContext}
+              />
+            )}
           </div>
         </main>
       </div>

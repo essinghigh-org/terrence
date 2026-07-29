@@ -10,7 +10,7 @@ import {
   teams,
   teamMemberships,
 } from "../db/schema";
-import { eq, and, desc, count, inArray, like } from "drizzle-orm";
+import { eq, and, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
@@ -248,7 +248,13 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    const where = eq(apiTokens.userId, userId);
+    const where = and(
+      eq(apiTokens.userId, userId),
+      or(
+        isNull(apiTokens.description),
+        ne(apiTokens.description, "Browser session access token"),
+      ),
+    );
     const [tokens, countRows] = await Promise.all([
       db.query.apiTokens.findMany({ where, orderBy: [desc(apiTokens.createdAt)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(apiTokens).where(where),

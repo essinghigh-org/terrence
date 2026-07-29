@@ -68,16 +68,40 @@ test("plans uploaded cloud configuration against the latest local state and reco
     await writeFile(join(recordDir, "plan.json"), JSON.stringify({
       format_version: "1.2",
       terraform_version: "1.2.3",
-      resource_changes: [{ address: "test_resource.example" }],
+      resource_changes: [{
+        address: "test_resource.example",
+        mode: "managed",
+        change: { actions: ["no-op"], importing: { id: "existing-1" } },
+      }, {
+        address: "test_resource.updated_import",
+        mode: "managed",
+        change: { actions: ["update"], importing: { id: "existing-2" } },
+      }, {
+        address: "test_resource.created",
+        mode: "managed",
+        change: { actions: ["create"] },
+      }, {
+        address: "test_resource.replaced",
+        mode: "managed",
+        change: { actions: ["delete", "create"] },
+      }, {
+        address: "test_resource.deleted",
+        mode: "managed",
+        change: { actions: ["delete"] },
+      }, {
+        address: "data.test_resource.read",
+        mode: "data",
+        change: { actions: ["read"] },
+      }],
     }));
     await writeFile(binaryPath, [
       "#!/bin/sh",
       "record_dir=" + JSON.stringify(recordDir),
       "case \\"$1\\" in",
       '  init) echo "$@" > "$record_dir/init-args"; cp terrence_backend_override.tf "$record_dir/backend-override" ;;',
-      '  plan) printf "plan-first\\n"; touch "$record_dir/wait-sentinel"; while [ -f "$record_dir/wait-sentinel" ]; do sleep 0.01; done; printf "plan-second\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
+      '  plan) printf "plan-first\\n"; touch "$record_dir/wait-sentinel"; while [ -f "$record_dir/wait-sentinel" ]; do sleep 0.01; done; printf "plan-second\\n"; printf "Plan: 9 to import, 9 to add, 9 to change, 9 to destroy.\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
       '  show) cat "$record_dir/plan.json" ;;',
-      '  apply) echo "$PROVIDER_TOKEN" > "$record_dir/apply-provider-token"; echo "$TF_LOG" > "$record_dir/apply-tf-log"; cp "$record_dir/applied-state" terraform.tfstate ;;',
+      '  apply) printf "Apply complete! Resources: 2 imported, 3 added, 4 changed, 5 destroyed.\\n"; echo "$PROVIDER_TOKEN" > "$record_dir/apply-provider-token"; echo "$TF_LOG" > "$record_dir/apply-tf-log"; cp "$record_dir/applied-state" terraform.tfstate ;;',
       "  *) exit 2 ;;",
       "esac",
     ].join("\\n"));
@@ -227,6 +251,18 @@ test("plans uploaded cloud configuration against the latest local state and reco
       applyTfLog,
       streamedBeforeExit,
       applied: applied?.status,
+      planCounts: {
+        additions: applied?.planResourceAdditions,
+        changes: applied?.planResourceChanges,
+        destructions: applied?.planResourceDestructions,
+        imports: applied?.planResourceImports,
+      },
+      applyCounts: {
+        additions: applied?.applyResourceAdditions,
+        changes: applied?.applyResourceChanges,
+        destructions: applied?.applyResourceDestructions,
+        imports: applied?.applyResourceImports,
+      },
       persistedPlanJson,
       stateSerials: recordedStates.map(state => state.serial),
       appliedState: JSON.parse(recordedStates.at(-1)?.statePayload ?? "null"),
@@ -237,6 +273,8 @@ test("plans uploaded cloud configuration against the latest local state and reco
     seededSerial: 7,
     applied: "applied",
     streamedBeforeExit: true,
+    planCounts: { additions: 2, changes: 1, destructions: 2, imports: 2 },
+    applyCounts: { additions: 3, changes: 4, destructions: 5, imports: 2 },
   });
   expect(result.initArgs).toContain("-reconfigure");
   expect(result.planArgs).toContain("-refresh-only");
@@ -268,7 +306,11 @@ test("plans uploaded cloud configuration against the latest local state and reco
   });
   expect(result.persistedPlanJson).toMatchObject({
     format_version: "1.2",
-    resource_changes: [{ address: "test_resource.example" }],
+  });
+  expect(result.persistedPlanJson.resource_changes).toHaveLength(6);
+  expect(result.persistedPlanJson.resource_changes[0]).toMatchObject({
+    address: "test_resource.example",
+    change: { actions: ["no-op"], importing: { id: "existing-1" } },
   });
 });
 
@@ -295,10 +337,21 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 
     await executeRun("run");
     const run = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
-    console.log(JSON.stringify({ status: run?.status }));
+    console.log(JSON.stringify({
+      status: run?.status,
+      planCounts: {
+        additions: run?.planResourceAdditions,
+        changes: run?.planResourceChanges,
+        destructions: run?.planResourceDestructions,
+        imports: run?.planResourceImports,
+      },
+    }));
   `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
 
-  expect(result).toEqual({ status: "planned_and_finished" });
+  expect(result).toEqual({
+    status: "planned_and_finished",
+    planCounts: { additions: 1, changes: 0, destructions: 0, imports: 0 },
+  });
 });
 
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {

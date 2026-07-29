@@ -26,6 +26,9 @@ import {
   type ClaimedAgentJob,
 } from "../lib/agent-jobs";
 import { refetchConfigurationVersion } from "../lib/webhooks";
+import type { PlanJson } from "../lib/plan-json";
+
+const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
 function getAttrs(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null) return {};
@@ -236,6 +239,18 @@ function nonNegativeInteger(value: unknown): number | null | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+function planJsonFrom(value: unknown): PlanJson | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return undefined;
+  try {
+    const serialized = JSON.stringify(value);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_AGENT_PLAN_JSON_BYTES) return undefined;
+  } catch {
+    return undefined;
+  }
+  return value as PlanJson;
+}
+
 function completionFromBody(body: unknown): AgentJobCompletion | undefined {
   const attrs = getAttrs(body);
   const status = attrs.status;
@@ -243,10 +258,19 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
   const resourceAdditions = nonNegativeInteger(attrs["resource-additions"]);
   const resourceChanges = nonNegativeInteger(attrs["resource-changes"]);
   const resourceDestructions = nonNegativeInteger(attrs["resource-destructions"]);
-  if (resourceAdditions === undefined || resourceChanges === undefined || resourceDestructions === undefined) return undefined;
+  const resourceImports = nonNegativeInteger(attrs["resource-imports"]);
+  const planJson = planJsonFrom(attrs["plan-json"]);
+  if (
+    resourceAdditions === undefined
+    || resourceChanges === undefined
+    || resourceDestructions === undefined
+    || resourceImports === undefined
+    || planJson === undefined
+    || (planJson !== null && status !== "completed")
+  ) return undefined;
   const errorMessage = attrs["error-message"] === undefined || attrs["error-message"] === null
     ? null
-    : typeof attrs["error-message"] === "string"
+    : typeof attrs["error-message"] === "string" && attrs["error-message"].length <= 16_384
       ? attrs["error-message"]
       : undefined;
   const statePayload = attrs.state === undefined || attrs.state === null
@@ -287,6 +311,8 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
     resourceAdditions,
     resourceChanges,
     resourceDestructions,
+    resourceImports,
+    planJson,
     statePayload,
     jsonState,
     jsonStateOutputs,
@@ -625,6 +651,13 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (completion === undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid agent job result" }] };
+    }
+    if (completion.planJson !== null) {
+      const claimed = await findClaimedAgentJob(agent.id, jobId);
+      if (claimed !== undefined && claimed.job.phase !== "plan") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan-json is only valid for completed plan jobs" }] };
+      }
     }
     const completed = await completeAgentJob(agent.id, jobId, completion);
     if (completed === undefined) {

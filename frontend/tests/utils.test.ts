@@ -6,7 +6,7 @@ test("cn returns a merged className string", () => {
 });
 
 test("cn handles conditional classes with clsx", () => {
-  const result = cn("base", false && "hidden", undefined, null, "extra");
+  const result = cn("base", { hidden: false }, undefined, null, "extra");
   expect(result).toBe("base extra");
 });
 

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   consumeAuthExpiry,
+  fetchAllApiPages,
   fetchApi,
   getAuthToken,
   getAuthTokenExpiry,
@@ -22,6 +23,28 @@ test("reads JSON, text, and empty API responses", async () => {
     headers: { "Content-Type": "application/vnd.api+json" },
   }))).toEqual({ ok: true });
   expect(await readResponseBody(new Response("plain text"))).toBe("plain text");
+});
+
+test("collects paginated API data and stops on a repeated page", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    calls.push(url);
+    return Response.json(url.includes("page%5Bnumber%5D=2")
+      ? { data: [{ id: "run-2" }], meta: { pagination: { "next-page": 2 } } }
+      : { data: [{ id: "run-1" }], meta: { pagination: { "next-page": 2 } } });
+  }) as typeof fetch;
+
+  try {
+    expect(await fetchAllApiPages<{ id: string }>("/workspaces/ws-1/runs")).toEqual([
+      { id: "run-1" },
+      { id: "run-2" },
+    ]);
+    expect(calls).toHaveLength(2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("removes expired tokens before they are used", () => {
@@ -61,7 +84,7 @@ test("invalidates an authenticated session after a 401 response", async () => {
   }
 });
 
-test("rotates a browser session and retries one failed API request", async () => {
+test("rotates an expired browser session before sending the API request", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; authorization: string | null; credentials?: RequestCredentials }[] = [];
   setAuthToken("expired-access", Date.now() - 1, true);
@@ -94,7 +117,6 @@ test("rotates a browser session and retries one failed API request", async () =>
   try {
     expect(await fetchApi("/account/details")).toEqual({ data: { id: "user-1" } });
     expect(calls).toEqual([
-      { url: "/api/v2/account/details", authorization: "Bearer expired-access", credentials: undefined },
       { url: "/api/v2/users/refresh", authorization: null, credentials: "same-origin" },
       { url: "/api/v2/account/details", authorization: "Bearer rotated-access", credentials: undefined },
     ]);

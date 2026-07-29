@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { buttonVariants, Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,40 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fetchApi } from "@/lib/api";
-
-function buildNextPageUrl(current: string, nextPage: number): string {
-  const qi = current.indexOf("?");
-  const base = qi >= 0 ? current.substring(0, qi) : current;
-  const search = new URLSearchParams(qi >= 0 ? current.substring(qi + 1) : "");
-  search.set("page[number]", String(nextPage));
-  return base + "?" + search.toString();
-}
-
-async function fetchAllPages<T>(path: string): Promise<T[]> {
-  const results: T[] = [];
-  let url: string | null = path;
-  let page = 1;
-  while (url != null) {
-    const res = await fetchApi(url) as { data?: T[]; links?: { next?: string | null }; meta?: { pagination?: Record<string, unknown> } };
-    if (res.data != null && Array.isArray(res.data)) {
-      for (const item of res.data) results.push(item);
-    }
-    const nextLink = res.links?.next ?? null;
-    const nextPage = res.meta?.pagination?.["next-page"];
-    const total = res.meta?.pagination?.["total-pages"] as number | undefined;
-    if (nextLink != null) {
-      url = nextLink;
-      page++;
-    } else if (nextPage != null && typeof nextPage === "number" && nextPage > page && (total == null || nextPage <= total)) {
-      url = buildNextPageUrl(url, nextPage);
-      page = nextPage;
-    } else {
-      url = null;
-    }
-  }
-  return results;
-}
+import { fetchAllApiPages, fetchApi } from "@/lib/api";
 
 type ResourceIdentifier = {
   id: string;
@@ -110,11 +77,13 @@ function messageFrom(error: unknown, fallback: string): string {
 function VariablesDialog({
   open,
   variableSet,
+  canManage,
   onOpenChange,
   onCountChange,
 }: {
   open: boolean;
   variableSet: VariableSet | null;
+  canManage: boolean;
   onOpenChange: (open: boolean) => void;
   onCountChange: (variableSetId: string, delta: number) => void;
 }): React.JSX.Element {
@@ -139,7 +108,7 @@ function VariablesDialog({
     setFormOpen(false);
     setError("");
 
-    fetchAllPages<VariableSetVariable>(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
+    fetchAllApiPages<VariableSetVariable>(`/varsets/${variableSetId}/relationships/vars?page[size]=100`)
       .then((data: VariableSetVariable[]): void => {
         if (active) setVariables(data);
       })
@@ -156,6 +125,7 @@ function VariablesDialog({
   }, [open, variableSetId]);
 
   const openForm = (variable?: VariableSetVariable): void => {
+    if (!canManage) return;
     setEditing(variable ?? null);
     setKey(variable?.attributes.key ?? "");
     setValue(variable?.attributes.sensitive === true ? "" : variable?.attributes.value ?? "");
@@ -168,7 +138,7 @@ function VariablesDialog({
 
   const saveVariable = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (variableSetId == null) return;
+    if (!canManage || variableSetId == null) return;
     if (editing?.attributes.sensitive === true && !sensitive && value === "") {
       setError("Enter a new value before making this sensitive variable visible.");
       return;
@@ -211,7 +181,7 @@ function VariablesDialog({
   };
 
   const deleteVariable = async (variable: VariableSetVariable): Promise<void> => {
-    if (variableSetId == null || !window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
+    if (!canManage || variableSetId == null || !window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
     setError("");
     try {
       await fetchApi(`/varsets/${variableSetId}/relationships/vars/${variable.id}`, {
@@ -314,9 +284,9 @@ function VariablesDialog({
           </form>
         ) : (
           <div className="flex flex-col gap-4">
-            <div className="flex justify-end">
+            {canManage && <div className="flex justify-end">
               <Button onClick={(): void => { openForm(); }}>Add variable</Button>
-            </div>
+            </div>}
             {error !== "" && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -330,13 +300,13 @@ function VariablesDialog({
                     <TableHead>Value</TableHead>
                     <TableHead>Category</TableHead>
                     <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    {canManage && <TableHead className="text-right">Actions</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading && (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                      <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
                         Loading variables…
                       </TableCell>
                     </TableRow>
@@ -358,7 +328,7 @@ function VariablesDialog({
                         <TableCell className="max-w-48 truncate text-muted-foreground">
                           {variable.attributes.description ?? "—"}
                         </TableCell>
-                        <TableCell>
+                        {canManage && <TableCell>
                           <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
@@ -375,12 +345,12 @@ function VariablesDialog({
                               Delete
                             </Button>
                           </div>
-                        </TableCell>
+                        </TableCell>}
                       </TableRow>
                     ))}
                   {!loading && variables.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                      <TableCell colSpan={canManage ? 5 : 4} className="h-20 text-center text-muted-foreground">
                         No variables in this set.
                       </TableCell>
                     </TableRow>
@@ -400,6 +370,7 @@ export function VariableSets(): React.JSX.Element {
   const orgName = rawOrgName ?? "";
   const [variableSets, setVariableSets] = useState<VariableSet[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState("");
 
@@ -418,21 +389,42 @@ export function VariableSets(): React.JSX.Element {
   const [workspaceError, setWorkspaceError] = useState("");
   const [variablesOpen, setVariablesOpen] = useState(false);
   const [variablesSet, setVariablesSet] = useState<VariableSet | null>(null);
+  const activeOrganizationName = useRef(orgName);
+  activeOrganizationName.current = orgName;
+  const canManage = orgName !== "" && manageableOrganizationName === orgName;
 
   useEffect((): (() => void) | undefined => {
     if (orgName === "") return;
     let active = true;
     setLoading(true);
     setPageError("");
+    setVariableSets([]);
+    setWorkspaces([]);
+    setManageableOrganizationName("");
+    setEditorOpen(false);
+    setWorkspaceOpen(false);
+    setVariablesOpen(false);
 
     Promise.all([
-      fetchAllPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
-      fetchAllPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
+      fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
+      fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
+      fetchApi(`/organizations/${encodeURIComponent(orgName)}`) as Promise<{
+        data?: { attributes?: { permissions?: { "can-manage-workspaces"?: boolean } } };
+      }>,
     ])
-      .then(([setsData, workspacesData]: [VariableSet[], Workspace[]]): void => {
+      .then(([setsData, workspacesData, organizationResponse]: [
+        VariableSet[],
+        Workspace[],
+        { data?: { attributes?: { permissions?: { "can-manage-workspaces"?: boolean } } } },
+      ]): void => {
         if (!active) return;
         setVariableSets(setsData);
         setWorkspaces(workspacesData);
+        setManageableOrganizationName(
+          organizationResponse.data?.attributes?.permissions?.["can-manage-workspaces"] === true
+            ? orgName
+            : "",
+        );
       })
       .catch((error: unknown): void => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
@@ -447,6 +439,7 @@ export function VariableSets(): React.JSX.Element {
   }, [orgName]);
 
   const openEditor = (variableSet?: VariableSet): void => {
+    if (!canManage) return;
     setEditing(variableSet ?? null);
     setName(variableSet?.attributes.name ?? "");
     setDescription(variableSet?.attributes.description ?? "");
@@ -457,7 +450,7 @@ export function VariableSets(): React.JSX.Element {
 
   const saveVariableSet = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (orgName === "") return;
+    if (!canManage || orgName === "") return;
     setSavingSet(true);
     setEditorError("");
 
@@ -480,6 +473,7 @@ export function VariableSets(): React.JSX.Element {
           }),
         },
       ) as { data: VariableSet };
+      if (activeOrganizationName.current !== orgName) return;
       const saved = response.data;
       setVariableSets((current: VariableSet[]): VariableSet[] => {
         const next = editing != null
@@ -498,10 +492,11 @@ export function VariableSets(): React.JSX.Element {
   };
 
   const deleteVariableSet = async (variableSet: VariableSet): Promise<void> => {
-    if (!window.confirm(`Delete variable set "${variableSet.attributes.name}"?`)) return;
+    if (!canManage || !window.confirm(`Delete variable set "${variableSet.attributes.name}"?`)) return;
     setPageError("");
     try {
       await fetchApi(`/varsets/${variableSet.id}`, { method: "DELETE" });
+      if (activeOrganizationName.current !== orgName) return;
       setVariableSets((current: VariableSet[]): VariableSet[] => current.filter((item: VariableSet): boolean => item.id !== variableSet.id));
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable set"));
@@ -509,6 +504,7 @@ export function VariableSets(): React.JSX.Element {
   };
 
   const openWorkspaceEditor = (variableSet: VariableSet): void => {
+    if (!canManage) return;
     setWorkspaceSet(variableSet);
     setSelectedWorkspaceIds(
       new Set((variableSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id)),
@@ -523,6 +519,7 @@ export function VariableSets(): React.JSX.Element {
   };
 
   const updateVariableCount = (variableSetId: string, delta: number): void => {
+    if (!canManage) return;
     setVariableSets((current: VariableSet[]): VariableSet[] =>
       current.map((variableSet: VariableSet): VariableSet =>
         variableSet.id === variableSetId
@@ -539,6 +536,7 @@ export function VariableSets(): React.JSX.Element {
   };
 
   const toggleWorkspace = (workspaceId: string, checked: boolean): void => {
+    if (!canManage) return;
     setSelectedWorkspaceIds((current: Set<string>): Set<string> => {
       const next = new Set(current);
       if (checked) next.add(workspaceId);
@@ -549,7 +547,7 @@ export function VariableSets(): React.JSX.Element {
 
   const saveWorkspaceRelationships = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (workspaceSet == null) return;
+    if (!canManage || workspaceSet == null) return;
 
     const currentIds = new Set(
       (workspaceSet.relationships.workspaces?.data ?? []).map((workspace: ResourceIdentifier): string => workspace.id),
@@ -568,12 +566,14 @@ export function VariableSets(): React.JSX.Element {
           body: relationshipBody(attached),
         });
       }
+      if (activeOrganizationName.current !== orgName) return;
       if (detached.length > 0) {
         await fetchApi(`/varsets/${workspaceSet.id}/relationships/workspaces`, {
           method: "DELETE",
           body: relationshipBody(detached),
         });
       }
+      if (activeOrganizationName.current !== orgName) return;
 
       const updated: VariableSet = {
         ...workspaceSet,
@@ -594,6 +594,7 @@ export function VariableSets(): React.JSX.Element {
       setWorkspaceSet(updated);
       setWorkspaceOpen(false);
     } catch (error: unknown) {
+      if (activeOrganizationName.current !== orgName) return;
       try {
         const fetched = await fetchApi(`/varsets/${workspaceSet.id}`) as { data?: VariableSet } | undefined;
         if (fetched?.data != null) {
@@ -620,10 +621,10 @@ export function VariableSets(): React.JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link to={`/app/${orgName}`} className={buttonVariants({ variant: "outline" })}>
+          <Link to={`/app/${encodeURIComponent(orgName)}`} className={buttonVariants({ variant: "outline" })}>
             Workspaces
           </Link>
-          <Button onClick={(): void => { openEditor(); }}>New variable set</Button>
+          {canManage && <Button onClick={(): void => { openEditor(); }}>New variable set</Button>}
         </div>
       </header>
 
@@ -676,24 +677,26 @@ export function VariableSets(): React.JSX.Element {
                       >
                         Variables
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(): void => { openWorkspaceEditor(variableSet); }}
-                        disabled={variableSet.attributes.global}
-                      >
-                        Workspaces
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={(): void => { openEditor(variableSet); }}>
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={(): void => { void deleteVariableSet(variableSet); }}
-                      >
-                        Delete
-                      </Button>
+                      {canManage && <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(): void => { openWorkspaceEditor(variableSet); }}
+                          disabled={variableSet.attributes.global}
+                        >
+                          Workspaces
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={(): void => { openEditor(variableSet); }}>
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={(): void => { void deleteVariableSet(variableSet); }}
+                        >
+                          Delete
+                        </Button>
+                      </>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -816,6 +819,7 @@ export function VariableSets(): React.JSX.Element {
       <VariablesDialog
         open={variablesOpen}
         variableSet={variablesSet}
+        canManage={canManage}
         onOpenChange={setVariablesOpen}
         onCountChange={updateVariableCount}
       />

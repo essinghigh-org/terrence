@@ -2,7 +2,12 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, like, notInArray } from "drizzle-orm";
-import { workspaceResource, workspaceVariableResource, tagBindingResource } from "../lib/response";
+import {
+  workspaceResource,
+  workspaceVariableResource,
+  tagBindingResource,
+  type WorkspaceResourcePermissions,
+} from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspaceIdsForPermission, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
 
@@ -39,6 +44,45 @@ type WsItem = DeepReadonly<typeof workspaces.$inferSelect>;
 type TagItem = DeepReadonly<typeof workspaceTags.$inferSelect>;
 type VarItem = DeepReadonly<typeof workspaceVariables.$inferSelect>;
 type WorkspaceVcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
+
+async function resourcePermissions(
+  workspace: WsItem,
+  userId: string | undefined,
+  principalOrgId: string | null,
+  teamId: string | null,
+): Promise<WorkspaceResourcePermissions> {
+  const [
+    canPlan,
+    canApply,
+    canLock,
+    canAdmin,
+    canWriteVariables,
+    canReadVariables,
+    canReadStateVersions,
+    canWorkspaceRunTasks,
+    canManageOrgRunTasks,
+  ] = await Promise.all([
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "plan"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "apply"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "lock"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "admin"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "variables-write"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "variables-read"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "state-read"),
+    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "run-tasks"),
+    checkOrganizationPermission(workspace.orgId, userId, principalOrgId, teamId, "manage-run-tasks"),
+  ]);
+  return {
+    canPlan,
+    canApply,
+    canLock,
+    canAdmin,
+    canWriteVariables,
+    canReadVariables,
+    canReadStateVersions,
+    canManageRunTasks: canWorkspaceRunTasks && canManageOrgRunTasks,
+  };
+}
 
 function isUniqueConstraintError(err: unknown): boolean {
   return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && err.message.includes("UNIQUE")) || ("code" in err && err.code === "SQLITE_CONSTRAINT_UNIQUE"));
@@ -200,11 +244,21 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     const currentRunStatuses = csv("filter[current-run][status]");
     if (currentRunStatuses.length > 0) {
-      const matchingWsIds = (await db.query.runs.findMany({
-        where: and(inArray(runs.status, currentRunStatuses)),
-        columns: { workspaceId: true },
-      })).map((r: Readonly<{ workspaceId: string }>): string => r.workspaceId);
-      conditions.push(inArray(workspaces.id, [...new Set(matchingWsIds)]));
+      // ponytail: scans only run status metadata; use a window-function subquery if histories make this filter slow.
+      const runHistory = await db.query.runs.findMany({
+        columns: { workspaceId: true, status: true },
+        orderBy: [desc(runs.createdAt)],
+      });
+      const seen = new Set<string>();
+      const matchingWsIds: string[] = [];
+      for (const run of runHistory) {
+        if (seen.has(run.workspaceId)) continue;
+        seen.add(run.workspaceId);
+        if (currentRunStatuses.includes(run.status)) matchingWsIds.push(run.workspaceId);
+      }
+      conditions.push(matchingWsIds.length > 0
+        ? inArray(workspaces.id, matchingWsIds)
+        : eq(workspaces.id, "__no_matching_workspace__"));
     }
     const where = and(...(conditions as Parameters<typeof and>));
     const [wsList, countRows] = await Promise.all([
@@ -212,8 +266,42 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       db.select({ total: count() }).from(workspaces).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
+    const principalOrg = principalOrgId ?? null;
+    const principalTeam = teamId ?? null;
+    const [
+      planIds,
+      applyIds,
+      lockIds,
+      adminIds,
+      writeVariableIds,
+      readVariableIds,
+      readStateIds,
+      runTaskIds,
+      canManageOrgRunTasks,
+    ] = await Promise.all([
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "plan"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "apply"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "lock"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "admin"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "variables-write"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "variables-read"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "state-read"),
+      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "run-tasks"),
+      checkOrganizationPermission(org.id, user?.id, principalOrg, principalTeam, "manage-run-tasks"),
+    ]);
+    const allows = (ids: readonly string[] | null, workspaceId: string): boolean =>
+      ids === null || ids.includes(workspaceId);
     const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> =>
-      workspaceResource(w, org.defaultIacBinary, await checkWorkspacePermission(w, user?.id, principalOrgId ?? null, teamId ?? null, "plan"))));
+      workspaceResource(w, org.defaultIacBinary, {
+        canAdmin: allows(adminIds, w.id),
+        canApply: allows(applyIds, w.id),
+        canLock: allows(lockIds, w.id),
+        canManageRunTasks: canManageOrgRunTasks && allows(runTaskIds, w.id),
+        canPlan: allows(planIds, w.id),
+        canReadStateVersions: allows(readStateIds, w.id),
+        canReadVariables: allows(readVariableIds, w.id),
+        canWriteVariables: allows(writeVariableIds, w.id),
+      })));
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -400,7 +488,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       projectId: ws.projectId,
     });
     (set as { status: number }).status = 201;
-    return { data: await workspaceResource(ws, org.defaultIacBinary, Boolean(user)) };
+    return {
+      data: await workspaceResource(
+        ws,
+        org.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
   .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -409,8 +503,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const canPlan = await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "plan");
-    return { data: await workspaceResource(ws, org.defaultIacBinary, canPlan) };
+    return {
+      data: await workspaceResource(
+        ws,
+        org.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
   .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -420,7 +519,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return updateWorkspaceResponse(ws, org.defaultIacBinary, true, body, set);
+    return updateWorkspaceResponse(
+      ws,
+      org.defaultIacBinary,
+      { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
+      body,
+      set,
+    );
   })
   .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params.org_name ?? "";
@@ -453,12 +558,17 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    const canPlan = await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "plan");
-    return { data: await workspaceResource(ws, org?.defaultIacBinary, canPlan) };
+    return {
+      data: await workspaceResource(
+        ws,
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
   .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const latestState = await db.query.stateVersions.findFirst({
       where: eq(stateVersions.workspaceId, ws.id),
@@ -468,8 +578,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const resources: Record<string, unknown>[] = [];
     if (latestState?.jsonState !== null && latestState?.jsonState !== undefined) {
       try {
-        const parsed = typeof latestState.jsonState === "string" ? JSON.parse(latestState.jsonState) : latestState.jsonState;
-        const resList = Array.isArray(parsed?.resources) ? parsed.resources : [];
+        const parsed: unknown = typeof latestState.jsonState === "string"
+          ? JSON.parse(latestState.jsonState) as unknown
+          : latestState.jsonState;
+        const rawResources = parsed !== null && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>).resources
+          : undefined;
+        const resList = Array.isArray(rawResources) ? rawResources : [];
         const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0];
 
         for (const r of resList) {
@@ -482,8 +597,10 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
             let provider = "hashicorp/provider";
             if (typeof rObj.provider === "string") {
-              const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider) || /provider\["([^"]+)"\]/.exec(rObj.provider);
-              if (match?.[1]) provider = match[1];
+              const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider)
+                ?? /provider\["([^"]+)"\]/.exec(rObj.provider);
+              const providerName = match?.[1];
+              if (typeof providerName === "string" && providerName !== "") provider = providerName;
             }
 
             const id = `wsr-${Bun.hash(`${ws.id}:${address}`).toString(36)}`;
@@ -518,7 +635,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    return updateWorkspaceResponse(ws, org?.defaultIacBinary, true, body, set);
+    return updateWorkspaceResponse(
+      ws,
+      org?.defaultIacBinary,
+      { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
+      body,
+      set,
+    );
   })
   .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const workspaceId = params.workspace_id ?? "";
@@ -772,7 +895,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     await db.update(workspaces).set({ locked: true, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    return { data: await workspaceResource({ ...ws, locked: true }, org?.defaultIacBinary, true) };
+    return {
+      data: await workspaceResource(
+        { ...ws, locked: true },
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
 
   .post("/api/v2/workspaces/:workspace_id/actions/unlock", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -784,7 +913,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     await promoteIntermediateStateVersion(workspaceId);
     await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    return { data: await workspaceResource({ ...ws, locked: false }, org?.defaultIacBinary, true) };
+    return {
+      data: await workspaceResource(
+        { ...ws, locked: false },
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
   .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
@@ -793,7 +928,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     await promoteIntermediateStateVersion(workspaceId);
     await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    return { data: await workspaceResource({ ...ws, locked: false }, org?.defaultIacBinary, true) };
+    return {
+      data: await workspaceResource(
+        { ...ws, locked: false },
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      ),
+    };
   })
   // --- Remote State Consumers ---
   .get("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -952,7 +1093,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 async function updateWorkspaceResponse(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   defaultIacBinary: string | null | undefined,
-  canRun: boolean,
+  principal: Readonly<{
+    userId: string | undefined;
+    principalOrgId: string | null;
+    teamId: string | null;
+  }>,
   body: unknown,
   set: SetObj,
 ): Promise<unknown> {
@@ -984,7 +1129,7 @@ async function updateWorkspaceResponse(
 
   const newGlobal = typeof attributes["global-remote-state"] === "boolean" ? attributes["global-remote-state"] : workspace.globalRemoteState;
   const newProject = typeof attributes["project-remote-state"] === "boolean" ? attributes["project-remote-state"] : workspace.projectRemoteState;
-  if (newGlobal && newProject) {
+  if (newGlobal === true && newProject === true) {
     (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "global-remote-state and project-remote-state cannot both be true" }] };
   }
 
@@ -1165,5 +1310,11 @@ async function updateWorkspaceResponse(
   }
   const saved = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
   if (saved === undefined) throw new Error("Unable to update workspace");
-  return { data: await workspaceResource(saved, defaultIacBinary, canRun) };
+  return {
+    data: await workspaceResource(
+      saved,
+      defaultIacBinary,
+      await resourcePermissions(saved, principal.userId, principal.principalOrgId, principal.teamId),
+    ),
+  };
 }

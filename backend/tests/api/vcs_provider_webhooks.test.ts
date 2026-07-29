@@ -1,10 +1,11 @@
 import { createHmac } from "node:crypto";
 import { beforeAll, beforeEach, afterAll, describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   configurationVersions,
+  auditLogs,
   oauthClients,
   oauthTokens,
   organizations,
@@ -200,6 +201,16 @@ describe("GitLab and Bitbucket webhooks", () => {
       },
     });
     expect(run?.planOnly).toBe(false);
+    const runCreatedEvent = run === undefined
+      ? undefined
+      : await db.query.auditLogs.findFirst({
+          where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, run.id)),
+        });
+    expect(runCreatedEvent?.details).toMatchObject({
+      source: "gitlab",
+      triggerReason: "push",
+      workspaceId: gitlabWorkspaceId,
+    });
     expect(fetches).toContainEqual({
       authorization: "Bearer gitlab-token",
       url: `https://gitlab.example/api/v4/projects/platform%2Finfrastructure/repository/archive.tar.gz?sha=${gitlabPayload.checkout_sha}`,

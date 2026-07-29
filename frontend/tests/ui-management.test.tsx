@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { OrganizationSettings } from "../src/views/OrganizationSettings";
 import { Projects } from "../src/views/Projects";
@@ -34,6 +34,9 @@ test("edits and deletes projects through supported routes and reassigns a worksp
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/projects") return json({ data: projects });
     if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: [workspace] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-projects": true } } } });
+    }
     if (url === "/api/v2/projects/project-app" && init?.method === "PATCH") return json({ data: projects[1] });
     if (url === "/api/v2/projects/project-app" && init?.method === "DELETE") return new Response(null, { status: 204 });
     if (url === "/api/v2/workspaces/workspace-1" && init?.method === "PATCH") return json({ data: workspace });
@@ -78,6 +81,79 @@ test("edits and deletes projects through supported routes and reassigns a worksp
   });
 });
 
+test("keeps projects read-only without project management permission", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/projects") {
+      return json({ data: [{ id: "project-app", attributes: { name: "Applications" } }] });
+    }
+    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-projects": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/projects"]}>
+      <Routes><Route path="/app/:orgName/projects" element={<Projects />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Applications")).toBeTruthy(); });
+  expect(view.queryByRole("button", { name: "Create project" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Assign workspaces" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Edit Applications" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Delete Applications" })).toBeNull();
+  expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
+});
+
+test("ignores stale projects and permissions after changing organizations", async () => {
+  let resolveAcmeProjects!: (response: Response) => void;
+  const acmeProjects = new Promise<Response>((resolve): void => { resolveAcmeProjects = resolve; });
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/projects") return acmeProjects;
+    if (url === "/api/v2/organizations/platform/projects") {
+      return json({ data: [{ id: "project-platform", attributes: { name: "Platform" } }] });
+    }
+    if (url.endsWith("/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-projects": true } } } });
+    }
+    if (url === "/api/v2/organizations/platform") {
+      return json({ data: { attributes: { permissions: { "can-manage-projects": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/projects"]}>
+      <Link to="/app/platform/projects">Switch organization</Link>
+      <Routes><Route path="/app/:orgName/projects" element={<Projects />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]): boolean =>
+      urlOf(input) === "/api/v2/organizations/acme/projects")).toBeTrue();
+  });
+  fireEvent.click(view.getByRole("link", { name: "Switch organization" }));
+  expect(await view.findByText("Platform")).toBeTruthy();
+
+  await act(async (): Promise<void> => {
+    resolveAcmeProjects(json({
+      data: [{ id: "project-acme", attributes: { name: "Acme project" } }],
+    }));
+    await acmeProjects;
+  });
+
+  expect(view.queryByText("Acme project")).toBeNull();
+  expect(view.queryByRole("button", { name: "Create project" })).toBeNull();
+});
+
 test("filters workspaces by run status and adds, updates, and removes tags", async () => {
   const tags: { id: string; attributes: { key: string; value: string } }[] = [];
   const workspace = (): Record<string, unknown> => ({
@@ -85,6 +161,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     attributes: {
       name: "production",
       locked: false,
+      permissions: { "can-update": true },
       "tag-names": tags.map((tag): string => tag.attributes.key),
       "vcs-repo": null,
     },
@@ -93,9 +170,10 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: [workspace()] });
-    if (url === "/api/v2/organizations/acme/projects") {
+    if (url.startsWith("/api/v2/organizations/acme/projects?")) {
       return json({ data: [{ id: "project-default", attributes: { name: "Default Project" } }] });
     }
+    if (url.startsWith("/api/v2/organizations/acme/runs?")) return json({ data: [] });
     if (url === "/api/v2/workspaces/workspace-1/tag-bindings" && init?.method === undefined) return json({ data: tags });
     if (url === "/api/v2/workspaces/workspace-1/tag-bindings" && init?.method === "PATCH") {
       const payload = JSON.parse(init.body as string) as { data: { attributes: { key: string; value: string } }[] };
@@ -125,6 +203,11 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input]): boolean =>
       urlOf(input).includes("filter%5Bcurrent-run%5D%5Bstatus%5D=errored"))).toBeTrue();
+  });
+  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "completed" } });
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]): boolean =>
+      urlOf(input).includes("planned_and_finished"))).toBeTrue();
   });
 
   fireEvent.click(view.getByRole("button", { name: "Manage tags for production" }));
@@ -187,7 +270,21 @@ test("manages team organization access, invites a member, and removes them", asy
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme" && init?.method === undefined) {
-      return json({ data: { id: "org-1", attributes: { name: "acme" } } });
+      return json({
+        data: {
+          id: "org-1",
+          attributes: {
+            name: "acme",
+            permissions: {
+              "can-update": true,
+              "can-destroy": true,
+              "can-create-team": true,
+              "can-manage-users": true,
+              "can-update-organization-access": true,
+            },
+          },
+        },
+      });
     }
     if (url === "/api/v2/organizations/acme/teams" && init?.method === undefined) return json({ data: [team] });
     if (url === "/api/v2/teams/team-1" && init?.method === "PATCH") {
@@ -222,13 +319,12 @@ test("manages team organization access, invites a member, and removes them", asy
   globalThis.fetch = fetchMock as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/app/acme/settings"]}>
+    <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
       <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
     </MemoryRouter>,
   );
 
   await waitFor((): void => { expect(view.getByText("Organization Settings")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "Teams" }));
   fireEvent.click(view.getByRole("button", { name: "Manage permissions for Developers" }));
   fireEvent.click(view.getByLabelText("Manage Projects"));
   fireEvent.click(view.getByLabelText("Manage Modules"));
@@ -278,4 +374,217 @@ test("manages team organization access, invites a member, and removes them", asy
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/organization-memberships/membership-invite" && init?.method === "DELETE")).toBeTrue();
   });
+});
+
+test("fails closed for organization and team mutations without explicit permissions", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { id: "org-1", attributes: { name: "acme" } } });
+    }
+    if (url === "/api/v2/organizations/acme/teams") {
+      return json({ data: [{ id: "team-1", attributes: { name: "Developers" } }] });
+    }
+    if (url === "/api/v2/organizations/acme/organization-memberships") {
+      return json({
+        data: [{
+          id: "membership-1",
+          attributes: { email: "member@example.com", role: "member", status: "active" },
+        }],
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const teamsView = render(
+    <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await teamsView.findByText("Manage access across the organization.");
+  expect(teamsView.getByPlaceholderText("New team name").disabled).toBeTrue();
+  expect(teamsView.getByRole("button", { name: "Manage permissions for Developers" }).disabled).toBeTrue();
+  expect(teamsView.getByLabelText("Email").disabled).toBeTrue();
+  expect(teamsView.getByRole("button", { name: "Invite" }).disabled).toBeTrue();
+  expect(teamsView.getByRole("button", { name: "Remove member@example.com" }).disabled).toBeTrue();
+  teamsView.unmount();
+
+  const generalView = render(
+    <MemoryRouter initialEntries={["/app/acme/settings"]}>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await generalView.findByText("Organization owner access is required to change these settings.");
+  expect(generalView.getByLabelText("Organization Name").disabled).toBeTrue();
+  expect(generalView.getByRole("button", { name: "Save settings" }).disabled).toBeTrue();
+  expect(generalView.getByRole("button", { name: "Delete Organization" }).disabled).toBeTrue();
+  expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
+});
+
+test("shows a retryable organization load error", async () => {
+  let organizationRequests = 0;
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme") {
+      organizationRequests += 1;
+      if (organizationRequests === 1) {
+        return json({ errors: [{ title: "Service unavailable" }] }, 503);
+      }
+      return json({ data: { id: "org-1", attributes: { name: "acme", permissions: {} } } });
+    }
+    if (
+      url === "/api/v2/organizations/acme/teams"
+      || url === "/api/v2/organizations/acme/organization-memberships"
+    ) return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/settings"]}>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await view.findByRole("alert");
+  expect(view.getByText("Could not load organization settings")).toBeTruthy();
+  expect(view.queryByText("Loading organization settings...")).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: "Try again" }));
+  await view.findByText("Organization Settings");
+  expect(organizationRequests).toBe(2);
+});
+
+test("surfaces and retries team and member load errors", async () => {
+  let teamRequests = 0;
+  let membershipRequests = 0;
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { id: "org-1", attributes: { name: "acme", permissions: {} } } });
+    }
+    if (url === "/api/v2/organizations/acme/teams") {
+      teamRequests += 1;
+      return teamRequests === 1
+        ? json({ errors: [{ title: "Teams unavailable" }] }, 503)
+        : json({ data: [] });
+    }
+    if (url === "/api/v2/organizations/acme/organization-memberships") {
+      membershipRequests += 1;
+      return membershipRequests === 1
+        ? json({ errors: [{ title: "Members unavailable" }] }, 503)
+        : json({ data: [] });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await view.findByRole("button", { name: "Retry teams" });
+  expect(view.getByRole("button", { name: "Retry members" })).toBeTruthy();
+  expect(view.queryByText("No teams created yet.")).toBeNull();
+  expect(view.queryByText("No organization members found.")).toBeNull();
+
+  fireEvent.click(view.getByRole("button", { name: "Retry teams" }));
+  fireEvent.click(view.getByRole("button", { name: "Retry members" }));
+  await waitFor((): void => {
+    expect(view.queryByRole("button", { name: "Retry teams" })).toBeNull();
+    expect(view.queryByRole("button", { name: "Retry members" })).toBeNull();
+  });
+  expect(view.getByText("No teams created yet.")).toBeTruthy();
+  expect(view.getByText("No organization members found.")).toBeTruthy();
+  expect(teamRequests).toBe(2);
+  expect(membershipRequests).toBe(2);
+});
+
+test("reloads organization settings at the renamed path", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme" && init?.method === "PATCH") {
+      return json({
+        data: {
+          id: "org-1",
+          attributes: {
+            name: "renamed-org",
+            permissions: { "can-update": true, "can-destroy": true },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/organizations/acme" || url === "/api/v2/organizations/renamed-org") {
+      return json({
+        data: {
+          id: "org-1",
+          attributes: {
+            name: url.endsWith("renamed-org") ? "renamed-org" : "acme",
+            permissions: { "can-update": true, "can-destroy": true },
+          },
+        },
+      });
+    }
+    if (url.endsWith("/teams") || url.endsWith("/organization-memberships")) return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/settings"]}>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  const input = await view.findByLabelText("Organization Name");
+  fireEvent.change(input, { target: { value: "renamed-org" } });
+  fireEvent.click(view.getByRole("button", { name: "Save settings" }));
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([request, init]): boolean =>
+      urlOf(request) === "/api/v2/organizations/renamed-org" && init?.method === undefined)).toBeTrue();
+  });
+});
+
+test("ignores an organization response after navigating to another organization", async () => {
+  let resolveAcme!: (response: Response) => void;
+  const acmeResponse = new Promise<Response>((resolve): void => { resolveAcme = resolve; });
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme") return acmeResponse;
+    if (url === "/api/v2/organizations/platform") {
+      return json({
+        data: {
+          id: "org-platform",
+          attributes: { name: "platform", permissions: { "can-update": true } },
+        },
+      });
+    }
+    if (url.endsWith("/teams") || url.endsWith("/organization-memberships")) return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/settings"]}>
+      <Link to="/app/platform/settings">Switch organization</Link>
+      <Routes><Route path="/app/:orgName/settings" element={<OrganizationSettings />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  fireEvent.click(view.getByRole("link", { name: "Switch organization" }));
+  expect(await view.findByDisplayValue("platform")).toBeTruthy();
+
+  await act(async (): Promise<void> => {
+    resolveAcme(json({
+      data: {
+        id: "org-acme",
+        attributes: { name: "acme", permissions: { "can-update": true } },
+      },
+    }));
+    await acmeResponse;
+  });
+
+  expect(view.getByDisplayValue("platform")).toBeTruthy();
+  expect(view.queryByDisplayValue("acme")).toBeNull();
 });
