@@ -205,6 +205,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const userItems = payload.data;
     if (Array.isArray(userItems)) {
+      const batch: (typeof teamMemberships.$inferInsert)[] = [];
       // Pre-fetch all org memberships to avoid N+1
       const userIds = userItems
         .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") ? (item as Record<string, unknown>).id as string : "")
@@ -219,9 +220,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
       for (const userId of userIds) {
         const membership = memberships.get(userId);
         if (membership?.status === "active") {
-          await db.insert(teamMemberships).values({ id: `tm-${crypto.randomUUID()}`, teamId, userId, createdAt: Date.now() }).onConflictDoNothing();
+          batch.push({ id: `tm-${crypto.randomUUID()}`, teamId, userId, createdAt: Date.now() });
         }
       }
+      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};

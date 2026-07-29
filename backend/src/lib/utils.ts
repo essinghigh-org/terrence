@@ -620,9 +620,10 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     if (archivePath !== null) await rm(archivePath, { force: true });
   }));
   for (const r of runsToDelete) {
-    await db.delete(logs).where(eq(logs.runId, r.id));
     await Promise.all([deleteRunLogArchive(r.id), deletePlanJsonArtifact(r.id)]);
   }
+  const runIds = runsToDelete.map((r): string => r.id);
+  if (runIds.length > 0) await db.delete(logs).where(inArray(logs.runId, runIds));
   await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
   await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
   await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, workspaceId));
@@ -756,30 +757,36 @@ export async function applyDataRetentionGarbageCollection(
   const staleStateVersions = softDeletedVersions.filter(({ softDeletedAt }): boolean =>
     typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff
   );
-  for (const stateVersion of staleStateVersions) {
-    await db.delete(stateVersions).where(eq(stateVersions.id, stateVersion.id));
+  if (staleStateVersions.length > 0) {
+    await db.delete(stateVersions).where(inArray(stateVersions.id, staleStateVersions.map((v): string => v.id)));
   }
-  for (const stateVersion of softDeletedVersions) {
-    if (stateVersion.softDeletedAt === null) {
-      await db.update(stateVersions).set({ softDeletedAt: now }).where(eq(stateVersions.id, stateVersion.id));
-    }
+  const softDeletedStateVersionIds = softDeletedVersions
+    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
+    .map((v): string => v.id);
+  if (softDeletedStateVersionIds.length > 0) {
+    await db.update(stateVersions).set({ softDeletedAt: now }).where(inArray(stateVersions.id, softDeletedStateVersionIds));
   }
 
   const staleConfigurationVersions = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean =>
     typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff
   );
   let archivesDeleted = 0;
+  const staleConfigVersionIds: string[] = [];
   for (const configurationVersion of staleConfigurationVersions) {
     if (await removeConfigurationArchive(configurationVersion.archivePath)) archivesDeleted += 1;
+    staleConfigVersionIds.push(configurationVersion.id);
+  }
+  if (staleConfigVersionIds.length > 0) {
     await db.update(configurationVersions).set({
       archivePath: null,
       status: "backing_data_permanently_deleted",
-    }).where(eq(configurationVersions.id, configurationVersion.id));
+    }).where(inArray(configurationVersions.id, staleConfigVersionIds));
   }
-  for (const configurationVersion of softDeletedConfigurationVersions) {
-    if (configurationVersion.softDeletedAt === null) {
-      await db.update(configurationVersions).set({ softDeletedAt: now }).where(eq(configurationVersions.id, configurationVersion.id));
-    }
+  const softDeletedConfigVersionIds = softDeletedConfigurationVersions
+    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
+    .map((v): string => v.id);
+  if (softDeletedConfigVersionIds.length > 0) {
+    await db.update(configurationVersions).set({ softDeletedAt: now }).where(inArray(configurationVersions.id, softDeletedConfigVersionIds));
   }
 
   const staleRuns = workspaceRuns.filter(({ status, softDeletedAt }): boolean =>
@@ -788,14 +795,16 @@ export async function applyDataRetentionGarbageCollection(
     && softDeletedAt <= graceCutoff
   );
   let runArchivesDeleted = 0;
+  const staleRunIds: string[] = [];
   for (const run of staleRuns) {
     const [logsDeleted] = await Promise.all([
       deleteRunLogArchive(run.id),
       deletePlanJsonArtifact(run.id),
     ]);
     if (logsDeleted) runArchivesDeleted += 1;
-    await db.delete(runs).where(eq(runs.id, run.id));
+    staleRunIds.push(run.id);
   }
+  if (staleRunIds.length > 0) await db.delete(runs).where(inArray(runs.id, staleRunIds));
   const retainedRuns = workspaceRuns.filter(({ id }): boolean =>
     !staleRuns.some((staleRun): boolean => staleRun.id === id)
   );
@@ -842,11 +851,11 @@ export async function applyDataRetentionGarbageCollection(
       }
     }
   }
-  for (const id of stateVersionIds) {
+  if (stateVersionIds.size > 0) {
     await db.update(stateVersions).set({
       status: "backing_data_soft_deleted",
       softDeletedAt: now,
-    }).where(eq(stateVersions.id, id));
+    }).where(inArray(stateVersions.id, [...stateVersionIds]));
   }
 
   const currentConfigurationVersionId = retainedConfigurationVersions[0]?.id;
@@ -863,11 +872,11 @@ export async function applyDataRetentionGarbageCollection(
     : retainedConfigurationVersions
       .filter(({ id, createdAt }): boolean => !protectedConfigurationVersionIds.has(id) && createdAt <= retentionCutoff)
       .map(({ id }): string => id);
-  for (const id of configurationVersionIds) {
+  if (configurationVersionIds.length > 0) {
     await db.update(configurationVersions).set({
       status: "backing_data_soft_deleted",
       softDeletedAt: now,
-    }).where(eq(configurationVersions.id, id));
+    }).where(inArray(configurationVersions.id, configurationVersionIds));
   }
 
   const expiredRunIds = retentionCutoff === null

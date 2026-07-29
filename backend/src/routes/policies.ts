@@ -542,14 +542,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const wsItems = payload.data;
     if (Array.isArray(wsItems)) {
+      const batch: { id: string; policySetId: string; workspaceId: string }[] = [];
       for (const item of wsItems) {
         if (item === null || typeof item !== "object" || typeof (item as Record<string, unknown>).id !== "string") continue;
         const wsId = (item as Record<string, unknown>).id as string;
         const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
         if (workspace?.orgId === ps.orgId) {
-          await db.insert(policySetWorkspaces).values({ id: `psw-${crypto.randomUUID()}`, policySetId, workspaceId: wsId }).onConflictDoNothing();
+          batch.push({ id: `psw-${crypto.randomUUID()}`, policySetId, workspaceId: wsId });
         }
       }
+      if (batch.length > 0) await db.insert(policySetWorkspaces).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};

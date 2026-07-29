@@ -1276,6 +1276,7 @@ async function runPolicyChecks(
 
   let hardFailed = false;
   let softFailed = false;
+  const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
 
   for (const policy of allPolicies) {
     const checkId = `pchk-${crypto.randomUUID()}`;
@@ -1405,7 +1406,7 @@ async function runPolicyChecks(
       const storedStatus = checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory"
         ? "soft_failed"
         : checkStatus;
-      await db.insert(policyChecks).values({
+      checkBatch.push({
         id: checkId,
         runId,
         policyId: policy.id,
@@ -1434,7 +1435,7 @@ async function runPolicyChecks(
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      await db.insert(policyChecks).values({
+      checkBatch.push({
         id: checkId,
         runId,
         policyId: policy.id,
@@ -1448,6 +1449,8 @@ async function runPolicyChecks(
       await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" evaluation error: ${errMsg}`);
     }
   }
+
+  if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
 
   // Both hard and soft failures block apply
   const proceed = !hardFailed && !softFailed;
@@ -1603,8 +1606,8 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
     if (list === undefined) runsByWorkspace.set(r.workspaceId, [r]);
     else list.push(r);
   }
-
   const enqueued: string[] = [];
+  const batch: (typeof assessmentResults.$inferInsert)[] = [];
 
   for (const workspace of candidateWorkspaces) {
     const wsAssessments = assessmentsByWorkspace.get(workspace.id) ?? [];
@@ -1631,14 +1634,15 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
     ) continue;
 
     const id = `asmtres-${crypto.randomUUID()}`;
-    await db.insert(assessmentResults).values({
+    batch.push({
       id,
       workspaceId: workspace.id,
-      status: "pending",
+      status: "pending" as const,
       createdAt: now,
     });
     enqueued.push(id);
   }
+  if (batch.length > 0) await db.insert(assessmentResults).values(batch);
   return enqueued;
 }
 

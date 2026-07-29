@@ -810,12 +810,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
+    const batch: { id: string; workspaceId: string; consumerWorkspaceId: string }[] = [];
     for (const item of list) {
       if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
         const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
-        await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId }).onConflictDoNothing();
+        batch.push({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId });
       }
     }
+    if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })
@@ -827,12 +829,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
+    const batch: { id: string; workspaceId: string; consumerWorkspaceId: string }[] = [];
     for (const item of list) {
       if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
         const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
-        await db.insert(remoteStateConsumers).values({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId }).onConflictDoNothing();
+        batch.push({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId });
       }
     }
+    if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })

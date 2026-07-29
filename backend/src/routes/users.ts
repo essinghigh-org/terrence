@@ -167,20 +167,27 @@ export const userRoutes = new Elysia({ name: "users" })
     const teamRelData = teamsRel.data;
     const teamIds: string[] = [];
     if (Array.isArray(teamRelData)) {
+      const candidateIds: string[] = [];
       for (const t of teamRelData) {
         if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).id === "string") {
-          const tId = (t as Record<string, unknown>).id as string;
-          const team = await db.query.teams.findFirst({ where: eq(teams.id, tId) });
-          if (team?.orgId !== org.id) continue;
-          teamIds.push(tId);
-          try {
-            await db.insert(teamMemberships).values({
-              id: `tmem-${crypto.randomUUID()}`, teamId: tId, userId: targetUser.id, createdAt: Date.now(),
-            });
-          } catch {
-            // ignore conflict
-          }
+          candidateIds.push((t as Record<string, unknown>).id as string);
         }
+      }
+      if (candidateIds.length > 0) {
+        const teamsInOrg = await db.query.teams.findMany({
+          where: and(inArray(teams.id, candidateIds), eq(teams.orgId, org.id)),
+          columns: { id: true },
+        });
+        const membershipBatch = teamsInOrg.map((team): typeof teamMemberships.$inferInsert => ({
+          id: `tmem-${crypto.randomUUID()}`,
+          teamId: team.id,
+          userId: targetUser.id,
+          createdAt: Date.now(),
+        }));
+        if (membershipBatch.length > 0) {
+          await db.insert(teamMemberships).values(membershipBatch).onConflictDoNothing();
+        }
+        teamIds.push(...teamsInOrg.map((t): string => t.id));
       }
     }
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
