@@ -42,6 +42,7 @@ const runsAdditions: [string, string][] = [
   ["apply_resource_additions", "integer DEFAULT 0"],
   ["apply_resource_changes", "integer DEFAULT 0"],
   ["apply_resource_destructions", "integer DEFAULT 0"],
+  ["applied_at", "integer"],
 ];
 for (const [col, def] of runsAdditions) {
   if (!existingRunsColumns.has(col)) {
@@ -59,6 +60,7 @@ const svAdditions: [string, string][] = [
   ["vcs_commit_sha", "text"],
   ["vcs_commit_url", "text"],
   ["run_id", "text REFERENCES runs(id)"],
+  ["terraform_version", "text"],
 ];
 for (const [col, def] of svAdditions) {
   if (!existingSvCols.has(col)) {
@@ -71,6 +73,9 @@ const wsTableInfo = await sqlite.execute("PRAGMA table_info(workspaces)");
 const existingWsCols = getColumnNames(wsTableInfo);
 if (!existingWsCols.has("created_at")) {
   await sqlite.execute("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
+}
+if (!existingWsCols.has("updated_at")) {
+  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN updated_at INTEGER");
 }
 // Check workspaces for source column
 if (!existingWsCols.has("source")) {

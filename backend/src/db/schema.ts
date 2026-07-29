@@ -219,6 +219,7 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
@@ -329,6 +330,7 @@ export const runs = sqliteTable("runs", {
   applyResourceChanges: integer("apply_resource_changes"),
   applyResourceDestructions: integer("apply_resource_destructions"),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  appliedAt: integer("applied_at"),
   softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull(),
 });
@@ -420,6 +422,7 @@ export const stateVersions = sqliteTable("state_versions", {
   vcsCommitSha: text("vcs_commit_sha"),
   vcsCommitUrl: text("vcs_commit_url"),
   runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  terraformVersion: text("terraform_version"),
   intermediate: integer("intermediate", { mode: "boolean" }).notNull().default(false),
   softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
