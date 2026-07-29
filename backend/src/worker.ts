@@ -799,7 +799,7 @@ export async function executeRun(runId: string): Promise<void> {
 
       if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
         await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-        const ok = await extractTarArchive(cv.archivePath, workDir);
+        const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory);
         if (!ok) {
           throw new Error("Configuration archive extraction failed or contained invalid path components.");
         }

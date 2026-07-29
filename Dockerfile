@@ -29,25 +29,6 @@ RUN apt-get update && apt-get install -y \
     coreutils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenTofu with SHA256 verification
-ENV TOFU_VERSION=1.7.2
-RUN ARCH=${TARGETARCH:-amd64} && \
-    curl -fLo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${ARCH}.zip" && \
-    curl -fLo tofu_SHA256SUMS "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" && \
-    grep "tofu_${TOFU_VERSION}_linux_${ARCH}.zip" tofu_SHA256SUMS | sed "s|tofu_${TOFU_VERSION}_linux_${ARCH}.zip|tofu.zip|" | sha256sum -c - && \
-    unzip tofu.zip -d /usr/local/bin && \
-    rm tofu.zip tofu_SHA256SUMS && \
-    chmod +x /usr/local/bin/tofu
-
-# Install Terraform with SHA256 verification
-ENV TERRAFORM_VERSION=1.9.3
-RUN ARCH=${TARGETARCH:-amd64} && \
-    curl -fLo terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" && \
-    curl -fLo terraform_SHA256SUMS "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" && \
-    grep "terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" terraform_SHA256SUMS | sed "s|terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip|terraform.zip|" | sha256sum -c - && \
-    unzip terraform.zip -d /usr/local/bin && \
-    rm terraform.zip terraform_SHA256SUMS && \
-    chmod +x /usr/local/bin/terraform
 
 # Install Infracost with SHA256 verification
 ENV INFRACOST_VERSION=0.10.45

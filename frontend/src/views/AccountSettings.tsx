@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation, useOutletContext } from "react-router-dom";
 import { fetchApi } from "../lib/api";
-import { cn } from "../lib/utils";
 import type { LayoutOutletContext } from "../components/Layout";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -258,36 +257,6 @@ export function AccountSettings(): React.JSX.Element {
   /* ── Render ─────────────────────────────────────── */
   return (
     <div className="max-w-3xl mx-auto py-8 space-y-8">
-      {/* Top Tab Bar */}
-      {!mustChangePassword && (
-        <div className="flex border-b border-border space-x-6 pb-2">
-          {[
-            { id: "profile", label: "Profile", icon: User },
-            { id: "sessions", label: "Sessions", icon: MonitorSmartphone },
-            { id: "password", label: "Password", icon: Lock },
-            { id: "api-tokens", label: "API Tokens", icon: KeyRound },
-          ].map((tab): React.JSX.Element => (
-            <a
-              key={tab.id}
-              href={`#${tab.id}`}
-              onClick={(e): void => {
-                e.preventDefault();
-                window.location.hash = tab.id;
-                document.getElementById(tab.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }}
-              className={cn(
-                "flex items-center gap-1.5 py-1.5 text-sm font-medium transition-colors border-b-2 -mb-2.5",
-                (location.hash === `#${tab.id}` || (location.hash === "" && tab.id === "profile"))
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <tab.icon className="size-4" />
-              {tab.label}
-            </a>
-          ))}
-        </div>
-      )}
 
       {/* Error / Success */}
       {error !== "" && (

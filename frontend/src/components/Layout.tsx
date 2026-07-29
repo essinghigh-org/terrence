@@ -27,9 +27,7 @@ import {
   Lock,
   LogOut,
   Menu,
-  Monitor,
   MonitorSmartphone,
-  Moon,
   Package,
   PackageOpen,
   PanelLeftClose,
@@ -37,7 +35,6 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  Sun,
   Trash2,
   UserRound,
   Users,
@@ -65,7 +62,7 @@ import { Button, buttonVariants } from "./ui/button";
 import { CommandPalette } from "./CommandPalette";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
-import { applyThemeMode, getStoredThemeMode, type ThemeMode } from "../lib/theme";
+import { applyThemeMode } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
 import { cn } from "../lib/utils";
 
@@ -182,13 +179,12 @@ export function Layout({
   const [canReadStateVersions, setCanReadStateVersions] = useState(false);
   const [canReadVariable, setCanReadVariable] = useState(false);
   const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
-  const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredThemeMode);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
 
   useEffect(() => {
-    applyThemeMode(themeMode);
-  }, [themeMode]);
+    applyThemeMode();
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
@@ -702,9 +698,7 @@ export function Layout({
         Skip to main content
       </a>
 
-      {/* Conditionally hide top navbar header on /app/account per user request */}
-      {!inAccountSettings && (
-        <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
+      <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
               <DialogTrigger asChild>
@@ -834,40 +828,6 @@ export function Layout({
               </kbd>
             </Button>
 
-            {/* Theme Toggle */}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={(
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-background hover:bg-background/10 hover:text-background size-8"
-                    aria-label="Theme mode switcher"
-                  />
-                )}
-              >
-                {themeMode === "dark" ? (
-                  <Moon className="size-4" />
-                ) : themeMode === "light" ? (
-                  <Sun className="size-4" />
-                ) : (
-                  <Monitor className="size-4" />
-                )}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-36">
-                <DropdownMenuLabel>Appearance</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => setThemeMode("light")}>
-                  <Sun className="mr-2 size-4" /> Light
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setThemeMode("dark")}>
-                  <Moon className="mr-2 size-4" /> Dark
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setThemeMode("system")}>
-                  <Monitor className="mr-2 size-4" /> System
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
             {/* Help & Support */}
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -958,7 +918,6 @@ export function Layout({
             </DropdownMenu>
           </div>
         </header>
-      )}
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <aside
