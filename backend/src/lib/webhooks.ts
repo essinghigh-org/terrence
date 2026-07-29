@@ -675,6 +675,10 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
             const body = await response.json() as Record<string, unknown>[];
             const sha = body[0]?.sha;
             if (typeof sha === "string") return sha;
+            console.error(`[terrence] latestCommitSha: unexpected response body for ${vcs.identifier}`);
+          } else {
+            const errText = await response.text().catch((): string => "");
+            console.error(`[terrence] latestCommitSha: GitHub API returned ${response.status} for ${url}: ${errText.slice(0, 500)}`);
           }
         }
       }
