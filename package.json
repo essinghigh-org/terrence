@@ -5,7 +5,12 @@
   "scripts": {
     "dev:backend": "cd backend && bun run --watch index.ts",
     "dev:frontend": "cd frontend && bun run dev",
+    "dev": "bun run dev:backend & bun run dev:frontend",
+    "build": "cd frontend && bun run build",
+    "start": "cd backend && bun run index.ts",
     "test:backend": "cd backend && bun test",
+    "test:frontend": "cd frontend && bun test",
+    "test": "bun run test:backend && bun run test:frontend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "bun run --cwd backend typecheck && bun run --cwd frontend typecheck"

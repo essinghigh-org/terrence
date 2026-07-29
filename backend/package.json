@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "bun run index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
