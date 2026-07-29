@@ -50,20 +50,20 @@ describe("JSON:API pagination", () => {
       description: "pagination contract",
     });
     await db.insert(workspaces).values([
-      { id: workspaceIds[0], name: "alpha", orgId },
-      { id: workspaceIds[1], name: "beta", orgId },
+      { id: workspaceIds[0]!, name: "alpha", orgId },
+      { id: workspaceIds[1]!, name: "beta", orgId },
       { id: privateWorkspaceId, name: "private", orgId: otherOrgId },
     ]);
     await db.insert(runs).values([
       {
-        id: runIds[0],
-        workspaceId: workspaceIds[0],
+        id: runIds[0]!,
+        workspaceId: workspaceIds[0]!,
         status: "planned",
         createdAt: 200,
       },
       {
-        id: runIds[1],
-        workspaceId: workspaceIds[1],
+        id: runIds[1]!,
+        workspaceId: workspaceIds[1]!,
         status: "planned",
         createdAt: 100,
       },

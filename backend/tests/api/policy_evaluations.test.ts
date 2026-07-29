@@ -57,7 +57,6 @@ describe("Policy Evaluations & Outcomes API", () => {
       name: "ws-test",
       terraformVersion: "1.5.7",
       createdAt: Date.now(),
-      updatedAt: Date.now(),
     });
 
     await db.insert(runs).values({

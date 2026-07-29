@@ -104,6 +104,8 @@ test("creates a workspace from the modal", async () => {
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
   changeInput(asElement(view.getByLabelText("Execution Engine")), "terraform");
   changeInput(asElement(view.getByLabelText(/Engine Version/)), "1.9.3");
+  // Switch source to VCS so Repository Identifier fields appear
+  changeInput(asElement(view.getByLabelText("Workspace Source")), "vcs");
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   changeInput(asElement(view.getByLabelText("GitHub App Installation ID")), "ghain-123");
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
@@ -122,6 +124,7 @@ test("creates a workspace from the modal", async () => {
         "auto-apply": true,
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
+        source: "tfe-api",
         "vcs-repo": {
           identifier: "hashicorp/terraform",
           "github-app-installation-id": "ghain-123",
@@ -169,6 +172,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
     </>,
   );
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
+  changeInput(asElement(view.getByLabelText("Workspace Source")), "vcs");
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");

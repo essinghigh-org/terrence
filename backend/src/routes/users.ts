@@ -340,6 +340,7 @@ export const userRoutes = new Elysia({ name: "users" })
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
+      teamId: null,
     };
     if (orgId !== undefined) {
       await db.transaction(async (tx: unknown): Promise<void> => {
@@ -392,6 +393,7 @@ export const userRoutes = new Elysia({ name: "users" })
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
+      teamId: null,
     };
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;

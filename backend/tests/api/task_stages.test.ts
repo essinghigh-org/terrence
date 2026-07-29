@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, projects, workspaces, runs, taskStages, runTasks } from "../../src/db/schema";
+import { users, apiTokens, organizations, organizationMemberships, projects, workspaces, runs, taskStages } from "../../src/db/schema";
 
 describe("Task Stages & Multi-Stage API", () => {
   let token: string;
@@ -56,7 +56,6 @@ describe("Task Stages & Multi-Stage API", () => {
       name: "ws-test",
       terraformVersion: "1.5.7",
       createdAt: Date.now(),
-      updatedAt: Date.now(),
     });
 
     await db.insert(runs).values({

@@ -115,13 +115,13 @@ function teamOrganizationAllows(
 export async function checkOrganizationPermission(
   orgId: string,
   userId: string | undefined,
-  tokenOrgId: string | null,
-  tokenTeamId: string | null,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
   required: OrganizationPermission,
 ): Promise<boolean> {
   if (tokenOrgId !== null) return tokenOrgId === orgId;
   if (tokenTeamId !== null) {
-    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId!) });
     return team?.orgId === orgId && teamOrganizationAllows(team.organizationAccess, required);
   }
   if (userId === undefined) return false;

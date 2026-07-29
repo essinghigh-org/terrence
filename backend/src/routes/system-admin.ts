@@ -113,7 +113,7 @@ function requestedChecks(url: QueryUrl): ReadonlyMap<string, ReadonlySet<string>
     const available = group === undefined
       ? undefined
       : ALL_CHECKS[group as keyof typeof ALL_CHECKS] as readonly string[] | undefined;
-    if (group === "" || extra !== undefined || available === undefined || (check !== undefined && !available.includes(check))) {
+    if (group === undefined || group === "" || extra !== undefined || available === undefined || (check !== undefined && !available.includes(check))) {
       return undefined;
     }
     const checks = selected.get(group) ?? new Set<string>();

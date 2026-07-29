@@ -1,5 +1,4 @@
 import { Elysia } from "elysia";
-import type { BunFile } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
@@ -8,7 +7,7 @@ import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
-const serveFrontend = (): BunFile => Bun.file(FRONTEND_INDEX);
+const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX);
 
 // Import route plugins
 import { healthRoutes } from "./routes/health";
@@ -273,7 +272,7 @@ export const app = new Elysia()
     }
   })
   .use(staticPlugin({
-    assets: "../frontend/dist",
+    assets: join(import.meta.dir, "../../frontend/dist"),
     prefix: "",
   }))
   .get("/login", serveFrontend)

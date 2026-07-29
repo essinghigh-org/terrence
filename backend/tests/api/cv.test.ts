@@ -64,7 +64,7 @@ describe("TFE API v2 - Configuration Versions", () => {
       name: "cv-workspace",
       orgId: orgId,
     }).returning();
-    workspaceId = ws[0].id;
+    workspaceId = ws[0]!.id;
   });
 
   it("should create a configuration version and return an upload URL", async () => {

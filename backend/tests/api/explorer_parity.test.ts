@@ -54,7 +54,6 @@ describe("Explorer API (TFE Parity)", () => {
       name: "explorer-ws",
       terraformVersion: "1.5.7",
       createdAt: Date.now(),
-      updatedAt: Date.now(),
     });
 
     token = tokenVal;

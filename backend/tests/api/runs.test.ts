@@ -65,7 +65,7 @@ describe("TFE API v2 - Runs", () => {
       orgId: orgId,
       autoApply: false
     }).returning();
-    workspaceId = ws[0].id;
+    workspaceId = ws[0]!.id;
   });
 
   it("should create a run", async () => {

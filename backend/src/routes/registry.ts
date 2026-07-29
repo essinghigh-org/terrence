@@ -102,8 +102,8 @@ async function checkRegistryManagementRead(
   userId: string | undefined,
   orgId: string,
   kind: "modules" | "providers",
-  tokenOrgId: string | null,
-  teamId: string | null,
+  tokenOrgId: string | null | undefined,
+  teamId: string | null | undefined,
 ): Promise<boolean> {
   return await checkRegistryReadPermission(userId, orgId, kind, tokenOrgId)
     || await checkOrganizationPermission(
@@ -2205,7 +2205,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   .patch("/api/v2/registry-modules/:registry_name/:namespace/:name/:provider/test-configuration", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const { namespace, name, provider } = params;
     const mod = await db.query.registryModules.findFirst({
-      where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+      where: and(eq(registryModules.namespace, namespace!), eq(registryModules.name, name!), eq(registryModules.provider, provider!)),
     });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };

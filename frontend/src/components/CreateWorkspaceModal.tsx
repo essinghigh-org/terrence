@@ -139,6 +139,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           <div className="pt-4 border-t border-gray-200 mt-2">
             <h4 className="text-sm font-medium mb-3">Workspace Source</h4>
             <div className="flex flex-col gap-1.5 mb-4">
+              <label htmlFor="source-type" className="text-sm font-medium">Workspace Source</label>
               <select
                 id="source-type"
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"

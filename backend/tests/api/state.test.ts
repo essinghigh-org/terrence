@@ -65,7 +65,7 @@ describe("TFE API v2 - State Versions & Locking", () => {
       orgId: orgId,
       locked: false
     }).returning();
-    workspaceId = ws[0].id;
+    workspaceId = ws[0]!.id;
   });
 
   it("should lock a workspace", async () => {

@@ -43,13 +43,13 @@ test("migration 0002 backfills existing tokens and preserves nullable account da
     const token = (await client.execute({
       sql: "SELECT created_at, last_used_at, expires_at FROM api_tokens WHERE id = ?",
       args: ["existing-token"],
-    })).rows[0];
+    })).rows[0]!;
     expect(Number(token.created_at)).toBeGreaterThanOrEqual(beforeMigration - 1_000);
     expect(token.last_used_at).toBeNull();
     expect(token.expires_at).toBeNull();
 
-    const user = (await client.execute("SELECT email FROM users WHERE id = 'existing-user'")).rows[0];
-    const variable = (await client.execute("SELECT hcl FROM workspace_variables WHERE id = 'existing-var'")).rows[0];
+    const user = (await client.execute("SELECT email FROM users WHERE id = 'existing-user'")).rows[0]!;
+    const variable = (await client.execute("SELECT hcl FROM workspace_variables WHERE id = 'existing-var'")).rows[0]!;
     expect(user.email).toBeNull();
     expect(Number(variable.hcl)).toBe(0);
 

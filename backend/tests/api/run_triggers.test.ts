@@ -27,7 +27,7 @@ describe("Workspace Run Triggers & Cost Estimates API contract", () => {
         Authorization: `Bearer ${auth}`,
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? null : JSON.stringify(body),
     }));
 
   beforeAll(async () => {

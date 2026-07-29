@@ -49,16 +49,16 @@ describe("native Terraform organization run queue", () => {
       description: "run queue contract",
     });
     await db.insert(workspaces).values([
-      { id: workspaceIds[0], name: "alpha", orgId, locked: true },
-      { id: workspaceIds[1], name: "beta", orgId, locked: true },
+      { id: workspaceIds[0]!, name: "alpha", orgId, locked: true },
+      { id: workspaceIds[1]!, name: "beta", orgId, locked: true },
       { id: `private-workspace-${suffix}`, name: "private", orgId: otherOrgId, locked: true },
     ]);
     await db.insert(runs).values([
-      { id: runIds.planning, workspaceId: workspaceIds[0], status: "planning", createdAt: 100 },
-      { id: runIds.applying, workspaceId: workspaceIds[1], status: "applying", createdAt: 200 },
-      { id: runIds.firstPending, workspaceId: workspaceIds[0], status: "pending", createdAt: 300 },
-      { id: runIds.secondPending, workspaceId: workspaceIds[1], status: "pending", createdAt: 400 },
-      { id: `run-planned-${suffix}`, workspaceId: workspaceIds[0], status: "planned", createdAt: 500 },
+      { id: runIds.planning, workspaceId: workspaceIds[0]!, status: "planning", createdAt: 100 },
+      { id: runIds.applying, workspaceId: workspaceIds[1]!, status: "applying", createdAt: 200 },
+      { id: runIds.firstPending, workspaceId: workspaceIds[0]!, status: "pending", createdAt: 300 },
+      { id: runIds.secondPending, workspaceId: workspaceIds[1]!, status: "pending", createdAt: 400 },
+      { id: `run-planned-${suffix}`, workspaceId: workspaceIds[0]!, status: "planned", createdAt: 500 },
       {
         id: `run-private-${suffix}`,
         workspaceId: `private-workspace-${suffix}`,

@@ -22,13 +22,6 @@ type ParamCtx = Readonly<{
 
 type OcItem = Readonly<typeof oauthClients.$inferSelect>;
 
-type OtItem = Readonly<{
-  readonly id: string;
-  readonly serviceProviderUser: string | null;
-  readonly hasSshKey: boolean;
-  readonly createdAt: number;
-}>;
-
 type OAuth2Endpoints = Readonly<{
   authorization: URL;
   token: URL;
@@ -785,7 +778,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tokenList = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, ocId) });
-    return { data: tokenList.map((ot: OtItem): Record<string, unknown> => ({ id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } })) };
+    return { data: tokenList.map((ot): Record<string, unknown> => ({ id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } })) };
   })
   .get("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const otId = params.ot_id ?? "";

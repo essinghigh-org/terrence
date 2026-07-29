@@ -204,7 +204,7 @@ export const workspaces = sqliteTable("workspaces", {
   fileTriggersEnabled: integer("file_triggers_enabled", { mode: "boolean" }).default(true),
   triggerPrefixes: text("trigger_prefixes", { mode: "json" }).$type<string[]>(),
   triggerPatterns: text("trigger_patterns", { mode: "json" }).$type<string[]>(),
-  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; githubAppInstallationId?: string; ingressSubmodules?: boolean; tagsRegex?: string }>(),
+  vcsRepo: text("vcs_repo", { mode: "json" }).$type<{ branch?: string; identifier?: string; oauthTokenId?: string; githubAppInstallationId?: string; ingressSubmodules?: boolean; tagsRegex?: string; cloneUrl?: string }>(),
   queueAllRuns: integer("queue_all_runs", { mode: "boolean" }).default(true),
   speculativeEnabled: integer("speculative_enabled", { mode: "boolean" }).default(true),
   allowDestroyPlan: integer("allow_destroy_plan", { mode: "boolean" }).default(true),

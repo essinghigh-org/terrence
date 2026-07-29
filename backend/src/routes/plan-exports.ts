@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { planExports, runs, type users } from "../db/schema";
+import { planExports, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { findAuthorizedRun } from "../lib/utils";

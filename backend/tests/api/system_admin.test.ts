@@ -27,7 +27,7 @@ describe("System administration API contract", () => {
       ...(options.accept === undefined ? {} : { Accept: options.accept }),
       ...(options.body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
     },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: options.body === undefined ? null : JSON.stringify(options.body),
   }));
 
   beforeAll(async () => {

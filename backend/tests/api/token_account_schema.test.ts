@@ -32,7 +32,7 @@ describe("account, token, and variable schema contracts", () => {
       Authorization: `Bearer ${token}`,
       ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? null : JSON.stringify(body),
   }));
 
   beforeAll(async () => {

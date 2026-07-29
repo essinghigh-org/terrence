@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { cidrRangeLists, cidrRanges, organizations, type users } from "../db/schema";
-import { eq, and, count, desc } from "drizzle-orm";
+import { eq, desc, count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrgPermission, pageRequest, pagination } from "../lib/utils";
 
@@ -118,7 +118,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const updates: Partial<CidrRangeListItem> = { updatedAt: Date.now() };
+    const updates: Record<string, unknown> = { updatedAt: Date.now() };
     if (typeof attributes.name === "string" && attributes.name.trim() !== "") updates.name = attributes.name.trim();
     if (typeof attributes.description === "string") updates.description = attributes.description;
     if (typeof attributes["enforcement-scope"] === "string") updates.enforcementScope = attributes["enforcement-scope"];
@@ -201,7 +201,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const updates: Partial<CidrRangeItem> = {};
+    const updates: Record<string, unknown> = {};
     if (typeof attributes.value === "string" && attributes.value.trim() !== "") updates.value = attributes.value.trim();
     if (typeof attributes.description === "string") updates.description = attributes.description;
 

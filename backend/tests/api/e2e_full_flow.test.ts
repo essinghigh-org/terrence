@@ -46,8 +46,6 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
       })
     );
     expect(regRes.status).toBe(201);
-    const regData = await regRes.json();
-    const _userId = regData.data.id;
 
     const loginRes = await app.handle(
       new Request("http://localhost/api/v2/users/login", {

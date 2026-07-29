@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { workspaceTransfers, workspaces, organizations, projects, type users } from "../db/schema";
+import { workspaceTransfers, type users } from "../db/schema";
 import { eq, count, desc } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { pageRequest, pagination, checkOrgPermission } from "../lib/utils";
+import { pageRequest, pagination } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 

@@ -19,7 +19,7 @@ type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | bo
       ? readonly DeepReadonly<R>[]
       : { readonly [K in keyof T]: DeepReadonly<T[K]> };
 
-type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean; mustChangePassword?: boolean }>;
+type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 export function userResource(

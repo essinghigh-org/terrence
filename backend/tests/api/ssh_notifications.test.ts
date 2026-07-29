@@ -33,7 +33,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
         Authorization: `Bearer ${auth}`,
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? null : JSON.stringify(body),
     }));
 
   beforeAll(async () => {
@@ -185,7 +185,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
         [`/api/v2/workspaces/${workspaceId}/notification-configurations`, "Workspace Alert"],
         [`/api/v2/projects/${projectId}/notification-configurations`, "Project Alert"],
       ]) {
-        const response = await request(path, "POST", {
+        const response = await request(path!, "POST", {
           data: {
             attributes: {
               name,

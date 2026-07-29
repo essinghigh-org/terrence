@@ -31,7 +31,7 @@ describe("OAuth client agent-pool relationship", () => {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/vnd.api+json",
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? null : JSON.stringify(body),
     }));
 
   beforeAll(async () => {

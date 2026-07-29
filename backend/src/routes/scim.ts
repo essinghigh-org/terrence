@@ -1,11 +1,9 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { db } from "../db";
-import {
-  scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
-  users, organizationMemberships
-} from "../db/schema";
-import { eq, and, count, asc, inArray } from "drizzle-orm";
+import { scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
+  users } from "../db/schema";
+import { eq, inArray } from "drizzle-orm";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
 
@@ -134,14 +132,13 @@ export const scimRoutes = new Elysia({ name: "scim" })
       passwordHash,
       isSiteAdmin: false,
       mustChangePassword: false,
-      createdAt: Date.now(),
     });
 
     const scimIdentityId = `scimuser-${crypto.randomUUID()}`;
     await db.insert(scimUserIdentities).values({
       id: scimIdentityId,
       userId,
-      createdAt: Date.now(),
+      username: userName,
     });
 
     (set as { status: number }).status = 201;

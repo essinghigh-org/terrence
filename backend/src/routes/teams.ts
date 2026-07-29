@@ -28,13 +28,6 @@ type TeamItem = Readonly<{
   readonly allowMemberTokenManagement?: boolean | null;
 }>;
 
-type TokItem = Readonly<{
-  readonly id: string;
-  readonly description: string;
-  readonly createdAt: number;
-  readonly lastUsedAt: number | null;
-}>;
-
 type TwItem = Readonly<{
   readonly id: string;
   readonly access: string;
@@ -322,7 +315,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tokenList = await db.query.apiTokens.findMany({ where: eq(apiTokens.teamId, teamId) });
-    return { data: tokenList.map((t: TokItem): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null } })) };
+    return { data: tokenList.map((t): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null } })) };
   })
   .delete("/api/v2/teams/:team_id/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const teamId = params.team_id ?? "";
@@ -355,7 +348,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = typeof teamData.id === "string" ? teamData.id : "";
     const workspaceId = typeof wsData.id === "string" ? wsData.id : "";
     const access = typeof attrs.access === "string" ? attrs.access : "write";
-    const permissions = attrs.permissions ?? null;
+    const permissions = (attrs.permissions as Record<string, unknown> | null) ?? null;
     if (teamId === "" || workspaceId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const [ws, targetTeam] = await Promise.all([
       db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) }),
@@ -380,7 +373,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const updates: Partial<typeof teamWorkspaces.$inferInsert> = {};
+    const updates: Record<string, unknown> = {};
     if (typeof attributes.access === "string") updates.access = attributes.access;
     if (attributes.permissions !== undefined) updates.permissions = attributes.permissions;
     if (Object.keys(updates).length > 0) await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));

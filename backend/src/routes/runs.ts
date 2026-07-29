@@ -53,6 +53,58 @@ async function authorizedOrgWorkspaces(
 }
 
 
+async function createRun(
+  workspaceId: string,
+  attributes: Readonly<Record<string, unknown>>,
+  cvId: string | undefined,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+  set: SetObj,
+): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
+  const message = typeof attributes.message === "string" ? attributes.message : "";
+  const isDestroy = typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false;
+  const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
+  const requestedPlanOnly = typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
+  const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
+  const refreshOnly = typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false;
+  const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
+  const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
+  const runVariables = Array.isArray(attributes.variables) ? attributes.variables : null;
+  const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
+  const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
+  const allowEmptyApply = typeof attributes["allow-empty-apply"] === "boolean" ? attributes["allow-empty-apply"] : false;
+  const savePlan = typeof attributes["save-plan"] === "boolean" ? attributes["save-plan"] : false;
+  const allowConfigGeneration = typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false;
+  if (workspaceId === "") { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] }; }
+  if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
+    (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
+  }
+  const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+  if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
+  if (!canApply && (requestedAutoApply === true || allowEmptyApply)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  const autoApply = canApply && (requestedAutoApply ?? workspace.autoApply === true);
+  let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
+  if (cvId !== undefined) {
+    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
+  }
+  if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
+  const id = crypto.randomUUID();
+  const createdAt = Date.now();
+  const logToken = crypto.randomUUID();
+  const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
+  const nowIso = new Date(createdAt).toISOString();
+  const finalMsg = message !== "" ? message : "Queued manually";
+  await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, createdAt });
+  queueRunNotification(id, "run:created", "pending");
+  (set as { status: number }).status = 201;
+  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, softDeletedAt: null, createdAt }, canApply) };
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -124,7 +176,18 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status)).length, running: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length } } };
   })
-  .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const wsId = params.workspace_id ?? "";
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+    const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
+    const cvData = typeof cvRel.data === "object" && cvRel.data !== null ? (cvRel.data as Record<string, unknown>) : {};
+    const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
+    return createRun(wsId, attributes, cvId, user, orgId, teamId, set);
+  })
+  .post("/api/v2/runs", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -133,49 +196,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     const wsData = typeof wsRel.data === "object" && wsRel.data !== null ? (wsRel.data as Record<string, unknown>) : {};
     const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
     const cvData = typeof cvRel.data === "object" && cvRel.data !== null ? (cvRel.data as Record<string, unknown>) : {};
-    const message = typeof attributes.message === "string" ? attributes.message : "";
-    const isDestroy = typeof attributes["is-destroy"] === "boolean" ? attributes["is-destroy"] : false;
-    const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
-    const requestedPlanOnly = typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
-    const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
-    const refreshOnly = typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false;
-    const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
-    const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
-    const runVariables = Array.isArray(attributes.variables) ? attributes.variables : null;
-    const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
-    const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
-    const allowEmptyApply = typeof attributes["allow-empty-apply"] === "boolean" ? attributes["allow-empty-apply"] : false;
-    const savePlan = typeof attributes["save-plan"] === "boolean" ? attributes["save-plan"] : false;
-    const allowConfigGeneration = typeof attributes["allow-config-generation"] === "boolean" ? attributes["allow-config-generation"] : false;
     const workspaceId = typeof wsData.id === "string" ? wsData.id : "";
     const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    if (workspaceId === "") { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Workspace ID is required" }] }; }
-    if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
-      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
-    }
-    const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
-    if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
-    if (!canApply && (requestedAutoApply === true || allowEmptyApply)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const autoApply = canApply && (requestedAutoApply ?? workspace.autoApply === true);
-    let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
-    if (cvId !== undefined) {
-      configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-      if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
-    }
-    if (workspace.iacBinary === null && request.headers.get("Terraform-Version") !== null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
-    const id = crypto.randomUUID();
-    const createdAt = Date.now();
-    const logToken = crypto.randomUUID();
-    const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
-    const nowIso = new Date(createdAt).toISOString();
-    const finalMsg = message !== "" ? message : "Queued manually";
-    await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, createdAt });
-    queueRunNotification(id, "run:created", "pending");
-    (set as { status: number }).status = 201;
-    return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, createdBy: user?.id ?? null, softDeletedAt: null, createdAt }, canApply) };
+    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

@@ -27,7 +27,7 @@ describe("private registry organization permissions", () => {
         Authorization: `Bearer ${token}`,
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? null : JSON.stringify(body),
     }));
 
   const data = async <T>(response: Readonly<Response>): Promise<T> =>

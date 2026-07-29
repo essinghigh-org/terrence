@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { runTasks, workspaceRunTasks, runTaskResults, taskStages, policyEvaluations, policySetOutcomes, organizations, type users } from "../db/schema";
+import { runTasks, workspaceRunTasks, runTaskResults, taskStages, organizations, type users } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
@@ -14,15 +14,6 @@ type ParamCtx = Readonly<{
   orgId: string | null;
   teamId: string | null;
   set: SetObj;
-}>;
-
-type TaskItem = Readonly<{
-  readonly id: string;
-  readonly name: string;
-  readonly description: string | null;
-  readonly url: string;
-  readonly category: string;
-  readonly enabled: boolean;
 }>;
 
 type BindingItem = Readonly<{
