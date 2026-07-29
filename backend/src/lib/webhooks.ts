@@ -668,13 +668,28 @@ export async function createConfigurationVersionFromVcs(
   const sha = await latestCommitSha(workspace, branch);
   if (sha === undefined) return { error: "Failed to retrieve the latest commit from VCS. Check VCS credentials." };
 
+  // Determine the VCS source
+  let source = "tfe-api";
+  if (vcs.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
+    source = "github";
+  } else if (vcs.oauthTokenId !== undefined && vcs.oauthTokenId !== "") {
+    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.oauthTokenId) });
+    if (token !== undefined) {
+      const client = await db.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+      });
+      const provider = providerForOAuthClient(client?.serviceProvider ?? "");
+      source = provider ?? "tfe-api";
+    }
+  }
+
   const cvId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
   await db.insert(configurationVersions).values({
     id: cvId,
     workspaceId: workspace.id,
     status: "pending",
     speculative: false,
-    source: "tfe-api",
+    source,
     ingressAttributes: { commitSha: sha, branch },
     statusTimestamps: {},
   });
