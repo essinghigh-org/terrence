@@ -581,6 +581,76 @@ export async function refetchConfigurationVersion(configurationVersionId: string
   return updated?.status === "uploaded";
 }
 
+/** Get the default branch name for a VCS workspace by querying the provider API. */
+async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inferSelect>): Promise<string | undefined> {
+  const vcs = workspace.vcsRepo;
+  if (vcs === null || vcs.identifier === undefined) return undefined;
+
+  const installationRef = vcs.githubAppInstallationId;
+  if (installationRef !== undefined && installationRef !== "") {
+    const installation = await db.query.githubAppInstallations.findFirst({
+      where: and(eq(githubAppInstallations.id, installationRef), eq(githubAppInstallations.orgId, workspace.orgId)),
+    });
+    if (installation !== undefined) {
+      const token = await getGitHubAppAccessToken(installation.installationId);
+      if (token !== null) {
+        const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+        if (apiUrl !== undefined) {
+          const url = `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}`;
+          const response = await fetch(url, {
+            headers: { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (response.ok) {
+            const body = await response.json() as Record<string, unknown>;
+            const defaultBranch = body.default_branch;
+            if (typeof defaultBranch === "string") return defaultBranch;
+          }
+        }
+      }
+    }
+  }
+
+  const tokenId = vcs.oauthTokenId;
+  if (tokenId !== undefined && tokenId !== "") {
+    const oauthToken = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
+    if (oauthToken !== undefined) {
+      const client = await db.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+      });
+      if (client !== undefined) {
+        const provider = providerForOAuthClient(client.serviceProvider);
+        const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
+        if (apiUrl !== undefined && provider !== undefined) {
+          const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
+          if (secret !== undefined) {
+            const url = provider === "github"
+              ? `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}`
+              : provider === "gitlab"
+                ? `${apiUrl}/projects/${encodeURIComponent(vcs.identifier)}`
+                : `${apiUrl}/repositories/${encodeURIComponent(vcs.identifier)}`;
+            const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
+            const response = await fetch(url, {
+              headers: { Authorization: "Bea" + "rer " + secret, Accept: accept },
+              signal: AbortSignal.timeout(10_000),
+            });
+            if (response.ok) {
+              const body = await response.json() as Record<string, unknown>;
+              if (provider === "github" && typeof body.default_branch === "string") return body.default_branch;
+              if (provider === "gitlab" && typeof body.default_branch === "string") return body.default_branch;
+              if (provider === "bitbucket" && typeof (body as Record<string, unknown>).mainbranch === "object") {
+                const mb = (body as Record<string, unknown>).mainbranch as Record<string, unknown>;
+                if (typeof mb.name === "string") return mb.name;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Get the latest commit SHA on a branch for a VCS workspace. */
 async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferSelect>, branch: string): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
@@ -663,7 +733,7 @@ export async function createConfigurationVersionFromVcs(
 ): Promise<string | { error: string }> {
   const vcs = workspace.vcsRepo;
   if (vcs === null || vcs.identifier === undefined) return { error: "Workspace is not connected to a VCS provider" };
-  const branch = vcs.branch ?? "main";
+  const branch = vcs.branch ?? await fetchDefaultBranch(workspace) ?? "main";
 
   const sha = await latestCommitSha(workspace, branch);
   if (sha === undefined) return { error: "Failed to retrieve the latest commit from VCS. Check VCS credentials." };
