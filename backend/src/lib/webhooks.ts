@@ -585,6 +585,8 @@ export async function refetchConfigurationVersion(configurationVersionId: string
 async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inferSelect>): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
   if (vcs === null || vcs.identifier === undefined) return undefined;
+  const repoParts = vcs.identifier.split("/");
+  const encodedPath = repoParts.map(encodeURIComponent).join("/");
 
   const installationRef = vcs.githubAppInstallationId;
   if (installationRef !== undefined && installationRef !== "") {
@@ -596,7 +598,7 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
       if (token !== null) {
         const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
         if (apiUrl !== undefined) {
-          const url = `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}`;
+          const url = `${apiUrl}/repos/${encodedPath}`;
           const response = await fetch(url, {
             headers: { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" },
             signal: AbortSignal.timeout(10_000),
@@ -625,7 +627,7 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
           const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
           if (secret !== undefined) {
             const url = provider === "github"
-              ? `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}`
+              ? `${apiUrl}/repos/${encodedPath}`
               : provider === "gitlab"
                 ? `${apiUrl}/projects/${encodeURIComponent(vcs.identifier)}`
                 : `${apiUrl}/repositories/${encodeURIComponent(vcs.identifier)}`;
@@ -655,6 +657,8 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
 async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferSelect>, branch: string): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
   if (vcs === null || vcs.identifier === undefined) return undefined;
+  const repoParts = vcs.identifier.split("/");
+  const encodedPath = repoParts.map(encodeURIComponent).join("/");
 
   const installationRef = vcs.githubAppInstallationId;
   if (installationRef !== undefined && installationRef !== "") {
@@ -666,7 +670,7 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
       if (token !== null) {
         const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
         if (apiUrl !== undefined) {
-          const url = `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
+          const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
           const response = await fetch(url, {
             headers: { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" },
             signal: AbortSignal.timeout(10_000),
@@ -699,7 +703,7 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
           const secret = await decryptSecret(token.token).catch((): undefined => undefined);
           if (secret !== undefined) {
             const url = provider === "github"
-              ? `${apiUrl}/repos/${encodeURIComponent(vcs.identifier)}/commits?sha=${encodeURIComponent(branch)}&per_page=1`
+              ? `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`
               : provider === "gitlab"
                 ? `${apiUrl}/projects/${encodeURIComponent(vcs.identifier)}/repository/commits?ref_name=${encodeURIComponent(branch)}&per_page=1`
                 : `${apiUrl}/repositories/${encodeURIComponent(vcs.identifier)}/refs/branches/${encodeURIComponent(branch)}`;
