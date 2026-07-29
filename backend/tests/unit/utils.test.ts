@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { signedApiURL, validSignedApiURL } from "../../src/lib/utils";
+import { signedApiURL, validSignedApiURL, workspaceRelationshipIds, validateExternalUrl } from "../../src/lib/utils";
 
 // An empty (but not-expired) signed URL is always valid against the same
 // SIGNED_URL_SECRET the module uses, so we use signedApiURL itself as a
@@ -81,5 +81,97 @@ describe("validSignedApiURL", () => {
     url.searchParams.set("expires", String(Math.floor(Date.now() / 1000) + 600));
     url.searchParams.set("signature", "short");
     expect(validSignedApiURL(makeRequest(url.toString()), path, "GET")).toBe(false);
+  });
+});
+
+describe("workspaceRelationshipIds", () => {
+  it("extracts workspace IDs from a valid payload", () => {
+    const result = workspaceRelationshipIds({
+      data: [
+        { id: "ws-1", type: "workspaces" },
+        { id: "ws-2", type: "workspaces" },
+      ],
+    });
+    expect(result).toEqual(["ws-1", "ws-2"]);
+  });
+
+  it("deduplicates repeated IDs", () => {
+    const result = workspaceRelationshipIds({
+      data: [
+        { id: "ws-1", type: "workspaces" },
+        { id: "ws-1", type: "workspaces" },
+      ],
+    });
+    expect(result).toEqual(["ws-1"]);
+  });
+
+  it("returns undefined for empty data", () => {
+    expect(workspaceRelationshipIds({ data: [] })).toBeUndefined();
+  });
+
+  it("returns undefined for missing data key", () => {
+    expect(workspaceRelationshipIds({})).toBeUndefined();
+  });
+
+  it("returns undefined when payload is null", () => {
+    expect(workspaceRelationshipIds(null)).toBeUndefined();
+  });
+
+  it("returns undefined when data is not an array", () => {
+    expect(workspaceRelationshipIds({ data: "not-an-array" })).toBeUndefined();
+  });
+
+  it("returns undefined when items have wrong type", () => {
+    expect(workspaceRelationshipIds({
+      data: [{ id: "proj-1", type: "projects" }],
+    })).toBeUndefined();
+  });
+});
+
+describe("validateExternalUrl", () => {
+  it("accepts a public HTTPS URL", () => {
+    expect(validateExternalUrl("https://example.com/hook")).toBeNull();
+  });
+
+  it("accepts a public HTTP URL", () => {
+    expect(validateExternalUrl("http://example.com/hook")).toBeNull();
+  });
+
+  it("rejects loopback", () => {
+    expect(validateExternalUrl("http://127.0.0.1:3000/hook")).toBe(
+      "URL points to a private or loopback address",
+    );
+  });
+
+  it("rejects localhost", () => {
+    expect(validateExternalUrl("http://localhost:3000/hook")).toBe(
+      "URL points to a private or loopback address",
+    );
+  });
+
+  it("rejects private 10.x", () => {
+    expect(validateExternalUrl("http://10.0.1.5/hook")).toBe(
+      "URL points to a private or loopback address",
+    );
+  });
+
+  it("rejects private 192.168.x", () => {
+    expect(validateExternalUrl("http://192.168.1.1/hook")).toBe(
+      "URL points to a private or loopback address",
+    );
+  });
+
+  it("rejects invalid URL strings", () => {
+    expect(validateExternalUrl("not-a-url")).toBe("Invalid URL");
+  });
+
+  it("rejects non-http protocols", () => {
+    expect(validateExternalUrl("ftp://example.com")).toBe(
+      "Only http and https URLs are allowed",
+    );
+  });
+
+  it("allows private IPs when allowPrivate is true", () => {
+    expect(validateExternalUrl("http://127.0.0.1:3000/hook", true)).toBeNull();
   });
 });
