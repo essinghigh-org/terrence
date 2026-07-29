@@ -3,6 +3,17 @@ import { Link, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Filter, CheckCircle2, XCircle, Clock, AlertCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Checkbox } from "../components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import { toast } from "../components/ui/toast";
 
 type RunItem = {
   id: string;
@@ -21,6 +32,10 @@ export function RunList({ workspaceId, orgName: propOrgName, workspaceName: prop
 
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [runMessage, setRunMessage] = useState("");
+  const [planOnly, setPlanOnly] = useState(true);
+  const [creating, setCreating] = useState(false);
 
   useEffect((): void => {
     void loadRuns();
@@ -72,19 +87,34 @@ export function RunList({ workspaceId, orgName: propOrgName, workspaceName: prop
     return map[status] ?? status;
   };
 
-  async function handleStartNewRun(): Promise<void> {
-    await fetchApi("/api/v2/runs", {
-      method: "POST",
-      body: JSON.stringify({
-        data: {
-          type: "runs",
-          relationships: {
-            workspace: { data: { type: "workspaces", id: workspaceId } },
+  async function handleStartRun(): Promise<void> {
+    setCreating(true);
+    try {
+      await fetchApi("/api/v2/runs", {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "runs",
+            attributes: {
+              message: runMessage.trim() !== "" ? runMessage.trim() : undefined,
+              "auto-apply": !planOnly,
+            },
+            relationships: {
+              workspace: { data: { type: "workspaces", id: workspaceId } },
+            },
           },
-        },
-      }),
-    });
-    void loadRuns();
+        }),
+      });
+      setDialogOpen(false);
+      setRunMessage("");
+      toast.add({ title: "Run started", type: "success" });
+      void loadRuns();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to start run";
+      toast.add({ title: msg, type: "error" });
+    } finally {
+      setCreating(false);
+    }
   }
 
   if (loading) return <div className="py-8 text-center text-gray-500">Loading runs...</div>;
@@ -93,18 +123,25 @@ export function RunList({ workspaceId, orgName: propOrgName, workspaceName: prop
     <div>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-           <Button variant="outline" className="h-9 px-3 text-sm text-gray-700 font-medium rounded-[4px] border-gray-300 shadow-sm flex items-center gap-2 bg-white hover:bg-gray-50">
-             <Filter className="h-4 w-4 text-gray-500" /> Filter runs
-           </Button>
+          <Button variant="outline" className="h-9 px-3 text-sm text-gray-700 font-medium rounded-[4px] border-gray-300 shadow-sm flex items-center gap-2 bg-white hover:bg-gray-50">
+            <Filter className="h-4 w-4 text-gray-500" /> Filter runs
+          </Button>
         </div>
+        <Button
+          className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none"
+          onClick={(): void => { setDialogOpen(true); }}
+        >
+          Start new run
+        </Button>
       </div>
 
+      {/* Run List */}
       <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
         {runs.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <h3 className="text-base text-gray-900 font-medium mb-1">No runs yet</h3>
             <p className="text-sm mb-4">There is no run history for this workspace.</p>
-            <Button className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none" onClick={(): void => { void handleStartNewRun(); }}>
+            <Button className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white rounded-[4px] h-9 px-4 shadow-none" onClick={(): void => { setDialogOpen(true); }}>
               Start new run
             </Button>
           </div>
@@ -134,18 +171,18 @@ export function RunList({ workspaceId, orgName: propOrgName, workspaceName: prop
                     </div>
                   </td>
                   <td className="px-4 py-4 border-r border-gray-200">
-                     <div className="flex items-center gap-2 text-[13px] text-gray-900 font-medium">
-                        {getStatusIcon(run.attributes.status)}
-                        {getStatusText(run.attributes.status)}
-                     </div>
+                    <div className="flex items-center gap-2 text-[13px] text-gray-900 font-medium">
+                      {getStatusIcon(run.attributes.status)}
+                      {getStatusText(run.attributes.status)}
+                    </div>
                   </td>
                   <td className="px-4 py-4 border-r border-gray-200 text-[13px] text-gray-600">
                     UI/API
                   </td>
                   <td className="px-4 py-4 border-r border-gray-200">
                     <div className="flex items-center gap-2">
-                       <div className="h-5 w-5 rounded bg-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-600">U</div>
-                       <span className="text-[13px] text-gray-600">User</span>
+                      <div className="h-5 w-5 rounded bg-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-600">U</div>
+                      <span className="text-[13px] text-gray-600">User</span>
                     </div>
                   </td>
                   <td className="px-4 py-4 text-[13px] text-gray-500">
@@ -157,6 +194,51 @@ export function RunList({ workspaceId, orgName: propOrgName, workspaceName: prop
           </table>
         )}
       </div>
+
+      {/* Create Run Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Start new run</DialogTitle>
+            <DialogDescription>
+              Configure and start a new run for this workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="run-message" className="text-sm font-medium">Message</label>
+              <Input
+                id="run-message"
+                placeholder="Optional message..."
+                value={runMessage}
+                onChange={(e): void => { setRunMessage(e.target.value); }}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="plan-only"
+                checked={planOnly}
+                onCheckedChange={(checked: boolean): void => { setPlanOnly(checked); }}
+              />
+              <label htmlFor="plan-only" className="text-sm cursor-pointer select-none">
+                Plan only — do not auto-apply
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-[#2962ff] hover:bg-[#1a4bcf] text-white"
+              disabled={creating}
+              onClick={(): void => { void handleStartRun(); }}
+            >
+              {creating ? "Starting..." : "Start run"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

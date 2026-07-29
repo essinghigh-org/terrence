@@ -934,7 +934,9 @@ test("queues a run, displays its logs, and applies it", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => { expect(list.getByText("There is no run history for this workspace.")).toBeTruthy(); });
-  fireEvent.click(list.getByRole("button", { name: "Start new run" }));
+  fireEvent.click(list.getAllByRole("button", { name: "Start new run" })[0]);
+  await waitFor((): void => { expect(list.getByText("Configure and start a new run for this workspace.")).toBeTruthy(); });
+  fireEvent.click(list.getByRole("button", { name: "Start run" }));
   await waitFor((): void => { expect(list.getByText("Queued manually via UI")).toBeTruthy(); });
   cleanup();
 
