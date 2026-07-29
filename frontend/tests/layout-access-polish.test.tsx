@@ -378,7 +378,7 @@ test("scrolls contextual account links after account data loads", async () => {
   );
 
   await view.findByRole("button", { name: "Save Profile" });
-  const tokenHeading = view.getByText("API Tokens");
+  const tokenHeading = (await view.findAllByText("API Tokens")).find((el) => el.closest("#api-tokens") !== null)!;
   const tokenCard = tokenHeading.closest("#api-tokens") as HTMLElement;
   const scrollIntoView = mock((): void => undefined);
   tokenCard.scrollIntoView = scrollIntoView;

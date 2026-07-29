@@ -1,13 +1,16 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
 import { createElement, useEffect, useRef, useState } from "react";
 import {
-  ArrowRightLeft,
+  ArrowRight,
+  Check,
+  ChevronRight,
   Copy,
+  Download,
   Eye,
   FileCode,
-  Minus,
   Plus,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
 import { Badge } from "./ui/badge";
@@ -61,7 +64,7 @@ type PlanJson = {
   format_version?: string;
 };
 
-type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "no-op";
+type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
 
 type DiffRow = Readonly<{
   path: string;
@@ -104,11 +107,12 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
 const operationConfig = {
   create: { icon: Plus, label: "create", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
   update: { icon: RefreshCw, label: "change", className: "border-blue-200 bg-blue-50 text-blue-700" },
-  delete: { icon: Minus, label: "destroy", className: "border-red-200 bg-red-50 text-red-700" },
-  replace: { icon: ArrowRightLeft, label: "replace", className: "border-amber-200 bg-amber-50 text-amber-700" },
+  delete: { icon: Trash2, label: "destroy", className: "border-red-200 bg-red-50 text-red-700" },
+  replace: { icon: RefreshCw, label: "replace", className: "border-amber-200 bg-amber-50 text-amber-700" },
   read: { icon: Eye, label: "read", className: "border-purple-200 bg-purple-50 text-purple-700" },
-  import: { icon: Plus, label: "import", className: "border-teal-200 bg-teal-50 text-teal-700" },
-  move: { icon: ArrowRightLeft, label: "move", className: "border-indigo-200 bg-indigo-50 text-indigo-700" },
+  import: { icon: Download, label: "import", className: "border-teal-200 bg-teal-50 text-teal-700" },
+  move: { icon: ArrowRight, label: "move", className: "border-slate-300 bg-slate-100 text-slate-700" },
+  remove: { icon: Trash2, label: "removed from state", className: "border-slate-300 bg-slate-100 text-slate-700" },
   "no-op": { icon: RefreshCw, label: "no-op", className: "border-gray-200 bg-gray-50 text-gray-500" },
 } satisfies Record<Operation, Readonly<{ icon: typeof Plus; label: string; className: string }>>;
 
@@ -186,17 +190,22 @@ function parsePlanJson(value: unknown): PlanJson | null {
   return value;
 }
 
-function operationFor(actions: readonly string[]): Operation {
+function operationFor(actions: readonly string[], actionReason?: string): Operation {
   if (actions.includes("create") && actions.includes("delete")) return "replace";
   if (actions.includes("create")) return "create";
-  if (actions.includes("delete")) return "delete";
+  if (actions.includes("delete")) {
+    if (actionReason === "delete_because_no_resource_config" || actionReason === "removed_from_state") {
+      return "remove";
+    }
+    return "delete";
+  }
   if (actions.includes("update")) return "update";
   if (actions.includes("read")) return "read";
   return "no-op";
 }
 
 function operationForResource(resource: ResourceChange): Operation {
-  const operation = operationFor(resource.change.actions);
+  const operation = operationFor(resource.change.actions, resource.action_reason);
   if (operation !== "no-op") return operation;
   if (resource.change.importing !== undefined) return "import";
   if (resource.previous_address !== undefined) return "move";
@@ -405,9 +414,21 @@ function actionReasonLabel(reason: string): string {
 
 function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
   const operationIcon = config.icon;
+
+  const handleCopy = (event: React.MouseEvent): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
+    if (clipboard !== undefined) {
+      void clipboard.writeText(resource.address);
+      setCopied(true);
+      setTimeout((): void => { setCopied(false); }, 1500);
+    }
+  };
 
   return (
     <details
@@ -415,20 +436,20 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
       onToggle={(event): void => { setExpanded(event.currentTarget.open); }}
     >
       <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
-        <span aria-hidden="true" className="text-xs text-gray-400 transition-transform group-open:rotate-90">▶</span>
+        <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
         <Badge variant="outline" className={`gap-1 rounded-md capitalize ${config.className}`}>
           {createElement(operationIcon, { className: "size-3" })}
           {config.label}
         </Badge>
-        {resource.change.importing !== undefined && operation !== "import" && (
+        {resource.change.importing !== undefined && operationForResource(resource) !== "import" && (
           <Badge variant="outline" className={`gap-1 rounded-md capitalize ${operationConfig.import.className}`}>
-            <Plus className="size-3" />
+            <Download className="size-3" />
             import
           </Badge>
         )}
-        {resource.previous_address !== undefined && operation !== "move" && (
+        {resource.previous_address !== undefined && operationForResource(resource) !== "move" && (
           <Badge variant="outline" className={`gap-1 rounded-md capitalize ${operationConfig.move.className}`}>
-            <ArrowRightLeft className="size-3" />
+            <ArrowRight className="size-3" />
             move
           </Badge>
         )}
@@ -438,16 +459,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
             <button
               type="button"
               aria-label={`Copy ${resource.address} address`}
-              title="Copy resource address"
-              className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900"
-              onClick={(event): void => {
-                event.preventDefault();
-                event.stopPropagation();
-                const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
-                if (clipboard !== undefined) void clipboard.writeText(resource.address);
-              }}
+              title={copied ? "Copied address!" : "Copy resource address"}
+              className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+              onClick={handleCopy}
             >
-              <Copy className="size-3" />
+              {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
             </button>
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
@@ -463,7 +479,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               <span>Deposed key: <code className="font-mono">{resource.deposed}</code></span>
             )}
             {resource.previous_address !== undefined && (
-              <span>Moved from <code className="font-mono">{resource.previous_address}</code></span>
+              <span className="flex items-center gap-1">
+                Moved from <code className="font-mono">{resource.previous_address}</code>
+                <ArrowRight className="inline size-3 text-gray-400" />
+                <code className="font-mono font-medium text-gray-700">{resource.address}</code>
+              </span>
             )}
             {resource.change.importing !== undefined && (
               <span>
@@ -772,6 +792,17 @@ export function PlanOutput({
     },
   ].filter((item): boolean => item.count > 0);
 
+  const opCounts = {
+    create: changedResources.filter((resource): boolean => operationForResource(resource) === "create").length,
+    update: changedResources.filter((resource): boolean => operationForResource(resource) === "update").length,
+    delete: changedResources.filter((resource): boolean => operationForResource(resource) === "delete").length,
+    replace: changedResources.filter((resource): boolean => operationForResource(resource) === "replace").length,
+    read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
+    import: importCount,
+    move: moveCount,
+    remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
+  };
+
   return (
     <section aria-label="Structured plan output" className="border-t border-gray-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
@@ -825,25 +856,26 @@ export function PlanOutput({
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
-          <label className="text-xs font-medium text-gray-600">
-            <span className="sr-only">Filter by operation</span>
-            <select
-              value={operation}
-              aria-label="Filter by operation"
-              className="h-8 rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              onChange={(event): void => { setOperation(event.currentTarget.value as Operation | "all"); }}
-            >
-              <option value="all">All operations</option>
-              <option value="create">Create</option>
-              <option value="update">Change</option>
-              <option value="delete">Destroy</option>
-              <option value="replace">Replace</option>
-              <option value="read">Read</option>
-              <option value="import">Import</option>
-              <option value="move">Move</option>
+          <select
+            value={operation}
+            aria-label="Filter by operation"
+            className="h-8 rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            onChange={(event): void => {
+              const val = ((event.currentTarget || event.target) as HTMLSelectElement).value as Operation | "all";
+              setOperation(val);
+            }}
+          >
+              <option value="all">All operations ({changedResources.length})</option>
+              <option value="create">Create ({opCounts.create})</option>
+              <option value="update">Change ({opCounts.update})</option>
+              <option value="delete">Destroy ({opCounts.delete})</option>
+              <option value="replace">Replace ({opCounts.replace})</option>
+              <option value="move">Move ({opCounts.move})</option>
+              <option value="import">Import ({opCounts.import})</option>
+              <option value="remove">Remove from state ({opCounts.remove})</option>
+              <option value="read">Read ({opCounts.read})</option>
             </select>
-          </label>
-        </div>
+          </div>
         <span aria-live="polite" className="text-xs text-gray-500">
           Showing {filteredResources.length} of {changedResources.length}
           {driftResources.length > 0 && ` · ${filteredDrift.length} of ${driftResources.length} drift`}

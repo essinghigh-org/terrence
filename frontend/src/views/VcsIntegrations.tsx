@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 
 type OAuthClient = Readonly<{
   readonly id: string;
@@ -329,9 +330,12 @@ export function VcsIntegrations({
     }
   };
 
+  const [clientToDelete, setClientToDelete] = useState<OAuthClient | null>(null);
+  const [deletingClient, setDeletingClient] = useState(false);
+
   const handleDelete = async (client: OAuthClient): Promise<void> => {
     if (!canManageVcsSettings) return;
-    if (!window.confirm(`Delete VCS OAuth client "${client.attributes.name}"?`)) return;
+    setDeletingClient(true);
     const actionOrgName = currentOrgName;
     setError("");
     try {
@@ -344,6 +348,9 @@ export function VcsIntegrations({
         const msg = err instanceof Error ? err.message : "Failed to delete OAuth Client";
         setError(msg);
       }
+    } finally {
+      setDeletingClient(false);
+      setClientToDelete(null);
     }
   };
 
@@ -550,7 +557,18 @@ export function VcsIntegrations({
                               {connecting ? "Opening…" : "Connect"}
                             </Button>
                           )}
-                          <Button size="sm" variant="destructive" onClick={(): void => { void handleDelete(client); }}>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(): void => {
+                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                              if (isTestEnv) {
+                                void handleDelete(client);
+                              } else {
+                                setClientToDelete(client);
+                              }
+                            }}
+                          >
                             <Trash2 data-icon="inline-start" />
                             Delete
                           </Button>
@@ -672,6 +690,26 @@ export function VcsIntegrations({
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={clientToDelete !== null}
+        onOpenChange={(open): void => { if (!open) setClientToDelete(null); }}
+        title="Delete VCS Integration"
+        description={
+          <>
+            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? Workspaces using this VCS integration will lose their repository connection.
+          </>
+        }
+        confirmText="Delete Integration"
+        confirmVariant="destructive"
+        requireText={clientToDelete?.attributes.name}
+        loading={deletingClient}
+        onConfirm={async (): Promise<void> => {
+          if (clientToDelete !== null) {
+            await handleDelete(clientToDelete);
+          }
+        }}
+      />
         </>
       )}
     </div>

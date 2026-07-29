@@ -168,7 +168,6 @@ export function WorkspaceVariables({
 
   const deleteVariable = async (variable: WorkspaceVariable): Promise<void> => {
     if (!canUpdate) return;
-    if (!window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
     setPageError("");
     try {
       await fetchApi(`/workspaces/${workspaceId}/vars/${variable.id}`, { method: "DELETE" });

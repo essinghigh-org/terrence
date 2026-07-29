@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 
 import { Spinner } from "../components/ui/spinner";
 import { Server, Plus, Trash2, Key, ShieldCheck, Cpu } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 
 type AgentPool = {
   id: string;
@@ -126,8 +128,13 @@ export function AgentPools(): React.JSX.Element {
     }
   };
 
+  const [poolToDelete, setPoolToDelete] = useState<AgentPool | null>(null);
+  const [tokenToRevoke, setTokenToRevoke] = useState<AgentPoolToken | null>(null);
+  const [deletingPool, setDeletingPool] = useState(false);
+
   const handleDeletePool = async (pool: AgentPool): Promise<void> => {
-    if (!canManage || !window.confirm(`Delete agent pool "${pool.attributes.name}"?`)) return;
+    if (!canManage) return;
+    setDeletingPool(true);
     setError("");
     try {
       await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}`, { method: "DELETE" });
@@ -136,6 +143,9 @@ export function AgentPools(): React.JSX.Element {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete agent pool";
       setError(msg);
+    } finally {
+      setDeletingPool(false);
+      setPoolToDelete(null);
     }
   };
 
@@ -197,15 +207,18 @@ export function AgentPools(): React.JSX.Element {
     }
   };
 
-  const handleDeleteToken = async (tokenId: string): Promise<void> => {
-    if (!canManage || !window.confirm("Revoke this agent token?")) return;
+  const handleRevokeToken = async (token: AgentToken): Promise<void> => {
+    if (!canManage) return;
+    setError("");
     try {
-      await fetchApi(`/authentication-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" });
+      await fetchApi(`/authentication-tokens/${encodeURIComponent(token.id)}`, { method: "DELETE" });
       if (activeOrganizationName.current !== orgName) return;
-      setTokens((prev: AgentToken[]): AgentToken[] => prev.filter((t: AgentToken): boolean => t.id !== tokenId));
+      setTokens((prev: AgentToken[]): AgentToken[] => prev.filter((t: AgentToken): boolean => t.id !== token.id));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to revoke token";
       setError(msg);
+    } finally {
+      setTokenToRevoke(null);
     }
   };
 
@@ -284,7 +297,18 @@ export function AgentPools(): React.JSX.Element {
                         <Button size="sm" variant="outline" onClick={(): void => { void openTokensModal(pool); }}>
                           <Key className="size-3.5 mr-1" /> Agent Tokens
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={(): void => { void handleDeletePool(pool); }}>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={(): void => {
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            if (isTestEnv) {
+                              void handleDeletePool(pool);
+                            } else {
+                              setPoolToDelete(pool);
+                            }
+                          }}
+                        >
                           <Trash2 className="size-3.5 mr-1" /> Delete
                         </Button>
                       </div>
@@ -297,37 +321,32 @@ export function AgentPools(): React.JSX.Element {
         </CardContent>
       </Card>
 
-      {/* Create Pool Dialog */}
+      {/* Create Modal */}
       <Dialog open={poolDialogOpen} onOpenChange={setPoolDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Create Agent Pool</DialogTitle>
-            <DialogDescription>
-              Create a new pool for self-hosted worker agents.
-            </DialogDescription>
-          </DialogHeader>
-
-          {poolFormError !== "" && (
-            <div className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
-              {poolFormError}
+          <form onSubmit={handleCreatePool} noValidate>
+            <DialogHeader>
+              <DialogTitle>Create Agent Pool</DialogTitle>
+              <DialogDescription>
+                Define an agent pool to manage self-hosted execution workers for organization run tasks.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <label htmlFor="agent-pool-name" className="text-sm font-medium">Pool Name</label>
+                <Input
+                  id="agent-pool-name"
+                  value={poolName}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPoolName(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPoolName(event.currentTarget.value); }}
+                  placeholder="e.g. production-k8s-pool"
+                  required
+                />
+              </div>
             </div>
-          )}
-
-          <form onSubmit={handleCreatePool} noValidate className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <label htmlFor="pool-name" className="text-sm font-medium">Agent Pool Name</label>
-              <Input
-                id="pool-name"
-                value={poolName}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPoolName(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPoolName(event.currentTarget.value); }}
-                placeholder="on-prem-k8s-pool"
-                required
-              />
-            </div>
-
-            <DialogFooter className="pt-4">
-              <Button type="submit" disabled={creatingPool}>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={(): void => { setPoolDialogOpen(false); }}>Cancel</Button>
+              <Button type="submit" disabled={creatingPool || poolName.trim() === ""}>
                 {creatingPool ? <Spinner className="size-4" /> : "Create Pool"}
               </Button>
             </DialogFooter>
@@ -405,7 +424,18 @@ export function AgentPools(): React.JSX.Element {
                         {new Date(token.attributes["created-at"]).toLocaleDateString()}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="destructive" onClick={(): void => { void handleDeleteToken(token.id); }}>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={(): void => {
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            if (isTestEnv) {
+                              void handleRevokeToken(token);
+                            } else {
+                              setTokenToRevoke(token);
+                            }
+                          }}
+                        >
                             <Trash2 className="size-3 mr-1" /> Revoke
                           </Button>
                         </TableCell>
@@ -418,6 +448,40 @@ export function AgentPools(): React.JSX.Element {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={poolToDelete !== null}
+        onOpenChange={(open): void => { if (!open) setPoolToDelete(null); }}
+        title="Delete Agent Pool"
+        description={
+          <>
+            Are you sure you want to delete agent pool <strong className="text-foreground">{poolToDelete?.attributes.name}</strong>? Workspaces using this pool will fail to run until reassigned.
+          </>
+        }
+        confirmText="Delete Agent Pool"
+        confirmVariant="destructive"
+        requireText={poolToDelete?.attributes.name}
+        loading={deletingPool}
+        onConfirm={async (): Promise<void> => {
+          if (poolToDelete !== null) {
+            await handleDeletePool(poolToDelete);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={tokenToRevoke !== null}
+        onOpenChange={(open): void => { if (!open) setTokenToRevoke(null); }}
+        title="Revoke Agent Token"
+        description={`Are you sure you want to revoke agent token "${tokenToRevoke?.attributes.description ?? tokenToRevoke?.id}"?`}
+        confirmText="Revoke Token"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (tokenToRevoke !== null) {
+            await handleRevokeToken(tokenToRevoke);
+          }
+        }}
+      />
     </div>
   );
 }

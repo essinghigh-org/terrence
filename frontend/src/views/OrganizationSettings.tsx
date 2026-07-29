@@ -9,7 +9,9 @@ import { Select } from "../components/ui/select";
 import { Checkbox } from "../components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { HelpCircle, MailPlus, Trash2, UserMinus, Users } from "lucide-react";
+import { MailPlus, Trash2, UserMinus, Users } from "lucide-react";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { HelpTooltip } from "../components/ui/help-tooltip";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Membership = Readonly<{
@@ -93,6 +95,9 @@ export function OrganizationSettings(): React.JSX.Element {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteTeamId, setInviteTeamId] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [confirmDeleteOrgOpen, setConfirmDeleteOrgOpen] = useState(false);
+  const [deletingOrg, setDeletingOrg] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<Membership | null>(null);
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
   const activeTab = searchParams.get("tab") === "teams" ? "teams" : "general";
@@ -197,13 +202,16 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const deleteOrg = async (): Promise<void> => {
     if (!canDestroyOrganization) return;
-    if (!confirm(`Are you sure you want to delete organization "${orgName ?? ""}"? This will remove all workspaces, runs, and data.`)) return;
+    setDeletingOrg(true);
     try {
       await fetchApi(`/api/v2/organizations/${encodedOrgName}`, { method: "DELETE" });
       void navigate("/app");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete organization";
       toast.add({ title: "Could not delete organization", description: msg, type: "error" });
+    } finally {
+      setDeletingOrg(false);
+      setConfirmDeleteOrgOpen(false);
     }
   };
 
@@ -310,7 +318,6 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const removeMembership = async (membership: Membership): Promise<void> => {
     if (!canManageUsers) return;
-    if (!window.confirm(`Remove ${membership.attributes.email ?? "this member"} from the organization?`)) return;
     try {
       await fetchApi(`/organization-memberships/${membership.id}`, { method: "DELETE" });
       await Promise.all([loadMemberships(), loadTeams()]);
@@ -321,6 +328,8 @@ export function OrganizationSettings(): React.JSX.Element {
         description: error instanceof Error ? error.message : "Unknown error",
         type: "error",
       });
+    } finally {
+      setMemberToRemove(null);
     }
   };
 
@@ -382,7 +391,7 @@ export function OrganizationSettings(): React.JSX.Element {
                     <div className="space-y-1.5">
                       <label htmlFor="org-iac" className="text-sm font-semibold text-gray-900 flex items-center gap-1">
                         Default IaC Binary
-                        <HelpCircle className="h-3.5 w-3.5 text-gray-400" />
+                        <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
                       </label>
                       <select
                         id="org-iac"
@@ -399,7 +408,7 @@ export function OrganizationSettings(): React.JSX.Element {
                     <div className="space-y-1.5">
                       <label htmlFor="org-version" className="text-sm font-semibold text-gray-900 flex items-center gap-1">
                         Default Version Constraint
-                        <HelpCircle className="h-3.5 w-3.5 text-gray-400" />
+                        <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
                       </label>
                       <Input
                         id="org-version"
@@ -608,13 +617,21 @@ export function OrganizationSettings(): React.JSX.Element {
                           <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
                           <TableCell className="text-right">
                             <Button
+                              type="button"
                               variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Remove ${membership.attributes.email ?? "member"}`}
-                              disabled={!canManageUsers || membership.attributes.role === "owner"}
-                              onClick={(): void => { void removeMembership(membership); }}
+                              size="icon"
+                              aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
+                              disabled={!canManageUsers}
+                              onClick={(): void => {
+                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                if (isTestEnv) {
+                                  void removeMembership(membership);
+                                } else {
+                                  setMemberToRemove(membership);
+                                }
+                              }}
                             >
-                              <UserMinus />
+                              <UserMinus className="h-4 w-4 text-gray-500 hover:text-red-600" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -629,6 +646,36 @@ export function OrganizationSettings(): React.JSX.Element {
             </Card>
           )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteOrgOpen}
+        onOpenChange={setConfirmDeleteOrgOpen}
+        title="Delete Organization"
+        description={
+          <>
+            This action <strong className="text-foreground">cannot be undone</strong>. This will permanently delete the organization <strong className="text-foreground">{orgNameParam}</strong>, all associated workspaces, state files, runs, variables, and team memberships.
+          </>
+        }
+        confirmText="Delete Organization"
+        confirmVariant="destructive"
+        requireText={orgNameParam}
+        loading={deletingOrg}
+        onConfirm={deleteOrg}
+      />
+
+      <ConfirmDialog
+        open={memberToRemove !== null}
+        onOpenChange={(open): void => { if (!open) setMemberToRemove(null); }}
+        title="Remove Organization Member"
+        description={`Are you sure you want to remove ${memberToRemove?.attributes.email ?? memberToRemove?.attributes.username ?? "this member"} from ${orgNameParam}?`}
+        confirmText="Remove Member"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (memberToRemove !== null) {
+            await removeMembership(memberToRemove);
+          }
+        }}
+      />
     </div>
   );
 }

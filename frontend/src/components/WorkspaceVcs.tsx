@@ -269,7 +269,7 @@ export function WorkspaceVcs({
   };
 
   const disconnect = async (): Promise<void> => {
-    if (!canUpdate || !window.confirm("Disconnect this workspace from version control?")) return;
+    if (!canUpdate) return;
     setSaving(true);
     setSaved(false);
     setError("");

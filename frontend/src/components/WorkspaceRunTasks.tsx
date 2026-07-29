@@ -161,7 +161,7 @@ export function WorkspaceRunTasks({
   };
 
   const remove = async (taskId: string): Promise<void> => {
-    if (!canManage || saving !== null || !window.confirm("Remove this run task?")) return;
+    if (!canManage || saving !== null) return;
     setSaving(taskId);
     setError("");
     setNotice("");

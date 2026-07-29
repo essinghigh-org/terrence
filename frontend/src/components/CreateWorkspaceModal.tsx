@@ -14,6 +14,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 
 type CreateWorkspaceModalProps = {
   orgName: string;
@@ -196,9 +197,12 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                    Repository Identifier
-                  </label>
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Repository Identifier
+                    </label>
+                    <HelpTooltip content="The repository path on your VCS provider (e.g. 'org/repo-name' or 'user/repo-name')." />
+                  </div>
                   <Input
                     id="vcs-identifier"
                     value={vcsIdentifier}

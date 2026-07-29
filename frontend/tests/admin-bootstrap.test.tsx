@@ -43,7 +43,7 @@ test("sends a temporary administrator to the password page", async () => {
       </Routes>
     </MemoryRouter>,
   );
-  changeInput(view.getByLabelText("Username"), "admin");
+  changeInput(view.getByLabelText(/Username/i), "admin");
   changeInput(view.getByLabelText("Password"), "temporary-admin-password");
   await act(async () => {
     const form = view.getByRole("button", { name: "Sign in" }).closest("form");

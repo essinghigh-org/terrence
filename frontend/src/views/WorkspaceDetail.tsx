@@ -29,6 +29,7 @@ import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
 
 export type WorkspaceSection =
@@ -535,14 +536,19 @@ export function WorkspaceDetail({
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Execution mode</div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      Execution mode
+                      <HelpTooltip icon="info" content="Execution mode determines whether Terraform or OpenTofu runs execute remotely in Terrence agent pools or locally on your CLI." />
+                    </div>
                     <div className="text-[13px] text-gray-900 flex items-center gap-1.5">
                        <span className="capitalize">{executionMode}</span>
-                       <Info className="h-3.5 w-3.5 text-gray-400" />
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Execution engine</div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      Execution engine
+                      <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
+                    </div>
                     <div className="text-[13px] text-gray-900 flex items-center gap-1.5">
                        <span className="capitalize">{iacBinary}</span> {engineVersion}
                        {engineVersion === "latest" && (

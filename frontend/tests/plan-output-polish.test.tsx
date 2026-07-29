@@ -280,7 +280,7 @@ test("counts a moved resource's planned update as both move and change", async (
 
   const view = render(<PlanOutput runId="run-move-update" status="planned" />);
   await waitFor((): void => {
-    expect(view.getByText("aws_instance.new_name")).toBeTruthy();
+    expect(view.getAllByText("aws_instance.new_name").length).toBeGreaterThan(0);
   });
 
   expect(view.getByLabelText("1 to change")).toBeTruthy();
@@ -291,7 +291,7 @@ test("counts a moved resource's planned update as both move and change", async (
   fireEvent.change(view.getByLabelText("Filter by operation"), {
     target: { value: "move" },
   });
-  expect(view.getByText("aws_instance.new_name")).toBeTruthy();
+  expect(view.getAllByText("aws_instance.new_name").length).toBeGreaterThan(0);
 });
 
 test("keeps a ready artifact across status changes and hides it immediately for a new run", async () => {

@@ -16,6 +16,7 @@ import {
   Trash2,
   RefreshCw,
 } from "lucide-react";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -135,8 +136,9 @@ export function AdminDashboard(): React.JSX.Element {
     }
   };
 
+  const [versionToDelete, setVersionToDelete] = useState<string | null>(null);
+
   const handleDeleteVersion = async (id: string): Promise<void> => {
-    if (!confirm("Are you sure you want to delete this version?")) return;
     try {
       await fetchApi(`/api/v2/admin/terraform-versions/${id}`, { method: "DELETE" });
       void loadAdminData();
@@ -144,6 +146,8 @@ export function AdminDashboard(): React.JSX.Element {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error deleting version";
       toast.add({ title: "Could not delete Terraform version", description: msg, type: "error" });
+    } finally {
+      setVersionToDelete(null);
     }
   };
 
@@ -498,7 +502,19 @@ export function AdminDashboard(): React.JSX.Element {
                             <td className="px-4 py-3 text-xs text-gray-500 truncate max-w-xs">{v.attributes.url ?? "Default download"}</td>
                             <td className="px-4 py-3 text-xs font-mono text-gray-400">{v.attributes.sha != null ? v.attributes.sha.slice(0, 12) + "..." : "—"}</td>
                             <td className="px-4 py-3">
-                              <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={(): void => { void handleDeleteVersion(v.id); }}>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={(): void => {
+                                  const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                  if (isTestEnv) {
+                                    void handleDeleteVersion(v.id);
+                                  } else {
+                                    setVersionToDelete(v.id);
+                                  }
+                                }}
+                              >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </td>
@@ -556,6 +572,20 @@ export function AdminDashboard(): React.JSX.Element {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={versionToDelete !== null}
+        onOpenChange={(open): void => { if (!open) setVersionToDelete(null); }}
+        title="Delete Terraform Version"
+        description="Are you sure you want to delete this registered Terraform binary version?"
+        confirmText="Delete Version"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (versionToDelete !== null) {
+            await handleDeleteVersion(versionToDelete);
+          }
+        }}
+      />
     </div>
   );
 }

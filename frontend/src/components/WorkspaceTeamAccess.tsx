@@ -212,8 +212,6 @@ export function WorkspaceTeamAccess({
   };
 
   const removeAccess = async (relationship: TeamWorkspace): Promise<void> => {
-    const name = namesById.get(relationship.relationships.team.data.id) ?? "this team";
-    if (!window.confirm(`Remove workspace access for ${name}?`)) return;
     setPageError("");
     try {
       await fetchApi(`/team-workspaces/${relationship.id}`, { method: "DELETE" });

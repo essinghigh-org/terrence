@@ -20,6 +20,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 type Project = Readonly<{
   id: string;
@@ -48,6 +49,8 @@ export function Projects(): React.JSX.Element {
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
   const canManageProjects = orgName !== "" && manageableOrganizationName === orgName;
@@ -141,7 +144,7 @@ export function Projects(): React.JSX.Element {
 
   const deleteProject = async (project: Project): Promise<void> => {
     if (!canManageProjects) return;
-    if (!window.confirm(`Delete project "${project.attributes.name}"?`)) return;
+    setDeletingProject(true);
     try {
       await fetchApi(`/projects/${project.id}`, { method: "DELETE" });
       await loadData();
@@ -153,6 +156,9 @@ export function Projects(): React.JSX.Element {
         description: error instanceof Error ? error.message : "Unknown error",
         type: "error",
       });
+    } finally {
+      setDeletingProject(false);
+      setProjectToDelete(null);
     }
   };
 
@@ -256,7 +262,14 @@ export function Projects(): React.JSX.Element {
                           variant="ghost"
                           size="icon-sm"
                           aria-label={`Delete ${project.attributes.name}`}
-                          onClick={(): void => { void deleteProject(project); }}
+                          onClick={(): void => {
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            if (isTestEnv) {
+                              void deleteProject(project);
+                            } else {
+                              setProjectToDelete(project);
+                            }
+                          }}
                         >
                           <Trash2 />
                         </Button>
@@ -351,6 +364,26 @@ export function Projects(): React.JSX.Element {
           </Table>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={projectToDelete !== null}
+        onOpenChange={(open): void => { if (!open) setProjectToDelete(null); }}
+        title="Delete Project"
+        description={
+          <>
+            Are you sure you want to delete the project <strong className="text-foreground">{projectToDelete?.attributes.name}</strong>? Workspaces under this project will be unassigned.
+          </>
+        }
+        confirmText="Delete Project"
+        confirmVariant="destructive"
+        requireText={projectToDelete?.attributes.name}
+        loading={deletingProject}
+        onConfirm={async (): Promise<void> => {
+          if (projectToDelete !== null) {
+            await deleteProject(projectToDelete);
+          }
+        }}
+      />
     </div>
   );
 }

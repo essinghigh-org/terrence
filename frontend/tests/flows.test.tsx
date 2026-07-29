@@ -65,7 +65,7 @@ test("logs in, stores the token, and navigates home", async () => {
     </MemoryRouter>,
   );
 
-  changeInput(asElement(view.getByLabelText("Username")), "alice");
+  changeInput(asElement(view.getByLabelText(/Username/i)), "alice");
   changeInput(asElement(view.getByLabelText("Password")), "correct horse");
   await act(async () => {
     const form = view.getByRole("button", { name: "Sign in" }).closest("form");

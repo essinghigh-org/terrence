@@ -57,7 +57,7 @@ export function Login(): React.JSX.Element {
           <CardContent>
             <FieldGroup>
               <Field data-invalid={error !== ""}>
-                <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
                 <Input
                   id="login-username"
                   value={username}

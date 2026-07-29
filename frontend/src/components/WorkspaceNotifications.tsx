@@ -198,7 +198,6 @@ export function WorkspaceNotifications({
   };
 
   const deleteConfiguration = async (configuration: NotificationConfiguration): Promise<void> => {
-    if (!window.confirm(`Delete notification configuration "${configuration.attributes.name}"?`)) return;
     setPageError("");
     setNotice("");
     try {

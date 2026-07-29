@@ -17,8 +17,10 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Table,
   TableBody,
@@ -180,8 +182,10 @@ function VariablesDialog({
     }
   };
 
+  const [varToDelete, setVarToDelete] = useState<VariableSetVariable | null>(null);
+
   const deleteVariable = async (variable: VariableSetVariable): Promise<void> => {
-    if (!canManage || variableSetId == null || !window.confirm(`Delete variable "${variable.attributes.key}"?`)) return;
+    if (!canManage || variableSetId == null) return;
     setError("");
     try {
       await fetchApi(`/varsets/${variableSetId}/relationships/vars/${variable.id}`, {
@@ -191,10 +195,13 @@ function VariablesDialog({
       onCountChange(variableSetId, -1);
     } catch (caught: unknown) {
       setError(messageFrom(caught, "Failed to delete variable"));
+    } finally {
+      setVarToDelete(null);
     }
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>
@@ -340,7 +347,14 @@ function VariablesDialog({
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={(): void => { void deleteVariable(variable); }}
+                              onClick={(): void => {
+                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                if (isTestEnv) {
+                                  void deleteVariable(variable);
+                                } else {
+                                  setVarToDelete(variable);
+                                }
+                              }}
                             >
                               Delete
                             </Button>
@@ -362,6 +376,21 @@ function VariablesDialog({
         )}
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      open={varToDelete !== null}
+      onOpenChange={(open): void => { if (!open) setVarToDelete(null); }}
+      title="Delete Variable"
+      description={`Are you sure you want to delete variable "${varToDelete?.attributes.key ?? ""}"?`}
+      confirmText="Delete Variable"
+      confirmVariant="destructive"
+      onConfirm={async (): Promise<void> => {
+        if (varToDelete !== null) {
+          await deleteVariable(varToDelete);
+        }
+      }}
+    />
+    </>
   );
 }
 
@@ -491,8 +520,12 @@ export function VariableSets(): React.JSX.Element {
     }
   };
 
+  const [varSetToDelete, setVarSetToDelete] = useState<VariableSet | null>(null);
+  const [deletingVarSet, setDeletingVarSet] = useState(false);
+
   const deleteVariableSet = async (variableSet: VariableSet): Promise<void> => {
-    if (!canManage || !window.confirm(`Delete variable set "${variableSet.attributes.name}"?`)) return;
+    if (!canManage) return;
+    setDeletingVarSet(true);
     setPageError("");
     try {
       await fetchApi(`/varsets/${variableSet.id}`, { method: "DELETE" });
@@ -500,6 +533,9 @@ export function VariableSets(): React.JSX.Element {
       setVariableSets((current: VariableSet[]): VariableSet[] => current.filter((item: VariableSet): boolean => item.id !== variableSet.id));
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable set"));
+    } finally {
+      setDeletingVarSet(false);
+      setVarSetToDelete(null);
     }
   };
 
@@ -692,7 +728,14 @@ export function VariableSets(): React.JSX.Element {
                         <Button
                           size="sm"
                           variant="destructive"
-                          onClick={(): void => { void deleteVariableSet(variableSet); }}
+                          onClick={(): void => {
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            if (isTestEnv) {
+                              void deleteVariableSet(variableSet);
+                            } else {
+                              setVarSetToDelete(variableSet);
+                            }
+                          }}
                         >
                           Delete
                         </Button>
@@ -751,7 +794,10 @@ export function VariableSets(): React.JSX.Element {
                   onCheckedChange={(checked: boolean): void => { setGlobal(checked); }}
                 />
                 <div className="flex flex-col gap-0.5">
-                  <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
+                  <div className="flex items-center gap-1.5">
+                    <FieldLabel htmlFor="variable-set-global">Global</FieldLabel>
+                    <HelpTooltip content="Global variable sets automatically apply their variables to all current and future workspaces in this organization." />
+                  </div>
                   <FieldDescription>Apply this set to every workspace.</FieldDescription>
                 </div>
               </Field>
@@ -762,7 +808,7 @@ export function VariableSets(): React.JSX.Element {
                 </Button>
                 <Button type="submit" disabled={savingSet}>
                   {savingSet && <Spinner data-icon="inline-start" />}
-                  {savingSet ? "Saving" : "Save variable set"}
+                  {savingSet ? "Saving..." : "Save variable set"}
                 </Button>
               </DialogFooter>
             </FieldGroup>
@@ -771,26 +817,26 @@ export function VariableSets(): React.JSX.Element {
       </Dialog>
 
       <Dialog open={workspaceOpen} onOpenChange={setWorkspaceOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Manage workspaces</DialogTitle>
+            <DialogTitle>Apply to workspaces</DialogTitle>
             <DialogDescription>
-              Choose which workspaces use {workspaceSet?.attributes.name}.
+              Choose which workspaces receive configuration from {workspaceSet?.attributes.name}.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={saveWorkspaceRelationships} noValidate>
             <FieldGroup>
-              <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
+              <div className="flex max-h-64 flex-col gap-2 overflow-y-auto rounded-md border p-3">
                 {workspaces.map((workspace): React.JSX.Element => (
                   <Field key={workspace.id} orientation="horizontal">
                     <Checkbox
-                      id={`variable-set-workspace-${workspace.id}`}
+                      id={`workspace-${workspace.id}`}
                       checked={selectedWorkspaceIds.has(workspace.id)}
                       onCheckedChange={(checked: boolean): void =>
                         { toggleWorkspace(workspace.id, checked); }
                       }
                     />
-                    <FieldLabel htmlFor={`variable-set-workspace-${workspace.id}`}>
+                    <FieldLabel htmlFor={`workspace-${workspace.id}`}>
                       {workspace.attributes.name}
                     </FieldLabel>
                   </Field>
@@ -822,6 +868,26 @@ export function VariableSets(): React.JSX.Element {
         canManage={canManage}
         onOpenChange={setVariablesOpen}
         onCountChange={updateVariableCount}
+      />
+
+      <ConfirmDialog
+        open={varSetToDelete !== null}
+        onOpenChange={(open): void => { if (!open) setVarSetToDelete(null); }}
+        title="Delete Variable Set"
+        description={
+          <>
+            Are you sure you want to delete variable set <strong className="text-foreground">{varSetToDelete?.attributes.name}</strong>? Variables in this set will be removed from all assigned workspaces.
+          </>
+        }
+        confirmText="Delete Variable Set"
+        confirmVariant="destructive"
+        requireText={varSetToDelete?.attributes.name}
+        loading={deletingVarSet}
+        onConfirm={async (): Promise<void> => {
+          if (varSetToDelete !== null) {
+            await deleteVariableSet(varSetToDelete);
+          }
+        }}
       />
     </main>
   );

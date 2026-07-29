@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams } from "../db/schema";
-import { and, count, eq, gt, inArray, isNull, ne } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
@@ -313,7 +313,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const user = await db.query.users.findFirst({
-      where: eq(users.username, username),
+      where: or(eq(users.username, username), eq(users.email, username)),
     });
 
     if (user === undefined || !(await bcrypt.compare(password, user.passwordHash))) {
@@ -463,9 +463,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Password must be at least 10 characters" }] };
     }
-    if (email !== undefined && email !== null && typeof email !== "string") {
+    const RFC_5322_EMAIL_REGEX = /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$/i;
+
+    const emailStr = typeof email === "string" && email.trim() !== "" ? email.trim() : `${username}@example.com`;
+    if (!RFC_5322_EMAIL_REGEX.test(emailStr)) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
     }
 
     const existing = await db.query.users.findFirst({

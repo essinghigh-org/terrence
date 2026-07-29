@@ -9,6 +9,7 @@ import { fetchApi, setAuthToken } from "@/lib/api";
 
 export function Register(): React.JSX.Element {
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -17,6 +18,12 @@ export function Register(): React.JSX.Element {
   const handleRegister = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
     setError("");
+
+    if (email.trim() === "") {
+      setError("Email address is required.");
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -24,7 +31,7 @@ export function Register(): React.JSX.Element {
         await fetchApi("/users", {
           method: "POST",
           body: JSON.stringify({
-            data: { type: "users", attributes: { username, password } },
+            data: { type: "users", attributes: { username, email: email.trim(), password } },
           }),
         });
       } catch (signupError: unknown) {
@@ -71,6 +78,18 @@ export function Register(): React.JSX.Element {
                   aria-invalid={Boolean(error)}
                   required
                   autoFocus
+                />
+              </Field>
+              <Field data-invalid={Boolean(error)}>
+                <FieldLabel htmlFor="register-email">Email address</FieldLabel>
+                <Input
+                  id="register-email"
+                  type="email"
+                  value={email}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }}
+                  autoComplete="email"
+                  aria-invalid={Boolean(error)}
+                  required
                 />
               </Field>
               <Field data-invalid={Boolean(error)}>

@@ -233,7 +233,6 @@ export function WorkspaceRunTriggers({
   };
 
   const detach = async (sourceWorkspaceId: string): Promise<void> => {
-    if (!window.confirm("Remove this run trigger?")) return;
     setError("");
     try {
       await fetchApi(`/workspaces/${workspaceId}/relationships/run-triggers`, {
@@ -246,7 +245,7 @@ export function WorkspaceRunTriggers({
         ),
       );
     } catch (caught: unknown) {
-      setError(messageFrom(caught, "Failed to remove run trigger"));
+      setError(caught instanceof Error ? caught.message : "Failed to remove run trigger");
     }
   };
 

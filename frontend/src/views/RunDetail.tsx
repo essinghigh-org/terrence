@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
+import { ApplyOutput } from "../components/ApplyOutput";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -326,7 +327,15 @@ function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element 
   if (status === "finished") return <CheckCircle2 className="size-5 text-emerald-600" aria-hidden="true" />;
   if (status === "errored" || status === "unreachable") return <XCircle className="size-5 text-red-600" aria-hidden="true" />;
   if (status === "canceled") return <AlertCircle className="size-5 text-gray-500" aria-hidden="true" />;
-  if (status === "running" || status === "queued") return <Clock className="size-5 text-blue-600" aria-hidden="true" />;
+  if (status === "running") {
+    return (
+      <span className="relative flex size-5 items-center justify-center">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-blue-400 opacity-75" />
+        <Clock className="relative size-4 text-blue-600" aria-hidden="true" />
+      </span>
+    );
+  }
+  if (status === "queued") return <Clock className="size-5 text-blue-600" aria-hidden="true" />;
   return <Circle className="size-5 text-gray-300" aria-hidden="true" />;
 }
 
@@ -904,7 +913,7 @@ export function RunDetail({
           <details
             aria-labelledby="plan-heading"
             className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
-            open={["running", "finished", "errored", "unreachable"].includes(planStatus) || undefined}
+            open={["running", "finished", "errored", "unreachable"].includes(planStatus)}
           >
             <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1071,7 +1080,7 @@ export function RunDetail({
             className={`overflow-hidden rounded-md border bg-white shadow-sm ${
               ["errored", "unreachable"].includes(applyStatus) ? "border-red-300" : "border-gray-200"
             }`}
-            open={["running", "errored", "unreachable"].includes(applyStatus) || undefined}
+            open={["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
           >
             <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1105,6 +1114,16 @@ export function RunDetail({
                 </div>
               </div>
             </summary>
+
+            {applyStatus !== "pending" && (
+              <ApplyOutput
+                runId={runId}
+                status={status}
+                applyStatus={applyStatus}
+                applyLogs={applyLogs}
+              />
+            )}
+
             {["errored", "unreachable"].includes(applyStatus) && (
               <section aria-labelledby="apply-diagnostics-heading" className="border-t border-red-200 bg-red-50/70 px-5 py-4">
                 <h3 id="apply-diagnostics-heading" className="text-sm font-semibold text-red-900">Diagnostics</h3>
