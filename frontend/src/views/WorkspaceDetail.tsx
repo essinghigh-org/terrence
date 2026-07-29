@@ -36,9 +36,14 @@ type Workspace = {
 }
 
 type RunSummary = {
+  id?: string;
   attributes: {
     message?: string | null;
     status: string;
+    "plan-resource-additions"?: number;
+    "plan-resource-changes"?: number;
+    "plan-resource-destructions"?: number;
+    [key: string]: unknown;
   };
 }
 
@@ -205,8 +210,35 @@ export function WorkspaceDetail(): React.JSX.Element {
                 <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
                    <h3 className="text-base font-semibold text-gray-900">Resources</h3>
                 </div>
-                <div className="p-5 text-center text-sm text-gray-500 py-12">
-                   No resource data available yet.
+                <div className="p-5">
+                  {latestRun != null && (latestRun.attributes["plan-resource-additions"] != null || latestRun.attributes["plan-resource-changes"] != null || latestRun.attributes["plan-resource-destructions"] != null) ? (
+                    <div className="flex items-center justify-center gap-6 py-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-emerald-600">{latestRun.attributes["plan-resource-additions"] ?? 0}</div>
+                        <div className="text-xs text-gray-500 mt-1">To add</div>
+                      </div>
+                      <div className="w-px h-10 bg-gray-200" />
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600">{latestRun.attributes["plan-resource-changes"] ?? 0}</div>
+                        <div className="text-xs text-gray-500 mt-1">To change</div>
+                      </div>
+                      <div className="w-px h-10 bg-gray-200" />
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-red-600">{latestRun.attributes["plan-resource-destructions"] ?? 0}</div>
+                        <div className="text-xs text-gray-500 mt-1">To destroy</div>
+                      </div>
+                    </div>
+                  ) : latestRun != null && latestRun.attributes.status === "applied" ? (
+                    <div className="p-5 text-center text-sm text-gray-500">
+                      <CheckCircle2 className="size-8 text-emerald-500 mx-auto mb-2" />
+                      <p>Resources managed. Run a plan to see resource changes.</p>
+                    </div>
+                  ) : (
+                    <div className="p-5 text-center text-sm text-gray-500">
+                      <Play className="size-8 text-gray-300 mx-auto mb-2" />
+                      <p>Start a run to plan your infrastructure.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
