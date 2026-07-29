@@ -4,6 +4,7 @@ import { agentPools, runs, workspaces, configurationVersions, organizations, log
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
 import { runResource, planResource, applyResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
+import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
 import { authPlugin } from "../auth";
@@ -154,6 +155,15 @@ async function createRun(
   if (cvId !== undefined) {
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
+  } else if (workspace.vcsRepo !== null && workspace.vcsRepo.identifier !== undefined && workspace.vcsRepo.branch !== undefined) {
+    // Auto-create a configuration version from VCS for manual runs
+    const result = await createConfigurationVersionFromVcs(workspace);
+    if (typeof result === "object" && "error" in result) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] };
+    }
+    cvId = result;
+    configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
   }
   if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
   const id = crypto.randomUUID();
