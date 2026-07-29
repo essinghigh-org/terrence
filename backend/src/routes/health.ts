@@ -19,6 +19,27 @@ function prometheusLabel(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
 }
 
+async function readinessResponse(set: SetCtx["set"]): Promise<unknown> {
+  let dbOk = true;
+  try {
+    await db.query.users.findFirst();
+  } catch {
+    dbOk = false;
+  }
+  const status = dbOk ? "OK" : "ERROR";
+  if (!dbOk) (set as { status: number }).status = 503;
+  return {
+    node: "terrence-node-1",
+    status,
+    checks: [
+      { check: "database", status: dbOk ? "OK" : "ERROR" },
+      { check: "disk", status: "OK" },
+      { check: "task-worker", status: "OK" },
+      { check: "archivist", status: "OK" },
+    ],
+  };
+}
+
 export const healthRoutes = new Elysia({ name: "health" })
   .use(authPlugin)
   .get("/.well-known/terraform.json", (): Record<string, unknown> => ({
@@ -109,46 +130,8 @@ export const healthRoutes = new Elysia({ name: "health" })
       return { status: "not_ready" };
     }
   })
-  .get("/api/v1/health/readiness", async ({ set }: SetCtx): Promise<unknown> => {
-    let dbOk = true;
-    try {
-      await db.query.users.findFirst();
-    } catch {
-      dbOk = false;
-    }
-    const status = dbOk ? "OK" : "ERROR";
-    if (!dbOk) (set as { status: number }).status = 503;
-    return {
-      node: "terrence-node-1",
-      status,
-      checks: [
-        { check: "database", status: dbOk ? "OK" : "ERROR" },
-        { check: "disk", status: "OK" },
-        { check: "task-worker", status: "OK" },
-        { check: "archivist", status: "OK" },
-      ],
-    };
-  })
-  .get("/api/v1/nodes/readiness", async ({ set }: SetCtx): Promise<unknown> => {
-    let dbOk = true;
-    try {
-      await db.query.users.findFirst();
-    } catch {
-      dbOk = false;
-    }
-    const status = dbOk ? "OK" : "ERROR";
-    if (!dbOk) (set as { status: number }).status = 503;
-    return {
-      node: "terrence-node-1",
-      status,
-      checks: [
-        { check: "database", status: dbOk ? "OK" : "ERROR" },
-        { check: "disk", status: "OK" },
-        { check: "task-worker", status: "OK" },
-        { check: "archivist", status: "OK" },
-      ],
-    };
-  })
+  .get("/api/v1/health/readiness", async ({ set }: SetCtx): Promise<unknown> => readinessResponse(set))
+  .get("/api/v1/nodes/readiness", async ({ set }: SetCtx): Promise<unknown> => readinessResponse(set))
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
     version: process.env.BUILD_VERSION ?? "dev",
     build: process.env.BUILD_SHA ?? "unknown",
