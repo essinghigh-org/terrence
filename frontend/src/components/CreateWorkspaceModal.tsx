@@ -238,42 +238,6 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-1">
-                    <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                      Repository Identifier
-                    </label>
-                    <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
-                  </div>
-
-                  {vcsRepositories.length > 0 && (
-                    <select
-                      id="vcs-repo-select"
-                      aria-label="Accessible repositories dropdown"
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
-                      value={vcsIdentifier}
-                      onChange={(e): void => { setVcsIdentifier(e.target.value); }}
-                      disabled={loading}
-                    >
-                      <option value="">-- Choose an accessible repository --</option>
-                      {vcsRepositories.map((repo): React.JSX.Element => (
-                        <option key={repo.identifier} value={repo.identifier}>
-                          {repo.identifier}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-
-                  <Input
-                    id="vcs-identifier"
-                    value={vcsIdentifier}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
-                    placeholder={vcsReposLoading ? "Fetching accessible repositories…" : "e.g. hashicorp/terraform"}
-                    disabled={loading || vcsReposLoading}
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2">
                   <label htmlFor="vcs-connection" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                     VCS Connection
                   </label>
@@ -303,6 +267,46 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                         ? "No registered connections are available. Add one in organization VCS settings."
                         : "Choose a registered GitHub App or OAuth connection."}
                   </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="vcs-identifier" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Repository Identifier
+                    </label>
+                    <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
+                  </div>
+
+                  {vcsReposLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-500 py-1">
+                      <Spinner className="size-3.5" /> Loading accessible repositories…
+                    </div>
+                  ) : vcsRepositories.length > 0 ? (
+                    <select
+                      id="vcs-repo-select"
+                      aria-label="Accessible repositories dropdown"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm font-mono"
+                      value={vcsIdentifier}
+                      onChange={(e): void => { setVcsIdentifier(e.target.value); }}
+                      disabled={loading}
+                    >
+                      <option value="">-- Select from accessible repositories --</option>
+                      {vcsRepositories.map((repo): React.JSX.Element => (
+                        <option key={repo.identifier} value={repo.identifier}>
+                          {repo.identifier}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+
+                  <Input
+                    id="vcs-identifier"
+                    value={vcsIdentifier}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
+                    placeholder={vcsReposLoading ? "Fetching accessible repositories…" : "e.g. organization/repository"}
+                    disabled={loading || vcsReposLoading}
+                  />
                 </div>
               </div>
             )}

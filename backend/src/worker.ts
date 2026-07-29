@@ -303,6 +303,9 @@ function infracostEnvironment(): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && (key === "PATH" || key.startsWith("INFRACOST_"))) environment[key] = value;
   }
+  if (process.env.INFRACOST_API_KEY !== undefined && process.env.INFRACOST_API_KEY !== "") {
+    environment.INFRACOST_API_KEY = process.env.INFRACOST_API_KEY;
+  }
   return environment;
 }
 
@@ -317,6 +320,17 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     "pending-at": statusTimestamps["cost-estimating-at"] ?? new Date().toISOString(),
     "finished-at": null,
   };
+
+  if (process.env.INFRACOST_ENABLED !== "true") {
+    await writeLog(runId, "plan", "[terrence] Cost estimation is disabled. Skipping.");
+    const estimate = emptyCostEstimate("skipped", {
+      ...timestamps,
+      "finished-at": new Date().toISOString(),
+    });
+    await writeCostEstimateArtifact(runId, estimate);
+    return;
+  }
+
   const inputPath = join(executionDir, "terrence.infracost-plan.json");
 
   try {
@@ -1032,15 +1046,28 @@ export async function executeRun(runId: string): Promise<void> {
       }
       await updateRunStatus(runId, "post_plan_completed");
 
+      const hasNoResourceChanges = resourceCounts.additions === 0
+        && resourceCounts.changes === 0
+        && resourceCounts.destructions === 0;
+
       if (run.planOnly) {
         await updateRunStatus(runId, "planned_and_finished");
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
-      } else if (run.autoApply) {
-        await writeLog(runId, "plan", `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`);
+      } else if (run.autoApply || (workspace.autoApply && run.autoApply !== false)) {
+        await writeLog(
+          runId,
+          "plan",
+          hasNoResourceChanges
+            ? `[terrence] Plan has no resource changes. Automatically applying to update workspace state.`
+            : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
+        );
         keepPlan = true;
         await executeApply(runId);
+      } else if (hasNoResourceChanges) {
+        await writeLog(runId, "plan", `[terrence] Plan has no resource changes. Run finished.`);
+        await updateRunStatus(runId, "planned_and_finished");
       } else {
         await updateRunStatus(runId, "planned");
         queueRunNotification(runId, "run:needs_attention", "planned");

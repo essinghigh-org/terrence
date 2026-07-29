@@ -334,57 +334,13 @@ export function WorkspaceVcs({
         <CardContent>
           <FieldGroup>
             <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
-              {vcsRepositories.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  <Select
-                    id="vcs-repo-select"
-                    value={identifier}
-                    onValueChange={setIdentifier}
-                    disabled={!canUpdate}
-                  >
-                    <SelectItem value="">-- Choose an accessible repository --</SelectItem>
-                    {vcsRepositories.map((repo) => (
-                      <SelectItem key={repo.identifier} value={repo.identifier}>
-                        {repo.identifier}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                  <Input
-                    id="vcs-identifier"
-                    value={identifier}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                      setIdentifier(event.target.value);
-                    }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                      setIdentifier(event.currentTarget.value);
-                    }}
-                    placeholder="Or enter custom path e.g. organization/repository"
-                    disabled={!canUpdate}
-                  />
-                </div>
-              ) : (
-                <Input
-                  id="vcs-identifier"
-                  value={identifier}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setIdentifier(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setIdentifier(event.currentTarget.value);
-                  }}
-                  placeholder="organization/repository"
-                  disabled={!canUpdate}
-                />
-              )}
-              <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
-            </Field>
-            <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="vcs-connection">VCS connection</FieldLabel>
               <Select
                 id="vcs-connection"
                 value={connectionValue}
-                onValueChange={setConnectionValue}
+                onValueChange={(val: string): void => {
+                  setConnectionValue(val);
+                }}
                 disabled={!canUpdate || connectionsLoading}
               >
                 <SelectItem value="">
@@ -407,6 +363,40 @@ export function WorkspaceVcs({
                     : "Choose a registered GitHub App or OAuth connection."}
                 </FieldDescription>
               )}
+            </Field>
+
+            <Field data-disabled={!canUpdate}>
+              <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
+              <div className="flex flex-col gap-2">
+                {vcsRepositories.length > 0 && (
+                  <Select
+                    id="vcs-repo-select"
+                    value={identifier}
+                    onValueChange={setIdentifier}
+                    disabled={!canUpdate}
+                  >
+                    <SelectItem value="">-- Select from accessible repositories --</SelectItem>
+                    {vcsRepositories.map((repo) => (
+                      <SelectItem key={repo.identifier} value={repo.identifier}>
+                        {repo.identifier}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                )}
+                <Input
+                  id="vcs-identifier"
+                  value={identifier}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    setIdentifier(event.target.value);
+                  }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setIdentifier(event.currentTarget.value);
+                  }}
+                  placeholder="e.g. organization/repository"
+                  disabled={!canUpdate}
+                />
+              </div>
+              <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
             </Field>
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>

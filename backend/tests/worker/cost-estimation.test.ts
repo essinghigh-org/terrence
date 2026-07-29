@@ -13,6 +13,7 @@ async function runWorkerScript(script: string, env: Readonly<Record<string, stri
         TEST_DIR: testDir,
         DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
         STORAGE_DIR: join(testDir, "storage"),
+        INFRACOST_ENABLED: "true",
         ...env,
       },
       stdout: "pipe",

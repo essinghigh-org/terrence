@@ -702,7 +702,7 @@ export function RunDetail({
   const costPending = ["queued", "pending"].includes(costStatus);
   const costFailed = ["errored", "canceled"].includes(costStatus);
   const showCostEstimate = costEstimate !== null
-    || ["cost_estimating", "cost_estimated"].includes(status);
+    && !["skipped", "disabled", "unavailable"].includes(costStatus);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>

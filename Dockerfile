@@ -18,7 +18,9 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     STORAGE_DIR=/app/backend/storage \
-    DATABASE_URL=file:/app/backend/storage/terrence.db
+    DATABASE_URL=file:/app/backend/storage/terrence.db \
+    INFRACOST_ENABLED=false \
+    INFRACOST_API_KEY=""
 
 # Install system dependencies needed for OpenTofu & Terraform
 RUN apt-get update && apt-get install -y \

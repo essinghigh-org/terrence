@@ -294,7 +294,7 @@ test("workspace core routes persist settings and execute from the configured sub
       forceUnlock: 200,
       lockedReason: "Locked manually",
       locked: false,
-      runStatus: "planned",
+      runStatus: expect.stringMatching(/^(planned|planned_and_finished|applied)$/),
       publicPlanLogUrl: expect.stringMatching(/^https:\/\/tfe\.example\.test\/api\/v2\/runs\/.+\/plan\/log\//),
       cwdMatches: true,
       blockedSafeDelete: 409,

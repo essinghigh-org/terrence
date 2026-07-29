@@ -239,7 +239,10 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const connectionId = params.connection_id ?? "";
+    let connectionId = params.connection_id ?? "";
+    if (connectionId.startsWith("github-app:")) connectionId = connectionId.slice("github-app:".length);
+    if (connectionId.startsWith("oauth-token:")) connectionId = connectionId.slice("oauth-token:".length);
+
     const repos: Array<{ id: string; type: string; attributes: { identifier: string; name: string } }> = [];
 
     // 1. Check if connection is GitHub App Installation
