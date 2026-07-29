@@ -37,6 +37,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     }));
 
   beforeAll(async () => {
+    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
     await db.insert(organizationMemberships).values([

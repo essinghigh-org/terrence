@@ -11,6 +11,7 @@ import {
   users,
   workspaces,
 } from "../db/schema";
+import { validateExternalUrl } from "./utils";
 
 type NotificationConfiguration = Readonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -49,6 +50,11 @@ export async function postNotification(
 
   let lastResponse: Response | undefined;
   let lastError = "";
+  const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
+  const urlError = validateExternalUrl(configuration.url, allowPrivate);
+  if (urlError !== null) {
+    return { body: urlError, code: "422", headers: {} as Readonly<Record<string, readonly string[]>>, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
+  }
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       lastResponse = await fetch(configuration.url, {

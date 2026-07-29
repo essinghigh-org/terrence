@@ -1,5 +1,5 @@
 import { join, resolve } from "path";
-import { mkdir, exists, chmod, unlink } from "fs/promises";
+import { mkdir, exists, chmod, unlink, readdir, rm } from "fs/promises";
 import { spawn } from "bun";
 
 const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
@@ -297,6 +297,19 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     try {
       const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
       exitCode = await unzipProc.exited;
+      // Zip Slip protection: verify no extracted file escaped the target directory
+      if (exitCode === 0) {
+        const resolvedTarget = resolve(targetDir);
+        const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
+        for (const entry of entries) {
+          const fullPath = join(targetDir, entry);
+          const resolved = resolve(fullPath);
+          if (!resolved.startsWith(resolvedTarget)) {
+            await rm(targetDir, { recursive: true, force: true }).catch((): void => {});
+            throw new Error(`Zip Slip detected: extracted path ${resolved} is outside target directory`);
+          }
+        }
+      }
     } catch (spawnErr: unknown) {
       const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
       console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);

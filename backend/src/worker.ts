@@ -40,7 +40,7 @@ import { mkdir, rm, writeFile, readFile, exists, readdir } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
-import { FINAL_RUN_STATUSES, signedApiURL } from "./lib/utils";
+import { FINAL_RUN_STATUSES, signedApiURL, validateExternalUrl } from "./lib/utils";
 import {
   emptyCostEstimate,
   parseInfracostOutput,
@@ -631,7 +631,11 @@ async function executeRunTasks(
     let status = "running";
     let message: string | null = null;
     let resultUrl: string | null = null;
-    try {
+    const urlError = validateExternalUrl(task.url, process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true");
+    if (urlError !== null) {
+      status = "failed";
+      message = urlError;
+    } else try {
       const response = await fetch(task.url, {
         method: "POST",
         headers,
@@ -1305,7 +1309,9 @@ async function runPolicyChecks(
         const opaQuery = typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
           ? policy.query
           : "data";
-        const opaProc = spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuery], {
+        // Validate OPA query to prevent argument injection — only allow safe query syntax
+        const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
+        const opaProc = spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe], {
           cwd: workDir,
           env: { PATH: process.env.PATH ?? "" },
           stdout: "pipe",

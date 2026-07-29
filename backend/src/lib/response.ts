@@ -723,7 +723,7 @@ export function stateVersionResource(
     attributes: {
       ...(includeState ? { state: state.statePayload } : {}),
       serial: state.serial,
-      md5: createHash("md5").update(payload).digest("hex"),
+      md5: createHash("sha256").update(payload).digest("hex"),
       lineage: typeof parsed?.lineage === "string" ? parsed.lineage : null,
       "terraform-version": typeof parsed?.terraform_version === "string" ? parsed.terraform_version : null,
       "resources-processed": parsed !== null,

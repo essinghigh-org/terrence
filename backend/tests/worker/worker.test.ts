@@ -302,7 +302,7 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 });
 
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { createHmac } = await import("node:crypto");
     const { db } = await import("./src/db/index.ts");
     const {

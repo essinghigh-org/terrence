@@ -8,7 +8,7 @@ import {
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
 } from "../db/schema";
 import { and, desc, eq, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
@@ -445,6 +445,19 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
     .digest("hex"));
   const actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+const PRIVATE_IP_PATTERN = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.|::1$|localhost$)/i;
+
+export function validateExternalUrl(url: string, allowPrivate = false): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
+    if (!allowPrivate && PRIVATE_IP_PATTERN.test(parsed.hostname)) return "URL points to a private or loopback address";
+    return null; // valid
+  } catch {
+    return "Invalid URL";
+  }
 }
 
 export function logChunk(output: string, request: RequestWithUrl): Uint8Array {
