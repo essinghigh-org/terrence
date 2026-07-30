@@ -17,6 +17,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -68,6 +75,72 @@ export function AdminDashboard(): React.JSX.Element {
   const [auditLogs, setAuditLogs] = useState<DataItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+
+  // Create user form state
+  const [newUsername, setNewUsername] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newIsAdmin, setNewIsAdmin] = useState(false);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createUserError, setCreateUserError] = useState<string | null>(null);
+
+  const resetCreateForm = (): void => {
+    setNewUsername("");
+    setNewEmail("");
+    setNewPassword("");
+    setNewIsAdmin(false);
+    setCreateUserError(null);
+  };
+
+  const handleCreateUser = async (e: React.SyntheticEvent): Promise<void> => {
+    e.preventDefault();
+    const username = newUsername.trim();
+    if (username === "" || newPassword.length < 10) {
+      setCreateUserError("Username is required and password must be at least 10 characters.");
+      return;
+    }
+    setCreatingUser(true);
+    setCreateUserError(null);
+    try {
+      await fetchApi("/api/v2/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "users",
+            attributes: {
+              username,
+              email: newEmail.trim() !== "" ? newEmail.trim() : null,
+              password: newPassword,
+              "is-site-admin": newIsAdmin,
+            },
+          },
+        }),
+      });
+      setCreateDialogOpen(false);
+      resetCreateForm();
+      void loadAdminData();
+      toast.add({ title: "User created", type: "success" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error creating user";
+      setCreateUserError(msg);
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (id: string): Promise<void> => {
+    try {
+      await fetchApi(`/api/v2/admin/users/${id}`, { method: "DELETE" });
+      setDeleteUserId(null);
+      void loadAdminData();
+      toast.add({ title: "User deleted", type: "success" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error deleting user";
+      toast.add({ title: "Could not delete user", description: msg, type: "error" });
+    }
+  };
 
   // Version form state
   const [newVersion, setNewVersion] = useState("");
@@ -228,8 +301,20 @@ export function AdminDashboard(): React.JSX.Element {
           {activeTab === "users" && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Registered Users</CardTitle>
-                <CardDescription>View user accounts across the TFE instance</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg">Registered Users</CardTitle>
+                    <CardDescription>Manage user accounts across this instance. Use the admin user creation form to add local accounts.</CardDescription>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="gap-2"
+                    onClick={(): void => { setCreateDialogOpen(true); }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Create user
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="rounded-md border overflow-hidden">
@@ -239,13 +324,15 @@ export function AdminDashboard(): React.JSX.Element {
                         <th className="px-4 py-3">Username</th>
                         <th className="px-4 py-3">Email</th>
                         <th className="px-4 py-3">Site Admin</th>
+                        <th className="px-4 py-3">Status</th>
                         <th className="px-4 py-3">User ID</th>
+                        <th className="px-4 py-3">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {users.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                          <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
                             No users found.
                           </td>
                         </tr>
@@ -263,7 +350,89 @@ export function AdminDashboard(): React.JSX.Element {
                                 <span className="text-gray-400 text-xs">No</span>
                               )}
                             </td>
+                            <td className="px-4 py-3">
+                              {u.attributes["is-suspended"] === true ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 border border-red-200">
+                                  Suspended
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">Active</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-xs font-mono text-gray-400">{u.id}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex gap-1.5 flex-wrap">
+                                {/* Promote / Demote Admin */}
+                                {u.attributes["is-site-admin"] === true ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/revoke_admin`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges revoked", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to revoke admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Demote
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/grant_admin`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges granted", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to grant admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Promote
+                                  </Button>
+                                )}
+                                {/* Suspend / Unsuspend */}
+                                {u.attributes["is-suspended"] === true ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/unsuspend`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "User unsuspended", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to unsuspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Unsuspend
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/suspend`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "User suspended", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to suspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Suspend
+                                  </Button>
+                                )}
+                                {/* Delete */}
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  className="h-7 text-xs"
+                                  onClick={(): void => { setDeleteUserId(u.id); }}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </td>
                           </tr>
                         ))
                       )}
@@ -583,6 +752,81 @@ export function AdminDashboard(): React.JSX.Element {
         onConfirm={async (): Promise<void> => {
           if (versionToDelete !== null) {
             await handleDeleteVersion(versionToDelete);
+          }
+        }}
+      />
+
+      {/* Create User Dialog */}
+      <Dialog open={createDialogOpen} onOpenChange={(open: boolean): void => { if (!open) { setCreateDialogOpen(false); resetCreateForm(); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New User</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateUser} className="flex flex-col gap-4">
+            {createUserError !== null && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{createUserError}</div>
+            )}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-700">Username *</label>
+              <Input
+                placeholder="jdoe"
+                value={newUsername}
+                onChange={(e): void => { setNewUsername(e.target.value); }}
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-700">Email (optional)</label>
+              <Input
+                type="email"
+                placeholder="jdoe@example.com"
+                value={newEmail}
+                onChange={(e): void => { setNewEmail(e.target.value); }}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-700">Password *</label>
+              <Input
+                type="password"
+                placeholder="At least 10 characters"
+                value={newPassword}
+                onChange={(e): void => { setNewPassword(e.target.value); }}
+                required
+                minLength={10}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newIsAdmin}
+                onChange={(e): void => { setNewIsAdmin(e.target.checked); }}
+                className="rounded border-gray-300"
+              />
+              Grant site admin privileges
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); resetCreateForm(); }} disabled={creatingUser}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={creatingUser}>
+                {creatingUser ? "Creating..." : "Create User"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete User Confirmation */}
+      <ConfirmDialog
+        open={deleteUserId !== null}
+        onOpenChange={(open): void => { if (!open) setDeleteUserId(null); }}
+        title="Delete User"
+        description="Are you sure you want to permanently delete this user? This action cannot be undone. All associated data will be removed."
+        confirmText="Delete User"
+        confirmVariant="destructive"
+        onConfirm={async (): Promise<void> => {
+          if (deleteUserId !== null) {
+            await handleDeleteUser(deleteUserId);
           }
         }}
       />

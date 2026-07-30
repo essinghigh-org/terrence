@@ -168,4 +168,59 @@ describe("Admin Operations API contract", () => {
     // Clean up
     await request(`/api/v2/admin/opa-versions/${opaId}`, "DELETE");
   });
+
+  it("supports admin user management: create, promote, suspend, delete", async () => {
+    const newUserId = `admin-created-${crypto.randomUUID()}`;
+
+    // 1. Admin creates a new user
+    const createRes = await request("/api/v2/admin/users", "POST", {
+      data: {
+        type: "users",
+        attributes: {
+          username: newUserId,
+          email: `${newUserId}@example.com`,
+          password: "password12345",
+        },
+      },
+    });
+    expect(createRes.status).toBe(201);
+    const createBody = await createRes.json();
+    expect(createBody.data.attributes.username).toBe(newUserId);
+    expect(createBody.data.attributes.email).toBe(`${newUserId}@example.com`);
+
+    // 2. Created user can be found in admin list
+    const listRes = await request(`/api/v2/admin/users?q=${newUserId}`);
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.data.length).toBeGreaterThan(0);
+    const matched = listBody.data.find((u: any) => u.attributes.username === newUserId);
+    expect(matched).toBeDefined();
+    expect(matched.attributes["is-site-admin"]).toBeFalse();
+
+    // 3. Promote to site admin
+    const promoteRes = await request(`/api/v2/admin/users/${createBody.data.id}/actions/grant_admin`, "POST");
+    expect(promoteRes.status).toBe(200);
+    const promoteBody = await promoteRes.json();
+    expect(promoteBody.data.attributes["is-site-admin"]).toBeTrue();
+
+    // 4. Suspend user
+    const suspendRes = await request(`/api/v2/admin/users/${createBody.data.id}/actions/suspend`, "POST");
+    expect(suspendRes.status).toBe(200);
+    const suspendBody = await suspendRes.json();
+    expect(suspendBody.data.attributes["is-suspended"]).toBeTrue();
+
+    // 5. Unsuspend user
+    const unsuspendRes = await request(`/api/v2/admin/users/${createBody.data.id}/actions/unsuspend`, "POST");
+    expect(unsuspendRes.status).toBe(200);
+    const unsuspendBody = await unsuspendRes.json();
+    expect(unsuspendBody.data.attributes["is-suspended"]).toBeFalse();
+
+    // 6. Delete user
+    const delRes = await request(`/api/v2/admin/users/${createBody.data.id}`, "DELETE");
+    expect(delRes.status).toBe(204);
+
+    // 7. Verify user is gone
+    const getRes = await request(`/api/v2/admin/users/${createBody.data.id}`);
+    expect(getRes.status).toBe(404);
+  });
 });

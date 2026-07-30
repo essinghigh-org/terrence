@@ -4,7 +4,9 @@ import { users, organizations, workspaces, runs, adminTerraformVersions, adminSe
 import { eq, and, or, desc, count, notInArray, like, SQL } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
+import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
+import * as bcrypt from "bcryptjs";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -315,6 +317,49 @@ export const adminRoutes = new Elysia({ name: "admin" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     return { data: allUsers.map((u: UserItem) => adminUserResource(u)), ...pagination(request, number, size, totalCount) };
+  })
+  .post("/api/v2/admin/users", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const username = typeof attrs.username === "string" ? attrs.username.trim() : "";
+    const email = typeof attrs.email === "string" ? attrs.email.trim() : null;
+    const password = typeof attrs.password === "string" ? attrs.password : "";
+    const isSiteAdmin = attrs["is-site-admin"] === true;
+
+    if (username === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] };
+    }
+    if (password.length < 10) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Password must be at least 10 characters" }] };
+    }
+
+    const existing = await db.query.users.findFirst({ where: eq(users.username, username) });
+    if (existing !== undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = `user-${crypto.randomUUID()}`;
+
+    try {
+      await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
+    } catch (e: unknown) {
+      if (isUniqueConstraintError(e)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
+      }
+      throw e;
+    }
+
+    const created = await db.query.users.findFirst({ where: eq(users.id, id) });
+    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    (set as { status: number }).status = 201;
+    return { data: adminUserResource(created) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params.user_id ?? "";
