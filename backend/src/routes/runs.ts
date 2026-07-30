@@ -198,7 +198,7 @@ async function createRun(
   const logToken = crypto.randomUUID();
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
   const nowIso = new Date(createdAt).toISOString();
-  const finalMsg = message !== "" ? message : "Queued manually";
+  const finalMsg = message !== "" ? message : "Triggered via UI";
   const origin = originForConfiguration(configurationVersion);
   await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
   await auditLog("create", "runs", id, user?.id ?? null, workspace.orgId, {

@@ -21,7 +21,16 @@ type StateItem = {
 };
 
 function stateStatus(value: unknown): string {
-  return typeof value === "string" && value !== "" ? value.replace(/_/g, " ") : "Finalized";
+  if (typeof value !== "string" || value === "") return "Finalized";
+  const labels: Record<string, string> = {
+    pending: "Pending",
+    finalized: "Finalized",
+  };
+  return labels[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
+}
+
+function runStatusLabel(value: string): string {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
 }
 
 type StateHistoryProps = {
@@ -178,16 +187,16 @@ export function StateHistory({ workspaceId, orgName, workspaceName }: StateHisto
                         to={`/app/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}/runs/${encodeURIComponent(s.relationships.run.data.id)}`}
                         className="text-primary hover:underline"
                       >
-                        {typeof s.attributes["run-status"] === "string"
-                          ? (s.attributes["run-status"]).replace(/_/g, " ")
-                          : "run"}
+                        {typeof s.attributes["run-message"] === "string" && s.attributes["run-message"] !== ""
+                          ? s.attributes["run-message"]
+                          : "Manual run"}
                       </Link>
-                      {typeof s.attributes["run-message"] === "string" && s.attributes["run-message"] !== "" && (
-                        <span className="text-muted-foreground max-w-40 truncate" title={s.attributes["run-message"]}>
-                          {s.attributes["run-message"]}
-                        </span>
-                      )}
-                      <span className="text-[11px] capitalize text-muted-foreground">{stateStatus(s.attributes["status"])}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {typeof s.attributes["run-status"] === "string"
+                          ? runStatusLabel(s.attributes["run-status"])
+                          : "Run Status Unknown"}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">{stateStatus(s.attributes["status"])}</span>
                     </div>
                   ) : "—"}
                 </TableCell>
