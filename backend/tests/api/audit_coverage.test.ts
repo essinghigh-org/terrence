@@ -44,6 +44,7 @@ beforeAll(async () => {
   await db.insert(users).values({
     id: userId,
     username: `audit-user-${suffix}`,
+    email: `audit-user-${suffix}@example.com`,
     passwordHash: "unused",
   });
   await db.insert(apiTokens).values({
@@ -134,6 +135,29 @@ describe("audit coverage", () => {
       details: { name: workspaceName, projectId },
     });
     expect(JSON.stringify([organizationAudit?.details, workspaceAudit?.details])).not.toContain(secretMarker);
+  });
+
+  it("returns authorized audit trails with actor identity", async () => {
+    const [organizationTrailersResponse, auditTrailsResponse] = await Promise.all([
+      request("/api/v2/organization-audit-trailers"),
+      request("/api/v2/audit-trails"),
+    ]);
+    expect(organizationTrailersResponse.status).toBe(200);
+    expect(auditTrailsResponse.status).toBe(200);
+
+    for (const response of [organizationTrailersResponse, auditTrailsResponse]) {
+      const body = await response.json() as { data: { type: string; attributes: Record<string, unknown> }[] };
+      const entry = body.data.find(({ attributes }) => attributes["resource-id"] === orgId);
+      expect(entry).toBeDefined();
+      expect(entry).toMatchObject({
+        type: "audit-trails",
+        attributes: {
+          action: "create",
+          "actor-username": `audit-user-${suffix}`,
+          "actor-email": `audit-user-${suffix}@example.com`,
+        },
+      });
+    }
   });
 
   it("audits run creation with safe actor-aware activity details", async () => {

@@ -64,6 +64,8 @@ export function AdminDashboard(): React.JSX.Element {
     "resource-type"?: string;
 
     "resource-id"?: string | null;
+    "actor-username"?: string | null;
+    "actor-email"?: string | null;
     [key: string]: unknown;
   };
   type DataItem = { id: string; attributes: ItemAttrs };
@@ -861,12 +863,13 @@ export function AdminDashboard(): React.JSX.Element {
                         <th className="px-4 py-3">Action</th>
                         <th className="px-4 py-3">Resource Type</th>
                         <th className="px-4 py-3">Resource ID</th>
+                        <th className="px-4 py-3">Actor</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {auditLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                          <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
                             No audit log entries recorded.
                           </td>
                         </tr>
@@ -877,6 +880,12 @@ export function AdminDashboard(): React.JSX.Element {
                             <td className="px-4 py-3 font-medium text-gray-900">{log.attributes.action}</td>
                             <td className="px-4 py-3 text-gray-600">{log.attributes["resource-type"]}</td>
                             <td className="px-4 py-3 text-xs font-mono text-gray-400">{log.attributes["resource-id"] ?? "—"}</td>
+                            <td className="px-4 py-3 text-gray-600">
+                              {log.attributes["actor-username"] ?? log.attributes["actor-email"] ?? "System"}
+                              {log.attributes["actor-email"] !== null && log.attributes["actor-email"] !== undefined && (
+                                <span className="block text-xs text-gray-400">{log.attributes["actor-email"]}</span>
+                              )}
+                            </td>
                           </tr>
                         ))
                       )}

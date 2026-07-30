@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
-import { runTriggers, auditLogs, githubWebhookDeliveries, organizations, workspaces, workspaceVariables, type users } from "../db/schema";
+import { runTriggers, auditLogs, githubWebhookDeliveries, organizations, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
 import { workspaceVariableResource } from "../lib/response";
@@ -136,6 +136,43 @@ function webhookUnauthorized(set: SetObj, detail: string): { errors: { status: s
 function webhookUnprocessable(set: SetObj, detail: string): { errors: { status: string; title: string; detail: string }[] } {
   (set as { status: number }).status = 422;
   return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
+}
+
+type AuditLogItem = Readonly<typeof auditLogs.$inferSelect>;
+
+async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<Record<string, unknown>[]> {
+  const actorIds = [...new Set(logsList.map((log): string | null => log.userId).filter((id): id is string => id !== null))];
+  const actors = actorIds.length === 0
+    ? []
+    : await db.query.users.findMany({ where: inArray(users.id, actorIds), columns: { id: true, username: true, email: true } });
+  const actorsById = new Map(actors.map((actor): [string, { username: string; email: string | null }] => [actor.id, actor]));
+  return logsList.map((al: AuditLogItem): Record<string, unknown> => {
+    const actor = al.userId === null ? undefined : actorsById.get(al.userId);
+    return {
+      id: al.id,
+      type: "audit-trails",
+      attributes: {
+        action: al.action,
+        "resource-type": al.resourceType,
+        "resource-id": al.resourceId,
+        details: al.details,
+        "created-at": new Date(al.createdAt).toISOString(),
+        "actor-username": actor?.username ?? null,
+        "actor-email": actor?.email ?? null,
+      },
+    };
+  });
+}
+
+async function auditLogsForUser(user: Readonly<typeof users.$inferSelect>): Promise<AuditLogItem[]> {
+  if (user.isSiteAdmin === true) return db.query.auditLogs.findMany({ limit: 100, orderBy: [desc(auditLogs.createdAt)] });
+  const memberships = await db.query.organizationMemberships.findMany({
+    where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+    columns: { orgId: true },
+  });
+  const orgIds = memberships.map(({ orgId }): string => orgId);
+  if (orgIds.length === 0) return [];
+  return db.query.auditLogs.findMany({ where: inArray(auditLogs.orgId, orgIds), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
 }
 
 const webhookAcknowledged = {
@@ -383,22 +420,22 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .get("/api/v2/admin/audit-logs", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const logsList = await db.query.auditLogs.findMany({ limit: 100, orderBy: [desc(auditLogs.createdAt)] });
-    return { data: logsList.map((al: Readonly<typeof auditLogs.$inferSelect>): Record<string, unknown> => ({ id: al.id, type: "audit-logs", attributes: { action: al.action, "resource-type": al.resourceType, "resource-id": al.resourceId, details: al.details, "created-at": new Date(al.createdAt).toISOString() } })) };
+    return { data: (await auditTrailResources(logsList)).map((resource): Record<string, unknown> => ({ ...resource, type: "audit-logs" })) };
   })
   .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
-    return { data: logsList.map((al: Readonly<typeof auditLogs.$inferSelect>): Record<string, unknown> => ({ id: al.id, type: "audit-logs", attributes: { action: al.action, "resource-type": al.resourceType, "resource-id": al.resourceId, details: al.details, "created-at": new Date(al.createdAt).toISOString() } })) };
+    return { data: await auditTrailResources(logsList) };
   })
-  .get("/api/v2/organization-audit-trailers", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/organization-audit-trailers", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    return { data: [] };
+    return { data: await auditTrailResources(await auditLogsForUser(user)) };
   })
-  .get("/api/v2/audit-trails", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/audit-trails", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    return { data: [] };
+    return { data: await auditTrailResources(await auditLogsForUser(user)) };
   })
   // --- Cost Estimation ---
   .get("/api/v2/runs/:run_id/cost-estimate", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
