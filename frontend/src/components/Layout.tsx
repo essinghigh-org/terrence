@@ -57,7 +57,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "./ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button, buttonVariants } from "./ui/button";
 import { CommandPalette } from "./CommandPalette";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
@@ -172,6 +172,7 @@ export function Layout({
   const [mustChangePassword, setMustChangePassword] = useState<boolean | null>(null);
   const [siteAdmin, setSiteAdmin] = useState(false);
   const [accountName, setAccountName] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [organizationNames, setOrganizationNames] = useState<string[]>([]);
   const [organizationPermissions, setOrganizationPermissions] =
     useState<OrganizationPermissions | null>(null);
@@ -223,12 +224,14 @@ export function Layout({
               "is-site-admin"?: boolean;
               "must-change-password"?: boolean;
               username?: string;
+              "avatar-url"?: string;
             };
           };
         }).data?.attributes;
         setSiteAdmin(attributes?.["is-site-admin"] === true);
         setMustChangePassword(attributes?.["must-change-password"] === true);
         setAccountName(attributes?.username ?? "");
+        setAvatarUrl(attributes?.["avatar-url"] ?? "");
       }
       if (organizationsResult.status === "fulfilled") {
         setOrganizationNames(
@@ -879,11 +882,15 @@ export function Layout({
                 )}
               >
                 <Avatar className="size-6 rounded">
-                  <AvatarFallback className="rounded bg-background/15 text-background text-xs">
-                    {accountName === ""
-                      ? <UserRound aria-hidden="true" />
-                      : accountName.slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
+                  {avatarUrl !== "" ? (
+                    <AvatarImage src={avatarUrl} alt={accountName} className="rounded object-cover" />
+                  ) : (
+                    <AvatarFallback className="rounded bg-background/15 text-background text-xs">
+                      {accountName === ""
+                        ? <UserRound aria-hidden="true" />
+                        : accountName.slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  )}
                 </Avatar>
                 <ChevronDown className="size-3.5" data-icon="inline-end" />
               </DropdownMenuTrigger>

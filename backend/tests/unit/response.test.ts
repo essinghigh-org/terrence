@@ -58,10 +58,11 @@ describe("userResource", () => {
     expect(avatarUrl).toInclude("gravatar.com/avatar/");
   });
 
-  it("falls back to user id for avatar when email is empty", () => {
+  it("falls back to default avatar when email is empty", () => {
     const result = userResource({ id: "user-fallback", username: "y", email: "" });
     const avatarUrl = result.attributes["avatar-url"];
-    expect(avatarUrl).toInclude("user-fallback");
+    expect(avatarUrl).toInclude("gravatar.com/avatar/00000000000000000000000000000000");
+    expect(avatarUrl).toInclude("d=mp&f=y");
   });
 
   it("sets permissions for user type", () => {

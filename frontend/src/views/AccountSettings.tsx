@@ -10,6 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { KeyRound, Lock, MonitorSmartphone, Plus, ShieldCheck, Trash2, User } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -27,7 +28,7 @@ function formatSessionDate(value: string): string {
 }
 
 export function AccountSettings(): React.JSX.Element {
-  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean } };
+  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean; "avatar-url"?: string } };
   const location = useLocation();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
@@ -281,6 +282,20 @@ export function AccountSettings(): React.JSX.Element {
           <CardDescription>Your account details.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex items-center gap-4 mb-4">
+            <Avatar className="size-16">
+              {account?.attributes["avatar-url"] ? (
+                <AvatarImage src={account.attributes["avatar-url"]} alt={username} />
+              ) : (
+                <AvatarFallback className="text-lg">
+                  {username === "" ? <User /> : username.slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              )}
+            </Avatar>
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Your avatar is provided by <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline hover:no-underline">Gravatar</a> based on your email address.</p>
+            </div>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Username</label>
