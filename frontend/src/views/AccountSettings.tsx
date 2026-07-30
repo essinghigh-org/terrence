@@ -62,6 +62,13 @@ export function AccountSettings(): React.JSX.Element {
   const [sessionToRevoke, setSessionToRevoke] = useState<BrowserSession | null>(null);
   const [tokenToDelete, setTokenToDelete] = useState<{ id: string; desc: string } | null>(null);
 
+  // Multi-factor authentication
+  const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [mfaEnrollment, setMfaEnrollment] = useState<{ secret: string; "otpauth-url"?: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaLoaded, setMfaLoaded] = useState(false);
+
   /* ---- Data Loading ---- */
   useEffect((): void => {
     void loadAccount();
@@ -97,12 +104,80 @@ export function AccountSettings(): React.JSX.Element {
         void loadSessions();
         const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
         setTokens(tokensRes.data);
+        await loadMfa();
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load account";
       setError(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMfa(): Promise<void> {
+    try {
+      const response = await fetchApi("/account/mfa") as { data?: { attributes?: { enabled?: boolean } } };
+      setMfaEnabled(response.data?.attributes?.enabled === true);
+    } catch {
+      // Keep settings usable when connected to a server without MFA support.
+      setMfaEnabled(false);
+    } finally {
+      setMfaLoaded(true);
+    }
+  }
+
+  async function handleBeginMfaEnrollment(): Promise<void> {
+    setMfaLoading(true);
+    setError("");
+    try {
+      const response = await fetchApi("/account/mfa/enroll", { method: "POST" }) as {
+        data: { attributes: { secret: string; "otpauth-url"?: string } };
+      };
+      setMfaEnrollment(response.data.attributes);
+      setMfaCode("");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not start MFA enrollment");
+    } finally {
+      setMfaLoading(false);
+    }
+  }
+
+  async function handleConfirmMfaEnrollment(): Promise<void> {
+    if (mfaCode.trim() === "") return;
+    setMfaLoading(true);
+    setError("");
+    try {
+      await fetchApi("/account/mfa/verify", {
+        method: "POST",
+        body: JSON.stringify({ data: { attributes: { code: mfaCode.trim() } } }),
+      });
+      setMfaEnabled(true);
+      setMfaEnrollment(null);
+      setMfaCode("");
+      setSuccessMsg("Multi-factor authentication enabled");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "The MFA code could not be verified");
+    } finally {
+      setMfaLoading(false);
+    }
+  }
+
+  async function handleDisableMfa(): Promise<void> {
+    if (mfaCode.trim() === "") return;
+    setMfaLoading(true);
+    setError("");
+    try {
+      await fetchApi("/account/mfa", {
+        method: "DELETE",
+        body: JSON.stringify({ data: { attributes: { code: mfaCode.trim() } } }),
+      });
+      setMfaEnabled(false);
+      setMfaCode("");
+      setSuccessMsg("Multi-factor authentication disabled");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not disable MFA");
+    } finally {
+      setMfaLoading(false);
     }
   }
 
@@ -454,7 +529,58 @@ export function AccountSettings(): React.JSX.Element {
         </CardFooter>
       </Card>
 
-      {/* ── 4. Tokens ── */}
+      {/* ── 4. Multi-factor authentication ── */}
+      {!mustChangePassword && mfaLoaded && (
+        <Card id="mfa" className="scroll-mt-20">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <ShieldCheck className="size-4" />
+              Multi-factor authentication
+            </CardTitle>
+            <CardDescription>Protect sign-ins with a time-based authenticator code.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {mfaEnabled ? (
+              <>
+                <div className="flex items-center gap-2 text-sm">
+                  <Badge variant="secondary">Enabled</Badge>
+                  <span className="text-muted-foreground">Your account requires an authenticator code at sign in.</span>
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
+                  <Input id="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
+                </div>
+              </>
+            ) : mfaEnrollment !== null ? (
+              <div className="space-y-4 rounded-md border bg-muted/30 p-4">
+                <p className="text-sm">Add this account to your authenticator app, then enter the generated 6-digit code.</p>
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Setup key</p>
+                  <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
+                </div>
+                {mfaEnrollment["otpauth-url"] && <p className="text-xs text-muted-foreground">Or use this URI: <code className="select-all break-all">{mfaEnrollment["otpauth-url"]}</code></p>}
+                <div className="space-y-1.5">
+                  <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
+                  <Input id="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
+            )}
+          </CardContent>
+          <CardFooter className="gap-2">
+            {mfaEnabled ? (
+              <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleDisableMfa(); }}>Disable MFA</Button>
+            ) : mfaEnrollment !== null ? (
+              <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
+            ) : (
+              <Button type="button" disabled={mfaLoading} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
+            )}
+          </CardFooter>
+        </Card>
+      )}
+
+      {/* ── 5. Tokens ── */}
       <Card id="api-tokens" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
