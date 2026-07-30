@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { stateVersions, workspaces, type users } from "../db/schema";
+import { stateVersions, workspaces, runs, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
 import {
@@ -51,7 +51,24 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       db.select({ total: count() }).from(stateVersions).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: versions.map((sv: Readonly<typeof stateVersions.$inferSelect>): Record<string, unknown> => stateVersionResource(sv, request)), ...pagination(request, number, size, totalCount) };
+    // Batch-fetch runs for state versions that have runId set
+    const runIds = [...new Set(versions.map((sv): string | null => sv.runId).filter((id): id is string => id !== null))];
+    const runMap = new Map<string, Readonly<{ status: string; message: string | null }>>();
+    if (runIds.length > 0) {
+      const runRows = await db.query.runs.findMany({
+        where: inArray(runs.id, runIds),
+        columns: { id: true, status: true, message: true },
+      });
+      for (const r of runRows) {
+        runMap.set(r.id, { status: r.status, message: r.message });
+      }
+    }
+    return {
+      data: versions.map((sv: Readonly<typeof stateVersions.$inferSelect>): Record<string, unknown> =>
+        stateVersionResource(sv, request, false, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null),
+      ),
+      ...pagination(request, number, size, totalCount),
+    };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
@@ -66,7 +83,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       orderBy: [desc(stateVersions.serial)],
     });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: stateVersionResource(sv, request, true) };
+    const runData = sv.runId !== null
+      ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
+      : null;
+    return { data: stateVersionResource(sv, request, true, runData ?? null) };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
@@ -89,7 +109,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: stateVersionResource(sv, request, true) };
+    const runData = sv.runId !== null
+      ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
+      : null;
+    return { data: stateVersionResource(sv, request, true, runData ?? null) };
   })
   .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     if ((user === undefined || user === null) && orgId === null && teamId === null) {

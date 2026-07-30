@@ -589,7 +589,7 @@ export function WorkspaceDetail({
           </Card>
         )}
         {activeSection === "states" && canReadStateVersions && (
-          <StateHistory workspaceId={workspace.id} />
+          <StateHistory workspaceId={workspace.id} orgName={orgName ?? ""} workspaceName={workspace.attributes.name} />
         )}
         {activeSection === "variables" && canReadVariable && (
           <WorkspaceVariables

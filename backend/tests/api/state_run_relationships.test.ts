@@ -129,6 +129,61 @@ describe("TFE API v2 - State-Run Relationships & Locking", () => {
     expect(body).toBeDefined();
   });
 
+  test("should include run status and message in state version list", async () => {
+    // Create a state version linked to the existing run
+    const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "abc-123", resources: [] });
+    const b64State = Buffer.from(rawState).toString("base64");
+    await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { serial: 1, state: b64State },
+            relationships: {
+              run: { data: { id: runId, type: "runs" } },
+            },
+          },
+        }),
+      })
+    );
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toBeInstanceOf(Array);
+    expect(body.data.length).toBeGreaterThanOrEqual(1);
+
+    // The state version should have run relationship data
+    const svWithRun = (body.data as Array<Record<string, unknown>>).find(
+      (sv: Record<string, unknown>): boolean => {
+        const rels = sv.relationships as Record<string, unknown> | null | undefined;
+        const runRel = rels?.run as Record<string, unknown> | null | undefined;
+        return runRel?.data != null;
+      }
+    ) as Record<string, unknown> | undefined;
+    expect(svWithRun).toBeDefined();
+    const rels = (svWithRun as Record<string, unknown>).relationships as Record<string, unknown>;
+    const runRel = rels.run as Record<string, unknown>;
+    const runData = runRel.data as Record<string, unknown>;
+    expect(runData.id).toBe(runId);
+    const attrs = (svWithRun as Record<string, unknown>).attributes as Record<string, unknown>;
+
+    // Run attributes should be included
+    expect(attrs["run-status"]).toBeDefined();
+    expect(attrs["run-message"]).toBeDefined();
+    expect(attrs["run-status"]).toBe("pending");
+    expect(attrs["run-message"]).toBe("Test run");
+  });
+
   test("should reject state version creation if workspace is locked", async () => {
     // Lock workspace
     await app.handle(

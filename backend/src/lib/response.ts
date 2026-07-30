@@ -704,6 +704,7 @@ export function stateVersionResource(
   state: StateParam,
   request: Readonly<{ url: string }>,
   includeState = false,
+  run?: Readonly<{ status: string; message: string | null }> | null,
 ): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
   const rawResources = Array.isArray(parsed?.resources) ? parsed.resources : [];
@@ -786,6 +787,8 @@ export function stateVersionResource(
       "hosted-json-state-upload-url": pending && !jsonStateAvailable
         ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT")
         : null,
+      "run-status": run !== null && run !== undefined ? run.status : null,
+      "run-message": run !== null && run !== undefined ? run.message : null,
     },
     relationships: {
       workspace: { data: { id: state.workspaceId, type: "workspaces" } },

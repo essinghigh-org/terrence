@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,8 @@ type StateItem = {
 
 type StateHistoryProps = {
   workspaceId: string;
+  orgName?: string;
+  workspaceName?: string;
 }
 
 type LoadState =
@@ -34,7 +37,7 @@ function formatDate(value: unknown): string {
   return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
 }
 
-export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Element {
+export function StateHistory({ workspaceId, orgName, workspaceName }: StateHistoryProps): React.JSX.Element {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [retry, setRetry] = useState(0);
   const [selectedState, setSelectedState] = useState<string | null>(null);
@@ -162,7 +165,23 @@ export function StateHistory({ workspaceId }: StateHistoryProps): React.JSX.Elem
                 </TableCell>
                 <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>
                 <TableCell className="font-mono text-xs">
-                  {s.relationships?.run?.data?.id ?? "—"}
+                  {s.relationships?.run?.data?.id != null ? (
+                    <div className="flex flex-col gap-0.5">
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}/runs/${encodeURIComponent(s.relationships.run.data.id)}`}
+                        className="text-primary hover:underline"
+                      >
+                        {typeof s.attributes["run-status"] === "string"
+                          ? (s.attributes["run-status"] as string).replace(/_/g, " ")
+                          : "run"}
+                      </Link>
+                      {typeof s.attributes["run-message"] === "string" && s.attributes["run-message"] !== "" && (
+                        <span className="text-muted-foreground max-w-40 truncate" title={s.attributes["run-message"] as string}>
+                          {s.attributes["run-message"] as string}
+                        </span>
+                      )}
+                    </div>
+                  ) : "—"}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {typeof s.attributes["vcs-commit-sha"] === "string" ? (
