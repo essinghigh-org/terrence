@@ -215,7 +215,6 @@ export function CommandPalette({
           ) : (
             <div className="space-y-1">
               {filtered.map((item) => {
-                // eslint-disable-next-line @typescript-eslint/naming-convention
                 const IconComponent = item.icon;
                 return (
                   <button

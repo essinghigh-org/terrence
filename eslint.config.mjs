@@ -154,14 +154,69 @@ export default tseslint.config(
     files: ['frontend/src/**/*.tsx'],
     rules: {
       '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+    },
+  },
+  // ── Frontend legacy components needing targeted overrides ─────────────
+  {
+    files: [
+      'frontend/src/components/CommandPalette.tsx',
+      'frontend/src/components/CreateWorkspaceModal.tsx',
+      'frontend/src/components/Layout.tsx',
+      'frontend/src/components/ShortcutsHelpModal.tsx',
+      'frontend/src/components/WorkspaceVcs.tsx',
+      'frontend/src/views/Registry.tsx',
+      'frontend/src/views/RunList.tsx',
+      'frontend/src/views/RunDetail.tsx',
+    ],
+    rules: {
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'off',
+    },
+  },
+  {
+    files: [
+      'frontend/src/views/AccountSettings.tsx',
+      'frontend/src/components/VcsRepoSelector.tsx',
+      'frontend/src/components/WorkspaceRetention.tsx',
+      'frontend/src/components/PlanOutput.tsx',
+      'frontend/src/views/AgentPools.tsx',
+      'frontend/src/views/Registry.tsx',
+      'frontend/src/views/RunDetail.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/strict-boolean-expressions': 'off',
-      '@typescript-eslint/no-deprecated': 'off',
-      '@typescript-eslint/no-redundant-type-constituents': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
       '@typescript-eslint/restrict-template-expressions': 'off',
+    },
+  },
+  {
+    files: [
+      'frontend/src/components/ui/status-badge.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/no-redundant-type-constituents': 'off',
+    },
+  },
+  {
+    files: [
+      'frontend/src/components/ui/confirm-dialog.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/no-deprecated': 'off',
+    },
+  },
+  {
+    files: [
+      'frontend/src/components/ui/help-tooltip.tsx',
+      'frontend/src/components/CommandPalette.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/naming-convention': 'off',
     },
   },
 
@@ -207,10 +262,9 @@ export default tseslint.config(
     files: ['backend/src/routes/**/*.ts', 'backend/src/app.ts', 'backend/src/worker.ts'],
     rules: {
       '@typescript-eslint/prefer-readonly-parameter-types': 'off',
-      '@typescript-eslint/no-non-null-assertion': 'off',
     },
   },
-  // ── Backend route/lib code uses practical patterns ───────────────────
+  // ── Backend route/lib/worker code uses practical patterns ───────────
   {
     files: ['backend/src/routes/**/*.ts', 'backend/src/lib/**/*.ts', 'backend/src/app.ts', 'backend/src/worker.ts'],
     rules: {
@@ -220,6 +274,7 @@ export default tseslint.config(
       '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/prefer-optional-chain': 'off',
+      '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'off',
     },
   },
 

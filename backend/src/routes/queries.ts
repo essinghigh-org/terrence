@@ -126,5 +126,6 @@ export const queryRoutes = new Elysia({ name: "queries" })
     const timestamps = { ...(q.statusTimestamps ?? {}), "canceled-at": new Date().toISOString() };
     await db.update(queryRuns).set({ status: "canceled", canceledBy: user.id, statusTimestamps: timestamps }).where(eq(queryRuns.id, id));
     const updated = await db.query.queryRuns.findFirst({ where: eq(queryRuns.id, id) });
-    return { data: queryResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: queryResource(updated) };
   });

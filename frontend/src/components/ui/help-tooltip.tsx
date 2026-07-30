@@ -17,7 +17,6 @@ export function HelpTooltip({
 }: HelpTooltipProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   const IconComp = icon === "info" ? Info : HelpCircle;
 
   return (

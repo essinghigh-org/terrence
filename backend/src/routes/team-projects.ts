@@ -20,7 +20,8 @@ type ParamCtx = Readonly<{
 
 type TeamProjectItem = Readonly<typeof teamProjects.$inferSelect>;
 
-const defaultAccessLevels: Record<string, { projectAccess: Record<string, string>; workspaceAccess: Record<string, unknown> }> = {
+type AccessLevel = { readonly projectAccess: Record<string, string>; readonly workspaceAccess: Record<string, unknown> };
+const defaultAccessLevels: Record<string, AccessLevel> = {
   read: {
     projectAccess: { settings: "read", teams: "none" },
     workspaceAccess: { create: false, move: false, locking: false, delete: false, runs: "read", variables: "read", "state-versions": "read", "sentinel-mocks": "none", "run-tasks": false, "policy-overrides": false },
@@ -39,8 +40,10 @@ const defaultAccessLevels: Record<string, { projectAccess: Record<string, string
   },
 };
 
+const FALLBACK_ACCESS: AccessLevel = { projectAccess: { settings: "read", teams: "none" }, workspaceAccess: { create: false, move: false, locking: false, delete: false, runs: "read", variables: "read", "state-versions": "read", "sentinel-mocks": "none", "run-tasks": false, "policy-overrides": false } };
+
 function teamProjectResource(tp: TeamProjectItem): Record<string, unknown> {
-  const defaults = defaultAccessLevels[tp.access] ?? (defaultAccessLevels.read!);
+  const defaults = defaultAccessLevels[tp.access] ?? FALLBACK_ACCESS;
   return {
     id: tp.id,
     type: "team-projects",
@@ -143,7 +146,8 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
 
     await db.update(teamProjects).set(updates).where(eq(teamProjects.id, tp.id));
     const updated = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, tp.id) });
-    return { data: teamProjectResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: teamProjectResource(updated) };
   })
   .delete("/api/v2/team-projects/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params.id ?? "") });

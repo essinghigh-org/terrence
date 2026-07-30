@@ -163,7 +163,8 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
     versionCache.set(tool, { versions, fetchedAt: Date.now() });
     return versions;
   } catch {
-    return cached?.versions ?? [];
+    if (cached !== undefined) return cached.versions;
+    throw new Error(`Failed to fetch available versions for ${tool}`);
   }
 }
 
@@ -309,7 +310,11 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
           const fullPath = join(targetDir, entry);
           const resolved = resolve(fullPath);
           if (!resolved.startsWith(resolvedTarget)) {
-            void rm(targetDir, { recursive: true, force: true }).catch((): void => undefined);
+            try {
+              await rm(targetDir, { recursive: true, force: true });
+            } catch {
+              // Cleanup failure is secondary — Zip Slip error is primary
+            }
             throw new Error(`Zip Slip detected: extracted path ${resolved} is outside target directory`);
           }
         }

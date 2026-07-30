@@ -20,12 +20,14 @@ jobs:
 
       - name: Determine if publish is needed
         id: check
+        env:
+          COMMIT_MSG: ${{ toJSON(github.event.head_commit.message) }}
         run: |
           # workflow_dispatch has no head_commit — always publish
           # push events: only publish if commit starts with "release:"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
-          elif echo '${{ toJSON(github.event.head_commit.message) }}' | grep -q '"release:'; then
+          elif echo "$COMMIT_MSG" | grep -q '"release:'; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"

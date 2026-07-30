@@ -409,11 +409,11 @@ export function RunList({
                               </span>
                               <span aria-hidden="true">|</span>
                               <span>triggered via {run.attributes.source === "github" ? "GitHub" : run.attributes.source === "tfe-api" ? "UI" : run.attributes.source ?? "UI"}</span>
+                              {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes.branch !== null && run.attributes.branch !== undefined && (<>
                               <span aria-hidden="true">|</span>
-                                <span>{run.attributes.branch !== null && run.attributes.branch !== undefined
-                                ? `Branch ${run.attributes.branch}`
-                                : "Default branch"}</span>
-                              {run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
+                                <span>{`Branch ${run.attributes.branch}`}</span>
+                              </>)}
+                              {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
                                 <>
                                   <span aria-hidden="true">|</span>
                                   <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>

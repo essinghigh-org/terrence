@@ -57,9 +57,12 @@ function originForConfiguration(
         : typeof ingress?.tag === "string" && ingress.tag !== ""
           ? "tag"
           : "push";
-  const origin: RunOrigin = { source, triggerReason };
-  if (ingress?.branch !== undefined) (origin as Record<string, unknown>).branch = ingress.branch;
-  if (ingress?.commitSha !== undefined) (origin as Record<string, unknown>).commitSha = ingress.commitSha;
+  const origin: RunOrigin = {
+    source,
+    triggerReason,
+    ...(typeof ingress?.branch === "string" ? { branch: ingress.branch } : {}),
+    ...(typeof ingress?.commitSha === "string" ? { commitSha: ingress.commitSha } : {}),
+  };
   return origin;
 }
 

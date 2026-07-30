@@ -232,7 +232,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-workspaces");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const relationship = variableRelationshipResources(body);
-    const ids = (relationship!.resources as ResItem[]).map((item: ResItem): string => item.id);
+    const ids = ((relationship ?? { resources: [] }).resources as ResItem[]).map((item: ResItem): string => item.id);
     if (ids.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable resources" }] }; }
     const variables = await db.query.variableSetVariables.findMany({ where: and(eq(variableSetVariables.variableSetId, record.id), inArray(variableSetVariables.id, ids)) });
     if (variables.length !== ids.length) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

@@ -132,7 +132,8 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     }
     await db.update(workspaceTransfers).set({ status: "canceled", updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
     const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    return { data: transferResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: transferResource(updated) };
   })
   .post("/api/v2/workspace-transfers/:transfer_id/actions/resume", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
@@ -147,5 +148,6 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     }
     await db.update(workspaceTransfers).set({ status: "running", pauseReason: null, updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
     const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    return { data: transferResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: transferResource(updated) };
   });

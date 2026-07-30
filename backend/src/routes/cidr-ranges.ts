@@ -125,7 +125,8 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
 
     await db.update(cidrRangeLists).set(updates).where(eq(cidrRangeLists.id, list.id));
     const updated = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, list.id) });
-    return { data: await cidrRangeListResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: await cidrRangeListResource(updated) };
   })
   .delete("/api/v2/cidr-range-lists/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
@@ -207,7 +208,8 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
 
     await db.update(cidrRanges).set(updates).where(eq(cidrRanges.id, range.id));
     const updated = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, range.id) });
-    return { data: cidrRangeResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: cidrRangeResource(updated) };
   })
   .delete("/api/v2/cidr-ranges/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params.id ?? "") });

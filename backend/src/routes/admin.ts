@@ -309,7 +309,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (filterSuspended === "false") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], false));
     if (q !== "") {
       const pattern = `%${q}%`;
-      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern))!);
+      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern)) as SQL); // eslint-disable-line @typescript-eslint/non-nullable-type-assertion-style
     }
     const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
     const [allUsers, countRows] = await Promise.all([
@@ -403,7 +403,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
     await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/unsuspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -413,7 +414,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if ((target as Record<string, unknown>).isSuspended !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/grant_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -423,7 +425,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (target.isSiteAdmin === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site admin" }] }; }
     await db.update(users).set({ isSiteAdmin: true }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/revoke_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -433,7 +436,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (target.isSiteAdmin !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site admin" }] }; }
     await db.update(users).set({ isSiteAdmin: false }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/grant_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -443,7 +447,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if ((target as Record<string, unknown>).isSiteAuditor === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site auditor" }] }; }
     await db.update(users).set({ isSiteAuditor: true }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/revoke_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -453,7 +458,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if ((target as Record<string, unknown>).isSiteAuditor !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] }; }
     await db.update(users).set({ isSiteAuditor: false }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    return { data: adminUserResource(updated!) };
+    if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/impersonate", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
