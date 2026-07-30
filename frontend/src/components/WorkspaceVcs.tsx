@@ -25,6 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { VcsRepoSelector } from "@/components/VcsRepoSelector";
 import { fetchApi } from "@/lib/api";
 
 type VcsRepo = {
@@ -367,35 +368,15 @@ export function WorkspaceVcs({
 
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
-              <div className="flex flex-col gap-2">
-                {vcsRepositories.length > 0 && (
-                  <Select
-                    id="vcs-repo-select"
-                    value={identifier}
-                    onValueChange={setIdentifier}
-                    disabled={!canUpdate}
-                  >
-                    <SelectItem value="">-- Select from accessible repositories --</SelectItem>
-                    {vcsRepositories.map((repo) => (
-                      <SelectItem key={repo.identifier} value={repo.identifier}>
-                        {repo.identifier}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                )}
-                <Input
-                  id="vcs-identifier"
-                  value={identifier}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setIdentifier(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setIdentifier(event.currentTarget.value);
-                  }}
-                  placeholder="e.g. organization/repository"
-                  disabled={!canUpdate}
-                />
-              </div>
+              <VcsRepoSelector
+                id="vcs-identifier"
+                value={identifier}
+                onValueChange={setIdentifier}
+                repositories={vcsRepositories}
+                loading={vcsRepositories.length === 0 && connectionValue !== "" && orgName !== ""}
+                disabled={!canUpdate}
+                placeholder="e.g. organization/repository"
+              />
               <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
             </Field>
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">

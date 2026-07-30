@@ -3,6 +3,7 @@ import { fetchApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { loadOrganizationVcsConnections, type VcsConnection } from "@/components/WorkspaceVcs";
+import { VcsRepoSelector } from "@/components/VcsRepoSelector";
 import {
   Dialog,
   DialogContent,
@@ -281,32 +282,17 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                     <div className="flex items-center gap-2 text-xs text-gray-500 py-1">
                       <Spinner className="size-3.5" /> Loading accessible repositories…
                     </div>
-                  ) : vcsRepositories.length > 0 ? (
-                    <select
-                      id="vcs-repo-select"
-                      aria-label="Accessible repositories dropdown"
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm font-mono"
+                  ) : (
+                    <VcsRepoSelector
+                      id="vcs-identifier"
                       value={vcsIdentifier}
-                      onChange={(e): void => { setVcsIdentifier(e.target.value); }}
+                      onValueChange={setVcsIdentifier}
+                      repositories={vcsRepositories}
+                      loading={vcsReposLoading}
                       disabled={loading}
-                    >
-                      <option value="">-- Select from accessible repositories --</option>
-                      {vcsRepositories.map((repo): React.JSX.Element => (
-                        <option key={repo.identifier} value={repo.identifier}>
-                          {repo.identifier}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
-
-                  <Input
-                    id="vcs-identifier"
-                    value={vcsIdentifier}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
-                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVcsIdentifier(event.currentTarget.value); }}
-                    placeholder={vcsReposLoading ? "Fetching accessible repositories…" : "e.g. organization/repository"}
-                    disabled={loading || vcsReposLoading}
-                  />
+                      placeholder="e.g. organization/repository"
+                    />
+                  )}
                 </div>
               </div>
             )}
