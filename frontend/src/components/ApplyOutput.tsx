@@ -1,22 +1,18 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
-import { createElement, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
+  Trash2,
   Check,
   CheckCircle2,
   Clock,
   Copy,
-  Download,
-  Eye,
   FileCode,
-  Plus,
-  RefreshCw,
-  Trash2,
   XCircle,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
-import { Badge } from "./ui/badge";
 import { Spinner } from "./ui/spinner";
+import { Badge } from "./ui/badge";
 
 type Change = {
   actions: string[];
@@ -86,16 +82,16 @@ type LoadState =
   | Readonly<{ kind: "ready"; plan: PlanJson }>;
 
 const operationConfig = {
-  create: { icon: Plus, label: "create", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  update: { icon: RefreshCw, label: "change", className: "border-blue-200 bg-blue-50 text-blue-700" },
-  delete: { icon: Trash2, label: "destroy", className: "border-red-200 bg-red-50 text-red-700" },
-  replace: { icon: RefreshCw, label: "replace", className: "border-amber-200 bg-amber-50 text-amber-700" },
-  read: { icon: Eye, label: "read", className: "border-purple-200 bg-purple-50 text-purple-700" },
-  import: { icon: Download, label: "import", className: "border-teal-200 bg-teal-50 text-teal-700" },
-  move: { icon: ArrowRight, label: "move", className: "border-slate-300 bg-slate-100 text-slate-700" },
-  remove: { icon: Trash2, label: "removed from state", className: "border-slate-300 bg-slate-100 text-slate-700" },
-  "no-op": { icon: RefreshCw, label: "no-op", className: "border-gray-200 bg-gray-50 text-gray-500" },
-} satisfies Record<Operation, Readonly<{ icon: typeof Plus; label: string; className: string }>>;
+  create: { symbol: "+", className: "text-emerald-700" },
+  update: { symbol: "~", className: "text-blue-700" },
+  delete: { icon: Trash2, className: "text-red-600" },
+  replace: { symbol: "±", className: "text-amber-700" },
+  read: { symbol: "◎", className: "text-purple-700" },
+  import: { symbol: "&", className: "text-gray-950" },
+  move: { symbol: "→", className: "text-slate-700" },
+  remove: { icon: Trash2, className: "text-gray-400" },
+  "no-op": { symbol: "·", className: "text-gray-400" },
+} satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -291,7 +287,6 @@ function ApplyResourceRow({
   const [copied, setCopied] = useState(false);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
-  const operationIcon = config.icon;
 
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
@@ -307,10 +302,13 @@ function ApplyResourceRow({
   return (
     <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 text-xs last:border-b-0 hover:bg-gray-50/80">
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <Badge variant="outline" className={`gap-1 rounded-md capitalize ${config.className}`}>
-          {createElement(operationIcon, { className: "size-3" })}
-          {config.label}
-        </Badge>
+        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
+          {"icon" in config ? (
+            <config.icon className="size-3" aria-hidden="true" />
+          ) : (
+            <span aria-hidden="true">{config.symbol}</span>
+          )}
+        </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

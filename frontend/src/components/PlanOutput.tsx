@@ -1,18 +1,13 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
-import { createElement, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
   ChevronRight,
   Copy,
-  Download,
-  Eye,
-  Plus,
-  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
-import { Badge } from "./ui/badge";
 import { Spinner } from "./ui/spinner";
 
 type Change = {
@@ -104,16 +99,16 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
 ]);
 
 const operationConfig = {
-  create: { icon: Plus, label: "create", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  update: { icon: RefreshCw, label: "~", className: "border-blue-200 bg-blue-50 text-blue-700" },
-  delete: { icon: Trash2, label: "destroy", className: "border-red-200 bg-red-50 text-red-700" },
-  replace: { icon: RefreshCw, label: "replace", className: "border-amber-200 bg-amber-50 text-amber-700" },
-  read: { icon: Eye, label: "read", className: "border-purple-200 bg-purple-50 text-purple-700" },
-  import: { icon: Download, label: "import", className: "border-teal-200 bg-teal-50 text-teal-700" },
-  move: { icon: ArrowRight, label: "move", className: "border-slate-300 bg-slate-100 text-slate-700" },
-  remove: { icon: Trash2, label: "removed from state", className: "border-slate-300 bg-slate-100 text-slate-700" },
-  "no-op": { icon: RefreshCw, label: "no-op", className: "border-gray-200 bg-gray-50 text-gray-500" },
-} satisfies Record<Operation, Readonly<{ icon: typeof Plus; label: string; className: string }>>;
+  create: { symbol: "+", className: "text-emerald-700" },
+  update: { symbol: "~", className: "text-blue-700" },
+  delete: { icon: Trash2, className: "text-red-600" },
+  replace: { symbol: "±", className: "text-amber-700" },
+  read: { symbol: "◎", className: "text-purple-700" },
+  import: { symbol: "&", className: "text-gray-950" },
+  move: { symbol: "→", className: "text-slate-700" },
+  remove: { icon: Trash2, className: "text-gray-400" },
+  "no-op": { symbol: "·", className: "text-gray-400" },
+} satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -356,12 +351,15 @@ function AttributeDiff({ change, address }: Readonly<{ change: Change; address: 
           <span aria-hidden="true" />
           <span>After</span>
         </div>
-        {visibleRows.map((row): React.JSX.Element => (
+        {visibleRows.map((row): React.JSX.Element => {
+          const attrSymbol = row.unchanged ? null : row.before === undefined ? { char: "+", cls: "text-emerald-700" } : row.after === undefined ? { char: "−", cls: "text-red-700" } : { char: "~", cls: "text-blue-700" };
+          return (
           <div key={row.path} className="grid grid-cols-[minmax(120px,1fr)_minmax(120px,1.2fr)_20px_minmax(120px,1.2fr)] items-start gap-3 border-t border-gray-100 py-2 text-xs">
-            <div className="min-w-0">
+            <div className="min-w-0 flex items-center gap-1.5">
+              {attrSymbol !== null && <span aria-hidden="true" className={`shrink-0 text-xs font-semibold ${attrSymbol.cls}`}>{attrSymbol.char}</span>}
               <code className="break-all font-mono font-medium text-gray-700">{row.path}</code>
               {forcesReplacement(row.path) && (
-                <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                <span className="ml-1 block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                   Forces replacement
                 </span>
               )}
@@ -378,7 +376,8 @@ function AttributeDiff({ change, address }: Readonly<{ change: Change; address: 
               </>
             )}
           </div>
-        ))}
+          );
+        })}
         {unchangedSummary !== "" && (
           <p className="border-t border-gray-100 py-2 text-xs text-blue-600">… {unchangedSummary}</p>
         )}
@@ -416,7 +415,6 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   const [copied, setCopied] = useState(false);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
-  const operationIcon = config.icon;
 
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
@@ -436,21 +434,24 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
     >
       <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
         <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
-        <Badge variant="outline" className={`gap-1 rounded-md capitalize ${config.className}`}>
-          {createElement(operationIcon, { className: "size-3" })}
-          {config.label}
-        </Badge>
+        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
+          {"icon" in config ? (
+            <config.icon className="size-3" aria-hidden="true" />
+          ) : (
+            <span aria-hidden="true">{config.symbol}</span>
+          )}
+        </span>
         {resource.change.importing !== undefined && operationForResource(resource) !== "import" && (
-          <Badge variant="outline" className={`gap-1 rounded-md capitalize ${operationConfig.import.className}`}>
-            <Download className="size-3" />
-            import
-          </Badge>
+          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-gray-950">
+            <span aria-hidden="true">&</span>
+            <span>import</span>
+          </span>
         )}
         {resource.previous_address !== undefined && operationForResource(resource) !== "move" && (
-          <Badge variant="outline" className={`gap-1 rounded-md capitalize ${operationConfig.move.className}`}>
-            <ArrowRight className="size-3" />
-            move
-          </Badge>
+          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-slate-700">
+            <span aria-hidden="true">→</span>
+            <span>move</span>
+          </span>
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -519,7 +520,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
           const trigger = action.lifecycle_action_trigger;
           return (
             <div key={`${label}:${index}`} className="flex items-start gap-3 px-5 py-3 text-xs">
-              <Badge variant="outline" className="rounded-md border-purple-200 bg-purple-50 text-purple-700">invoke</Badge>
+              <span className="inline-flex items-center gap-1 rounded-md border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-xs font-semibold leading-5 text-purple-700">invoke</span>
               <div className="min-w-0">
                 <code className="break-all font-mono font-semibold text-gray-900">{label}</code>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
@@ -601,8 +602,8 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
         {outputs.map(([name, output]): React.JSX.Element => (
           <details key={name} className="border-b border-gray-100 last:border-b-0">
             <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-gray-50">
-              <Badge variant="outline" className="font-mono text-[10px]">{name}</Badge>
-              <span className="text-gray-500">{operationConfig[operationFor(output.actions)].label}</span>
+              <span className="inline-flex items-center rounded border border-gray-300 bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
+              <span className="text-gray-500">{operationFor(output.actions) === "delete" ? "−" : operationFor(output.actions) === "no-op" ? "·" : operationFor(output.actions) === "create" ? "+" : operationFor(output.actions) === "update" ? "~" : operationFor(output.actions) === "read" ? "◎" : operationFor(output.actions) === "replace" ? "±" : operationFor(output.actions) === "import" ? "&" : operationFor(output.actions) === "move" ? "→" : ""}</span>
             </summary>
             <AttributeDiff change={output} address={`output.${name}`} />
           </details>
@@ -769,25 +770,25 @@ export function PlanOutput({
       count: importCount,
       label: "to import",
       symbol: "&",
-      className: "bg-gray-950 text-white",
+      className: "text-gray-950",
     },
     {
       count: counts.add,
       label: "to create",
       symbol: "+",
-      className: "bg-emerald-600 text-white",
+      className: "text-emerald-700",
     },
     {
       count: counts.change,
       label: "to change",
       symbol: "~",
-      className: "bg-blue-600 text-white",
+      className: "text-blue-700",
     },
     {
       count: counts.destroy,
       label: "to destroy",
       symbol: "−",
-      className: "bg-red-600 text-white",
+      className: "text-red-700",
     },
   ].filter((item): boolean => item.count > 0);
 
@@ -819,14 +820,14 @@ export function PlanOutput({
             No resource changes
           </div>
         ) : operationSummary.map((item): React.JSX.Element => (
-          <div
+          <span
             key={item.label}
             aria-label={`${item.count} ${item.label}`}
-            className={`min-w-36 flex-1 rounded px-3 py-2 text-sm font-semibold ${item.className}`}
-            style={{ flexGrow: item.count }}
+            className={`inline-flex items-center gap-1 text-xs font-semibold leading-5 ${item.className}`}
           >
-            {item.symbol} {item.count} <span className="font-normal">{item.label}</span>
-          </div>
+            <span aria-hidden="true">{item.symbol}</span>
+            {item.count} <span className="font-normal">{item.label}</span>
+          </span>
         ))}
       </div>
       {(counts.replace > 0 || moveCount > 0 || driftResources.length > 0 || actionInvocations.length > 0) && (

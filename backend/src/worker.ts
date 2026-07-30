@@ -1050,6 +1050,11 @@ export async function executeRun(runId: string): Promise<void> {
         && resourceCounts.changes === 0
         && resourceCounts.destructions === 0;
 
+      // Check if the plan has drift that needs to be applied to state
+      const hasDrift = planJson !== undefined
+        && Array.isArray((planJson as Record<string, unknown>)["resource_drift"])
+        && ((planJson as Record<string, unknown>)["resource_drift"] as unknown[]).length > 0;
+
       if (run.planOnly) {
         await updateRunStatus(runId, "planned_and_finished");
       } else if (run.savePlan) {
@@ -1059,14 +1064,14 @@ export async function executeRun(runId: string): Promise<void> {
         await writeLog(
           runId,
           "plan",
-          hasNoResourceChanges
-            ? `[terrence] Plan has no resource changes. Automatically applying to update workspace state.`
+          hasNoResourceChanges && !hasDrift
+            ? `[terrence] Plan has no resource changes and no drift. Automatically applying to update workspace state.`
             : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
         );
         keepPlan = true;
         await executeApply(runId);
-      } else if (hasNoResourceChanges) {
-        await writeLog(runId, "plan", `[terrence] Plan has no resource changes. Run finished.`);
+      } else if (hasNoResourceChanges && !hasDrift && !run.allowEmptyApply) {
+        await writeLog(runId, "plan", `[terrence] Plan has no resource changes or drift. Run finished.`);
         await updateRunStatus(runId, "planned_and_finished");
       } else {
         await updateRunStatus(runId, "planned");

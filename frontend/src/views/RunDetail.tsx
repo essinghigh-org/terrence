@@ -55,6 +55,7 @@ type RunAttributes = {
   operation?: string;
   permissions?: RunPermissions;
   "plan-only"?: boolean;
+  "refresh-only"?: boolean;
   "resource-additions"?: number;
   "resource-changes"?: number;
   "resource-destructions"?: number;
@@ -859,6 +860,8 @@ export function RunDetail({
             </Badge>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
             {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
+            {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-purple-700 border-purple-200 bg-purple-50">Refresh only</Badge>}
+            {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-blue-700 border-blue-200 bg-blue-50">Allow empty apply</Badge>}
           </div>
           <h1 className="break-words text-3xl font-bold tracking-tight text-gray-950">
             {attributes.message ?? "Manual run"}
@@ -1002,10 +1005,10 @@ export function RunDetail({
       <div className="min-w-0 space-y-5">
           <details
             aria-labelledby="plan-heading"
-            className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
+            className="group overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
             open={["running", "finished", "errored", "unreachable"].includes(planStatus)}
           >
-            <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+            <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
@@ -1164,8 +1167,8 @@ export function RunDetail({
           )}
 
           {assessmentChecks.length > 0 && (
-            <details className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-              <summary className="group cursor-pointer list-none">
+            <details className="group overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+              <summary className="cursor-pointer list-none">
                 <div className="flex items-center justify-between gap-3 px-5 py-4 group-open:border-b group-open:border-gray-200">
                   <div className="flex items-center gap-3">
                     <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
@@ -1202,12 +1205,12 @@ export function RunDetail({
           {showApply && (
           <details
             aria-labelledby="apply-heading"
-            className={`overflow-hidden rounded-md border bg-white shadow-sm ${
+            className={`group overflow-hidden rounded-md border bg-white shadow-sm ${
               ["errored", "unreachable"].includes(applyStatus) ? "border-red-300" : "border-gray-200"
             }`}
             open={["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
           >
-            <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+            <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
