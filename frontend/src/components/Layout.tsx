@@ -881,11 +881,11 @@ export function Layout({
                   />
                 )}
               >
-                <Avatar className="size-6 rounded">
+                <Avatar className="size-6 rounded-full">
                   {avatarUrl !== "" ? (
-                    <AvatarImage src={avatarUrl} alt={accountName} className="rounded object-cover" />
+                    <AvatarImage src={avatarUrl} alt={accountName} className="rounded-full object-cover" />
                   ) : (
-                    <AvatarFallback className="rounded bg-background/15 text-background text-xs">
+                    <AvatarFallback className="rounded-full bg-background/15 text-background text-xs">
                       {accountName === ""
                         ? <UserRound aria-hidden="true" />
                         : accountName.slice(0, 2).toUpperCase()}

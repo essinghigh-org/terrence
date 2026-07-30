@@ -913,11 +913,11 @@ export function RunDetail({
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Created by</dt>
               <dd className="mt-1 flex items-center gap-2">
-                <Avatar className="size-6 rounded">
+                <Avatar className="size-6 rounded-full">
                   {creatorAvatarUrl !== "" ? (
-                    <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded object-cover" />
+                    <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
                   ) : (
-                    <AvatarFallback className="rounded bg-gray-100 text-[10px] text-gray-600">
+                    <AvatarFallback className="rounded-full bg-gray-100 text-[10px] text-gray-600">
                       {creatorUsername.slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   )}
