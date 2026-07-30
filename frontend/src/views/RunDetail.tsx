@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
+  ChevronRight,
   Circle,
   Clock,
   History,
@@ -1008,7 +1008,7 @@ export function RunDetail({
             <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
-                  <ChevronDown className="size-4 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+                  <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
                   <h2 id="plan-heading" className="font-semibold capitalize text-gray-950">
                     Plan {planStatus.replace(/_/g, " ")}
@@ -1164,17 +1164,22 @@ export function RunDetail({
           )}
 
           {assessmentChecks.length > 0 && (
-            <section aria-labelledby="assessment-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-              <div className="flex items-center justify-between gap-3 px-5 py-4">
-                <div>
-                  <h2 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">Terraform checks and drift validation reported for this run.</p>
+            <details className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+              <summary className="group cursor-pointer list-none">
+                <div className="flex items-center justify-between gap-3 px-5 py-4 group-open:border-b group-open:border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                    <div>
+                      <h2 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h2>
+                      <p className="mt-1 text-xs text-muted-foreground">Terraform checks and drift validation reported for this run.</p>
+                    </div>
+                  </div>
+                  <Badge variant={assessmentChecks.some((check): boolean => ["failed", "errored"].includes(check.attributes.status)) ? "destructive" : "secondary"}>
+                    {assessmentChecks.filter((check): boolean => check.attributes.status === "passed").length} / {assessmentChecks.length} passed
+                  </Badge>
                 </div>
-                <Badge variant={assessmentChecks.some((check): boolean => ["failed", "errored"].includes(check.attributes.status)) ? "destructive" : "secondary"}>
-                  {assessmentChecks.filter((check): boolean => check.attributes.status === "passed").length} / {assessmentChecks.length} passed
-                </Badge>
-              </div>
-              <div className="border-t border-gray-200 px-5 py-3">
+              </summary>
+              <div className="px-5 py-3">
                 <Table>
                   <TableHeader><TableRow><TableHead>Check</TableHead><TableHead>Result</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -1191,7 +1196,7 @@ export function RunDetail({
                   </TableBody>
                 </Table>
               </div>
-            </section>
+            </details>
           )}
 
           {showApply && (
@@ -1205,7 +1210,7 @@ export function RunDetail({
             <summary className="group cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
-                  <ChevronDown className="size-4 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+                  <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
                   <h2 id="apply-heading" className="font-semibold capitalize text-gray-950">
                     Apply {canApply ? "needs confirmation" : applyStatus.replace(/_/g, " ")}
