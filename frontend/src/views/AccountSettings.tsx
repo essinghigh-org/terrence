@@ -118,17 +118,29 @@ export function AccountSettings(): React.JSX.Element {
     try {
       const response = await fetchApi("/account/mfa") as { data?: { attributes?: { enabled?: boolean } } };
       setMfaEnabled(response.data?.attributes?.enabled === true);
-    } catch {
-      // Keep settings usable when connected to a server without MFA support.
-      setMfaEnabled(false);
+    } catch (err: unknown) {
+      // Only fall back silently for 404/501 (MFA not supported on this server);
+      // surface other errors so the user knows something is wrong.
+      const status = err instanceof Response ? err.status : 0;
+      if (status === 404 || status === 501) {
+        setMfaEnabled(false);
+      } else {
+        setError(err instanceof Error ? err.message : "Could not load MFA status");
+      }
     } finally {
       setMfaLoaded(true);
     }
   }
 
+  async function handleCancelEnrollment(): Promise<void> {
+    setMfaEnrollment(null);
+    setMfaCode("");
+  }
+
   async function handleBeginMfaEnrollment(): Promise<void> {
     setMfaLoading(true);
     setError("");
+    setSuccessMsg("");
     try {
       const response = await fetchApi("/account/mfa/enroll", { method: "POST" }) as {
         data: { attributes: { secret: string; "otpauth-url"?: string } };
@@ -146,6 +158,7 @@ export function AccountSettings(): React.JSX.Element {
     if (mfaCode.trim() === "") return;
     setMfaLoading(true);
     setError("");
+    setSuccessMsg("");
     try {
       await fetchApi("/account/mfa/verify", {
         method: "POST",
@@ -166,6 +179,7 @@ export function AccountSettings(): React.JSX.Element {
     if (mfaCode.trim() === "") return;
     setMfaLoading(true);
     setError("");
+    setSuccessMsg("");
     try {
       await fetchApi("/account/mfa", {
         method: "DELETE",
@@ -572,7 +586,10 @@ export function AccountSettings(): React.JSX.Element {
             {mfaEnabled ? (
               <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleDisableMfa(); }}>Disable MFA</Button>
             ) : mfaEnrollment !== null ? (
-              <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
+              <>
+                <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
+                <Button type="button" variant="outline" disabled={mfaLoading} onClick={(): void => { void handleCancelEnrollment(); }}>Cancel</Button>
+              </>
             ) : (
               <Button type="button" disabled={mfaLoading} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
             )}
