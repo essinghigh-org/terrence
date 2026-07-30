@@ -365,3 +365,11 @@ export const app = new Elysia()
   .use(explorerRoutes)
   .use(teamProjectRoutes)
   .use(policyEvaluationRoutes);
+
+// Start the background worker queue
+import("./worker").then(({ startWorkerQueue }: typeof import("./worker")): void => {
+  startWorkerQueue();
+  log.info("Worker queue started");
+}).catch((error: unknown): void => {
+  log.error("Failed to start worker queue", { error: String(error) });
+});
