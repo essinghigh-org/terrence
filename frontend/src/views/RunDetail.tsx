@@ -869,7 +869,7 @@ export function RunDetail({
             {attributes.message ?? "Manual run"}
           </h1>
           <p className="mt-2 text-[13px] text-gray-600">
-            {statusLabel(attributes["trigger-reason"] ?? "manual")} · {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
+            {statusLabel(attributes["trigger-reason"] ?? "manual")} · {attributes["trigger-reason"] === "manual" ? "UI" : sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

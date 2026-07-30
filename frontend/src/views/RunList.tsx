@@ -388,11 +388,6 @@ export function RunList({
                         {run.attributes.message ?? "Triggered via UI"}
                       </Link>
                       <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 font-mono text-[11px] text-gray-500">
-                        {run.attributes["refresh-only"] === true && <span className="text-purple-700 font-semibold">refresh</span>}
-                        {run.attributes["plan-only"] === true && <span className="text-gray-600 font-semibold">plan</span>}
-                        {run.attributes["is-destroy"] === true && <span className="text-red-600 font-semibold">destroy</span>}
-                        {run.attributes["allow-empty-apply"] === true && <span className="text-blue-700 font-semibold">empty</span>}
-                        {(run.attributes["refresh-only"] === true || run.attributes["plan-only"] === true || run.attributes["is-destroy"] === true || run.attributes["allow-empty-apply"] === true) && <span aria-hidden="true">|</span>}
                         <span>{run.id}</span>
                         <span aria-hidden="true">|</span>
                         {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
@@ -417,7 +412,7 @@ export function RunList({
                                 <span>{username}</span>
                               </span>
                               <span aria-hidden="true">|</span>
-                              <span>triggered via {run.attributes.source === "github" ? "GitHub" : run.attributes.source === "tfe-api" ? "UI" : run.attributes.source ?? "UI"}</span>
+                              <span>triggered via {run.attributes["trigger-reason"] === "manual" ? "UI" : run.attributes.source === "github" ? "GitHub" : run.attributes.source === "gitlab" ? "GitLab" : run.attributes.source === "bitbucket" ? "Bitbucket" : "UI"}</span>
                               {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes.branch !== null && run.attributes.branch !== undefined && (<>
                               <span aria-hidden="true">|</span>
                                 <span>{`Branch ${run.attributes.branch}`}</span>
