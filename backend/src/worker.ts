@@ -582,7 +582,7 @@ async function extractTarArchive(
       }
     }
 
-    const extractProc = spawn(["tar", "-xzf", archivePath, "-C", destDir]);
+    const extractProc = spawn(["tar", "-xzf", archivePath, "-C", destDir, "--no-absolute-filenames"]);
     const ok = (await extractProc.exited) === 0;
     if (ok) {
       await unnestArchiveDirectory(destDir, workingDirectory);
