@@ -309,7 +309,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"),
       originsForRuns([authorized.run]),
     ]);
-    return { data: runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id)) };
+    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id));
+    const included = await includedUsersForRuns([authorized.run]);
+    return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const runId = params.run_id ?? "";

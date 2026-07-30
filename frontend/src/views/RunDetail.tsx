@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
 import { ApplyOutput } from "../components/ApplyOutput";
+import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -66,6 +67,11 @@ type RunAttributes = {
 type RunResource = {
   id: string;
   attributes: RunAttributes;
+  relationships?: {
+    "created-by"?: {
+      data: { id: string; type: string } | null;
+    };
+  };
 };
 
 type PhaseResource = {
@@ -122,6 +128,15 @@ type CostEstimate = {
     "matched-resources-count"?: number;
     "unmatched-resources-count"?: number;
     "error-message"?: string | null;
+  };
+};
+
+type IncludedUser = {
+  id: string;
+  type: string;
+  attributes: {
+    username: string;
+    "avatar-url"?: string;
   };
 };
 
@@ -443,6 +458,8 @@ export function RunDetail({
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
   const [fresh, setFresh] = useState(false);
+  const [creatorUsername, setCreatorUsername] = useState("");
+  const [creatorAvatarUrl, setCreatorAvatarUrl] = useState("");
   const [pendingAction, setPendingAction] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [planSummary, setPlanSummary] = useState<Readonly<{
@@ -460,11 +477,27 @@ export function RunDetail({
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
-      const response = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource };
+      const response = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource; included?: IncludedUser[] };
       if (signal.aborted) return null;
       setRun(response.data);
       setFresh(true);
       setLoadError("");
+
+      // Extract creator user info from included data
+      const creatorId = response.data.relationships?.["created-by"]?.data?.id;
+      if (creatorId !== undefined && Array.isArray(response.included)) {
+        const creator = response.included.find((u: IncludedUser): boolean => u.id === creatorId && u.type === "users");
+        if (creator !== undefined) {
+          setCreatorUsername(creator.attributes.username);
+          setCreatorAvatarUrl(creator.attributes["avatar-url"] ?? "");
+        } else {
+          setCreatorUsername("");
+          setCreatorAvatarUrl("");
+        }
+      } else {
+        setCreatorUsername("");
+        setCreatorAvatarUrl("");
+      }
 
       const [logResult, planResult, applyResult, costResult, policyResult, eventResult, commentResult] = await Promise.allSettled([
         fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
@@ -563,6 +596,8 @@ export function RunDetail({
       setPolicyChecks([]);
       setComments([]);
       setAuxiliaryError(false);
+      setCreatorUsername("");
+      setCreatorAvatarUrl("");
       setCommentBody("");
       setLoading(true);
     }
@@ -873,6 +908,23 @@ export function RunDetail({
             <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</dt>
             <dd className="mt-1 font-medium text-gray-950">{statusLabel(status)}</dd>
           </div>
+          {creatorUsername !== "" && (
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Created by</dt>
+              <dd className="mt-1 flex items-center gap-2">
+                <Avatar className="size-6 rounded">
+                  {creatorAvatarUrl !== "" ? (
+                    <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded object-cover" />
+                  ) : (
+                    <AvatarFallback className="rounded bg-gray-100 text-[10px] text-gray-600">
+                      {creatorUsername.slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  )}
+                </Avatar>
+                <span className="font-medium text-gray-700">{creatorUsername}</span>
+              </dd>
+            </div>
+          )}
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Workspace</dt>
             <dd className="mt-1">
@@ -1261,7 +1313,14 @@ export function RunDetail({
               ) : comments.map((comment: RunComment): React.JSX.Element => (
                 <article key={comment.id} className="px-5 py-4">
                   <div className="mb-1 flex items-center justify-between gap-3 text-xs text-gray-500">
-                    <span className="font-medium text-gray-700">{comment.attributes["actor-username"] ?? "System"}</span>
+                    <span className="flex items-center gap-2 font-medium text-gray-700">
+                      <Avatar className="size-5 rounded">
+                        <AvatarFallback className="rounded bg-gray-100 text-[9px] text-gray-600">
+                          {(comment.attributes["actor-username"] ?? "S").slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      {comment.attributes["actor-username"] ?? "System"}
+                    </span>
                     <time dateTime={comment.attributes["created-at"]}>{formatDate(comment.attributes["created-at"])}</time>
                   </div>
                   <p className="whitespace-pre-wrap text-sm text-gray-800">{comment.attributes.body}</p>

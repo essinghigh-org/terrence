@@ -112,6 +112,53 @@ describe("TFE API v2 - Runs", () => {
     expect(runInDb?.autoApply).toBe(true);
   });
 
+  it("should include created-by with included user data when fetching a single run", async () => {
+    const createRes = await app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { message: "Test single run creator" },
+            relationships: {
+              workspace: { data: { id: workspaceId, type: "workspaces" } },
+            },
+          },
+        }),
+      })
+    );
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { data: { id: string } };
+    const runId = created.data.id;
+
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${runId}`, {
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(response.status).toBe(200);
+    const document = await response.json() as {
+      data: { id: string; relationships?: Record<string, unknown> };
+      included?: Array<{ id: string; type: string; attributes: Record<string, unknown> }>;
+    };
+
+    expect(document.data.relationships).toBeDefined();
+    expect(document.data.relationships!["created-by"]).toBeDefined();
+    const createdBy = document.data.relationships!["created-by"] as { data: { id: string; type: string } | null };
+    expect(createdBy.data).toBeDefined();
+    expect(createdBy.data!.type).toBe("users");
+
+    expect(document.included).toBeDefined();
+    expect(document.included!.length).toBeGreaterThan(0);
+    const includedUser = document.included!.find((u: { type: string }): boolean => u.type === "users");
+    expect(includedUser).toBeDefined();
+    expect(includedUser!.attributes.username).toBe("run-owner");
+    expect(includedUser!.attributes["avatar-url"]).toContain("gravatar.com/avatar/");
+  });
+
   it("lists runs with created-by included user data", async () => {
     // Create a run first
     const createRes = await app.handle(
