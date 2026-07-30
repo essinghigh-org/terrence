@@ -41,8 +41,8 @@ export function CommandPalette({
 }>): JSX.Element {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const [orgs, setOrgs] = useState<Array<{ name: string }>>([]);
-  const [workspaces, setWorkspaces] = useState<Array<{ name: string }>>([]);
+  const [orgs, setOrgs] = useState<{ name: string }[]>([]);
+  const [workspaces, setWorkspaces] = useState<{ name: string }[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -183,7 +183,7 @@ export function CommandPalette({
     ? items.slice(0, 10)
     : items.filter((item) =>
         item.title.toLowerCase().includes(query) ||
-        (item.subtitle !== undefined && item.subtitle.toLowerCase().includes(query)) ||
+        (item.subtitle?.toLowerCase().includes(query) ?? false) ||
         item.category.toLowerCase().includes(query),
       );
 
@@ -200,7 +200,7 @@ export function CommandPalette({
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
             placeholder="Type a command or search organizations & workspaces..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); }}
           />
           <kbd className="pointer-events-none hidden select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100 sm:flex">
             ESC
@@ -215,6 +215,7 @@ export function CommandPalette({
           ) : (
             <div className="space-y-1">
               {filtered.map((item) => {
+                // eslint-disable-next-line @typescript-eslint/naming-convention
                 const IconComponent = item.icon;
                 return (
                   <button

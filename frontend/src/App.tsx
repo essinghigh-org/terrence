@@ -170,6 +170,10 @@ function App(): JSX.Element {
               element={<WorkspaceDetail section="health" />}
             />
             <Route
+              path=":orgName/workspaces/:workspaceName/settings/retention"
+              element={<WorkspaceDetail section="retention" />}
+            />
+            <Route
               path=":orgName/workspaces/:workspaceName/settings/delete"
               element={<WorkspaceDetail section="destruction" />}
             />

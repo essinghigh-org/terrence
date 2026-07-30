@@ -58,7 +58,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     const evalId = params.policy_evaluation_id ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId) {
+    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
       const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
       if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     }
@@ -69,7 +69,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     const evalId = params.policy_evaluation_id ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (evalRecord.runId) {
+    if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
       const authorized = await findAuthorizedRun(evalRecord.runId, user?.id, orgId, teamId);
       if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     }

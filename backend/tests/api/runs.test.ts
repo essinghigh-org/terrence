@@ -142,7 +142,7 @@ describe("TFE API v2 - Runs", () => {
     expect(response.status).toBe(200);
     const document = await response.json() as {
       data: { id: string; relationships?: Record<string, unknown> };
-      included?: Array<{ id: string; type: string; attributes: Record<string, unknown> }>;
+      included?: { id: string; type: string; attributes: Record<string, unknown> }[];
     };
 
     expect(document.data.relationships).toBeDefined();
@@ -188,8 +188,8 @@ describe("TFE API v2 - Runs", () => {
     );
     expect(listRes.status).toBe(200);
     const listData = await listRes.json() as {
-      data: Array<{ id: string; relationships?: { "created-by"?: { data: { id: string; type: string } | null } } }>;
-      included?: Array<{ id: string; type: string; attributes: { username: string; "avatar-url": string } }>;
+      data: { id: string; relationships?: { "created-by"?: { data: { id: string; type: string } | null } } }[];
+      included?: { id: string; type: string; attributes: { username: string; "avatar-url": string } }[];
     };
 
     const createdRun = listData.data.find((r) => r.relationships?.["created-by"]?.data?.id !== null);

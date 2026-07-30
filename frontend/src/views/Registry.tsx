@@ -106,7 +106,7 @@ async function registryApi<T>(
   if (!response.ok) {
     const errorBody: unknown = await response.json().catch((): null => null);
     const rawErrors = Array.isArray((errorBody as Record<string, unknown> | null)?.["errors"])
-      ? (errorBody as Record<string, unknown>)["errors"] as ReadonlyArray<Record<string, unknown>>
+      ? (errorBody as Record<string, unknown>)["errors"] as readonly Record<string, unknown>[]
       : [];
     const detail = typeof rawErrors[0]?.["detail"] === "string" ? (rawErrors[0] as Record<string, string>)["detail"] : null;
     throw new Error(detail ?? `API request failed (${response.status})`);

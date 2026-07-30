@@ -167,6 +167,10 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
   }
 }
 
+export async function availableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
+  return fetchAvailableVersions(tool);
+}
+
 export async function resolveVersionConstraint(tool: "tofu" | "terraform", constraintExpr: string): Promise<string> {
   if (constraintExpr === "latest") {
     return resolveLatestVersion(tool);
@@ -305,7 +309,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
           const fullPath = join(targetDir, entry);
           const resolved = resolve(fullPath);
           if (!resolved.startsWith(resolvedTarget)) {
-            await rm(targetDir, { recursive: true, force: true }).catch((): void => {});
+            void rm(targetDir, { recursive: true, force: true }).catch((): void => undefined);
             throw new Error(`Zip Slip detected: extracted path ${resolved} is outside target directory`);
           }
         }

@@ -584,7 +584,7 @@ export async function refetchConfigurationVersion(configurationVersionId: string
 /** Get the default branch name for a VCS workspace by querying the provider API. */
 async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inferSelect>): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
-  if (vcs === null || vcs.identifier === undefined) return undefined;
+  if (vcs?.identifier === undefined) return undefined;
   const repoParts = vcs.identifier.split("/");
   const encodedPath = repoParts.map(encodeURIComponent).join("/");
 
@@ -640,8 +640,8 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
               const body = await response.json() as Record<string, unknown>;
               if (provider === "github" && typeof body.default_branch === "string") return body.default_branch;
               if (provider === "gitlab" && typeof body.default_branch === "string") return body.default_branch;
-              if (provider === "bitbucket" && typeof (body as Record<string, unknown>).mainbranch === "object") {
-                const mb = (body as Record<string, unknown>).mainbranch as Record<string, unknown>;
+              if (provider === "bitbucket" && typeof (body).mainbranch === "object") {
+                const mb = (body).mainbranch as Record<string, unknown>;
                 if (typeof mb.name === "string") return mb.name;
               }
             }
@@ -656,7 +656,7 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
 /** Get the latest commit SHA on a branch for a VCS workspace. */
 async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferSelect>, branch: string): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
-  if (vcs === null || vcs.identifier === undefined) return undefined;
+  if (vcs?.identifier === undefined) return undefined;
   const repoParts = vcs.identifier.split("/");
   const encodedPath = repoParts.map(encodeURIComponent).join("/");
 
@@ -740,7 +740,7 @@ export async function createConfigurationVersionFromVcs(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
 ): Promise<string | { error: string }> {
   const vcs = workspace.vcsRepo;
-  if (vcs === null || vcs.identifier === undefined) return { error: "Workspace is not connected to a VCS provider" };
+  if (vcs?.identifier === undefined) return { error: "Workspace is not connected to a VCS provider" };
   const branch = vcs.branch ?? await fetchDefaultBranch(workspace) ?? "main";
 
   const sha = await latestCommitSha(workspace, branch);

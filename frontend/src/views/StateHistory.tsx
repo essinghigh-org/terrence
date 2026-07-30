@@ -20,6 +20,10 @@ type StateItem = {
   };
 };
 
+function stateStatus(value: unknown): string {
+  return typeof value === "string" && value !== "" ? value.replace(/_/g, " ") : "Finalized";
+}
+
 type StateHistoryProps = {
   workspaceId: string;
   orgName?: string;
@@ -116,7 +120,10 @@ export function StateHistory({ workspaceId, orgName, workspaceName }: StateHisto
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-xl font-semibold">State version history</h2>
+      <div>
+        <h2 className="text-xl font-semibold">State version history</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Browse historical state, inspect the run that produced it, and download a safe copy for recovery.</p>
+      </div>
 
       <div className="border rounded-md">
         <Table>
@@ -172,14 +179,15 @@ export function StateHistory({ workspaceId, orgName, workspaceName }: StateHisto
                         className="text-primary hover:underline"
                       >
                         {typeof s.attributes["run-status"] === "string"
-                          ? (s.attributes["run-status"] as string).replace(/_/g, " ")
+                          ? (s.attributes["run-status"]).replace(/_/g, " ")
                           : "run"}
                       </Link>
                       {typeof s.attributes["run-message"] === "string" && s.attributes["run-message"] !== "" && (
-                        <span className="text-muted-foreground max-w-40 truncate" title={s.attributes["run-message"] as string}>
-                          {s.attributes["run-message"] as string}
+                        <span className="text-muted-foreground max-w-40 truncate" title={s.attributes["run-message"]}>
+                          {s.attributes["run-message"]}
                         </span>
                       )}
+                      <span className="text-[11px] capitalize text-muted-foreground">{stateStatus(s.attributes["status"])}</span>
                     </div>
                   ) : "—"}
                 </TableCell>

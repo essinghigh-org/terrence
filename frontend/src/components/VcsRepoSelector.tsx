@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 type VcsRepoOption = {
   identifier: string;
   name: string;
+  owner?: string;
 };
 
 type VcsRepoSelectorProps = {
@@ -45,12 +46,21 @@ export function VcsRepoSelector({
   // Filter repositories based on search text
   const filteredRepos = useMemo((): VcsRepoOption[] => {
     if (search === "") return repositories;
-    const lower = search.toLowerCase();
-    return repositories.filter(
-      (repo: VcsRepoOption): boolean =>
-        repo.identifier.toLowerCase().includes(lower) ||
-        repo.name.toLowerCase().includes(lower),
-    );
+    const terms = search.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    return repositories
+      .map((repo: VcsRepoOption): { repo: VcsRepoOption; score: number } => {
+        const identifier = repo.identifier.toLocaleLowerCase();
+        const haystack = `${repo.identifier} ${repo.name} ${repo.owner ?? ""}`.toLocaleLowerCase();
+        const score = terms.reduce((total: number, term: string): number => {
+          if (identifier.startsWith(term)) return total + 4;
+          if (haystack.includes(term)) return total + 1;
+          return -100;
+        }, 0);
+        return { repo, score };
+      })
+      .filter(({ score }): boolean => Number.isFinite(score) && score > 0)
+      .sort((left, right): number => right.score - left.score || left.repo.identifier.localeCompare(right.repo.identifier))
+      .map(({ repo }): VcsRepoOption => repo);
   }, [repositories, search]);
 
   // Close the dropdown on outside click
@@ -125,11 +135,9 @@ export function VcsRepoSelector({
         }
         case "Enter": {
           event.preventDefault();
-          if (
-            highlightedIndex >= 0 &&
-            highlightedIndex < filteredRepos.length
-          ) {
-            handleSelect(filteredRepos[highlightedIndex]!);
+          const selectedRepo = filteredRepos[highlightedIndex];
+          if (selectedRepo !== undefined) {
+            handleSelect(selectedRepo);
           }
           break;
         }
@@ -147,8 +155,7 @@ export function VcsRepoSelector({
     [open, filteredRepos, highlightedIndex, handleSelect],
   );
 
-  const showDropdown =
-    open && !loading && repositories.length > 0 && filteredRepos.length > 0;
+  const showDropdown = open && !loading && repositories.length > 0 && filteredRepos.length > 0;
   const hasRepoList = !loading && repositories.length > 0 && filteredRepos.length > 0;
 
   return (
@@ -236,11 +243,13 @@ export function VcsRepoSelector({
                   event.preventDefault();
                   handleSelect(repo);
                 }}
-                onMouseEnter={(): void => setHighlightedIndex(index)}
+                onMouseEnter={(): void => { setHighlightedIndex(index); }}
               >
-                <span className="font-medium">{repo.name}</span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {repo.identifier}
+                <span className="min-w-0 truncate">
+                  <span className="block truncate font-medium">{repo.identifier}</span>
+                  {repo.name !== repo.identifier && (
+                    <span className="block truncate text-xs text-muted-foreground">{repo.name}</span>
+                  )}
                 </span>
               </li>
             ),

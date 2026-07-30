@@ -49,10 +49,10 @@ export const queryRoutes = new Elysia({ name: "queries" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const rels = (data?.relationships as Record<string, unknown>) ?? {};
+    const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
+    const rels: Record<string, unknown> = (data?.relationships ?? {}) as Record<string, unknown>;
     const wsRel = rels.workspace as Record<string, unknown> | undefined;
-    const workspaceId = typeof (wsRel?.data as Record<string, unknown>)?.id === "string" ? ((wsRel?.data as Record<string, unknown>).id as string) : "";
+    const workspaceId = typeof (wsRel?.data as Record<string, unknown> | undefined)?.id === "string" ? ((wsRel?.data as Record<string, unknown>).id as string) : "";
 
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user.id, orgId, teamId)) === undefined) {
@@ -123,7 +123,7 @@ export const queryRoutes = new Elysia({ name: "queries" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const timestamps = { ...((q.statusTimestamps as Record<string, string>) ?? {}), "canceled-at": new Date().toISOString() };
+    const timestamps = { ...(q.statusTimestamps ?? {}), "canceled-at": new Date().toISOString() };
     await db.update(queryRuns).set({ status: "canceled", canceledBy: user.id, statusTimestamps: timestamps }).where(eq(queryRuns.id, id));
     const updated = await db.query.queryRuns.findFirst({ where: eq(queryRuns.id, id) });
     return { data: queryResource(updated!) };

@@ -19,6 +19,7 @@ import {
   GitBranch,
   GitPullRequest,
   HelpCircle,
+  History as HistoryIcon,
   KeyRound,
   Keyboard,
   LayoutDashboard,
@@ -475,6 +476,7 @@ export function Layout({
         { label: "Version Control", to: `${settingsPath}/version-control`, icon: GitBranch },
         { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
         { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
+        { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
         { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
       ] as const;
 
@@ -822,7 +824,7 @@ export function Layout({
               variant="ghost"
               size="sm"
               className="hidden sm:inline-flex items-center gap-2 text-background/80 hover:bg-background/10 hover:text-background border border-background/20 h-8 px-2.5"
-              onClick={() => setCommandPaletteOpen(true)}
+              onClick={() => { setCommandPaletteOpen(true); }}
             >
               <Search className="size-3.5" />
               <span className="text-xs">Search...</span>
@@ -848,7 +850,7 @@ export function Layout({
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>Help and support</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => setShortcutsModalOpen(true)}>
+                  <DropdownMenuItem onClick={() => { setShortcutsModalOpen(true); }}>
                     <Keyboard className="mr-2 size-4 text-muted-foreground" />
                     Keyboard shortcuts (?)
                   </DropdownMenuItem>

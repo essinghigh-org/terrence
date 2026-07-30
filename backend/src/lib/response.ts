@@ -23,7 +23,7 @@ type UserParam = DeepReadonly<{ id: string; username: string; email?: string | n
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 // Keep the precise nested response type available to callers and contract tests.
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type, @typescript-eslint/explicit-module-boundary-types
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export function userResource(
   user: UserParam,
   authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
@@ -504,9 +504,9 @@ export function runResource(
       "debugging-mode": run.debuggingMode,
       "is-destroy": run.isDestroy === true,
       "created-at": new Date(run.createdAt).toISOString(),
-      "trigger-reason": origin?.triggerReason ?? "manual",
-      "branch": (origin as Record<string, unknown>)?.branch ?? null,
-      "commit-sha": (origin as Record<string, unknown>)?.commitSha ?? null,
+      "trigger-reason": (origin as Record<string, unknown> | undefined)?.triggerReason ?? "manual",
+      "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
+      "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
       variables: run.variables ?? [],
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,

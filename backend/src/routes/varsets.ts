@@ -57,7 +57,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : undefined;
-    if (data?.type !== "varsets" || !attributes || !validVariableSetAttributes(attributes)) {
+    if (data?.type !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
     }
     const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
@@ -109,11 +109,11 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const workspaceIds = workspaceRelationshipIds(body);
     if (!workspaceIds || workspaceIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace relationships" }] }; }
-    const targets = await db.query.workspaces.findMany({ where: inArray(workspaces.id, workspaceIds!) });
-    if (targets.length !== workspaceIds!.length || targets.some((w: Readonly<{ readonly orgId: string }>): boolean => w.orgId !== record.orgId)) {
+    const targets = await db.query.workspaces.findMany({ where: inArray(workspaces.id, workspaceIds) });
+    if (targets.length !== workspaceIds.length || targets.some((w: Readonly<{ readonly orgId: string }>): boolean => w.orgId !== record.orgId)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Workspaces must belong to the variable set organization" }] };
     }
-    await db.insert(variableSetWorkspaces).values(workspaceIds!.map((wid: string): typeof variableSetWorkspaces.$inferInsert => ({ id: crypto.randomUUID(), variableSetId: record.id, workspaceId: wid }))).onConflictDoNothing();
+    await db.insert(variableSetWorkspaces).values(workspaceIds.map((wid: string): typeof variableSetWorkspaces.$inferInsert => ({ id: crypto.randomUUID(), variableSetId: record.id, workspaceId: wid }))).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })
@@ -123,7 +123,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const workspaceIds = workspaceRelationshipIds(body);
     if (!workspaceIds || workspaceIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace relationships" }] }; }
-    await db.delete(variableSetWorkspaces).where(and(eq(variableSetWorkspaces.variableSetId, record.id), inArray(variableSetWorkspaces.workspaceId, workspaceIds!)));
+    await db.delete(variableSetWorkspaces).where(and(eq(variableSetWorkspaces.variableSetId, record.id), inArray(variableSetWorkspaces.workspaceId, workspaceIds)));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -134,11 +134,11 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const projectIds = projectRelationshipIds(body);
     if (!projectIds || projectIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationships" }] }; }
-    const targets = await db.query.projects.findMany({ where: inArray(projects.id, projectIds!) });
-    if (targets.length !== projectIds!.length || targets.some((p: Readonly<{ readonly orgId: string }>): boolean => p.orgId !== record.orgId)) {
+    const targets = await db.query.projects.findMany({ where: inArray(projects.id, projectIds) });
+    if (targets.length !== projectIds.length || targets.some((p: Readonly<{ readonly orgId: string }>): boolean => p.orgId !== record.orgId)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Projects must belong to the variable set organization" }] };
     }
-    await db.insert(variableSetProjects).values(projectIds!.map((pid: string): typeof variableSetProjects.$inferInsert => ({ id: `vsp-${crypto.randomUUID()}`, variableSetId: record.id, projectId: pid }))).onConflictDoNothing();
+    await db.insert(variableSetProjects).values(projectIds.map((pid: string): typeof variableSetProjects.$inferInsert => ({ id: `vsp-${crypto.randomUUID()}`, variableSetId: record.id, projectId: pid }))).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })
@@ -148,7 +148,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const projectIds = projectRelationshipIds(body);
     if (!projectIds || projectIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationships" }] }; }
-    await db.delete(variableSetProjects).where(and(eq(variableSetProjects.variableSetId, record.id), inArray(variableSetProjects.projectId, projectIds!)));
+    await db.delete(variableSetProjects).where(and(eq(variableSetProjects.variableSetId, record.id), inArray(variableSetProjects.projectId, projectIds)));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -204,14 +204,14 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (!relationship || relationship.resources.length === 0 || (relationship.resources as ResItem[]).some((item: ResItem): boolean => !validVariableSetVariableAttributes(item.attributes, true))) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable resources" }] };
     }
-    const ids = (relationship!.resources as ResItem[]).map((item: ResItem): string => item.id);
+    const ids = (relationship.resources as ResItem[]).map((item: ResItem): string => item.id);
     const variables = await db.query.variableSetVariables.findMany({ where: and(eq(variableSetVariables.variableSetId, record.id), inArray(variableSetVariables.id, ids)) });
     if (variables.length !== ids.length) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const byId = new Map(variables.map((v: VarItem): [string, VarItem] => [v.id, v]));
-    const updates = (relationship!.resources as ResItem[]).map((item: ResItem): { variable: VarItem; values: Record<string, unknown> } => {
+    const updates = (relationship.resources as ResItem[]).map((item: ResItem): { variable: VarItem; values: Record<string, unknown> } => {
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
-      return { variable: v, values: variableSetVariableUpdate(v, item.attributes as any) };
+      return { variable: v, values: variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]) };
     });
     try {
       await db.transaction(async (tx: unknown): Promise<void> => {
@@ -222,7 +222,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
     }
-    const resources = updates.map((u: Readonly<{ readonly variable: VarItem; readonly values: Readonly<Record<string, unknown>> }>): Record<string, unknown> => variableSetVariableResource({ ...u.variable, ...u.values } as VarItem));
+    const resources = updates.map((u: Readonly<{ readonly variable: VarItem; readonly values: Readonly<Record<string, unknown>> }>): Record<string, unknown> => variableSetVariableResource({ ...u.variable, ...u.values }));
 
 
     return { data: relationship.many ? resources : resources[0] };
@@ -252,7 +252,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (data?.type !== "vars" || !validVariableSetVariableAttributes(attributes, true)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
-    const updated = variableSetVariableUpdate(variable, attributes as any);
+    const updated = variableSetVariableUpdate(variable, attributes as Parameters<typeof variableSetVariableUpdate>[1]);
     try { await db.update(variableSetVariables).set(updated).where(eq(variableSetVariables.id, variable.id)); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;

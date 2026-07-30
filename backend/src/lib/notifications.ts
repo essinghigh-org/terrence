@@ -53,7 +53,7 @@ export async function postNotification(
   const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
   const urlError = validateExternalUrl(configuration.url, allowPrivate);
   if (urlError !== null) {
-    return { body: urlError, code: "422", headers: {} as Readonly<Record<string, readonly string[]>>, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
+    return { body: urlError, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
   }
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -287,7 +287,7 @@ export async function deliverChangeRequestNotifications(
   const workspaceTeams = await db.query.teamWorkspaces.findMany({
     where: eq(teamWorkspaces.workspaceId, workspace.id),
   });
-  const teamIds = workspaceTeams.map((tw: Readonly<{ teamId: string }>) => tw.teamId);
+  const teamIds: string[] = workspaceTeams.map((tw: Readonly<{ teamId: string }>): string => tw.teamId);
   const teamConfigurations = teamIds.length > 0
     ? await db.query.notificationConfigurations.findMany({
         where: or(...teamIds.map((id: string) => eq(notificationConfigurations.teamId, id))),

@@ -163,19 +163,19 @@ describe("TFE API v2 - State-Run Relationships & Locking", () => {
     expect(body.data.length).toBeGreaterThanOrEqual(1);
 
     // The state version should have run relationship data
-    const svWithRun = (body.data as Array<Record<string, unknown>>).find(
+    const svWithRun = (body.data as Record<string, unknown>[]).find(
       (sv: Record<string, unknown>): boolean => {
         const rels = sv.relationships as Record<string, unknown> | null | undefined;
         const runRel = rels?.run as Record<string, unknown> | null | undefined;
         return runRel?.data != null;
       }
-    ) as Record<string, unknown> | undefined;
+    );
     expect(svWithRun).toBeDefined();
-    const rels = (svWithRun as Record<string, unknown>).relationships as Record<string, unknown>;
+    const rels = (svWithRun!).relationships as Record<string, unknown>;
     const runRel = rels.run as Record<string, unknown>;
     const runData = runRel.data as Record<string, unknown>;
     expect(runData.id).toBe(runId);
-    const attrs = (svWithRun as Record<string, unknown>).attributes as Record<string, unknown>;
+    const attrs = (svWithRun!).attributes as Record<string, unknown>;
 
     // Run attributes should be included
     expect(attrs["run-status"]).toBeDefined();

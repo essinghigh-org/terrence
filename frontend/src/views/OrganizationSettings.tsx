@@ -3,13 +3,13 @@ import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom"
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "../components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Select } from "../components/ui/select";
 import { Checkbox } from "../components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { MailPlus, Trash2, UserMinus, Users } from "lucide-react";
+import { History, MailPlus, Trash2, UserMinus, Users } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { HelpTooltip } from "../components/ui/help-tooltip";
 
@@ -98,6 +98,10 @@ export function OrganizationSettings(): React.JSX.Element {
   const [confirmDeleteOrgOpen, setConfirmDeleteOrgOpen] = useState(false);
   const [deletingOrg, setDeletingOrg] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<Membership | null>(null);
+  const [retentionDays, setRetentionDays] = useState(0);
+  const [retentionCount, setRetentionCount] = useState(0);
+  const [retentionLoading, setRetentionLoading] = useState(false);
+  const [retentionSaving, setRetentionSaving] = useState(false);
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
   const activeTab = searchParams.get("tab") === "teams" ? "teams" : "general";
@@ -117,6 +121,7 @@ export function OrganizationSettings(): React.JSX.Element {
     void loadOrg();
     void loadTeams();
     void loadMemberships();
+    void loadRetention();
   }, [orgName]);
 
   const loadOrg = async (): Promise<void> => {
@@ -164,6 +169,40 @@ export function OrganizationSettings(): React.JSX.Element {
         setMembershipsError(error instanceof Error ? error.message : "Could not load organization members");
       }
     }
+  };
+
+  const loadRetention = async (): Promise<void> => {
+    setRetentionLoading(true);
+    try {
+      const response = await fetchApi(`/organizations/${encodedOrgName}/relationships/data-retention-policy`) as {
+        data?: { attributes?: { "delete-older-than-n-days"?: number | null; "state-versions-count"?: number | null } };
+      };
+      setRetentionDays(response.data?.attributes?.["delete-older-than-n-days"] ?? 0);
+      setRetentionCount(response.data?.attributes?.["state-versions-count"] ?? 0);
+    } catch { /* no policy is a valid initial state */ }
+    finally { setRetentionLoading(false); }
+  };
+
+  const saveRetention = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setRetentionSaving(true);
+    try {
+      await fetchApi(`/organizations/${encodedOrgName}/relationships/data-retention-policy`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: retentionDays > 0 ? "data-retention-policy-delete-olders" : "data-retention-policy-dont-deletes",
+            attributes: {
+              "state-versions-count": retentionCount > 0 ? retentionCount : null,
+              "delete-older-than-n-days": retentionDays > 0 ? retentionDays : null,
+            },
+          },
+        }),
+      });
+      toast.add({ title: "Organization retention policy saved", type: "success" });
+    } catch (error: unknown) {
+      toast.add({ title: "Could not save retention policy", description: error instanceof Error ? error.message : "Unknown error", type: "error" });
+    } finally { setRetentionSaving(false); }
   };
 
   const saveSettings = async (e: React.SyntheticEvent): Promise<void> => {
@@ -334,7 +373,13 @@ export function OrganizationSettings(): React.JSX.Element {
   };
 
   if (loading || (org !== null && !orgIsCurrent)) {
-    return <div className="p-8 text-center text-gray-500">Loading organization settings...</div>;
+    return (
+      <div role="status" aria-label="Loading organization settings" className="flex max-w-4xl flex-col gap-6">
+        <div className="h-9 w-72 animate-pulse rounded bg-muted" />
+        <div className="h-56 animate-pulse rounded-md border bg-muted/50" />
+        <div className="h-40 animate-pulse rounded-md border bg-muted/50" />
+      </div>
+    );
   }
   if (org === null) {
     return (
@@ -444,6 +489,24 @@ export function OrganizationSettings(): React.JSX.Element {
                     <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
                   </Button>
                 </CardContent>
+              </Card>
+
+              <Card className="border-gray-200 shadow-sm rounded-md">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base"><History className="size-4" />Organization data retention</CardTitle>
+                  <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
+                </CardHeader>
+                <form onSubmit={saveRetention}>
+                  <CardContent>
+                    {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
+                      <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" type="number" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
+                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" type="number" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
+                      </FieldGroup>
+                    )}
+                  </CardContent>
+                  <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
+                </form>
               </Card>
             </>
           )}

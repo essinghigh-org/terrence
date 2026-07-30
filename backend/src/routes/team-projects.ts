@@ -40,7 +40,7 @@ const defaultAccessLevels: Record<string, { projectAccess: Record<string, string
 };
 
 function teamProjectResource(tp: TeamProjectItem): Record<string, unknown> {
-  const defaults = defaultAccessLevels[tp.access] ?? defaultAccessLevels.read!;
+  const defaults = defaultAccessLevels[tp.access] ?? (defaultAccessLevels.read!);
   return {
     id: tp.id,
     type: "team-projects",
@@ -138,8 +138,8 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
 
     const updates: Record<string, unknown> = {};
     if (typeof attributes.access === "string") updates.access = attributes.access;
-    if (attributes["project-access"] !== undefined) updates.projectAccess = attributes["project-access"] as Record<string, string>;
-    if (attributes["workspace-access"] !== undefined) updates.workspaceAccess = attributes["workspace-access"] as Record<string, unknown>;
+    if (attributes["project-access"] !== undefined) updates.projectAccess = attributes["project-access"];
+    if (attributes["workspace-access"] !== undefined) updates.workspaceAccess = attributes["workspace-access"];
 
     await db.update(teamProjects).set(updates).where(eq(teamProjects.id, tp.id));
     const updated = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, tp.id) });

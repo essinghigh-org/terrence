@@ -47,10 +47,10 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const rels = (data?.relationships as Record<string, unknown>) ?? {};
+    const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
+    const rels: Record<string, unknown> = (data?.relationships ?? {}) as Record<string, unknown>;
     const planRel = rels.plan as Record<string, unknown> | undefined;
-    const planId = typeof (planRel?.data as Record<string, unknown>)?.id === "string" ? ((planRel?.data as Record<string, unknown>).id as string) : "";
+    const planId = typeof (planRel?.data as Record<string, unknown> | undefined)?.id === "string" ? ((planRel?.data as Record<string, unknown>).id as string) : "";
 
     if (planId === "") {
       (set as { status: number }).status = 422;

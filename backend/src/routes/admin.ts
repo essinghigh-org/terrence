@@ -1,7 +1,8 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings } from "../db/schema";
-import { eq, and, or, desc, count, notInArray, like, SQL } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
+import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -244,7 +245,7 @@ function gravatarUrl(email: string | null | undefined): string {
         return buf.buffer;
       })()
     )
-  ).map((b: number) => b.toString(16).padStart(2, "0")).join("");
+  ).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
   return `https://www.gravatar.com/avatar/${hash}?s=80&d=identicon`;
 }
 
@@ -308,7 +309,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (filterSuspended === "false") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], false));
     if (q !== "") {
       const pattern = `%${q}%`;
-      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern)) as SQL);
+      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern))!);
     }
     const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
     const [allUsers, countRows] = await Promise.all([
@@ -400,7 +401,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
-    await db.update(users).set({ isSuspended: true } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     return { data: adminUserResource(updated!) };
   })
@@ -410,7 +411,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSuspended !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
-    await db.update(users).set({ isSuspended: false } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     return { data: adminUserResource(updated!) };
   })
@@ -440,7 +441,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSiteAuditor === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site auditor" }] }; }
-    await db.update(users).set({ isSiteAuditor: true } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    await db.update(users).set({ isSiteAuditor: true }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     return { data: adminUserResource(updated!) };
   })
@@ -450,7 +451,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSiteAuditor !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] }; }
-    await db.update(users).set({ isSiteAuditor: false } as Partial<typeof users.$inferInsert>).where(eq(users.id, userId));
+    await db.update(users).set({ isSiteAuditor: false }).where(eq(users.id, userId));
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     return { data: adminUserResource(updated!) };
   })

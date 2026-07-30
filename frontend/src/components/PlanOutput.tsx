@@ -858,7 +858,7 @@ export function PlanOutput({
             aria-label="Filter by operation"
             className="h-8 rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             onChange={(event): void => {
-              const val = ((event.currentTarget || event.target) as HTMLSelectElement).value as Operation | "all";
+              const val = ((event.currentTarget || event.target)).value as Operation | "all";
               setOperation(val);
             }}
           >

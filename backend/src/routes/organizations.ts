@@ -539,7 +539,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
 
     const query = new URL(request.url).searchParams.get("q")?.toLocaleLowerCase() ?? "";
-    let items = [...tagCounts.entries()].map(([name, countVal]) => ({
+    let items = [...tagCounts.entries()].map(([name, countVal]): { id: string; type: string; attributes: { name: string; "created-at": string; "instance-count": number }; relationships: { organization: { data: { id: string; type: string } } } } => ({
       id: `tag-${org.name}-${name}`,
       type: "tags",
       attributes: {

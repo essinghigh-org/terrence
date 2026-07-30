@@ -48,6 +48,7 @@ function transferResource(t: WorkspaceTransferItem): Record<string, unknown> {
 export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" })
   .use(authPlugin)
   .post("/api/v2/workspace-transfers", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+
     if (user === null || user === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };

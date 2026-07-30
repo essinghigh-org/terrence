@@ -201,28 +201,28 @@ function parseApplyLogsToExecMap(
       if (line.includes(": Creating...")) {
         map.set(address, { state: "creating" });
       } else if (line.includes(": Creation complete after")) {
-        const match = line.match(/Creation complete after ([^[\s]+)/);
+        const match = /Creation complete after ([^[\s]+)/.exec(line);
         const elapsed = match?.[1];
-        const idMatch = line.match(/\[id=([^\]]+)\]/);
+        const idMatch = /\[id=([^\]]+)\]/.exec(line);
         map.set(address, { state: "created", elapsed, resourceId: idMatch?.[1] });
       } else if (line.includes(": Modifying...")) {
         map.set(address, { state: "modifying" });
       } else if (line.includes(": Modifications complete after")) {
-        const match = line.match(/Modifications complete after ([^[\s]+)/);
+        const match = /Modifications complete after ([^[\s]+)/.exec(line);
         map.set(address, { state: "modified", elapsed: match?.[1] });
       } else if (line.includes(": Destroying...")) {
         map.set(address, { state: "destroying" });
       } else if (line.includes(": Destruction complete after")) {
-        const match = line.match(/Destruction complete after ([^[\s]+)/);
+        const match = /Destruction complete after ([^[\s]+)/.exec(line);
         map.set(address, { state: "destroyed", elapsed: match?.[1] });
       } else if (line.includes(": Still creating...")) {
-        const match = line.match(/\[(.*?) elapsed\]/);
+        const match = /\[(.*?) elapsed\]/.exec(line);
         map.set(address, { state: "creating", elapsed: match?.[1] });
       } else if (line.includes(": Still modifying...")) {
-        const match = line.match(/\[(.*?) elapsed\]/);
+        const match = /\[(.*?) elapsed\]/.exec(line);
         map.set(address, { state: "modifying", elapsed: match?.[1] });
       } else if (line.includes(": Still destroying...")) {
-        const match = line.match(/\[(.*?) elapsed\]/);
+        const match = /\[(.*?) elapsed\]/.exec(line);
         map.set(address, { state: "destroying", elapsed: match?.[1] });
       } else if (line.includes(": Error") || line.includes("Error: ")) {
         map.set(address, { state: "failed", error: line });

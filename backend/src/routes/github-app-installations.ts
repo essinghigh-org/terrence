@@ -243,7 +243,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     if (connectionId.startsWith("github-app:")) connectionId = connectionId.slice("github-app:".length);
     if (connectionId.startsWith("oauth-token:")) connectionId = connectionId.slice("oauth-token:".length);
 
-    const repos: Array<{ id: string; type: string; attributes: { identifier: string; name: string } }> = [];
+    const repos: { id: string; type: string; attributes: { identifier: string; name: string; owner: string } }[] = [];
 
     // 1. Check if connection is GitHub App Installation
     const installation = await db.query.githubAppInstallations.findFirst({
@@ -258,14 +258,14 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
             headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
           });
           if (res.ok) {
-            const body = await res.json() as { repositories?: Array<{ full_name?: string; name?: string }> };
+            const body = await res.json() as { repositories?: { full_name?: string; name?: string }[] }; // eslint-disable-line @typescript-eslint/naming-convention
             for (const repo of body.repositories ?? []) {
               if (typeof repo.full_name === "string" && repo.full_name !== "") {
                 repos.push({
                   id: repo.full_name,
                   type: "vcs-repositories",
-                  attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name },
-                });
+                  attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name, owner: repo.full_name.split("/")[0] ?? "" },
+                });  
               }
             }
           }
@@ -283,14 +283,14 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
             headers: { Authorization: `Bearer ${tokenStr}`, Accept: "application/vnd.github.v3+json" },
           });
           if (res.ok) {
-            const body = await res.json() as Array<{ full_name?: string; name?: string }>;
+            const body = await res.json() as { full_name?: string; name?: string }[]; // eslint-disable-line @typescript-eslint/naming-convention
             if (Array.isArray(body)) {
               for (const repo of body) {
                 if (typeof repo.full_name === "string" && repo.full_name !== "") {
                   repos.push({
                     id: repo.full_name,
                     type: "vcs-repositories",
-                    attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name },
+                    attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name, owner: repo.full_name.split("/")[0] ?? "" },
                   });
                 }
               }

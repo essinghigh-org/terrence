@@ -22,7 +22,7 @@ function urlOf(input: string | URL | Request): string {
 
 test("publishes a new registry module with version and archive upload", async () => {
   const requests: Readonly<{ method: string | undefined; url: string }>[] = [];
-  let moduleId = "mod-new-vpc";
+  const moduleId = "mod-new-vpc";
   let versionId = "modver-new-vpc-v1";
 
   globalThis.fetch = mock(async (
@@ -135,10 +135,10 @@ test("publishes a new registry module with version and archive upload", async ()
   await view.findByRole("heading", { name: /publish module/i });
 
   // Fill in module details using the field's id
-  const nameInput = view.getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+  const nameInput = view.getByRole("textbox", { name: "Name" });
   fireEvent.input(nameInput, { target: { value: "vpc" } });
 
-  const providerInput = view.getByRole("textbox", { name: "Provider" }) as HTMLInputElement;
+  const providerInput = view.getByRole("textbox", { name: "Provider" });
   fireEvent.input(providerInput, { target: { value: "aws" } });
 
   // Click "Create module" to proceed
@@ -149,7 +149,7 @@ test("publishes a new registry module with version and archive upload", async ()
   await view.findByRole("heading", { name: /publish version/i });
 
   // Fill version
-  const versionInput = view.getByRole("textbox", { name: "Version" }) as HTMLInputElement;
+  const versionInput = view.getByRole("textbox", { name: "Version" });
   fireEvent.input(versionInput, { target: { value: "1.0.0" } });
 
   // Click publish version

@@ -45,17 +45,17 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
         limit: size,
       });
 
-      const wsIds = list.map((w) => w.id);
-      const projIds = [...new Set(list.map((w) => w.projectId).filter((id): id is string => id !== null))];
+      const wsIds: string[] = list.map((w): string => w.id);
+      const projIds: string[] = [...new Set(list.map((w): string | null => w.projectId).filter((id): id is string => id !== null))];
 
-      const [allProjects, allTags, latestStates, latestRuns] = await Promise.all([
+      const [allProjects, allTags, latestStates, latestRuns]: [typeof projects.$inferSelect[], typeof workspaceTags.$inferSelect[], typeof stateVersions.$inferSelect[], typeof runs.$inferSelect[]] = await Promise.all([
         projIds.length > 0 ? db.query.projects.findMany({ where: inArray(projects.id, projIds) }) : Promise.resolve([]),
         wsIds.length > 0 ? db.query.workspaceTags.findMany({ where: inArray(workspaceTags.workspaceId, wsIds) }) : Promise.resolve([]),
         wsIds.length > 0 ? db.query.stateVersions.findMany({ where: inArray(stateVersions.workspaceId, wsIds), orderBy: [desc(stateVersions.serial)] }) : Promise.resolve([]),
         wsIds.length > 0 ? db.query.runs.findMany({ where: inArray(runs.workspaceId, wsIds), orderBy: [desc(runs.createdAt)] }) : Promise.resolve([]),
       ]);
 
-      const projectsById = new Map(allProjects.map((p) => [p.id, p]));
+      const projectsById = new Map(allProjects.map((p): [string, typeof projects.$inferSelect] => [p.id, p]));
       const tagsByWs = new Map<string, string[]>();
       for (const t of allTags) {
         const arr = tagsByWs.get(t.workspaceId) ?? [];

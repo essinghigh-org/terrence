@@ -46,6 +46,7 @@ import { queryRoutes } from "./routes/queries";
 import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
+import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
@@ -183,6 +184,15 @@ function sensitivePath(request: CustomRequest): string | undefined {
 
 export const app = new Elysia()
   .use(authPlugin)
+  .get("/api/v2/available-versions", async ({ query, set }: Readonly<{ query: Readonly<Record<string, string>>; set: SetObject }>): Promise<unknown> => {
+    const tool = query.tool === "terraform" ? "terraform" : "tofu";
+    try {
+      return { data: await availableVersions(tool) };
+    } catch {
+      (set as { status: number }).status = 503;
+      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
+    }
+  })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
     const path = new URL(request.url).pathname;

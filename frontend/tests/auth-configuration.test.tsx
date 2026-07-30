@@ -122,12 +122,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(within(samlSection).getByText("Security Assertion Markup Language")).toBeTruthy();
 
   // Enable SAML
-  const samlEnabledCheckbox = within(samlSection).getByLabelText("Enable SAML SSO") as HTMLInputElement;
+  const samlEnabledCheckbox = within(samlSection).getByLabelText("Enable SAML SSO");
   expect(samlEnabledCheckbox.checked).toBeFalse();
   await act(async (): Promise<void> => { fireEvent.click(samlEnabledCheckbox); });
 
   // Fill in SSO endpoint
-  const ssoInput = within(samlSection).getByLabelText("SSO Endpoint URL") as HTMLInputElement;
+  const ssoInput = within(samlSection).getByLabelText("SSO Endpoint URL");
   await act(async (): Promise<void> => {
     fireEvent.input(ssoInput, { target: { value: "https://idp.example.com/sso" } });
   });
@@ -146,7 +146,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(within(oidcSection).getByText("OpenID Connect provider")).toBeTruthy();
 
   // Fill in OIDC issuer URL
-  const issuerInput = within(oidcSection).getByLabelText("Issuer URL") as HTMLInputElement;
+  const issuerInput = within(oidcSection).getByLabelText("Issuer URL");
   await act(async (): Promise<void> => {
     fireEvent.input(issuerInput, { target: { value: "https://accounts.example.com" } });
   });

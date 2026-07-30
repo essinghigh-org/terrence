@@ -28,6 +28,7 @@ type CreateWorkspaceModalProps = {
 type VcsRepoOption = {
   identifier: string;
   name: string;
+  owner?: string;
 };
 
 export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>): React.JSX.Element {
@@ -36,6 +37,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [autoApply, setAutoApply] = useState(false);
   const [iacBinary, setIacBinary] = useState(defaultIacBinary ?? "tofu");
   const [terraformVersion, setTerraformVersion] = useState("latest");
+  const [availableVersions, setAvailableVersions] = useState<string[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [vcsIdentifier, setVcsIdentifier] = useState("");
   const [vcsConnections, setVcsConnections] = useState<VcsConnection[]>([]);
@@ -52,6 +55,22 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setIacBinary(defaultIacBinary);
     }
   }, [defaultIacBinary, open]);
+
+  useEffect((): (() => void) | undefined => {
+    if (!open) return undefined;
+    const controller = new AbortController();
+    setVersionsLoading(true);
+    void fetchApi(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, { signal: controller.signal })
+      .then((response: unknown): void => {
+        const versions = (response as { data?: unknown }).data;
+        if (!controller.signal.aborted && Array.isArray(versions)) {
+          setAvailableVersions(versions.filter((version): version is string => typeof version === "string"));
+        }
+      })
+      .catch((): void => {})
+      .finally((): void => { if (!controller.signal.aborted) setVersionsLoading(false); });
+    return (): void => { controller.abort(); };
+  }, [iacBinary, open]);
 
   // Fetch registered VCS connections
   useEffect((): (() => void) | undefined => {
@@ -94,7 +113,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     )
       .then((res: unknown): void => {
         if (controller.signal.aborted) return;
-        const list = (res as { data?: Array<{ attributes: { identifier: string; name: string } }> }).data;
+        const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
         if (Array.isArray(list)) {
           setVcsRepositories(list.map((item) => item.attributes));
         }
@@ -204,14 +223,17 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="tf-version" className="text-xs font-medium font-mono text-gray-600">Engine Version (e.g. 1.8.5, 1.9.3, latest)</label>
-            <Input
+            <label htmlFor="tf-version" className="text-sm font-medium">Engine Version</label>
+            <select
               id="tf-version"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
               value={terraformVersion}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setTerraformVersion(event.currentTarget.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTerraformVersion(event.currentTarget.value); }}
-              placeholder="latest"
-            />
+              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setTerraformVersion(event.target.value); }}
+            >
+              <option value="latest">Latest available</option>
+              {availableVersions.map((version): React.JSX.Element => <option key={version} value={version}>{version}</option>)}
+            </select>
+            <p className="text-xs text-muted-foreground">{versionsLoading ? "Loading supported versions…" : "Versions are fetched from the selected engine release catalog."}</p>
           </div>
 
           <div className="flex items-center gap-2 mt-1">
@@ -239,15 +261,14 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                    VCS Connection
-                  </label>
+                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS Connection</label>
                   <select
                     id="vcs-connection"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
                     value={vcsConnectionValue}
                     onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
                       setVcsConnectionValue(event.target.value);
+                      setVcsIdentifier("");
                     }}
                     disabled={loading || vcsConnectionsLoading}
                   >
@@ -266,7 +287,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                       ? vcsConnectionsError
                       : vcsConnections.length === 0 && !vcsConnectionsLoading
                         ? "No registered connections are available. Add one in organization VCS settings."
-                        : "Choose a registered GitHub App or OAuth connection."}
+                        : "Choose a connection first, then search repositories by organization or name."}
                   </p>
                 </div>
 

@@ -24,6 +24,7 @@ import { WorkspacePolicySets } from "../components/WorkspacePolicySets";
 import { WorkspaceResources } from "../components/WorkspaceResources";
 import { WorkspaceVcs } from "../components/WorkspaceVcs";
 import { WorkspaceRunTasks } from "../components/WorkspaceRunTasks";
+import { WorkspaceRetention } from "../components/WorkspaceRetention";
 import { WorkspaceDestruction } from "../components/WorkspaceDestruction";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
@@ -46,6 +47,7 @@ export type WorkspaceSection =
   | "ssh-key"
   | "vcs"
   | "health"
+  | "retention"
   | "settings"
   | "locking"
   | "destruction";
@@ -250,7 +252,19 @@ export function WorkspaceDetail({
     }
   }
 
-  if (loading) return <div className="p-8 text-gray-500">Loading workspace...</div>;
+  if (loading) return (
+    <div role="status" aria-label="Loading workspace" className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <div className="h-3 w-32 animate-pulse rounded bg-muted" />
+        <div className="h-9 w-64 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-96 max-w-full animate-pulse rounded bg-muted" />
+      </div>
+      <div className="grid gap-6 xl:grid-cols-3">
+        <div className="h-48 animate-pulse rounded-md border bg-muted/50 xl:col-span-2" />
+        <div className="h-48 animate-pulse rounded-md border bg-muted/50" />
+      </div>
+    </div>
+  );
   if (workspace == null) {
     return (
       <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
@@ -295,6 +309,7 @@ export function WorkspaceDetail({
   const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
   const isSettingsSection = [
     "health",
+    "retention",
     "locking",
     "notifications",
     "policy-sets",
@@ -320,6 +335,7 @@ export function WorkspaceDetail({
     { id: "ssh-key", label: "SSH key" },
     { id: "vcs", label: "VCS" },
     { id: "health", label: "Health" },
+    { id: "retention", label: "Retention" },
     { id: "settings", label: "Settings" },
     { id: "destruction", label: "Destruction" },
   ] satisfies readonly { readonly id: WorkspaceSection; readonly label: string }[])
@@ -639,6 +655,7 @@ export function WorkspaceDetail({
             onSaved={(saved: Workspace): void => { setWorkspace(saved); }}
           />
         )}
+        {activeSection === "retention" && canUpdate && <WorkspaceRetention workspaceId={workspace.id} />}
         {activeSection === "vcs" && (
           <WorkspaceVcs
             key={workspace.id}

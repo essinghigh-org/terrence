@@ -46,6 +46,8 @@ type RunAttributes = {
   actions?: RunActions;
   "allow-empty-apply"?: boolean;
   "auto-apply"?: boolean;
+  "branch"?: string | null;
+  "commit-sha"?: string | null;
   "created-at"?: string;
   "has-changes"?: boolean;
   "is-destroy"?: boolean;
@@ -150,6 +152,17 @@ type PolicyCheck = {
     "policy-name"?: string | null;
     "enforcement-level"?: string | null;
     "created-at"?: string;
+  };
+};
+
+type AssessmentCheck = {
+  id: string;
+  attributes: {
+    address?: string | null;
+    kind?: string | null;
+    status: string;
+    message?: string | null;
+    detail?: string | null;
   };
 };
 
@@ -453,6 +466,7 @@ export function RunDetail({
   const [applyLogs, setApplyLogs] = useState("");
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
+  const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [comments, setComments] = useState<RunComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
@@ -501,12 +515,13 @@ export function RunDetail({
         setCreatorAvatarUrl("");
       }
 
-      const [logResult, planResult, applyResult, costResult, policyResult, eventResult, commentResult] = await Promise.allSettled([
+      const [logResult, planResult, applyResult, costResult, policyResult, assessmentResult, eventResult, commentResult] = await Promise.allSettled([
         fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
         fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
+        fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
         fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
       ]);
@@ -517,6 +532,7 @@ export function RunDetail({
         applyResult,
         costResult,
         policyResult,
+        assessmentResult,
         eventResult,
         commentResult,
       ].some((result): boolean => result.status === "rejected"));
@@ -559,6 +575,10 @@ export function RunDetail({
         const data = (policyResult.value as { data?: PolicyCheck[] }).data;
         setPolicyChecks(Array.isArray(data) ? data : []);
       }
+      if (assessmentResult.status === "fulfilled") {
+        const data = (assessmentResult.value as { data?: AssessmentCheck[] }).data;
+        setAssessmentChecks(Array.isArray(data) ? data : []);
+      }
       if (eventResult.status === "fulfilled") {
         const data = (eventResult.value as { data?: RunEvent[] }).data;
         setRunEvents(Array.isArray(data) ? data : []);
@@ -596,6 +616,7 @@ export function RunDetail({
       setApplyLogs("");
       setCostEstimate(null);
       setPolicyChecks([]);
+      setAssessmentChecks([]);
       setComments([]);
       setAuxiliaryError(false);
       setCreatorUsername("");
@@ -670,7 +691,14 @@ export function RunDetail({
   }
 
   if (run !== null && run.id !== runId) return <div className="p-8 text-gray-500">Loading run...</div>;
-  if (loading && run === null) return <div className="p-8 text-gray-500">Loading run...</div>;
+  if (loading && run === null) return (
+    <div role="status" aria-label="Loading run" className="flex flex-col gap-5">
+      <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+      <div className="h-10 w-72 animate-pulse rounded bg-muted" />
+      <div className="h-28 animate-pulse rounded-md border bg-muted/50" />
+      <div className="h-64 animate-pulse rounded-md border bg-muted/50" />
+    </div>
+  );
   if (run === null) {
     return (
       <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
@@ -838,6 +866,14 @@ export function RunDetail({
           <p className="mt-2 text-[13px] text-gray-600">
             {statusLabel(attributes["trigger-reason"] ?? "manual")} · {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
+          {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>{attributes.branch ?? "Default branch"}</span>
+              {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
+                <code title={attributes["commit-sha"]}>{attributes["commit-sha"].slice(0, 12)}</code>
+              )}
+            </div>
+          )}
         </div>
         {(canCancel || canForceCancel || canOverridePolicy) && (
           <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
@@ -1125,6 +1161,37 @@ export function RunDetail({
               </div>
             )}
           </section>
+          )}
+
+          {assessmentChecks.length > 0 && (
+            <section aria-labelledby="assessment-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 px-5 py-4">
+                <div>
+                  <h2 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">Terraform checks and drift validation reported for this run.</p>
+                </div>
+                <Badge variant={assessmentChecks.some((check): boolean => ["failed", "errored"].includes(check.attributes.status)) ? "destructive" : "secondary"}>
+                  {assessmentChecks.filter((check): boolean => check.attributes.status === "passed").length} / {assessmentChecks.length} passed
+                </Badge>
+              </div>
+              <div className="border-t border-gray-200 px-5 py-3">
+                <Table>
+                  <TableHeader><TableRow><TableHead>Check</TableHead><TableHead>Result</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {assessmentChecks.map((check): React.JSX.Element => (
+                      <TableRow key={check.id}>
+                        <TableCell>
+                          <div className="font-medium">{check.attributes.address ?? check.id}</div>
+                          {check.attributes.kind !== null && check.attributes.kind !== undefined && <div className="text-xs text-muted-foreground">{check.attributes.kind}</div>}
+                        </TableCell>
+                        <TableCell className="whitespace-normal">{check.attributes.message ?? check.attributes.detail ?? "—"}</TableCell>
+                        <TableCell><Badge variant={["failed", "errored"].includes(check.attributes.status) ? "destructive" : "secondary"}>{check.attributes.status.replace(/_/g, " ")}</Badge></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </section>
           )}
 
           {showApply && (

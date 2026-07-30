@@ -186,24 +186,26 @@ export function WorkspaceVcs({
     ? [initialConnection, ...connections]
     : connections;
 
-  const [vcsRepositories, setVcsRepositories] = useState<Array<{ identifier: string; name: string }>>([]);
+  const [vcsRepositories, setVcsRepositories] = useState<{ identifier: string; name: string; owner?: string }[]>([]);
+  const [vcsRepositoriesLoading, setVcsRepositoriesLoading] = useState(false);
 
   useEffect((): (() => void) | undefined => {
     setVcsRepositories([]);
+    setVcsRepositoriesLoading(false);
     if (!canUpdate || orgName === "" || connectionValue === "") return undefined;
     const controller = new AbortController();
+    setVcsRepositoriesLoading(true);
     void fetchApi(
       `/organizations/${encodeURIComponent(orgName)}/vcs-connections/${encodeURIComponent(connectionValue)}/repositories`,
       { signal: controller.signal },
     )
       .then((res: unknown): void => {
         if (controller.signal.aborted) return;
-        const list = (res as { data?: Array<{ attributes: { identifier: string; name: string } }> }).data;
-        if (Array.isArray(list)) {
-          setVcsRepositories(list.map((item) => item.attributes));
-        }
+        const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
+        if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
-      .catch((): void => {});
+      .catch((): void => {})
+      .finally((): void => { if (!controller.signal.aborted) setVcsRepositoriesLoading(false); });
     return (): void => {
       controller.abort();
     };
@@ -341,6 +343,7 @@ export function WorkspaceVcs({
                 value={connectionValue}
                 onValueChange={(val: string): void => {
                   setConnectionValue(val);
+                  setIdentifier("");
                 }}
                 disabled={!canUpdate || connectionsLoading}
               >
@@ -361,7 +364,7 @@ export function WorkspaceVcs({
                 <FieldDescription>
                   {displayedConnections.length === 0 && !connectionsLoading
                     ? "No registered connections are available. Add one in organization VCS settings."
-                    : "Choose a registered GitHub App or OAuth connection."}
+                      : "Choose a registered GitHub App or OAuth connection. Repository search includes organization and name."}
                 </FieldDescription>
               )}
             </Field>
@@ -373,11 +376,11 @@ export function WorkspaceVcs({
                 value={identifier}
                 onValueChange={setIdentifier}
                 repositories={vcsRepositories}
-                loading={vcsRepositories.length === 0 && connectionValue !== "" && orgName !== ""}
+                loading={vcsRepositoriesLoading}
                 disabled={!canUpdate}
                 placeholder="e.g. organization/repository"
               />
-              <FieldDescription>The namespace and repository that contains this configuration.</FieldDescription>
+              <FieldDescription>Search by organization or repository name, then select the full repository path.</FieldDescription>
             </Field>
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>

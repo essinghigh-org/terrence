@@ -72,7 +72,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
       offset: (number - 1) * size,
       limit: size,
     });
-    return { data: await Promise.all(lists.map((l) => cidrRangeListResource(l))), ...pagination(request, number, size, total) };
+    return { data: await Promise.all(lists.map(async (l) => cidrRangeListResource(l))), ...pagination(request, number, size, total) };
   })
   .post("/api/v2/organizations/:org_name/cidr-range-lists", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });

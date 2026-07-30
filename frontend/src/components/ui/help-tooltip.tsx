@@ -17,17 +17,18 @@ export function HelpTooltip({
 }: HelpTooltipProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
 
+  // eslint-disable-next-line @typescript-eslint/naming-convention
   const IconComp = icon === "info" ? Info : HelpCircle;
 
   return (
     <div
       className="relative inline-flex items-center"
-      onMouseEnter={(): void => setIsOpen(true)}
-      onMouseLeave={(): void => setIsOpen(false)}
+      onMouseEnter={(): void => { setIsOpen(true); }}
+      onMouseLeave={(): void => { setIsOpen(false); }}
     >
       <button
         type="button"
-        onClick={(): void => setIsOpen((prev): boolean => !prev)}
+        onClick={(): void => { setIsOpen((prev): boolean => !prev); }}
         aria-label={title ?? "Help info"}
         className={cn(
           "inline-flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",

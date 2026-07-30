@@ -2144,7 +2144,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
 
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+    const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
 
     let newStatus = ver.status;
     if (attributes.deprecated === true) newStatus = "deprecated";
