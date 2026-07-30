@@ -288,10 +288,12 @@ export const app = new Elysia()
       }
     }
   })
-  .use(staticPlugin({
-    assets: join(import.meta.dir, "../../frontend/dist"),
-    prefix: "/",
-  }))
+  .use(process.env.NODE_ENV === "development"
+    ? new Elysia()
+    : staticPlugin({
+        assets: join(import.meta.dir, "../../frontend/dist"),
+        prefix: "/",
+      }))
   .get("/login", serveFrontend)
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
