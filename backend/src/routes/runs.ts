@@ -36,11 +36,11 @@ type DeepReadonly<T> = T extends (infer R)[]
 
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
-type RunOrigin = Readonly<{ source: string; triggerReason: string }>;
+const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
+type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string }>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
-const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
 
 function originForConfiguration(
   configuration: ConfigurationVersionItem | undefined,
@@ -53,11 +53,14 @@ function originForConfiguration(
     : (ingress as Record<string, unknown>).manualTrigger === true
       ? "manual"
       : typeof ingress?.pullRequestNumber === "number"
-      ? "pull_request"
-      : typeof ingress?.tag === "string" && ingress.tag !== ""
-        ? "tag"
-        : "push";
-  return { source, triggerReason };
+        ? "pull_request"
+        : typeof ingress?.tag === "string" && ingress.tag !== ""
+          ? "tag"
+          : "push";
+  const origin: RunOrigin = { source, triggerReason };
+  if (ingress?.branch !== undefined) (origin as Record<string, unknown>).branch = ingress.branch;
+  if (ingress?.commitSha !== undefined) (origin as Record<string, unknown>).commitSha = ingress.commitSha;
+  return origin;
 }
 
 async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {

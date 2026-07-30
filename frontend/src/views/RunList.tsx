@@ -7,7 +7,7 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
+import { Avatar, AvatarImage } from "../components/ui/avatar";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -29,6 +29,9 @@ type RunItem = {
     source?: string;
     status: string;
     "trigger-reason"?: string;
+    "branch"?: string | null;
+    "commit-sha"?: string | null;
+    operation?: string;
   };
   relationships?: {
     "created-by"?: {
@@ -120,18 +123,6 @@ function StatusIcon({ status }: Readonly<{ status: string }>): React.JSX.Element
     return <XCircle className="size-4 text-gray-500" aria-hidden="true" />;
   }
   return <Clock className="size-4 text-blue-600" aria-hidden="true" />;
-}
-
-function displaySource(source: string | undefined): string {
-  if (source === undefined || source === "") return "—";
-  const labels: Readonly<Record<string, string>> = {
-    bitbucket: "Bitbucket",
-    github: "GitHub",
-    gitlab: "GitLab",
-    "tfe-api": "TFE API",
-    "tfe-no-code": "No-code provisioning",
-  };
-  return labels[source] ?? statusLabel(source);
 }
 
 export function RunList({
@@ -379,9 +370,6 @@ export function RunList({
                 <tr className="border-b border-gray-200 bg-[#fafafa] text-xs font-semibold tracking-wide text-gray-800">
                   <th className="border-r border-gray-200 px-4 py-3">Run</th>
                   <th className="border-r border-gray-200 px-4 py-3">Status</th>
-                  <th className="border-r border-gray-200 px-4 py-3">Source</th>
-                  <th className="border-r border-gray-200 px-4 py-3">Trigger</th>
-                  <th className="border-r border-gray-200 px-4 py-3">Triggered by</th>
                   <th className="px-4 py-3">Created</th>
                 </tr>
               </thead>
@@ -393,45 +381,48 @@ export function RunList({
                         to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
                         className="mb-0.5 block text-[13px] font-medium text-blue-700 hover:underline"
                       >
-                        {run.attributes.message ?? "Manual run"}
+                        {run.attributes.message ?? "Triggered via UI"}
                       </Link>
-                      <span className="font-mono text-[11px] text-gray-500">{run.id}</span>
+                      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 font-mono text-[11px] text-gray-500">
+                        <span>{run.id}</span>
+                        <span aria-hidden="true">|</span>
+                        {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
+                          <>
+                            <span className="text-gray-600">{run.attributes.operation.replace(/_/g, " ")}</span>
+                            <span aria-hidden="true">|</span>
+                          </>
+                        )}
+                        {(() => {
+                          const creatorId = run.relationships?.["created-by"]?.data?.id;
+                          const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
+                          const username = creatorUser?.attributes.username ?? "System";
+                          const avatarUrl = creatorUser?.attributes["avatar-url"] ?? "";
+                          return (
+                            <>
+                              <span className="flex items-center gap-1">
+                                {avatarUrl !== "" && (
+                                  <Avatar className="inline-flex size-4 align-middle rounded-full">
+                                    <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
+                                  </Avatar>
+                                )}
+                                <span>{username}</span>
+                              </span>
+                              <span aria-hidden="true">|</span>
+                              <span>triggered via {run.attributes.source === "github" ? "GitHub" : run.attributes.source === "tfe-api" ? "UI" : run.attributes.source ?? "UI"}</span>
+                              <span aria-hidden="true">|</span>
+                              <span>Branch {run.attributes["branch"] ?? "master"}</span>
+                              <span aria-hidden="true">|</span>
+                              <span>{(run.attributes["commit-sha"] ?? "").slice(0, 7)}</span>
+                            </>
+                          );
+                        })()}
+                      </div>
                     </td>
                     <td className="border-r border-gray-200 px-4 py-3">
                       <div className="flex items-center gap-2 text-[13px] font-medium text-gray-900">
                         <StatusIcon status={run.attributes.status} />
                         {statusLabel(run.attributes.status)}
                       </div>
-                    </td>
-                    <td className="border-r border-gray-200 px-4 py-3 text-[13px] text-gray-600">
-                      {displaySource(run.attributes.source)}
-                    </td>
-                    <td className="border-r border-gray-200 px-4 py-3 text-[13px] capitalize text-gray-600">
-                      {statusLabel(run.attributes["trigger-reason"] ?? "manual")}
-                    </td>
-                    <td className="border-r border-gray-200 px-4 py-3">
-                      {(() => {
-                        const creatorId = run.relationships?.["created-by"]?.data?.id;
-                        const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
-                        if (creatorUser === undefined) {
-                          return <span className="text-[13px] text-gray-400">System</span>;
-                        }
-                        const avatarUrl = creatorUser.attributes["avatar-url"] ?? "";
-                        return (
-                          <div className="flex items-center gap-2">
-                            <Avatar className="size-6 rounded-full">
-                              {avatarUrl !== "" ? (
-                                <AvatarImage src={avatarUrl} alt={creatorUser.attributes.username} className="rounded-full object-cover" />
-                              ) : (
-                                <AvatarFallback className="rounded-full bg-gray-100 text-[10px] text-gray-600">
-                                  {creatorUser.attributes.username.slice(0, 2).toUpperCase()}
-                                </AvatarFallback>
-                              )}
-                            </Avatar>
-                            <span className="text-[13px] font-medium text-gray-700">{creatorUser.attributes.username}</span>
-                          </div>
-                        );
-                      })()}
                     </td>
                     <td className="px-4 py-3 text-[13px] text-gray-500">
                       <time dateTime={run.attributes["created-at"]}>{formatDate(run.attributes["created-at"])}</time>

@@ -432,6 +432,8 @@ type RunParam = DeepReadonly<typeof runs.$inferSelect>;
 type RunOrigin = Readonly<{
   source?: string | null;
   triggerReason?: string | null;
+  branch?: string | null;
+  commitSha?: string | null;
 }>;
 
 function runHasChanges(run: RunParam): boolean {
@@ -503,6 +505,8 @@ export function runResource(
       "is-destroy": run.isDestroy === true,
       "created-at": new Date(run.createdAt).toISOString(),
       "trigger-reason": origin?.triggerReason ?? "manual",
+      "branch": (origin as Record<string, unknown>)?.branch ?? null,
+      "commit-sha": (origin as Record<string, unknown>)?.commitSha ?? null,
       variables: run.variables ?? [],
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,
