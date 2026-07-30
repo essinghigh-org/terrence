@@ -81,6 +81,25 @@ docker build -t terrence .
 docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 ```
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP listen port |
+| `NODE_ENV` | `development` | Set to `production` for production mode |
+| `DATABASE_URL` | `file:./storage/terrence.db` | SQLite database path |
+| `STORAGE_DIR` | `./storage` | Directory for state archives and binaries |
+| `PUBLIC_URL` | — | Public URL for webhook callbacks (required for GitHub App) |
+| `CORS_ORIGIN` | — | CORS origin (defaults to `*` in non-production) |
+| `INFRACOST_ENABLED` | `false` | Enable Infracost for cost estimation |
+| `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
+| `GITHUB_APP_SLUG` | — | GitHub App slug |
+| `GITHUB_APP_PRIVATE_KEY` | — | GitHub App RSA private key |
+| `GITHUB_APP_WEBHOOK_SECRET` | — | GitHub App webhook secret |
+| `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub Enterprise HTTP URL |
+| `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub Enterprise API URL |
+| `TERRENCE_DISABLE_LOCAL_SIGNUP` | `false` | When `true`, local account registration via `POST /api/v2/users` is disabled and the `/register` page redirects to `/login`. Set this on internet-facing instances. |
+
 ## Features
 
 - **Workspaces** — Create, configure, lock/unlock, manage VCS connections

@@ -1234,22 +1234,24 @@ export async function executeApply(runId: string): Promise<void> {
       if (await exists(stateFilePath)) {
         const statePayload = await readFile(stateFilePath, "utf-8");
 
-        await db.transaction(async (tx: unknown): Promise<void> => {
+        const nextSerial = await db.transaction(async (tx: unknown): Promise<number> => {
           const t = tx as typeof db;
           const latestState = await t.query.stateVersions.findFirst({
             where: eq(stateVersions.workspaceId, workspace.id),
             orderBy: [desc(stateVersions.serial)],
           });
-          const nextSerial = (latestState?.serial ?? 0) + 1;
+          const serial = (latestState?.serial ?? 0) + 1;
           await t.insert(stateVersions).values({
             id: crypto.randomUUID(),
             workspaceId: workspace.id,
-            serial: nextSerial,
+            serial,
             statePayload,
             runId,
           });
-          await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
+          return serial;
         });
+
+        await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
 
       }
     } else if (isSimulatedAllowed) {
