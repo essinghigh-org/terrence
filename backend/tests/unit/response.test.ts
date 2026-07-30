@@ -62,7 +62,7 @@ describe("userResource", () => {
     const result = userResource({ id: "user-fallback", username: "y", email: "" });
     const avatarUrl = result.attributes["avatar-url"];
     expect(avatarUrl).toInclude("gravatar.com/avatar/00000000000000000000000000000000");
-    expect(avatarUrl).toInclude("d=mp&f=y");
+    expect(avatarUrl).toInclude("d=mp&s=80&f=y");
   });
 
   it("sets permissions for user type", () => {

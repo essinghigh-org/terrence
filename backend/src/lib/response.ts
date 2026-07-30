@@ -29,8 +29,8 @@ export function userResource(
   authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
 ) {
   const avatarUrl = typeof user.email === "string" && user.email !== ""
-    ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp`
-    : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y`;
+    ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
+    : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
 
   return {
     id: user.id,

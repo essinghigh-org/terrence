@@ -97,6 +97,7 @@ type RunComment = {
   id: string;
   attributes: {
     "actor-username"?: string | null;
+    "actor-avatar-url"?: string | null;
     body: string;
     "created-at"?: string;
   };
@@ -1315,9 +1316,13 @@ export function RunDetail({
                   <div className="mb-1 flex items-center justify-between gap-3 text-xs text-gray-500">
                     <span className="flex items-center gap-2 font-medium text-gray-700">
                       <Avatar className="size-5 rounded">
-                        <AvatarFallback className="rounded bg-gray-100 text-[9px] text-gray-600">
-                          {(comment.attributes["actor-username"] ?? "S").slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
+                        {comment.attributes["actor-avatar-url"] ? (
+                          <AvatarImage src={comment.attributes["actor-avatar-url"]} alt={comment.attributes["actor-username"] ?? "User"} className="rounded object-cover" />
+                        ) : (
+                          <AvatarFallback className="rounded bg-gray-100 text-[9px] text-gray-600">
+                            {(comment.attributes["actor-username"] ?? "S").slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        )}
                       </Avatar>
                       {comment.attributes["actor-username"] ?? "System"}
                     </span>

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
@@ -77,14 +78,22 @@ async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<
   }));
 }
 
-async function usernamesById(userIds: readonly (string | null)[]): Promise<ReadonlyMap<string, string>> {
+async function usernamesById(userIds: readonly (string | null)[]): Promise<ReadonlyMap<string, { username: string; email: string | null }>> {
   const ids = [...new Set(userIds.filter((id): id is string => id !== null))];
   if (ids.length === 0) return new Map();
   const actors = await db.query.users.findMany({
     where: inArray(users.id, ids),
-    columns: { id: true, username: true },
+    columns: { id: true, username: true, email: true },
   });
-  return new Map(actors.map((actor): [string, string] => [actor.id, actor.username]));
+  return new Map(actors.map((actor): [string, { username: string; email: string | null }] => [actor.id, { username: actor.username, email: actor.email }]));
+}
+
+function gravatarUrl(email: string | null | undefined): string {
+  if (typeof email === "string" && email !== "") {
+    const hash = createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+    return `https://www.gravatar.com/avatar/${hash}?d=mp&s=80`;
+  }
+  return `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
 }
 
 async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Record<string, unknown>[]> {
@@ -359,7 +368,7 @@ export const runRoutes = new Elysia({ name: "runs" })
         attributes: {
           action: event.action,
           "created-at": new Date(event.createdAt).toISOString(),
-          "actor-username": event.userId === null ? null : usernames.get(event.userId) ?? null,
+          "actor-username": event.userId === null ? null : usernames.get(event.userId)?.username ?? null,
           details: safeRunEventDetails(event),
         },
       })),
@@ -559,7 +568,8 @@ export const runRoutes = new Elysia({ name: "runs" })
         attributes: {
           body: comment.body,
           "created-at": new Date(comment.createdAt).toISOString(),
-          "actor-username": comment.userId === null ? null : usernames.get(comment.userId) ?? null,
+          "actor-username": comment.userId === null ? null : usernames.get(comment.userId)?.username ?? null,
+          "actor-avatar-url": comment.userId === null ? null : gravatarUrl(usernames.get(comment.userId)?.email ?? null),
         },
       })),
     };
