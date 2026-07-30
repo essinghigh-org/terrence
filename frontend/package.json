@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build-dev": "tsc -b && vite build --mode development",
     "lint": "eslint .",
     "test": "bun test --preload ./tests/setup.ts",
     "typecheck": "tsc -b",
