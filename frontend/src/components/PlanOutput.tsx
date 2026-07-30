@@ -603,7 +603,7 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
           <details key={name} className="border-b border-gray-100 last:border-b-0">
             <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-gray-50">
               <span className="inline-flex items-center rounded border border-gray-300 bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
-              <span className="text-gray-500">{operationFor(output.actions) === "delete" ? "−" : operationFor(output.actions) === "no-op" ? "·" : operationFor(output.actions) === "create" ? "+" : operationFor(output.actions) === "update" ? "~" : operationFor(output.actions) === "read" ? "◎" : operationFor(output.actions) === "replace" ? "±" : operationFor(output.actions) === "import" ? "&" : operationFor(output.actions) === "move" ? "→" : ""}</span>
+              <span className="text-gray-500">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
             </summary>
             <AttributeDiff change={output} address={`output.${name}`} />
           </details>
