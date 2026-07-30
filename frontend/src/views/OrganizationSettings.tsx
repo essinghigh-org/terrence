@@ -12,8 +12,10 @@ import { toast } from "../components/ui/toast";
 import { History, MailPlus, Trash2, UserMinus, Users } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { HelpTooltip } from "../components/ui/help-tooltip";
+import { OrganizationCidrRanges } from "../components/OrganizationCidrRanges";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
+type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
 type Membership = Readonly<{
   id: string;
   attributes: Readonly<{ email?: string | null; username?: string | null; role?: string; status?: string }>;
@@ -82,6 +84,11 @@ export function OrganizationSettings(): React.JSX.Element {
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleDescription, setNewRoleDescription] = useState("");
+  const [newRolePermissions, setNewRolePermissions] = useState<Record<string, boolean>>({});
+  const [savingRole, setSavingRole] = useState(false);
   const [teamsError, setTeamsError] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [membershipsError, setMembershipsError] = useState("");
@@ -104,7 +111,8 @@ export function OrganizationSettings(): React.JSX.Element {
   const [retentionSaving, setRetentionSaving] = useState(false);
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
-  const activeTab = searchParams.get("tab") === "teams" ? "teams" : "general";
+  const requestedTab = searchParams.get("tab");
+  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" ? requestedTab : "general";
   const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
   const permissions = orgIsCurrent ? org.attributes.permissions : undefined;
   const canUpdateOrganization = permissions?.["can-update"] === true;
@@ -120,6 +128,7 @@ export function OrganizationSettings(): React.JSX.Element {
     setMembershipsError("");
     void loadOrg();
     void loadTeams();
+    void loadRoles();
     void loadMemberships();
     void loadRetention();
   }, [orgName]);
@@ -154,6 +163,34 @@ export function OrganizationSettings(): React.JSX.Element {
         setTeamsError(error instanceof Error ? error.message : "Could not load teams");
       }
     }
+  };
+
+  const loadRoles = async (): Promise<void> => {
+    try {
+      const response = await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`) as { data?: Role[] };
+      if (activeOrganizationName.current === orgNameParam) setRoles(Array.isArray(response.data) ? response.data : []);
+    } catch { /* restricted members may not list roles */ }
+  };
+
+  const saveRole = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    if (!canUpdateOrganizationAccess || newRoleName.trim() === "") return;
+    setSavingRole(true);
+    try {
+      await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`, { method: "POST", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: newRoleName.trim(), description: newRoleDescription.trim() || null, permissions: newRolePermissions } } }) });
+      setNewRoleName(""); setNewRoleDescription(""); setNewRolePermissions({}); await loadRoles();
+      toast.add({ title: "Role created", type: "success" });
+    } catch (error: unknown) { toast.add({ title: "Could not create role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
+    finally { setSavingRole(false); }
+  };
+
+  const updateRolePermission = async (role: Role, permission: OrganizationPermission, enabled: boolean): Promise<void> => {
+    if (!canUpdateOrganizationAccess) return;
+    const permissions = { ...(role.attributes.permissions ?? {}), [permission]: enabled };
+    try {
+      const response = await fetchApi(`/api/v2/organization-roles/${encodeURIComponent(role.id)}`, { method: "PATCH", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: role.attributes.name, description: role.attributes.description ?? null, permissions } } }) }) as { data: Role };
+      setRoles((current) => current.map((item) => item.id === role.id ? response.data : item));
+    } catch (error: unknown) { toast.add({ title: "Could not update role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
   };
 
   const loadMemberships = async (): Promise<void> => {
@@ -510,6 +547,38 @@ export function OrganizationSettings(): React.JSX.Element {
               </Card>
             </>
           )}
+
+          {activeTab === "roles" && (
+            <Card className="border-gray-200 shadow-sm rounded-md">
+              <CardHeader className="border-b border-gray-100 bg-gray-50/50 py-4 px-5">
+                <CardTitle className="text-base font-semibold text-gray-900">Reusable roles</CardTitle>
+                <CardDescription>Create named permission bundles that can be assigned to organization members.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5 p-5">
+                <form onSubmit={saveRole} className="space-y-3 rounded-md border p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Input aria-label="Role name" placeholder="Role name" value={newRoleName} onChange={(event): void => { setNewRoleName(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
+                    <Input aria-label="Role description" placeholder="Description (optional)" value={newRoleDescription} onChange={(event): void => { setNewRoleDescription(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {organizationPermissions.map((permission): React.JSX.Element => (
+                      <label key={permission} className="flex items-center gap-2 text-sm">
+                        <Checkbox checked={newRolePermissions[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { setNewRolePermissions((current) => ({ ...current, [permission]: checked })); }} />
+                        {permissionLabel(permission)}
+                      </label>
+                    ))}
+                  </div>
+                  <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>{savingRole ? "Creating…" : "Create role"}</Button>
+                </form>
+                <div className="divide-y rounded-md border">
+                  {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description || "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void updateRolePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
+                  {roles.length === 0 && <p className="p-5 text-sm text-muted-foreground">No reusable roles yet.</p>}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
 
           {activeTab === "teams" && (
             <Card className="border-gray-200 shadow-sm rounded-md">

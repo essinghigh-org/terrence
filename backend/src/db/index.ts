@@ -28,6 +28,20 @@ function getColumnNames(info: { readonly rows: readonly unknown[] }): Set<string
 export const db = drizzle(sqlite, { schema });
 await migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
 
+// Keep upgrades from pre-RBAC releases safe even when their migration journal is incomplete.
+await sqlite.executeMultiple(`
+  CREATE TABLE IF NOT EXISTS organization_roles (
+    id TEXT PRIMARY KEY NOT NULL, org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, description TEXT, permissions TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(org_id, name)
+  );
+  CREATE TABLE IF NOT EXISTS organization_membership_roles (
+    membership_id TEXT NOT NULL REFERENCES organization_memberships(id) ON DELETE CASCADE,
+    role_id TEXT NOT NULL REFERENCES organization_roles(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL, UNIQUE(membership_id, role_id)
+  );
+`);
+
 // Apply schema additions that may not be in the migration history
 const tableInfo = await sqlite.execute("PRAGMA table_info(runs)");
 const existingRunsColumns = getColumnNames(tableInfo);
@@ -165,6 +179,11 @@ await sqlite.executeMultiple(`
     status TEXT DEFAULT 'processing' NOT NULL,
     received_at INTEGER NOT NULL,
     processed_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS admin_settings (
+    id TEXT PRIMARY KEY NOT NULL,
+    "values" TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
   );
 `);
 

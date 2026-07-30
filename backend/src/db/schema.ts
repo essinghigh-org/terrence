@@ -119,6 +119,24 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   status: text("status").notNull().default("active"), // 'active' or 'invited'
 });
 
+export const organizationRoles = sqliteTable("organization_roles", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  permissions: text("permissions", { mode: "json" }).$type<Record<string, boolean>>().notNull().default({}),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [uniqueIndex("organization_roles_org_name_idx").on(table.orgId, table.name)]);
+
+export const organizationMembershipRoles = sqliteTable("organization_membership_roles", {
+  membershipId: text("membership_id").notNull().references(() => organizationMemberships.id, { onDelete: "cascade" }),
+  roleId: text("role_id").notNull().references(() => organizationRoles.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("organization_membership_roles_membership_role_idx").on(table.membershipId, table.roleId),
+]);
+
 export const teams = sqliteTable("teams", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -1031,6 +1049,13 @@ export const siteDataRetentionPolicies = sqliteTable("site_data_retention_polici
   stateVersionsCount: integer("state_versions_count"),
   deleteOlderThanNDays: integer("delete_older_than_n_days"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+/** Durable storage for site-admin setting groups whose shape is API-defined. */
+export const adminSettings = sqliteTable("admin_settings", {
+  id: text("id").primaryKey(),
+  values: text("values", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
 

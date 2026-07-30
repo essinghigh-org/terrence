@@ -572,7 +572,8 @@ export function Layout({
       const links = ([
         {
           active: location.pathname === organizationSettingsPath
-            && organizationSettingsTab !== "teams",
+            && organizationSettingsTab !== "teams"
+            && organizationSettingsTab !== "roles",
           icon: Settings,
           label: "General",
           to: organizationSettingsPath,
@@ -583,6 +584,13 @@ export function Layout({
           icon: Users,
           label: "Teams",
           to: `${organizationSettingsPath}?tab=teams`,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "roles",
+          icon: Users,
+          label: "Roles",
+          to: `${organizationSettingsPath}?tab=roles`,
         },
         {
           active: location.pathname === `${orgPath}/variable-sets`,

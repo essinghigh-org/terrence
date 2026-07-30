@@ -6,6 +6,7 @@ import {
   auditLogs, dataRetentionPolicies, organizationDataRetentionPolicies, remoteStateConsumers,
   agentPools, workspaceRunTasks, logs, organizationMemberships, projectTags, reservedTagKeys,
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
+  organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
 import { and, desc, eq, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHmac } from "node:crypto";
@@ -127,6 +128,20 @@ export async function checkOrganizationPermission(
   if (userId === undefined) return false;
   if (await checkOrgPermission(userId, orgId, "owner")) return true;
   if (!(await checkOrgPermission(userId, orgId, "member"))) return false;
+  const directMembership = await db.query.organizationMemberships.findFirst({
+    where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
+  });
+  if (directMembership !== undefined) {
+    const assigned = await db.query.organizationMembershipRoles.findMany({
+      where: eq(organizationMembershipRoles.membershipId, directMembership.id),
+    });
+    if (assigned.length > 0) {
+      const roles = await db.query.organizationRoles.findMany({
+        where: inArray(organizationRoles.id, assigned.map((item) => item.roleId)),
+      });
+      if (roles.some((role) => teamOrganizationAllows(role.permissions ?? {}, required))) return true;
+    }
+  }
   const memberships = await db.query.teamMemberships.findMany({
     where: eq(teamMemberships.userId, userId),
   });

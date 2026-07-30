@@ -46,6 +46,7 @@ import { queryRoutes } from "./routes/queries";
 import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
+import { organizationRoleRoutes } from "./routes/organization-roles";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
@@ -364,6 +365,7 @@ export const app = new Elysia()
   .use(scimRoutes)
   .use(explorerRoutes)
   .use(teamProjectRoutes)
+  .use(organizationRoleRoutes)
   .use(policyEvaluationRoutes);
 
 // Start the background worker queue
