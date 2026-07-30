@@ -868,7 +868,7 @@ export function RunDetail({
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <span>{attributes.branch ?? "Default branch"}</span>
+              <span>{typeof attributes.branch === "string" ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
                 <code title={attributes["commit-sha"]}>{attributes["commit-sha"].slice(0, 12)}</code>
               )}
