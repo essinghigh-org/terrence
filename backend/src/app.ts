@@ -7,6 +7,7 @@ import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
+const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
 const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX);
 
 // Import route plugins
@@ -279,6 +280,15 @@ export const app = new Elysia()
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
+  .get("*", async ({ request }: { request: { url: string } }): Promise<Response | undefined> => {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    if (pathname.startsWith("/api/") || pathname === "/login" || pathname.startsWith("/app")) return;
+    const filePath = join(FRONTEND_DIR, pathname);
+    if (filePath.startsWith(FRONTEND_DIR) && await Bun.file(filePath).exists()) {
+      return new Response(Bun.file(filePath));
+    }
+  })
   .options("/*", ({ set }: OptionsContext): Record<string, never> => {
     (set as { status: number }).status = 204;
     return {};
