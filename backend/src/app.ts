@@ -8,13 +8,7 @@ import { log } from "./lib/log";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
-const serveFrontend = (): Promise<Response> | Response => {
-  // In development mode, proxy to Vite dev server for React dev bundle
-  if (process.env.NODE_ENV === "development") {
-    return fetch("http://localhost:5173/index.html").catch((): Response => new Response(Bun.file(FRONTEND_INDEX)));
-  }
-  return new Response(Bun.file(FRONTEND_INDEX));
-};
+const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX);
 
 // Import route plugins
 import { healthRoutes } from "./routes/health";
@@ -288,12 +282,10 @@ export const app = new Elysia()
       }
     }
   })
-  .use(process.env.NODE_ENV === "development"
-    ? new Elysia()
-    : staticPlugin({
-        assets: join(import.meta.dir, "../../frontend/dist"),
-        prefix: "/",
-      }))
+  .use(staticPlugin({
+    assets: join(import.meta.dir, "../../frontend/dist"),
+    prefix: "/",
+  }))
   .get("/login", serveFrontend)
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
@@ -302,20 +294,6 @@ export const app = new Elysia()
     const url = new URL(request.url);
     const pathname = url.pathname;
     if (pathname.startsWith("/api/") || pathname === "/login" || pathname.startsWith("/app")) return;
-
-    // In development mode, proxy to Vite dev server for React dev bundle
-    if (process.env.NODE_ENV === "development") {
-      try {
-        const proxyUrl = `http://localhost:5173${pathname}${url.search}`;
-        const proxyResponse = await fetch(proxyUrl);
-        if (proxyResponse.ok || proxyResponse.status === 404) {
-          return proxyResponse;
-        }
-      } catch {
-        // Fall through to file serving
-      }
-    }
-
     const filePath = join(FRONTEND_DIR, pathname);
     if (filePath.startsWith(FRONTEND_DIR) && await Bun.file(filePath).exists()) {
       return new Response(Bun.file(filePath));

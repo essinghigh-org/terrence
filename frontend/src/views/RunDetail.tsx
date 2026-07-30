@@ -162,7 +162,7 @@ type AssessmentCheck = {
     kind?: string | null;
     status: string;
     message?: string | null;
-    detail?: string | null;
+    detail?: unknown;
   };
 };
 
@@ -1184,7 +1184,7 @@ export function RunDetail({
                           <div className="font-medium">{check.attributes.address ?? check.id}</div>
                           {check.attributes.kind !== null && check.attributes.kind !== undefined && <div className="text-xs text-muted-foreground">{check.attributes.kind}</div>}
                         </TableCell>
-                        <TableCell className="whitespace-normal">{check.attributes.message ?? check.attributes.detail ?? "—"}</TableCell>
+                        <TableCell className="whitespace-normal">{check.attributes.message ?? (typeof check.attributes.detail === "string" ? check.attributes.detail : "—")}</TableCell>
                         <TableCell><Badge variant={["failed", "errored"].includes(check.attributes.status) ? "destructive" : "secondary"}>{check.attributes.status.replace(/_/g, " ")}</Badge></TableCell>
                       </TableRow>
                     ))}
