@@ -7,7 +7,6 @@ import {
   Copy,
   Download,
   Eye,
-  FileCode,
   Plus,
   RefreshCw,
   Trash2,
@@ -106,7 +105,7 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
 
 const operationConfig = {
   create: { icon: Plus, label: "create", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  update: { icon: RefreshCw, label: "change", className: "border-blue-200 bg-blue-50 text-blue-700" },
+  update: { icon: RefreshCw, label: "~", className: "border-blue-200 bg-blue-50 text-blue-700" },
   delete: { icon: Trash2, label: "destroy", className: "border-red-200 bg-red-50 text-red-700" },
   replace: { icon: RefreshCw, label: "replace", className: "border-amber-200 bg-amber-50 text-amber-700" },
   read: { icon: Eye, label: "read", className: "border-purple-200 bg-purple-50 text-purple-700" },
@@ -672,7 +671,7 @@ export function PlanOutput({
         setLoadState({
           kind: "error",
           message: reason instanceof ApiError && reason.status === 404
-            ? "Structured plan output is not available for this run."
+            ? "Plan output is not available for this run."
             : reason instanceof Error
               ? reason.message
               : "Failed to load structured plan output.",
@@ -724,7 +723,7 @@ export function PlanOutput({
   if (loadState.kind === "unavailable") {
     return (
       <div role="status" className="border-t border-gray-200 bg-gray-50 px-5 py-4">
-        <p className="text-sm font-medium text-gray-700">Structured plan output was not produced for this run.</p>
+        <p className="text-sm font-medium text-gray-700">Plan output was not produced for this run.</p>
       </div>
     );
   }
@@ -732,7 +731,7 @@ export function PlanOutput({
   if (loadState.kind === "error") {
     return (
       <div role="alert" className="border-t border-gray-200 bg-red-50/60 px-5 py-4">
-        <p className="text-sm font-medium text-red-800">Could not load structured plan output</p>
+        <p className="text-sm font-medium text-red-800">Could not load plan output</p>
         <p className="mt-1 text-xs text-red-700">{loadState.message}</p>
         <button
           type="button"
@@ -804,11 +803,9 @@ export function PlanOutput({
   };
 
   return (
-    <section aria-label="Structured plan output" className="border-t border-gray-200">
+    <section aria-label="Plan output" className="border-t border-gray-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
         <div className="flex items-center gap-2">
-          <FileCode className="size-4 text-gray-400" />
-          <span className="text-xs font-medium text-gray-600">Structured plan</span>
         </div>
         <span className="text-xs text-gray-500">
           Terraform {planJson.terraform_version ?? "unknown"}

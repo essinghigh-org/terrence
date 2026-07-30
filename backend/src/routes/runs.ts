@@ -49,7 +49,9 @@ function originForConfiguration(
   const ingress = configuration.ingressAttributes;
   const triggerReason = !VCS_RUN_SOURCES.has(source)
     ? "manual"
-    : typeof ingress?.pullRequestNumber === "number"
+    : (ingress as Record<string, unknown>).manualTrigger === true
+      ? "manual"
+      : typeof ingress?.pullRequestNumber === "number"
       ? "pull_request"
       : typeof ingress?.tag === "string" && ingress.tag !== ""
         ? "tag"

@@ -768,7 +768,7 @@ export async function createConfigurationVersionFromVcs(
     status: "pending",
     speculative: false,
     source,
-    ingressAttributes: { commitSha: sha, branch },
+    ingressAttributes: { commitSha: sha, branch, manualTrigger: true } as typeof configurationVersions.$inferInsert["ingressAttributes"],
     statusTimestamps: {},
   });
 

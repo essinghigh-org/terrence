@@ -377,8 +377,8 @@ export function ApplyOutput({
         setLoadState({
           kind: "error",
           message: reason instanceof ApiError && reason.status === 404
-            ? "Structured plan data is unavailable for apply output."
-            : "Failed to load structured output for apply.",
+            ? "Plan data is unavailable for apply output."
+            : "Failed to load apply output.",
         });
       }
     };
@@ -399,7 +399,7 @@ export function ApplyOutput({
   if (loadState.kind === "error" || loadState.kind !== "ready") {
     return (
       <div role="status" className="border-t border-gray-200 bg-gray-50 px-5 py-4 text-xs text-gray-500">
-        Structured apply view is unavailable. See raw apply logs below.
+        Apply view is unavailable. See raw apply logs below.
       </div>
     );
   }
@@ -446,11 +446,11 @@ export function ApplyOutput({
   });
 
   return (
-    <section aria-label="Structured apply output" className="border-t border-gray-200">
+    <section aria-label="Apply output" className="border-t border-gray-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
         <div className="flex items-center gap-2">
           <FileCode className="size-4 text-gray-400" />
-          <span className="text-xs font-medium text-gray-700">Structured apply output</span>
+          <span className="text-xs font-medium text-gray-700"></span>
           {applyStatus === "applying" && (
             <Badge variant="outline" className="gap-1 rounded border-blue-300 bg-blue-50 text-[10px] text-blue-700 animate-pulse">
               <Spinner className="size-3 text-blue-600" />

@@ -956,7 +956,6 @@ export function RunDetail({
 
             <details
               className="group border-t border-gray-200"
-              open={["running", "errored", "unreachable"].includes(planStatus) || undefined}
             >
               <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
                 Raw plan log
@@ -1132,7 +1131,7 @@ export function RunDetail({
                 </pre>
               </section>
             )}
-            <details className="group" open={applyStatus === "running" || undefined}>
+            <details className="group">
               <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
                 Raw apply log
               </summary>
