@@ -10,6 +10,7 @@ import {
   runs,
   users,
   workspaces,
+  adminSettings,
 } from "../../src/db/schema";
 
 describe("Admin Operations API contract", () => {
@@ -169,6 +170,7 @@ describe("Admin Operations API contract", () => {
     await request(`/api/v2/admin/opa-versions/${opaId}`, "DELETE");
   });
 
+
   it("supports admin user management: create, promote, suspend, delete", async () => {
     const newUserId = `admin-created-${crypto.randomUUID()}`;
 
@@ -222,5 +224,27 @@ describe("Admin Operations API contract", () => {
     // 7. Verify user is gone
     const getRes = await request(`/api/v2/admin/users/${createBody.data.id}`);
     expect(getRes.status).toBe(404);
+  });
+
+  it("persists general settings and issues scoped, expiring impersonation tokens", async () => {
+    const targetId = `impersonation-target-${crypto.randomUUID()}`;
+    await db.insert(users).values({ id: targetId, username: targetId, passwordHash: "unused", isSiteAdmin: false });
+    const setting = await request("/api/v2/admin/general-settings", "PATCH", {
+      data: { attributes: { "api-rate-limit": 77 } },
+    });
+    expect(setting.status).toBe(200);
+    expect((await setting.json()).data.attributes["api-rate-limit"]).toBe(77);
+    const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "general") });
+    expect(stored?.values["api-rate-limit"]).toBe(77);
+
+    const impersonate = await request(`/api/v2/admin/users/${targetId}/actions/impersonate`, "POST");
+    expect(impersonate.status).toBe(200);
+    const tokenValue = (await impersonate.json()).data.attributes.token as string;
+    const tokenHash = createHash("sha256").update(tokenValue).digest("hex");
+    const issued = await db.query.apiTokens.findFirst({ where: eq(apiTokens.token, tokenHash) });
+    expect(issued?.userId).toBe(targetId);
+    expect(issued?.expiresAt).toBeGreaterThan(Date.now());
+    await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
+    await db.delete(users).where(eq(users.id, targetId));
   });
 });

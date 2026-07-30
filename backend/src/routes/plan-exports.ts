@@ -4,6 +4,7 @@ import { planExports, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { findAuthorizedRun } from "../lib/utils";
+import { readPlanJsonArtifact } from "../lib/plan-json";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -110,6 +111,20 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    (set as { status: number }).status = 200;
-    return {};
+    if (pe.expiresAt !== null && pe.expiresAt <= Date.now()) {
+      (set as { status: number }).status = 410;
+      return { errors: [{ status: "410", title: "Gone", detail: "Plan export has expired" }] };
+    }
+    const plan = await readPlanJsonArtifact(pe.planId);
+    if (plan === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Plan export artifact is unavailable" }] };
+    }
+    const headers = set.headers as Record<string, string | number>;
+    headers["Content-Type"] = "application/json";
+    headers["Content-Disposition"] = `attachment; filename=plan-export-${pe.id}.json`;
+    return new Response(JSON.stringify({ version: 1, dataType: pe.dataType, planId: pe.planId, plan }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename=plan-export-${pe.id}.json` },
+    });
   });

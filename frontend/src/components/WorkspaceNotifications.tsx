@@ -75,7 +75,9 @@ const messageFrom = (error: unknown, fallback: string): string =>
 
 export function WorkspaceNotifications({
   workspaceId,
-}: Readonly<{ workspaceId: string }>): React.JSX.Element {
+  mode = "notifications",
+}: Readonly<{ workspaceId: string; mode?: "notifications" | "webhooks" }>): React.JSX.Element {
+  const isWebhookMode = mode === "webhooks";
   const [configurations, setConfigurations] = useState<NotificationConfiguration[]>([]);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState("");
@@ -215,14 +217,16 @@ export function WorkspaceNotifications({
     <>
       <Card className="max-w-5xl">
         <CardHeader>
-          <CardTitle>Notification configurations</CardTitle>
+          <CardTitle>{isWebhookMode ? "Webhooks" : "Notification configurations"}</CardTitle>
           <CardDescription>
-            Send run, assessment, and automatic-destroy events to a webhook destination.
+            {isWebhookMode
+              ? "Manage destinations for run, assessment, and automatic-destroy events."
+              : "Send run, assessment, and automatic-destroy events to a webhook destination."}
           </CardDescription>
           <CardAction>
             <Button onClick={(): void => { openEditor(); }}>
               <Plus data-icon="inline-start" />
-              Add notification
+              {isWebhookMode ? "Add webhook" : "Add notification"}
             </Button>
           </CardAction>
         </CardHeader>
@@ -244,7 +248,7 @@ export function WorkspaceNotifications({
                 {loading && (
                   <TableRow>
                     <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
-                      Loading notification configurations…
+                      {isWebhookMode ? "Loading webhooks…" : "Loading notification configurations…"}
                     </TableCell>
                   </TableRow>
                 )}
@@ -284,7 +288,7 @@ export function WorkspaceNotifications({
                 {!loading && configurations.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
-                      No notification configurations have been added.
+                      {isWebhookMode ? "No webhooks have been added." : "No notification configurations have been added."}
                     </TableCell>
                   </TableRow>
                 )}
@@ -297,7 +301,9 @@ export function WorkspaceNotifications({
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{editing == null ? "Add notification" : "Edit notification"}</DialogTitle>
+            <DialogTitle>{editing == null
+              ? (isWebhookMode ? "Add webhook" : "Add notification")
+              : (isWebhookMode ? "Edit webhook" : "Edit notification")}</DialogTitle>
             <DialogDescription>
               Choose a webhook destination and the events it should receive.
             </DialogDescription>
@@ -386,7 +392,7 @@ export function WorkspaceNotifications({
                 </Button>
                 <Button type="submit" disabled={saving}>
                   {saving && <Spinner data-icon="inline-start" />}
-                  {saving ? "Saving" : "Save notification"}
+                  {saving ? "Saving" : (isWebhookMode ? "Save webhook" : "Save notification")}
                 </Button>
               </DialogFooter>
             </FieldGroup>

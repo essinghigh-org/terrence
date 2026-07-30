@@ -22,6 +22,7 @@ import { WorkspaceTeamAccess } from "../components/WorkspaceTeamAccess";
 import { WorkspaceVariables } from "../components/WorkspaceVariables";
 import { WorkspacePolicySets } from "../components/WorkspacePolicySets";
 import { WorkspaceResources } from "../components/WorkspaceResources";
+import { WorkspaceConfigurationVersions } from "../components/WorkspaceConfigurationVersions";
 import { WorkspaceVcs } from "../components/WorkspaceVcs";
 import { WorkspaceRunTasks } from "../components/WorkspaceRunTasks";
 import { WorkspaceRetention } from "../components/WorkspaceRetention";
@@ -41,9 +42,11 @@ export type WorkspaceSection =
   | "variables"
   | "team-access"
   | "notifications"
+  | "webhooks"
   | "policy-sets"
   | "run-tasks"
   | "run-triggers"
+  | "configuration-versions"
   | "ssh-key"
   | "vcs"
   | "health"
@@ -298,6 +301,7 @@ export function WorkspaceDetail({
   const updateOnlySection = [
     "notifications",
     "run-triggers",
+    "configuration-versions",
     "ssh-key",
     "team-access",
   ].includes(activeSection);
@@ -312,9 +316,11 @@ export function WorkspaceDetail({
     "retention",
     "locking",
     "notifications",
+    "webhooks",
     "policy-sets",
     "run-tasks",
     "run-triggers",
+    "configuration-versions",
     "settings",
     "ssh-key",
     "team-access",
@@ -329,9 +335,11 @@ export function WorkspaceDetail({
     { id: "variables", label: "Variables" },
     { id: "team-access", label: "Team access" },
     { id: "notifications", label: "Notifications" },
+    { id: "webhooks", label: "Webhooks" },
     { id: "policy-sets", label: "Policy sets" },
     { id: "run-tasks", label: "Run tasks" },
     { id: "run-triggers", label: "Run triggers" },
+    { id: "configuration-versions", label: "Configuration versions" },
     { id: "ssh-key", label: "SSH key" },
     { id: "vcs", label: "VCS" },
     { id: "health", label: "Health" },
@@ -629,6 +637,9 @@ export function WorkspaceDetail({
         {activeSection === "notifications" && canUpdate && (
           <WorkspaceNotifications workspaceId={workspace.id} />
         )}
+        {activeSection === "webhooks" && canUpdate && (
+          <WorkspaceNotifications mode="webhooks" workspaceId={workspace.id} />
+        )}
         {activeSection === "policy-sets" && <WorkspacePolicySets workspaceId={workspace.id} />}
         {activeSection === "run-tasks" && (
           <WorkspaceRunTasks
@@ -639,6 +650,9 @@ export function WorkspaceDetail({
         )}
         {activeSection === "run-triggers" && canUpdate && (
           <WorkspaceRunTriggers orgName={orgName ?? ""} workspaceId={workspace.id} />
+        )}
+        {activeSection === "configuration-versions" && canUpdate && (
+          <WorkspaceConfigurationVersions workspaceId={workspace.id} />
         )}
         {activeSection === "ssh-key" && canUpdate && (
           <WorkspaceSshKey

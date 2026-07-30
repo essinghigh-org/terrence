@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings } from "../db/schema";
+import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings, adminSettings, apiTokens } from "../db/schema";
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
@@ -8,6 +8,7 @@ import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/util
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import * as bcrypt from "bcryptjs";
+import { createHash } from "node:crypto";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -15,6 +16,7 @@ type ParamCtx = Readonly<{
   readonly params: Readonly<Record<string, string>>;
   readonly body?: unknown;
   readonly user?: Readonly<typeof users.$inferSelect> | null;
+  readonly token?: Readonly<{ id: string }> | null;
   readonly request: Readonly<{ url: string }>;
   readonly set: SetObj;
 }>;
@@ -56,65 +58,43 @@ const SAML_DEFAULTS = {
   updatedAt: 0,
 } satisfies typeof samlSettings.$inferInsert;
 
-// --- In-memory settings stores ---
-
-const generalSettings: Record<string, unknown> = {
-  "limit-user-organization-creation": false,
-  "api-rate-limiting-enabled": false,
-  "api-rate-limit": 30,
-  "plan-timeout": 3600,
-  "apply-timeout": 3600,
-  "send-passing-statuses-for-untriggered-speculative-plans": false,
-  "allow-speculative-plans-on-pull-requests-from-forks": false,
-  "default-remote-state-access": false,
+// Settings are persisted as JSON so values survive restarts without changing the API shape.
+type Settings = Record<string, unknown>;
+const settingDefaults: Record<string, Settings> = {
+  general: { "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false },
+  retention: { "delete-older-than-n-days": null },
+  cost: { enabled: false, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
+  smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain" },
+  twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
+  customization: { "support-email-address": null, "login-help": null, footer: null },
+  oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null },
+  // Compatibility aliases for legacy handlers below; the general/site groups use durable storage.
+  site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
 };
+const costEstimationSettings = settingDefaults.cost!;
+const smtpSettings = settingDefaults.smtp!;
+const twilioSettings = settingDefaults.twilio!;
+const customizationSettings = settingDefaults.customization!;
+const oidcSettings = settingDefaults.oidc!;
 
-const dataRetentionSettings: Record<string, unknown> = {
-  "delete-older-than-n-days": null,
-};
+async function getSettings(group: string): Promise<Settings> {
+  const defaults = settingDefaults[group] ?? {};
+  await db.insert(adminSettings).values({ id: group, values: defaults, updatedAt: Date.now() }).onConflictDoNothing();
+  const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
+  return { ...defaults, ...(row?.values ?? {}) };
+}
 
-const costEstimationSettings: Record<string, unknown> = {
-  enabled: false,
-  "aws-access-key-id": null,
-  "aws-secret-key": null,
-  "gcp-credentials": null,
-  "azure-client-id": null,
-  "azure-client-secret": null,
-  "azure-subscription-id": null,
-  "azure-tenant-id": null,
-};
+async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
+  const current = await getSettings(group);
+  const values = { ...current };
+  for (const key of Object.keys(attrs)) if (key in current) values[key] = attrs[key];
+  await db.insert(adminSettings).values({ id: group, values, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+  return values;
+}
 
-const smtpSettings: Record<string, unknown> = {
-  enabled: false,
-  host: null,
-  port: 25,
-  username: null,
-  password: null,
-  "sender-email": null,
-  auth: "plain",
-};
-
-const twilioSettings: Record<string, unknown> = {
-  enabled: false,
-  "account-sid": null,
-  "auth-token": null,
-  "from-number": null,
-};
-
-const customizationSettings: Record<string, unknown> = {
-  "support-email-address": null,
-  "login-help": null,
-  footer: null,
-};
-
-const oidcSettings: Record<string, unknown> = {
-  enabled: false,
-  issuer: null,
-  "client-id": null,
-  "client-secret": null,
-  scopes: "openid profile email",
-  "pkce-method": null,
-};
+function settingResource(id: string, values: Settings): Record<string, unknown> {
+  return { data: { id, type: id === "settings" ? "settings" : id, attributes: values } };
+}
 
 async function currentSamlSettings(): Promise<SamlSettings> {
   await db.insert(samlSettings).values(SAML_DEFAULTS).onConflictDoNothing();
@@ -466,8 +446,19 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const userId = params.user_id ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    (set as { status: number }).status = 204;
-    return {};
+    if (target.id === user.id || target.isSiteAdmin === true || (target as Record<string, unknown>).isSuspended === true) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This user cannot be impersonated" }] };
+    }
+    const rawToken = `imp-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    await db.insert(apiTokens).values({
+      id: `token-${crypto.randomUUID()}`,
+      token: createHash("sha256").update(rawToken).digest("hex"),
+      userId: target.id,
+      description: `Impersonation by ${user.username}`,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    });
+    return { data: { type: "authentication-tokens", attributes: { token: rawToken, "expires-at": new Date(Date.now() + 15 * 60 * 1000).toISOString(), "user-id": target.id } } };
   })
   .get("/api/v2/admin/organizations", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -846,50 +837,49 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return { data: samlSettingsResource(await currentSamlSettings(), request) };
   })
   // --- Admin Settings ---
-  .get("/api/v2/admin/settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "settings", type: "settings", attributes: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" } } };
+    return settingResource("settings", await getSettings("site"));
   })
-  .patch("/api/v2/admin/settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const costEst = typeof attrs["cost-estimation-enabled"] === "boolean" ? attrs["cost-estimation-enabled"] : false;
-    return { data: { id: "settings", type: "settings", attributes: { "cost-estimation-enabled": costEst, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" } } };
+    return settingResource("settings", await updateSettings("site", attrs));
   })
   // --- B.1 General Settings ---
-  .get("/api/v2/admin/general-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/general-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "general-settings", type: "general-settings", attributes: { ...generalSettings } } };
+    return settingResource("general-settings", await getSettings("general"));
   })
-  .patch("/api/v2/admin/general-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/general-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in generalSettings) generalSettings[key] = attrs[key]; }
-    return { data: { id: "general-settings", type: "general-settings", attributes: { ...generalSettings } } };
+    return settingResource("general-settings", await updateSettings("general", attrs));
   })
   // --- B.2 Data Retention Policy Settings ---
-  .get("/api/v2/admin/data-retention-policy-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/data-retention-policy-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (dataRetentionSettings["delete-older-than-n-days"] === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: "data-retention-policy-settings", type: "data-retention-policy-settings", attributes: { ...dataRetentionSettings } } };
+    const values = await getSettings("retention");
+    if (values["delete-older-than-n-days"] === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return settingResource("data-retention-policy-settings", values);
   })
-  .post("/api/v2/admin/data-retention-policy-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .post("/api/v2/admin/data-retention-policy-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const days = typeof attrs["delete-older-than-n-days"] === "number" ? attrs["delete-older-than-n-days"] : null;
-    dataRetentionSettings["delete-older-than-n-days"] = days;
+    const values = await updateSettings("retention", { "delete-older-than-n-days": days });
     (set as { status: number }).status = 201;
-    return { data: { id: "data-retention-policy-settings", type: "data-retention-policy-settings", attributes: { ...dataRetentionSettings } } };
+    return settingResource("data-retention-policy-settings", values);
   })
-  .delete("/api/v2/admin/data-retention-policy-settings", ({ user, set }: ParamCtx): unknown => {
+  .delete("/api/v2/admin/data-retention-policy-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    dataRetentionSettings["delete-older-than-n-days"] = null;
+    await updateSettings("retention", { "delete-older-than-n-days": null });
     (set as { status: number }).status = 204;
     return {};
   })

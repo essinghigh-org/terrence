@@ -142,6 +142,10 @@ function App(): JSX.Element {
               element={<WorkspaceDetail section="notifications" />}
             />
             <Route
+              path=":orgName/workspaces/:workspaceName/settings/webhooks"
+              element={<WorkspaceDetail section="webhooks" />}
+            />
+            <Route
               path=":orgName/workspaces/:workspaceName/settings/policies"
               element={<WorkspaceDetail section="policy-sets" />}
             />
@@ -152,6 +156,10 @@ function App(): JSX.Element {
             <Route
               path=":orgName/workspaces/:workspaceName/settings/run-triggers"
               element={<WorkspaceDetail section="run-triggers" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/configuration-versions"
+              element={<WorkspaceDetail section="configuration-versions" />}
             />
             <Route
               path=":orgName/workspaces/:workspaceName/settings/ssh"
