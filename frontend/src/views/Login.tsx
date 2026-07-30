@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -13,7 +13,17 @@ export function Login(): React.JSX.Element {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [signupEnabled, setSignupEnabled] = useState(false);
   const navigate = useNavigate();
+
+  useEffect((): void => {
+    fetchApi("/ping")
+      .then((data: unknown): void => {
+        const resp = data as { "signup-enabled"?: boolean };
+        setSignupEnabled(resp["signup-enabled"] !== false);
+      })
+      .catch((): void => { setSignupEnabled(true); });
+  }, []);
 
   const handleLogin = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -88,9 +98,11 @@ export function Login(): React.JSX.Element {
               {submitting && <Spinner data-icon="inline-start" />}
               Sign in
             </Button>
-            <Link to="/register" className={buttonVariants({ variant: "link" })}>
-              Create account
-            </Link>
+            {signupEnabled && (
+              <Link to="/register" className={buttonVariants({ variant: "link" })}>
+                Create account
+              </Link>
+            )}
           </CardFooter>
         </form>
       </Card>

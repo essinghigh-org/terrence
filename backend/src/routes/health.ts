@@ -58,11 +58,11 @@ export const healthRoutes = new Elysia({ name: "health" })
     "providers.v1": "/api/registry/v1/providers/",
   }))
   .get("/api", (): string => "Terrence API")
-  .get("/api/v2/ping", ({ set }: SetCtx): Record<string, never> => {
+  .get("/api/v2/ping", ({ set }: SetCtx): { "signup-enabled": boolean } => {
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
-    return {};
+    return { "signup-enabled": process.env.TERRENCE_DISABLE_LOCAL_SIGNUP !== "true" };
   })
   .get("/healthz", (): string => "ok")
   .get("/metrics", async ({ request, set }: MetricsCtx): Promise<unknown> => {

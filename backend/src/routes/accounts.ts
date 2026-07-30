@@ -449,6 +449,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
+    if (process.env.TERRENCE_DISABLE_LOCAL_SIGNUP === "true") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance." }] };
+    }
     const attrs = extractAttrs(body) ?? {};
     const username = typeof attrs.username === "string" ? attrs.username : "";
     const password = typeof attrs.password === "string" ? attrs.password : "";

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,22 @@ export function Register(): React.JSX.Element {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [checkingSignup, setCheckingSignup] = useState(true);
+  const [signupDisabled, setSignupDisabled] = useState(false);
   const navigate = useNavigate();
+
+  useEffect((): void => {
+    fetchApi("/ping")
+      .then((data: unknown): void => {
+        const resp = data as { "signup-enabled"?: boolean };
+        if (resp["signup-enabled"] === false) {
+          setSignupDisabled(true);
+          void navigate("/login");
+        }
+      })
+      .catch((): void => { /* assume signup is enabled */ })
+      .finally((): void => { setCheckingSignup(false); });
+  }, [navigate]);
 
   const handleRegister = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -54,6 +69,32 @@ export function Register(): React.JSX.Element {
       setSubmitting(false);
     }
   };
+
+  if (checkingSignup) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+        <Spinner className="size-6" />
+      </main>
+    );
+  }
+
+  if (signupDisabled) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+        <Card className="w-full max-w-sm shadow-sm">
+          <CardHeader>
+            <CardTitle>Signup disabled</CardTitle>
+            <CardDescription>Local account creation is disabled on this instance.</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Link to="/login" className="w-full">
+              <Button className="w-full" variant="outline">Sign in</Button>
+            </Link>
+          </CardFooter>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
