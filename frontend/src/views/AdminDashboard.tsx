@@ -15,6 +15,7 @@ import {
   Plus,
   Trash2,
   RefreshCw,
+  KeyRound,
 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -66,7 +67,7 @@ export function AdminDashboard(): React.JSX.Element {
     [key: string]: unknown;
   };
   type DataItem = { id: string; attributes: ItemAttrs };
-  const [activeTab, setActiveTab] = useState<"users" | "orgs" | "workspaces" | "runs" | "versions" | "audit">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "orgs" | "workspaces" | "runs" | "versions" | "audit" | "auth">("users");
   const [users, setUsers] = useState<DataItem[]>([]);
   const [orgs, setOrgs] = useState<DataItem[]>([]);
   const [workspaces, setWorkspaces] = useState<DataItem[]>([]);
@@ -77,6 +78,31 @@ export function AdminDashboard(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+
+  // Auth config state
+  const [samlEnabled, setSamlEnabled] = useState(false);
+  const [samlDebug, setSamlDebug] = useState(false);
+  const [samlSsoUrl, setSamlSsoUrl] = useState("");
+  const [samlSloUrl, setSamlSloUrl] = useState("");
+  const [samlIdpCert, setSamlIdpCert] = useState("");
+  const [samlAttrUsername, setSamlAttrUsername] = useState("Username");
+  const [samlAttrGroups, setSamlAttrGroups] = useState("MemberOf");
+  const [samlAttrSiteAdmin, setSamlAttrSiteAdmin] = useState("SiteAdmin");
+  const [samlSiteAdminRole, setSamlSiteAdminRole] = useState("site-admins");
+  const [samlTimeout, setSamlTimeout] = useState(1209600);
+  const [samlLoading, setSamlLoading] = useState(false);
+  const [samlSaving, setSamlSaving] = useState(false);
+  const [samlError, setSamlError] = useState<string | null>(null);
+
+  const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [oidcIssuer, setOidcIssuer] = useState("");
+  const [oidcClientId, setOidcClientId] = useState("");
+  const [oidcClientSecret, setOidcClientSecret] = useState("");
+  const [oidcScopes, setOidcScopes] = useState("openid profile email");
+  const [oidcPkceMethod, setOidcPkceMethod] = useState("");
+  const [oidcLoading, setOidcLoading] = useState(false);
+  const [oidcSaving, setOidcSaving] = useState(false);
+  const [oidcError, setOidcError] = useState<string | null>(null);
 
   // Create user form state
   const [newUsername, setNewUsername] = useState("");
@@ -166,7 +192,7 @@ export function AdminDashboard(): React.JSX.Element {
       } else if (activeTab === "versions") {
         const res = await fetchApi("/api/v2/admin/terraform-versions") as { data: DataItem[] };
         setTfVersions(res.data);
-      } else {
+      } else if (activeTab === "audit") {
         const res = await fetchApi("/api/v2/admin/audit-logs") as { data: DataItem[] };
         setAuditLogs(res.data);
       }
@@ -179,7 +205,14 @@ export function AdminDashboard(): React.JSX.Element {
   };
 
   useEffect((): void => {
-    if (siteAdmin) void loadAdminData();
+    if (siteAdmin) {
+      if (activeTab === "auth") {
+        void loadSamlSettings();
+        void loadOidcSettings();
+      } else {
+        void loadAdminData();
+      }
+    }
   }, [activeTab, siteAdmin]);
 
   const handleAddVersion = async (e: React.SyntheticEvent): Promise<void> => {
@@ -237,6 +270,119 @@ export function AdminDashboard(): React.JSX.Element {
     }
   };
 
+  // --- Auth settings helpers ---
+  const loadSamlSettings = async (): Promise<void> => {
+    setSamlLoading(true);
+    setSamlError(null);
+    try {
+      const res = await fetchApi("/api/v2/admin/saml-settings") as {
+        data: { attributes: Record<string, unknown> };
+      };
+      const attrs = res.data.attributes;
+      setSamlEnabled(attrs["enabled"] === true);
+      setSamlDebug(attrs["debug"] === true);
+      setSamlSsoUrl(typeof attrs["sso-endpoint-url"] === "string" ? attrs["sso-endpoint-url"] : "");
+      setSamlSloUrl(typeof attrs["slo-endpoint-url"] === "string" ? attrs["slo-endpoint-url"] : "");
+      setSamlIdpCert(typeof attrs["idp-cert"] === "string" ? attrs["idp-cert"] : "");
+      setSamlAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "Username");
+      setSamlAttrGroups(typeof attrs["attr-groups"] === "string" ? attrs["attr-groups"] : "MemberOf");
+      setSamlAttrSiteAdmin(typeof attrs["attr-site-admin"] === "string" ? attrs["attr-site-admin"] : "SiteAdmin");
+      setSamlSiteAdminRole(typeof attrs["site-admin-role"] === "string" ? attrs["site-admin-role"] : "site-admins");
+      setSamlTimeout(typeof attrs["sso-api-token-session-timeout"] === "number" ? attrs["sso-api-token-session-timeout"] : 1209600);
+    } catch (err: unknown) {
+      setSamlError(err instanceof Error ? err.message : "Failed to load SAML settings");
+    } finally {
+      setSamlLoading(false);
+    }
+  };
+
+  const loadOidcSettings = async (): Promise<void> => {
+    setOidcLoading(true);
+    setOidcError(null);
+    try {
+      const res = await fetchApi("/api/v2/admin/oidc-settings") as {
+        data: { attributes: Record<string, unknown> };
+      };
+      const attrs = res.data.attributes;
+      setOidcEnabled(attrs["enabled"] === true);
+      setOidcIssuer(typeof attrs["issuer"] === "string" ? attrs["issuer"] : "");
+      setOidcClientId(typeof attrs["client-id"] === "string" ? attrs["client-id"] : "");
+      setOidcClientSecret(typeof attrs["client-secret"] === "string" ? attrs["client-secret"] : "");
+      setOidcScopes(typeof attrs["scopes"] === "string" ? attrs["scopes"] : "openid profile email");
+      setOidcPkceMethod(typeof attrs["pkce-method"] === "string" ? attrs["pkce-method"] : "");
+    } catch (err: unknown) {
+      setOidcError(err instanceof Error ? err.message : "Failed to load OIDC settings");
+    } finally {
+      setOidcLoading(false);
+    }
+  };
+
+  const handleSaveSaml = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setSamlSaving(true);
+    setSamlError(null);
+    try {
+      const body: Record<string, unknown> = {
+        data: {
+          type: "saml-settings",
+          attributes: {
+            enabled: samlEnabled,
+            debug: samlDebug,
+            "sso-endpoint-url": samlSsoUrl.trim() !== "" ? samlSsoUrl.trim() : null,
+            "slo-endpoint-url": samlSloUrl.trim() !== "" ? samlSloUrl.trim() : null,
+            "idp-cert": samlIdpCert.trim() !== "" ? samlIdpCert.trim() : null,
+            "attr-username": samlAttrUsername,
+            "attr-groups": samlAttrGroups,
+            "attr-site-admin": samlAttrSiteAdmin,
+            "site-admin-role": samlSiteAdminRole,
+            "sso-api-token-session-timeout": samlTimeout,
+          },
+        },
+      };
+      await fetchApi("/api/v2/admin/saml-settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      void loadSamlSettings();
+      toast.add({ title: "SAML settings saved", type: "success" });
+    } catch (err: unknown) {
+      setSamlError(err instanceof Error ? err.message : "Failed to save SAML settings");
+    } finally {
+      setSamlSaving(false);
+    }
+  };
+
+  const handleSaveOidc = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setOidcSaving(true);
+    setOidcError(null);
+    try {
+      const body: Record<string, unknown> = {
+        data: {
+          type: "oidc-settings",
+          attributes: {
+            enabled: oidcEnabled,
+            issuer: oidcIssuer.trim() !== "" ? oidcIssuer.trim() : null,
+            "client-id": oidcClientId.trim() !== "" ? oidcClientId.trim() : null,
+            "client-secret": oidcClientSecret.trim() !== "" ? oidcClientSecret.trim() : null,
+            scopes: oidcScopes,
+            "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
+          },
+        },
+      };
+      await fetchApi("/api/v2/admin/oidc-settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      void loadOidcSettings();
+      toast.add({ title: "OIDC settings saved", type: "success" });
+    } catch (err: unknown) {
+      setOidcError(err instanceof Error ? err.message : "Failed to save OIDC settings");
+    } finally {
+      setOidcSaving(false);
+    }
+  };
+
   if (!accountLoaded) return <p className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
   if (!siteAdmin) return <Navigate to="/app" replace />;
 
@@ -267,6 +413,7 @@ export function AdminDashboard(): React.JSX.Element {
           { id: "runs" as const, label: "System Runs", icon: PlayCircle },
           { id: "versions" as const, label: "Tool Versions", icon: FileCode },
           { id: "audit" as const, label: "Audit Logs", icon: History },
+          { id: "auth" as const, label: "Authentication", icon: KeyRound },
         ].map((tab): React.JSX.Element => {
           const isActive = activeTab === tab.id;
           return (
@@ -738,6 +885,204 @@ export function AdminDashboard(): React.JSX.Element {
                 </div>
               </CardContent>
             </Card>
+          )}
+
+          {/* AUTHENTICATION TAB */}
+          {activeTab === "auth" && (
+            <div className="space-y-8">
+              {/* SAML SSO */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">SAML SSO</CardTitle>
+                      <CardDescription>Security Assertion Markup Language single sign-on configuration</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {samlLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading SAML settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveSaml} className="space-y-5">
+                      {samlError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{samlError}</span>
+                        </div>
+                      )}
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlEnabled}
+                            onChange={(e): void => { setSamlEnabled(e.target.checked); }}
+                            className="rounded border-gray-300"
+                            aria-label="Enable SAML SSO"
+                          />
+                          Enable SAML SSO
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlDebug}
+                            onChange={(e): void => { setSamlDebug(e.target.checked); }}
+                            className="rounded border-gray-300"
+                          />
+                          Debug mode
+                        </label>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
+                        <Input
+                          placeholder="https://idp.example.com/sso"
+                          value={samlSsoUrl}
+                          onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
+                          aria-label="SSO Endpoint URL"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
+                        <Input
+                          placeholder="https://idp.example.com/slo"
+                          value={samlSloUrl}
+                          onChange={(e): void => { setSamlSloUrl(e.target.value); }}
+                          aria-label="SLO Endpoint URL"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
+                        <Input
+                          placeholder="Paste IdP certificate"
+                          value={samlIdpCert}
+                          onChange={(e): void => { setSamlIdpCert(e.target.value); }}
+                        />
+                      </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-3">Attribute mappings</p>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <Input
+                              value={samlAttrUsername}
+                              onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Groups attribute</label>
+                            <Input
+                              value={samlAttrGroups}
+                              onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Site admin attribute</label>
+                            <Input
+                              value={samlAttrSiteAdmin}
+                              onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Site admin role value</label>
+                            <Input
+                              value={samlSiteAdminRole}
+                              onChange={(e): void => { setSamlSiteAdminRole(e.target.value); }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
+                        <Input
+                          type="number"
+                          value={samlTimeout}
+                          onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
+                        />
+                      </div>
+                      <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
+                        {samlSaving ? "Saving..." : "Save SAML settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* OIDC */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">OpenID Connect</CardTitle>
+                  <CardDescription>OpenID Connect provider configuration</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {oidcLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading OIDC settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveOidc} className="space-y-5">
+                      {oidcError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{oidcError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={oidcEnabled}
+                          onChange={(e): void => { setOidcEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Enable OIDC"
+                        />
+                        Enable OpenID Connect
+                      </label>
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Issuer URL</label>
+                          <Input
+                            placeholder="https://accounts.example.com"
+                            value={oidcIssuer}
+                            onChange={(e): void => { setOidcIssuer(e.target.value); }}
+                            aria-label="Issuer URL"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Client ID</label>
+                          <Input
+                            value={oidcClientId}
+                            onChange={(e): void => { setOidcClientId(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Client Secret</label>
+                          <Input
+                            type="password"
+                            value={oidcClientSecret}
+                            onChange={(e): void => { setOidcClientSecret(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Scopes</label>
+                          <Input
+                            value={oidcScopes}
+                            onChange={(e): void => { setOidcScopes(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">PKCE Method</label>
+                          <Input
+                            placeholder="S256"
+                            value={oidcPkceMethod}
+                            onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
+                          />
+                        </div>
+                      </div>
+                      <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
+                        {oidcSaving ? "Saving..." : "Save OIDC settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           )}
         </>
       )}
