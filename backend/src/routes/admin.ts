@@ -71,11 +71,7 @@ const settingDefaults: Record<string, Settings> = {
   // Compatibility aliases for legacy handlers below; the general/site groups use durable storage.
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
 };
-const costEstimationSettings = settingDefaults.cost!;
-const smtpSettings = settingDefaults.smtp!;
-const twilioSettings = settingDefaults.twilio!;
-const customizationSettings = settingDefaults.customization!;
-const oidcSettings = settingDefaults.oidc!;
+// cost, smtp, twilio, customization, oidc settings are DB-persisted via admin_settings table.
 
 async function getSettings(group: string): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
@@ -446,9 +442,13 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const userId = params.user_id ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (target.id === user.id || target.isSiteAdmin === true || (target as Record<string, unknown>).isSuspended === true) {
+    if (target.id === user.id || target.isSiteAdmin === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This user cannot be impersonated" }] };
+    }
+    if ((target as Record<string, unknown>).isSuspended === true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "User not found" }] };
     }
     const rawToken = `imp-${crypto.randomUUID()}-${crypto.randomUUID()}`;
     await db.insert(apiTokens).values({
@@ -884,67 +884,62 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return {};
   })
   // --- B.3 Cost Estimation Settings ---
-  .get("/api/v2/admin/cost-estimation-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "cost-estimation-settings", type: "cost-estimation-settings", attributes: { ...costEstimationSettings } } };
+    return settingResource("cost-estimation-settings", await getSettings("cost"));
   })
-  .patch("/api/v2/admin/cost-estimation-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/cost-estimation-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in costEstimationSettings) costEstimationSettings[key] = attrs[key]; }
-    return { data: { id: "cost-estimation-settings", type: "cost-estimation-settings", attributes: { ...costEstimationSettings } } };
+    return settingResource("cost-estimation-settings", await updateSettings("cost", attrs));
   })
   // --- B.5 SMTP Settings ---
-  .get("/api/v2/admin/smtp-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/smtp-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "smtp-settings", type: "smtp-settings", attributes: { ...smtpSettings } } };
+    return settingResource("smtp-settings", await getSettings("smtp"));
   })
-  .patch("/api/v2/admin/smtp-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/smtp-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in smtpSettings) smtpSettings[key] = attrs[key]; }
-    return { data: { id: "smtp-settings", type: "smtp-settings", attributes: { ...smtpSettings } } };
+    return settingResource("smtp-settings", await updateSettings("smtp", attrs));
   })
   // --- B.6 Twilio Settings ---
-  .get("/api/v2/admin/twilio-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/twilio-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "twilio-settings", type: "twilio-settings", attributes: { ...twilioSettings } } };
+    return settingResource("twilio-settings", await getSettings("twilio"));
   })
-  .patch("/api/v2/admin/twilio-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/twilio-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in twilioSettings) twilioSettings[key] = attrs[key]; }
-    return { data: { id: "twilio-settings", type: "twilio-settings", attributes: { ...twilioSettings } } };
+    return settingResource("twilio-settings", await updateSettings("twilio", attrs));
   })
   // --- B.7 Customization Settings ---
-  .get("/api/v2/admin/customization-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/customization-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "customization-settings", type: "customization-settings", attributes: { ...customizationSettings } } };
+    return settingResource("customization-settings", await getSettings("customization"));
   })
-  .patch("/api/v2/admin/customization-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/customization-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in customizationSettings) customizationSettings[key] = attrs[key]; }
-    return { data: { id: "customization-settings", type: "customization-settings", attributes: { ...customizationSettings } } };
+    return settingResource("customization-settings", await updateSettings("customization", attrs));
   })
   // --- B.8 OIDC Settings ---
-  .get("/api/v2/admin/oidc-settings", ({ user, set }: ParamCtx): unknown => {
+  .get("/api/v2/admin/oidc-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: { id: "oidc-settings", type: "oidc-settings", attributes: { ...oidcSettings } } };
+    return settingResource("oidc-settings", await getSettings("oidc"));
   })
-  .patch("/api/v2/admin/oidc-settings", ({ user, body, set }: ParamCtx): unknown => {
+  .patch("/api/v2/admin/oidc-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    for (const key of Object.keys(attrs)) { if (key in oidcSettings) oidcSettings[key] = attrs[key]; }
-    return { data: { id: "oidc-settings", type: "oidc-settings", attributes: { ...oidcSettings } } };
+    return settingResource("oidc-settings", await updateSettings("oidc", attrs));
   });

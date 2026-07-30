@@ -58,7 +58,8 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan ID is required" }] };
     }
 
-    const authorized = await findAuthorizedRun(planId, user.id, orgId, teamId);
+    const runId = planId.replace(/^plan-/, "");
+    const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
     if (authorized === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -89,7 +90,8 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const authorized = await findAuthorizedRun(pe.planId, user.id, orgId, teamId);
+    const runId = pe.planId.replace(/^plan-/, "");
+    const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
     if (authorized === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -106,7 +108,8 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const authorized = await findAuthorizedRun(pe.planId, user.id, orgId, teamId);
+    const runId = pe.planId.replace(/^plan-/, "");
+    const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
     if (authorized === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -115,7 +118,7 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 410;
       return { errors: [{ status: "410", title: "Gone", detail: "Plan export has expired" }] };
     }
-    const plan = await readPlanJsonArtifact(pe.planId);
+    const plan = await readPlanJsonArtifact(runId);
     if (plan === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "Plan export artifact is unavailable" }] };
