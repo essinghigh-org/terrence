@@ -273,7 +273,7 @@ export const app = new Elysia()
   })
   .use(staticPlugin({
     assets: join(import.meta.dir, "../../frontend/dist"),
-    prefix: "",
+    prefix: "/",
   }))
   .get("/login", serveFrontend)
   .get("/register", serveFrontend)
@@ -283,13 +283,20 @@ export const app = new Elysia()
     (set as { status: number }).status = 204;
     return {};
   })
-  .onError(({ code, error, set }: ErrorContext): { errors: { status: string; title: string; detail?: string }[] } => {
+  .onError(({ code, error, set, request }: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined => {
     const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    const pathname = new URL(request.url).pathname;
     if (code === "NOT_FOUND") {
+      if (!pathname.startsWith("/api/")) {
+        mutableSet.status = 404;
+        mutableSet.headers["Content-Type"] = "text/plain";
+        return "Not Found";
+      }
+      mutableSet.headers["Content-Type"] = "application/vnd.api+json";
       mutableSet.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
     mutableSet.status = 500;
     const detail = typeof error === "object" && error !== null && "message" in error
       ? String((error as Record<string, unknown>).message)
