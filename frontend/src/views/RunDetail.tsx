@@ -108,6 +108,7 @@ type RunEvent = {
   attributes: {
     action: string;
     "actor-username"?: string | null;
+    "actor-avatar-url"?: string | null;
     "created-at"?: string;
     details?: {
       fromStatus?: string;
@@ -1265,12 +1266,15 @@ export function RunDetail({
                   const triggerReason = event.attributes.details?.triggerReason;
                   return (
                     <li key={event.id} className="flex gap-3 px-5 py-3">
-                      <span
-                        aria-hidden="true"
-                        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-600"
-                      >
-                        {actor.slice(0, 1).toUpperCase()}
-                      </span>
+                      <Avatar className="size-8 rounded-full">
+                        {event.attributes["actor-avatar-url"] ? (
+                          <AvatarImage src={event.attributes["actor-avatar-url"]} alt={actor} className="rounded-full object-cover" />
+                        ) : (
+                          <AvatarFallback className="rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
+                            {actor.slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        )}
+                      </Avatar>
                       <div className="min-w-0 flex-1 text-sm">
                         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                           <p className="text-gray-800">
@@ -1315,11 +1319,11 @@ export function RunDetail({
                 <article key={comment.id} className="px-5 py-4">
                   <div className="mb-1 flex items-center justify-between gap-3 text-xs text-gray-500">
                     <span className="flex items-center gap-2 font-medium text-gray-700">
-                      <Avatar className="size-5 rounded">
+                      <Avatar className="size-5 rounded-full">
                         {comment.attributes["actor-avatar-url"] ? (
-                          <AvatarImage src={comment.attributes["actor-avatar-url"]} alt={comment.attributes["actor-username"] ?? "User"} className="rounded object-cover" />
+                          <AvatarImage src={comment.attributes["actor-avatar-url"]} alt={comment.attributes["actor-username"] ?? "User"} className="rounded-full object-cover" />
                         ) : (
-                          <AvatarFallback className="rounded bg-gray-100 text-[9px] text-gray-600">
+                          <AvatarFallback className="rounded-full bg-gray-100 text-[9px] text-gray-600">
                             {(comment.attributes["actor-username"] ?? "S").slice(0, 2).toUpperCase()}
                           </AvatarFallback>
                         )}

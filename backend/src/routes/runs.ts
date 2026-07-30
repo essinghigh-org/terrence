@@ -369,6 +369,7 @@ export const runRoutes = new Elysia({ name: "runs" })
           action: event.action,
           "created-at": new Date(event.createdAt).toISOString(),
           "actor-username": event.userId === null ? null : usernames.get(event.userId)?.username ?? null,
+          "actor-avatar-url": event.userId === null ? null : gravatarUrl(usernames.get(event.userId)?.email ?? null),
           details: safeRunEventDetails(event),
         },
       })),

@@ -419,11 +419,11 @@ export function RunList({
                         const avatarUrl = creatorUser.attributes["avatar-url"] ?? "";
                         return (
                           <div className="flex items-center gap-2">
-                            <Avatar className="size-6 rounded">
+                            <Avatar className="size-6 rounded-full">
                               {avatarUrl !== "" ? (
-                                <AvatarImage src={avatarUrl} alt={creatorUser.attributes.username} className="rounded object-cover" />
+                                <AvatarImage src={avatarUrl} alt={creatorUser.attributes.username} className="rounded-full object-cover" />
                               ) : (
-                                <AvatarFallback className="rounded bg-gray-100 text-[10px] text-gray-600">
+                                <AvatarFallback className="rounded-full bg-gray-100 text-[10px] text-gray-600">
                                   {creatorUser.attributes.username.slice(0, 2).toUpperCase()}
                                 </AvatarFallback>
                               )}
