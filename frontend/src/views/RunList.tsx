@@ -7,6 +7,7 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -18,7 +19,7 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { toast } from "../components/ui/toast";
-import { fetchAllApiPages, fetchApi } from "../lib/api";
+import { fetchApi } from "../lib/api";
 
 type RunItem = {
   id: string;
@@ -28,6 +29,20 @@ type RunItem = {
     source?: string;
     status: string;
     "trigger-reason"?: string;
+  };
+  relationships?: {
+    "created-by"?: {
+      data: { id: string; type: string } | null;
+    };
+  };
+};
+
+type IncludedUser = {
+  id: string;
+  type: string;
+  attributes: {
+    username: string;
+    "avatar-url"?: string;
   };
 };
 
@@ -136,6 +151,7 @@ export function RunList({
   const orgName = propOrgName ?? params.orgName ?? "";
   const workspaceName = propWorkspaceName ?? params.workspaceName ?? "";
   const [runs, setRuns] = useState<RunItem[]>([]);
+  const [usersMap, setUsersMap] = useState<ReadonlyMap<string, IncludedUser>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
@@ -147,9 +163,43 @@ export function RunList({
 
   const loadRuns = useCallback(async (signal: AbortSignal): Promise<void> => {
     try {
-      const response = await fetchAllApiPages<RunItem>(`/api/v2/workspaces/${workspaceId}/runs`, signal);
+      const endpoint = `/api/v2/workspaces/${workspaceId}/runs`;
+      const response = await fetchApi(endpoint, signal === undefined ? {} : { signal }) as {
+        data?: RunItem[];
+        included?: IncludedUser[];
+        meta?: { pagination?: Record<string, unknown> };
+      };
       if (!signal.aborted) {
-        setRuns(response);
+        const allRuns = Array.isArray(response.data) ? [...response.data] : [];
+        // Build user map from included
+        const userList = Array.isArray(response.included) ? response.included : [];
+        const userMap = new Map<string, IncludedUser>();
+        for (const user of userList) {
+          if (user.type === "users") userMap.set(user.id, user);
+        }
+        // Fetch remaining pages
+        let nextPage = response.meta?.pagination?.["next-page"];
+        while (typeof nextPage === "number" && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted) {
+          const nextUrl = new URL(endpoint, "http://terrence.local");
+          nextUrl.searchParams.set("page[number]", String(nextPage));
+          const nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+          const nextRes = await fetchApi(nextPath, signal === undefined ? {} : { signal }) as {
+            data?: RunItem[];
+            included?: IncludedUser[];
+            meta?: { pagination?: Record<string, unknown> };
+          };
+          if (signal.aborted) break;
+          if (Array.isArray(nextRes.data)) allRuns.push(...nextRes.data);
+          // Add users from included on subsequent pages too
+          if (Array.isArray(nextRes.included)) {
+            for (const user of nextRes.included) {
+              if (user.type === "users" && !userMap.has(user.id)) userMap.set(user.id, user);
+            }
+          }
+          nextPage = nextRes.meta?.pagination?.["next-page"];
+        }
+        setRuns(allRuns);
+        setUsersMap(userMap);
         setError("");
       }
     } catch (error: unknown) {
@@ -186,15 +236,20 @@ export function RunList({
   const filteredRuns = useMemo((): RunItem[] => {
     const query = filter.trim().toLocaleLowerCase();
     if (query === "") return runs;
-    return runs.filter((run: RunItem): boolean => [
-      run.id,
-      run.attributes.message,
-      run.attributes.status,
-      statusLabel(run.attributes.status),
-      run.attributes.source,
-      run.attributes["trigger-reason"],
-    ].some((value: string | null | undefined): boolean => value?.toLocaleLowerCase().includes(query) === true));
-  }, [filter, runs]);
+    return runs.filter((run: RunItem): boolean => {
+      const creatorId = run.relationships?.["created-by"]?.data?.id;
+      const creatorName = creatorId !== undefined ? usersMap.get(creatorId)?.attributes.username : undefined;
+      return [
+        run.id,
+        run.attributes.message,
+        run.attributes.status,
+        statusLabel(run.attributes.status),
+        run.attributes.source,
+        run.attributes["trigger-reason"],
+        creatorName,
+      ].some((value: string | null | undefined): boolean => value?.toLocaleLowerCase().includes(query) === true);
+    });
+  }, [filter, runs, usersMap]);
 
   async function handleStartRun(): Promise<void> {
     if (!canStartRun) return;
@@ -319,13 +374,14 @@ export function RunList({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[920px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-[#fafafa] text-xs font-semibold tracking-wide text-gray-800">
                   <th className="border-r border-gray-200 px-4 py-3">Run</th>
                   <th className="border-r border-gray-200 px-4 py-3">Status</th>
                   <th className="border-r border-gray-200 px-4 py-3">Source</th>
                   <th className="border-r border-gray-200 px-4 py-3">Trigger</th>
+                  <th className="border-r border-gray-200 px-4 py-3">Triggered by</th>
                   <th className="px-4 py-3">Created</th>
                 </tr>
               </thead>
@@ -352,6 +408,30 @@ export function RunList({
                     </td>
                     <td className="border-r border-gray-200 px-4 py-3 text-[13px] capitalize text-gray-600">
                       {statusLabel(run.attributes["trigger-reason"] ?? "manual")}
+                    </td>
+                    <td className="border-r border-gray-200 px-4 py-3">
+                      {(() => {
+                        const creatorId = run.relationships?.["created-by"]?.data?.id;
+                        const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
+                        if (creatorUser === undefined) {
+                          return <span className="text-[13px] text-gray-400">System</span>;
+                        }
+                        const avatarUrl = creatorUser.attributes["avatar-url"] ?? "";
+                        return (
+                          <div className="flex items-center gap-2">
+                            <Avatar className="size-6 rounded">
+                              {avatarUrl !== "" ? (
+                                <AvatarImage src={avatarUrl} alt={creatorUser.attributes.username} className="rounded object-cover" />
+                              ) : (
+                                <AvatarFallback className="rounded bg-gray-100 text-[10px] text-gray-600">
+                                  {creatorUser.attributes.username.slice(0, 2).toUpperCase()}
+                                </AvatarFallback>
+                              )}
+                            </Avatar>
+                            <span className="text-[13px] font-medium text-gray-700">{creatorUser.attributes.username}</span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-[13px] text-gray-500">
                       <time dateTime={run.attributes["created-at"]}>{formatDate(run.attributes["created-at"])}</time>

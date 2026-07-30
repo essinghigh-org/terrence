@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
-import { runResource, planResource, applyResource } from "../lib/response";
+import { runResource, planResource, applyResource, userResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
@@ -85,6 +85,16 @@ async function usernamesById(userIds: readonly (string | null)[]): Promise<Reado
     columns: { id: true, username: true },
   });
   return new Map(actors.map((actor): [string, string] => [actor.id, actor.username]));
+}
+
+async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Record<string, unknown>[]> {
+  const ids = [...new Set(runList.map((r: RunItem): string | null => r.createdBy).filter((id): id is string => id !== null))];
+  if (ids.length === 0) return [];
+  const userList = await db.query.users.findMany({
+    where: inArray(users.id, ids),
+    columns: { id: true, username: true, email: true, isSiteAdmin: true },
+  });
+  return userList.map((u): Record<string, unknown> => userResource(u as Parameters<typeof userResource>[0]));
 }
 
 function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
@@ -202,7 +212,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const origins = await originsForRuns(workspaceRuns);
-    return { data: workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id))), ...pagination(request, number, size, totalCount) };
+    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id)));
+    const included = await includedUsersForRuns(workspaceRuns);
+    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -222,7 +234,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     const totalCount = countRows[0]?.total ?? 0;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(orgRuns);
-    return { data: orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id))), ...pagination(request, number, size, totalCount) };
+    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id)));
+    const included = await includedUsersForRuns(orgRuns);
+    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -248,7 +262,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
     }).slice((number - 1) * size, number * size);
-    return { data, ...pagination(request, number, size, queue.length) };
+    const included = await includedUsersForRuns(queue);
+    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, queue.length) };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";

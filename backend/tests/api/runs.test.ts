@@ -112,6 +112,52 @@ describe("TFE API v2 - Runs", () => {
     expect(runInDb?.autoApply).toBe(true);
   });
 
+  it("lists runs with created-by included user data", async () => {
+    // Create a run first
+    const createRes = await app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { message: "Triggered by test user" },
+            relationships: {
+              workspace: { data: { id: workspaceId, type: "workspaces" } },
+            },
+          },
+        }),
+      })
+    );
+    expect(createRes.status).toBe(201);
+
+    // List runs for the workspace
+    const listRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs`, {
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(listRes.status).toBe(200);
+    const listData = await listRes.json() as {
+      data: Array<{ id: string; relationships?: { "created-by"?: { data: { id: string; type: string } | null } } }>;
+      included?: Array<{ id: string; type: string; attributes: { username: string; "avatar-url": string } }>;
+    };
+
+    const createdRun = listData.data.find((r) => r.relationships?.["created-by"]?.data?.id !== null);
+    expect(createdRun).toBeDefined();
+    expect(createdRun!.relationships!["created-by"]!.data!.type).toBe("users");
+
+    // Check that included user data is present
+    expect(listData.included).toBeDefined();
+    expect(listData.included!.length).toBeGreaterThan(0);
+    const includedUser = listData.included!.find((u) => u.type === "users");
+    expect(includedUser).toBeDefined();
+    expect(includedUser!.attributes.username).toBe("run-owner");
+    expect(includedUser!.attributes["avatar-url"]).toContain("gravatar.com/avatar/");
+  });
+
   it("rejects destroy runs when destroy plans are disabled", async () => {
     const body = JSON.stringify({
       data: {
