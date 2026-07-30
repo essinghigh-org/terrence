@@ -87,7 +87,10 @@ export function costEstimateResource(
   return {
     id: `ce-${run.id}`,
     type: "cost-estimates",
-    attributes,
+    attributes: {
+      ...attributes,
+      "infracost-enabled": process.env.INFRACOST_ENABLED === "true",
+    },
     links: { self: `/api/v2/cost-estimates/ce-${run.id}` },
   };
 }

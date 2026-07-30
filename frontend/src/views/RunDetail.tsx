@@ -133,6 +133,7 @@ type CostEstimate = {
     "matched-resources-count"?: number;
     "unmatched-resources-count"?: number;
     "error-message"?: string | null;
+    "infracost-enabled"?: boolean;
   };
 };
 
@@ -768,6 +769,7 @@ export function RunDetail({
   const costPending = ["queued", "pending"].includes(costStatus);
   const costFailed = ["errored", "canceled"].includes(costStatus);
   const showCostEstimate = costEstimate !== null
+    && costEstimate.attributes["infracost-enabled"] === true
     && !["skipped", "disabled", "unavailable"].includes(costStatus);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
