@@ -114,8 +114,10 @@ export const notificationTemplateRoutes = new Elysia()
     const attributes = attributesFrom(body);
     const updates: Partial<typeof notificationTemplates.$inferInsert> = {};
     if (typeof attributes.name === "string" && attributes.name.trim() !== "") updates.name = attributes.name.trim();
-    if (typeof attributes["title-template"] === "string") updates.titleTemplate = attributes["title-template"];
-    if (typeof attributes["body-template"] === "string") updates.bodyTemplate = attributes["body-template"];
+    // Mirror the POST guard: title/body must stay non-empty (an empty value
+    // would silently produce empty notifications on every delivery).
+    if (typeof attributes["title-template"] === "string" && attributes["title-template"].trim() !== "") updates.titleTemplate = attributes["title-template"];
+    if (typeof attributes["body-template"] === "string" && attributes["body-template"].trim() !== "") updates.bodyTemplate = attributes["body-template"];
     if (typeof attributes["event-type"] === "string") {
       const eventType = attributes["event-type"];
       if (!isNotificationEventType(eventType)) {
@@ -123,7 +125,9 @@ export const notificationTemplateRoutes = new Elysia()
       }
       updates.eventType = eventType;
     }
-    await db.update(notificationTemplates).set(updates).where(eq(notificationTemplates.id, template.id));
+    if (Object.keys(updates).length > 0) {
+      await db.update(notificationTemplates).set(updates).where(eq(notificationTemplates.id, template.id));
+    }
     const updated = await db.query.notificationTemplates.findFirst({ where: eq(notificationTemplates.id, template.id) });
     if (updated === undefined) return error(set, 500);
     return { data: templateResource(updated) };

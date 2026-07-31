@@ -209,6 +209,15 @@ describe("SSH Keys & Notification API contract", () => {
     });
     expect(badRes.status).toBe(422);
 
+    // 3b. PATCH cannot blank title/body templates (empty values silently
+    // produce empty notifications); the guard mirrors POST.
+    const blankRes = await request(`/api/v2/organizations/${orgName}/notification-templates/${tplId}`, "PATCH", {
+      data: { attributes: { "title-template": "  " } },
+    });
+    expect(blankRes.status).toBe(200);
+    const afterBlank = await db.query.notificationTemplates.findFirst({ where: eq(notificationTemplates.id, tplId) });
+    expect(afterBlank?.titleTemplate).toBe("Apply Failed: {{workspace.name}}");
+
     // 4. Delete rule + template
     const deleteRuleRes = await request(`/api/v2/organizations/${orgName}/notification-rules/${ruleId}`, "DELETE");
     expect(deleteRuleRes.status).toBe(204);
