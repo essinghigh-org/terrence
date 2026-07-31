@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { probeLandlockAbi } from "../../src/lib/sandbox";
+
+const TEST_RUN_SANDBOX = probeLandlockAbi() >= 1 ? "true" : "false";
 
 async function runWorkerScript(script: string, env: Readonly<Record<string, string>> = {}): Promise<Record<string, unknown>> {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-cost-estimate-"));
@@ -14,6 +17,9 @@ async function runWorkerScript(script: string, env: Readonly<Record<string, stri
         DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
         STORAGE_DIR: join(testDir, "storage"),
         INFRACOST_ENABLED: "true",
+        // Let the sandboxed fake-tofu write its record files.
+        TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
+        TERRENCE_RUN_SANDBOX: TEST_RUN_SANDBOX,
         ...env,
       },
       stdout: "pipe",

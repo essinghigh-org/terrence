@@ -11,6 +11,15 @@ RUN bun install
 WORKDIR /app/frontend
 RUN bun run build
 
+# Compile the static Landlock runner (needs a C toolchain; the final image
+# does not ship one)
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && gcc -static -O2 -Wall -Wextra -o /app/backend/bin/landlock-runner \
+        /app/backend/bin/landlock-runner.c \
+    && rm -rf /var/lib/apt/lists/* \
+    && /app/backend/bin/landlock-runner --probe
+
 # Final stage
 FROM oven/bun:1-slim
 ARG TARGETARCH=amd64
@@ -51,6 +60,7 @@ COPY backend/drizzle.config.ts ./backend/
 COPY backend/drizzle ./backend/drizzle
 COPY backend/index.ts ./backend/
 COPY backend/src ./backend/src
+COPY --from=builder /app/backend/bin/landlock-runner ./backend/bin/landlock-runner
 
 # Install production dependencies for backend
 WORKDIR /app/backend
@@ -59,7 +69,8 @@ RUN bun install --production
 # Copy built frontend static assets
 COPY --from=builder /app/frontend/dist /app/frontend/dist
 
-# Create storage directory & unprivileged user
+# Create storage directory & unprivileged user. The Landlock run sandbox needs
+# no privileges (no chroot, no capabilities), so the whole app runs unprivileged.
 RUN mkdir -p /app/backend/storage && \
     useradd -m appuser && \
     chown -R appuser:appuser /app
@@ -68,7 +79,7 @@ VOLUME ["/app/backend/storage"]
 
 USER appuser
 
-# Expose server port
+# Expose the API/UI
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

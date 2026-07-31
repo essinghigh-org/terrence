@@ -55,6 +55,7 @@ import {
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { recoverStaleAgentJobs } from "./lib/agent-jobs";
+import { RunSandbox, removeSandboxWorkDir } from "./lib/sandbox";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;
@@ -94,6 +95,44 @@ function noCodeUpgradeTarget(source: string | null): NoCodeUpgradeTarget | undef
     || [noCodeModuleId, moduleId, moduleVersionId, baseConfigurationVersionId].some((value): boolean => value === "")
   ) return undefined;
   return { noCodeModuleId, moduleId, moduleVersionId, baseConfigurationVersionId };
+}
+
+// --- Run sandbox (Landlock isolation for tofu/terraform) ---
+// Terraform/OpenTofu runs are executed through landlock-runner, which applies
+// a filesystem allow-list (workdir + binary dir + system libraries) to itself
+// before exec. Provider plugins and local-exec provisioners inherit the
+// restrictions, so they cannot see STORAGE_DIR (DB, encryption key, state
+// archives) or other workspaces. Requires a Landlock-enabled kernel; disable
+// with TERRENCE_RUN_SANDBOX=false.
+const RUN_SANDBOX_REQUIRED = (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase() !== "false";
+const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
+if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
+  console.error(
+    "[terrence] Run sandbox is REQUIRED (TERRENCE_RUN_SANDBOX not set to false) but Landlock is unavailable. "
+    + "Runs will FAIL until Landlock is enabled on the host kernel or TERRENCE_RUN_SANDBOX=false is set explicitly. "
+    + "See https://docs.kernel.org/userspace-api/landlock.html",
+  );
+}
+
+/**
+ * Guard used by run/apply/assessment entry points: if the sandbox is required
+ * but unavailable, refuse to execute anything rather than silently running
+ * unsandboxed IaC. Throws an Error that surfaces as a failed run.
+ */
+function assertRunSandboxAvailable(): void {
+  if (!RUN_SANDBOX_REQUIRED) return;
+  if (runSandbox === null) {
+    throw new Error(
+      "Run sandbox unavailable: Landlock is not enabled on this host kernel. "
+      + "Enable Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK) or explicitly set TERRENCE_RUN_SANDBOX=false "
+      + "to run without isolation. See https://docs.kernel.org/userspace-api/landlock.html",
+    );
+  }
+}
+
+/** Resolve the run workdir (tmpdir-based; the sandbox allow-lists it per run). */
+function runWorkDir(runId: string): string {
+  return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
 }
 
 async function writeLog(runId: string, phase: "plan" | "apply", outputText: string): Promise<void> {
@@ -276,12 +315,17 @@ async function readPlanJson(
   )];
   for (const binary of binaries) {
     try {
-      const process = spawn([binary, "show", "-json", tfplanPath], {
-        cwd: executionDir,
-        env: { PATH: processEnv("PATH") },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const process = runSandbox !== null
+        ? runSandbox.spawn([binary, "show", "-json", tfplanPath], {
+            cwd: executionDir,
+            env: { PATH: processEnv("PATH") },
+          })
+        : spawn([binary, "show", "-json", tfplanPath], {
+            cwd: executionDir,
+            env: { PATH: processEnv("PATH") },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
       const [exitCode, stdout] = await Promise.all([
         process.exited,
         new Response(process.stdout).text(),
@@ -762,6 +806,7 @@ async function executeRunTasks(
 }
 
 export async function executeRun(runId: string): Promise<void> {
+  assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
@@ -778,7 +823,7 @@ export async function executeRun(runId: string): Promise<void> {
     where: eq(organizations.id, workspace.orgId),
   });
 
-  const workDir = join(tmpdir(), "terrence", "runs", runId);
+  const workDir = runWorkDir(runId);
   let keepPlan = false;
 
   try {
@@ -920,15 +965,22 @@ export async function executeRun(runId: string): Promise<void> {
     if (resolved !== null && hasTfFiles) {
       const binary = resolved.binaryPath;
       await writeLog(runId, "plan", `[terrence] Using ${resolved.tool} v${resolved.version} at ${binary}`);
+      if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
 
       // 1. Run init
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
-      const initProc = spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
-        cwd: executionDir,
-        env: envVars,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+      const initProc = runSandbox !== null
+        ? runSandbox.spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
+            cwd: executionDir,
+            env: envVars,
+          })
+        : spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
 
       const [initExit] = await Promise.all([
         initProc.exited,
@@ -959,12 +1011,17 @@ export async function executeRun(runId: string): Promise<void> {
       }
       planArgs.push("-out=tfplan");
 
-      const planProc = spawn(planArgs, {
-        cwd: executionDir,
-        env: envVars,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const planProc = runSandbox !== null
+        ? runSandbox.spawn(planArgs, {
+            cwd: executionDir,
+            env: envVars,
+          })
+        : spawn(planArgs, {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
 
       const [planExit] = await Promise.all([
         planProc.exited,
@@ -1086,7 +1143,11 @@ export async function executeRun(runId: string): Promise<void> {
   } finally {
     if (!keepPlan) {
       try {
-        await rm(workDir, { recursive: true, force: true });
+        if (runSandbox !== null) {
+          await removeSandboxWorkDir(runId);
+        } else {
+          await rm(workDir, { recursive: true, force: true });
+        }
       } catch {}
     }
   }
@@ -1166,6 +1227,7 @@ async function finalizeNoCodeUpgrade(
 }
 
 export async function executeApply(runId: string): Promise<void> {
+  assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
@@ -1188,7 +1250,7 @@ export async function executeApply(runId: string): Promise<void> {
   if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
   await updateRunStatus(runId, "apply_queued");
   await updateRunStatus(runId, "applying");
-  const workDir = join(tmpdir(), "terrence", "runs", runId);
+  const workDir = runWorkDir(runId);
 
   let applySuccess = false;
 
@@ -1206,23 +1268,30 @@ export async function executeApply(runId: string): Promise<void> {
 
     if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
       const binary = resolved.binaryPath;
+      if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const envVars = buildSanitizedEnv(vars);
       if (run.debuggingMode) envVars.TF_LOG = "TRACE";
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
+      if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
       const hasPlanFile = await exists(join(executionDir, "tfplan"));
       if (!hasPlanFile) {
         throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
       }
       const applyArgs = [binary, "apply", "-no-color", "-input=false", "tfplan"];
 
-      const applyProc = spawn(applyArgs, {
-        cwd: executionDir,
-        env: envVars,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const applyProc = runSandbox !== null
+        ? runSandbox.spawn(applyArgs, {
+            cwd: executionDir,
+            env: envVars,
+          })
+        : spawn(applyArgs, {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
 
       const [applyExit] = await Promise.all([
         applyProc.exited,
@@ -1288,7 +1357,11 @@ export async function executeApply(runId: string): Promise<void> {
   } finally {
     if (applySuccess) {
       try {
-        await rm(workDir, { recursive: true, force: true });
+        if (runSandbox !== null) {
+          await removeSandboxWorkDir(runId);
+        } else {
+          await rm(workDir, { recursive: true, force: true });
+        }
       } catch {}
     } else {
       await writeLog(runId, "apply", `[terrence] Preserving work directory for debugging: ${workDir}`);
@@ -1556,7 +1629,9 @@ async function captureProcess(
   cwd: string,
   env: Readonly<Record<string, string>>,
 ): Promise<CapturedProcess> {
-  const child = spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+  const child = runSandbox !== null
+    ? runSandbox.spawn([...args], { cwd, env })
+    : spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -1739,6 +1814,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
 }
 
 export async function executeAssessment(assessmentResultId: string): Promise<void> {
+  assertRunSandboxAvailable();
   const assessment = await db.query.assessmentResults.findFirst({
     where: eq(assessmentResults.id, assessmentResultId),
   });
@@ -1760,7 +1836,9 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
 
   await db.update(assessmentResults).set({ status: "running" })
     .where(eq(assessmentResults.id, assessmentResultId));
-  const workDir = join(tmpdir(), "terrence", "assessments", assessmentResultId);
+  const workDir = runSandbox !== null
+    ? runSandbox.workDirFor(`assessment-${assessmentResultId}`)
+    : join(tmpdir(), "terrence", "assessments", assessmentResultId);
   const output: string[] = [];
   const appendOutput = (text: string): void => {
     if (text !== "") output.push(text.trimEnd());
@@ -1847,6 +1925,10 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
         ?? "latest";
       const resolved = await ensureBinary(requestedTool, requestedVersion);
       if (resolved === null) throw new Error(`Unable to resolve CLI binary '${requestedTool}' for assessment.`);
+      if (runSandbox !== null) {
+        await runSandbox.ensureTool(resolved.tool, resolved.version, resolved.binaryPath);
+        await runSandbox.prepareWorkDir(`assessment-${assessmentResultId}`);
+      }
       const init = await captureProcess(
         [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
         executionDir,
@@ -1944,7 +2026,11 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
     queueAssessmentNotification(assessmentResultId, "assessment:failed");
   } finally {
     try {
-      await rm(workDir, { recursive: true, force: true });
+      if (runSandbox !== null) {
+        await removeSandboxWorkDir(`assessment-${assessmentResultId}`);
+      } else {
+        await rm(workDir, { recursive: true, force: true });
+      }
     } catch {}
   }
 }

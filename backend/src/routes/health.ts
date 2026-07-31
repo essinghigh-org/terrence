@@ -3,6 +3,7 @@ import { db } from "../db";
 import { organizations, runs, users, workspaces } from "../db/schema";
 import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
+import { probeLandlockAbi } from "../lib/sandbox";
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
@@ -63,6 +64,37 @@ export const healthRoutes = new Elysia({ name: "health" })
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
     return { "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true" };
+  })
+  .get("/api/v2/meta", (): {
+    data: {
+      "run-sandbox": {
+        enabled: boolean;
+        available: boolean;
+        abi: number;
+        reason: string | null;
+        docs: string;
+      };
+    };
+  } => {
+    const sandboxRequired = (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase() !== "false";
+    const abi = probeLandlockAbi();
+    let reason: string | null = null;
+    if (abi < 1) {
+      reason = process.env.TERRENCE_LANDLOCK_RUNNER
+        ? "landlock-runner missing or Landlock not enabled in the kernel"
+        : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
+    }
+    return {
+      data: {
+        "run-sandbox": {
+          enabled: sandboxRequired,
+          available: abi >= 1,
+          abi,
+          reason,
+          docs: "https://docs.kernel.org/userspace-api/landlock.html",
+        },
+      },
+    };
   })
   .get("/healthz", (): string => "ok")
   .get("/metrics", async ({ request, set }: MetricsCtx): Promise<unknown> => {

@@ -25,6 +25,7 @@ import {
 } from "./lib/api";
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { RunSandboxGate } from "./components/RunSandboxGate";
 import { Toaster, toast } from "./components/ui/toast";
 
 function ProtectedRoute({ children }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
@@ -89,9 +90,10 @@ function AuthSessionManager(): null {
 function App(): JSX.Element {
   return (
     <ErrorBoundary>
-      <BrowserRouter>
-        <AuthSessionManager />
-        <Routes>
+      <RunSandboxGate>
+        <BrowserRouter>
+          <AuthSessionManager />
+          <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/" element={<Navigate to="/app" replace />} />
@@ -193,7 +195,8 @@ function App(): JSX.Element {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <Toaster />
-      </BrowserRouter>
+        </BrowserRouter>
+      </RunSandboxGate>
     </ErrorBoundary>
   );
 }

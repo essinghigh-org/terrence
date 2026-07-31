@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { probeLandlockAbi } from "../../src/lib/sandbox";
+
+// The sandboxed fake-tofu tests exercise real execution; on hosts without
+// Landlock, explicitly opt out so the suite still runs (production fail-closed
+// behaviour is covered by the sandbox + meta tests).
+const TEST_RUN_SANDBOX = probeLandlockAbi() >= 1 ? "true" : "false";
 
 async function runWorkerScript(script: string, env: Record<string, string> = {}) {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-worker-"));
@@ -14,6 +20,9 @@ async function runWorkerScript(script: string, env: Record<string, string> = {})
         TEST_DIR: testDir,
         DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
         STORAGE_DIR: join(testDir, "storage"),
+        // Let the sandboxed fake-tofu write its record files.
+        TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
+        TERRENCE_RUN_SANDBOX: TEST_RUN_SANDBOX,
         ...env,
       },
       stdout: "pipe",

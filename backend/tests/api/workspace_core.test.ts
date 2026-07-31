@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { probeLandlockAbi } from "../../src/lib/sandbox";
 
 test("workspace core routes persist settings and execute from the configured subdirectory", async () => {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-workspace-core-"));
@@ -254,6 +255,9 @@ test("workspace core routes persist settings and execute from the configured sub
         NODE_ENV: "production",
         PUBLIC_URL: "https://tfe.example.test",
         SIMULATED_RUNS: "false",
+        // Let the sandboxed fake-tofu write its cwd record file.
+        TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
+        TERRENCE_RUN_SANDBOX: process.env.TERRENCE_RUN_SANDBOX ?? (probeLandlockAbi() >= 1 ? "true" : "false"),
       },
       stdout: "pipe",
       stderr: "pipe",
