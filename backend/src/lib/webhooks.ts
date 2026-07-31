@@ -13,6 +13,7 @@ import {
   workspaces,
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
+import { emitRunEvent } from "./notify";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
 import { auditLog } from "./utils";
 
@@ -845,6 +846,7 @@ async function handleOAuthProviderWebhook(
       source: provider,
       triggerReason: kind,
     });
+    emitRunEvent(runId, "workspace.vcs.run.triggered");
     void reportRunVcsStatus(runId, "pending");
 
     downloads.push(fetchAndSaveProviderTarball(
@@ -955,6 +957,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       source: "github",
       triggerReason: isSpeculative ? "pull_request" : "push",
     });
+    emitRunEvent(runId, "workspace.vcs.run.triggered");
     void reportRunVcsStatus(runId, "pending");
     configurationVersionIds.push(configurationVersionId);
     if (workspaceToken !== null) downloadableConfigurationVersionIds.push(configurationVersionId);

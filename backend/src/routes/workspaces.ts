@@ -9,6 +9,7 @@ import {
   type WorkspaceResourcePermissions,
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
+import { emitLockCreated, emitVariableChanged } from "../lib/notify";
 import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspaceIdsForPermission, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
@@ -828,6 +829,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const hcl = typeof attributes.hcl === "boolean" ? attributes.hcl : false;
     const description = typeof attributes.description === "string" ? attributes.description : null;
     await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value, category, sensitive, hcl, description });
+    emitVariableChanged(workspaceId, { id: varId, key, category, sensitive, action: "created" });
     (set as { status: number }).status = 201;
     return { data: workspaceVariableResource({ id: varId, workspaceId, key, value, category, sensitive, hcl, description }) };
   })
@@ -870,6 +872,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       }
       throw error;
     }
+    emitVariableChanged(workspaceId, { id: varId, key, category, sensitive, action: "updated" });
     return { data: workspaceVariableResource({ ...variable, ...updated }) };
   })
   .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -880,6 +883,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
     if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
+    emitVariableChanged(workspaceId, { id: varId, key: variable.key, category: variable.category, sensitive: variable.sensitive ?? false, action: "deleted" });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -894,6 +898,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
     await db.update(workspaces).set({ locked: true, lockedReason: null }).where(eq(workspaces.id, workspaceId));
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
+    emitLockCreated(workspaceId, { id: `lock-${workspaceId}`, createdBy: user?.username ?? null, reason: null });
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
     return {
       data: await workspaceResource(

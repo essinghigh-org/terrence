@@ -1,11 +1,16 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import {
+  assessmentResults,
+  configurationVersions,
   notificationDeliveries,
   notificationDestinations,
   notificationRules,
   notificationTemplates,
+  organizations,
+  runs,
   workspaces,
+  workspaceTags,
 } from "../db/schema";
 import {
   isNotificationEventType,
@@ -29,10 +34,11 @@ export function renderTemplate(template: string, context: EventContext): string 
       if (current === null || current === undefined) return undefined;
       if (typeof current !== "object") return undefined;
       return (current as Record<string, unknown>)[key];
-    }, context as unknown);
+    }, context);
     if (value === null) return "";
     if (value === undefined) return match;
-    return String(value);
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
   });
 }
 
@@ -163,7 +169,7 @@ export type NotificationRule = Readonly<{
   orgId: string;
   name: string;
   eventType: string;
-  workspaceTagFilters: Readonly<{ key: string; value: string }[]>;
+  workspaceTagFilters: readonly Readonly<{ key: string; value: string }>[];
   destinationId: string;
   templateId: string | null;
   enabled: boolean;
@@ -173,7 +179,7 @@ export type NotificationRule = Readonly<{
  * Match a rule against an event context: same org, enabled, same event type,
  * and every workspace tag filter satisfied by the workspace's tags.
  */
-export function ruleMatches(rule: NotificationRule, context: EventContext): boolean {
+export function ruleMatches(rule: Readonly<NotificationRule>, context: Readonly<EventContext>): boolean {
   if (!rule.enabled) return false;
   if (rule.eventType !== context.event) return false;
   if (rule.workspaceTagFilters.length === 0) return true;
@@ -268,7 +274,7 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, Readonly<{ title: string
  * default for the event type.
  */
 export async function resolveTemplate(
-  rule: NotificationRule,
+  rule: Readonly<NotificationRule>,
 ): Promise<Readonly<{ title: string; body: string }>> {
   if (rule.templateId !== null) {
     const tpl = await db.query.notificationTemplates.findFirst({
@@ -306,7 +312,7 @@ export async function emitNotificationEvent(
     ),
   });
 
-  const matching = rules.filter((rule: NotificationRule): boolean => ruleMatches(rule, context));
+  const matching = rules.filter((rule: Readonly<NotificationRule>): boolean => ruleMatches(rule, context));
   if (matching.length === 0) return [];
 
   const results: DeliveryResult[] = [];
@@ -347,4 +353,214 @@ export async function emitNotificationEvent(
     results.push(delivery);
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Event context builders (worker + routes call these to emit)
+// ---------------------------------------------------------------------------
+
+/** Load workspace tags into a Record<key, value>. */
+async function workspaceTagsFor(workspaceId: string): Promise<Record<string, string>> {
+  const tags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId) });
+  const result: Record<string, string> = {};
+  for (const tag of tags) {
+    if (tag.key !== "" && tag.value !== null) result[tag.key] = tag.value;
+  }
+  return result;
+}
+
+/**
+ * Build the EventContext for a run event: loads the run, its workspace, the
+ * org name, the creator, and workspace tags. Returns null if the run or its
+ * workspace no longer exist.
+ */
+export async function buildRunContext(runId: string): Promise<EventContext | null> {
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  if (run === undefined) return null;
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+  if (workspace === undefined) return null;
+  const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+  const tags = await workspaceTagsFor(workspace.id);
+  // Commit metadata lives on the run's configuration version ingress attributes.
+  const configuration = run.configurationVersionId === null
+    ? undefined
+    : await db.query.configurationVersions.findFirst({
+        where: eq(configurationVersions.id, run.configurationVersionId),
+      });
+  const ingress = configuration?.ingressAttributes ?? {};
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  const runUrl = new URL(
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
+    baseUrl,
+  ).toString();
+  return {
+    event: "workspace.run.started", // replaced by caller
+    workspace: {
+      id: workspace.id,
+      name: workspace.name,
+      organizationName: organization?.name ?? workspace.orgId,
+      tags,
+    },
+    run: {
+      id: run.id,
+      message: run.message,
+      status: run.status,
+      createdAt: run.createdAt,
+      createdBy: run.createdBy,
+      commitSha: ingress.commitSha ?? null,
+      commitUrl: ingress.commitUrl ?? null,
+      commitMessage: ingress.commitMessage ?? null,
+      branch: ingress.branch ?? null,
+      url: runUrl,
+    },
+  };
+}
+
+/**
+ * Build the EventContext for a drift event from an assessment result.
+ */
+export async function buildDriftContext(assessmentResultId: string): Promise<EventContext | null> {
+  const result = await db.query.assessmentResults.findFirst({
+    where: eq(assessmentResults.id, assessmentResultId),
+  });
+  if (result === undefined) return null;
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, result.workspaceId) });
+  if (workspace === undefined) return null;
+  const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+  const tags = await workspaceTagsFor(workspace.id);
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  return {
+    event: "workspace.drift.detected",
+    workspace: {
+      id: workspace.id,
+      name: workspace.name,
+      organizationName: organization?.name ?? workspace.orgId,
+      tags,
+    },
+    drift: {
+      assessmentResultId: result.id,
+      resourcesDrifted: result.resourcesDrifted ?? 0,
+      resourcesUndrifted: result.resourcesUndrifted ?? 0,
+      checksPassed: result.checksPassed ?? 0,
+      checksFailed: result.checksFailed ?? 0,
+      checksErrored: result.checksErrored ?? 0,
+      checksUnknown: result.checksUnknown ?? 0,
+      url: new URL(`/api/v2/assessment-results/${encodeURIComponent(result.id)}`, baseUrl).toString(),
+    },
+  };
+}
+
+/**
+ * Build the EventContext for a workspace lock event.
+ */
+export async function buildLockContext(
+  workspaceId: string,
+  lock: Readonly<{ id: string; createdBy: string | null; reason: string | null }>,
+): Promise<EventContext | null> {
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+  if (workspace === undefined) return null;
+  const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+  const tags = await workspaceTagsFor(workspace.id);
+  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  return {
+    event: "workspace.lock.created",
+    workspace: {
+      id: workspace.id,
+      name: workspace.name,
+      organizationName: organization?.name ?? workspace.orgId,
+      tags,
+    },
+    lock: {
+      id: lock.id,
+      createdBy: lock.createdBy,
+      reason: lock.reason,
+      url: new URL(
+        `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}`,
+        baseUrl,
+      ).toString(),
+    },
+  };
+}
+
+/**
+ * Build the EventContext for a variable change event.
+ */
+export async function buildVariableContext(
+  workspaceId: string,
+  variable: Readonly<{ id: string; key: string; category: string; sensitive: boolean; action: "created" | "updated" | "deleted" }>,
+): Promise<EventContext | null> {
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+  if (workspace === undefined) return null;
+  const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+  const tags = await workspaceTagsFor(workspace.id);
+  return {
+    event: "workspace.variable.changed",
+    workspace: {
+      id: workspace.id,
+      name: workspace.name,
+      organizationName: organization?.name ?? workspace.orgId,
+      tags,
+    },
+    variable,
+  };
+}
+
+/**
+ * Fire-and-forget emit: set the event type on the built context and dispatch.
+ * Logs delivery failures; never throws to the caller.
+ */
+export function emitContext(context: EventContext, eventType: EventContext["event"]): void {
+  void emitNotificationEvent({ ...context, event: eventType }).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to emit notification event ${eventType}:`, error);
+  });
+}
+
+/** Fire-and-forget emit for a run-scoped event (started/plan/apply/vcs). */
+export function emitRunEvent(
+  runId: string,
+  eventType: "workspace.run.started"
+    | "workspace.plan.completed"
+    | "workspace.plan.failed"
+    | "workspace.apply.completed"
+    | "workspace.apply.failed"
+    | "workspace.vcs.run.triggered",
+): void {
+  void buildRunContext(runId).then((context): void => {
+    if (context !== null) emitContext(context, eventType);
+  }).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to build context for ${eventType} (run ${runId}):`, error);
+  });
+}
+
+/** Fire-and-forget emit for a drift event from an assessment result. */
+export function emitDriftEvent(assessmentResultId: string): void {
+  void buildDriftContext(assessmentResultId).then((context): void => {
+    if (context !== null) emitContext(context, "workspace.drift.detected");
+  }).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to build drift context for ${assessmentResultId}:`, error);
+  });
+}
+
+/** Fire-and-forget emit for a workspace lock event. */
+export function emitLockCreated(
+  workspaceId: string,
+  lock: Readonly<{ id: string; createdBy: string | null; reason: string | null }>,
+): void {
+  void buildLockContext(workspaceId, lock).then((context): void => {
+    if (context !== null) emitContext(context, "workspace.lock.created");
+  }).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to build lock context for ${workspaceId}:`, error);
+  });
+}
+
+/** Fire-and-forget emit for a workspace variable change event. */
+export function emitVariableChanged(
+  workspaceId: string,
+  variable: Readonly<{ id: string; key: string; category: string; sensitive: boolean; action: "created" | "updated" | "deleted" }>,
+): void {
+  void buildVariableContext(workspaceId, variable).then((context): void => {
+    if (context !== null) emitContext(context, "workspace.variable.changed");
+  }).catch((error: unknown): void => {
+    console.error(`[terrence] Failed to build variable context for ${workspaceId}:`, error);
+  });
 }

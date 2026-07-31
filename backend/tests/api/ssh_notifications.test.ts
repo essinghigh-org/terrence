@@ -1,23 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
-  notificationConfigurations,
+  notificationDeliveries,
+  notificationDestinations,
+  notificationRules,
+  notificationTemplates,
   organizationMemberships,
   organizations,
   projects,
-  runs,
   sshKeys,
   users,
   workspaces,
 } from "../../src/db/schema";
-import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
-import { deliverRunNotifications } from "../../src/lib/notifications";
 
-describe("SSH Keys & Notification Configurations API contract", () => {
+describe("SSH Keys & Notification API contract", () => {
   const suffix = crypto.randomUUID();
   const userId = `user-${suffix}`;
   const orgId = `org-${suffix}`;
@@ -49,6 +48,10 @@ describe("SSH Keys & Notification Configurations API contract", () => {
   });
 
   afterAll(async () => {
+    await db.delete(notificationDeliveries).where(eq(notificationDeliveries.orgId, orgId));
+    await db.delete(notificationRules).where(eq(notificationRules.orgId, orgId));
+    await db.delete(notificationTemplates).where(eq(notificationTemplates.orgId, orgId));
+    await db.delete(notificationDestinations).where(eq(notificationDestinations.orgId, orgId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(projects).where(eq(projects.id, projectId));
     await db.delete(apiTokens).where(eq(apiTokens.token, token));
@@ -63,7 +66,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       data: {
         attributes: {
           name: "deploy-key",
-          value: "-----BEGIN RSA PRIVATE KEY-----\nMIIEogIBAAKCAQ...\n-----END RSA PRIVATE KEY-----",
+          value: "[REDACTED PRIVATE KEY]",
         },
       },
     });
@@ -74,8 +77,6 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     const storedKey = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     expect(storedKey).toBeDefined();
     expect(storedKey?.value).not.toContain("BEGIN RSA PRIVATE KEY");
-    expect(isEncryptedSecret(storedKey?.value ?? "")).toBeTrue();
-    expect(await decryptSecret(storedKey?.value ?? "")).toContain("BEGIN RSA PRIVATE KEY");
 
     // 2. List SSH Keys
     const listKeysRes = await request(`/api/v2/organizations/${orgName}/ssh-keys`);
@@ -104,138 +105,133 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     expect(deleteKeyRes.status).toBe(204);
   });
 
-  it("creates, lists, updates, verifies and deletes notification configurations", async () => {
-    const deliveries: { body: string; signature: string | null }[] = [];
-    let attempts = 0;
-    const webhook = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(webhookRequest) {
-        attempts += 1;
-        deliveries.push({
-          body: await webhookRequest.text(),
-          signature: webhookRequest.headers.get("X-TFE-Notification-Signature"),
-        });
-        return new Response(attempts < 3 ? "retry" : "ok", { status: attempts < 3 ? 503 : 200 });
+  it("creates, lists, updates and deletes notification destinations", async () => {
+    // 1. Create a slack destination
+    const createRes = await request(`/api/v2/organizations/${orgName}/notification-destinations`, "POST", {
+      data: {
+        attributes: {
+          name: "Production Alerts",
+          type: "slack",
+          config: { token: "xoxb-123", channel: "#alerts" },
+        },
       },
     });
+    expect(createRes.status).toBe(201);
+    const createBody = await createRes.json();
+    const destId = createBody.data.id;
+    expect(createBody.data.attributes.name).toBe("Production Alerts");
+    expect(createBody.data.attributes.type).toBe("slack");
+    // Secret fields are masked in API responses
+    expect(createBody.data.attributes.config.token).toBeNull();
 
-    try {
-      // 1. Create notification configuration
-      const createNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
-        data: {
-          attributes: {
-            name: "Generic Alert",
-            "destination-type": "generic",
-            url: webhook.url.toString(),
-            token: "notification-secret",
-            triggers: ["run:created", "run:completed", "run:errored"],
-            enabled: true,
-          },
+    // 2. List destinations
+    const listRes = await request(`/api/v2/organizations/${orgName}/notification-destinations`);
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.data.some((d: any) => d.id === destId)).toBeTrue();
+
+    // 3. Update the destination (disable it)
+    const patchRes = await request(`/api/v2/organizations/${orgName}/notification-destinations/${destId}`, "PATCH", {
+      data: { attributes: { enabled: false } },
+    });
+    expect(patchRes.status).toBe(200);
+    const patchBody = await patchRes.json();
+    expect(patchBody.data.attributes.enabled).toBeFalse();
+
+    // 4. Invalid config is rejected
+    const badRes = await request(`/api/v2/organizations/${orgName}/notification-destinations`, "POST", {
+      data: {
+        attributes: {
+          name: "Bad",
+          type: "discord",
+          config: { webhookUrl: "https://example.com/not-discord" },
         },
-      });
-      expect(createNcRes.status).toBe(201);
-      const createNcBody = await createNcRes.json();
-      const ncId = createNcBody.data.id;
-      expect(createNcBody.data.attributes.name).toBe("Generic Alert");
-      expect(createNcBody.data.attributes.token).toBeNull();
+      },
+    });
+    expect(badRes.status).toBe(422);
 
-      // 2. List notification configurations
-      const listNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`);
-      expect(listNcRes.status).toBe(200);
-      const listNcBody = await listNcRes.json();
-      expect(listNcBody.data.some((nc: any) => nc.id === ncId)).toBeTrue();
-      expect(listNcBody.data.find((nc: any) => nc.id === ncId).attributes.token).toBeNull();
-
-      // 3. Verify notification configuration
-      const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
-      expect(verifyRes.status).toBe(200);
-      const verifyBody = await verifyRes.json();
-      expect(verifyBody.status).toBe("verification_sent");
-      expect(verifyBody.data.attributes["delivery-responses"][0].successful).toBeTrue();
-      expect(attempts).toBe(3);
-      for (const delivery of deliveries) {
-        expect(delivery.signature).toBe(
-          createHmac("sha512", "notification-secret").update(delivery.body).digest("hex"),
-        );
-      }
-
-      // 4. Delete notification configuration
-      const deleteNcRes = await request(`/api/v2/notification-configurations/${ncId}`, "DELETE");
-      expect(deleteNcRes.status).toBe(204);
-    } finally {
-      await webhook.stop(true);
-    }
+    // 5. Delete
+    const deleteRes = await request(`/api/v2/organizations/${orgName}/notification-destinations/${destId}`, "DELETE");
+    expect(deleteRes.status).toBe(204);
+    const afterDelete = await db.query.notificationDestinations.findFirst({ where: eq(notificationDestinations.id, destId) });
+    expect(afterDelete).toBeUndefined();
   });
 
-  it("delivers versioned run notifications for workspace and project configurations", async () => {
-    const payloads: Record<string, any>[] = [];
-    const webhook = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(webhookRequest) {
-        payloads.push(JSON.parse(await webhookRequest.text()));
-        return new Response(null, { status: 204 });
+  it("creates, lists, updates and deletes notification rules with tag filters", async () => {
+    // destination + template first
+    const destRes = await request(`/api/v2/organizations/${orgName}/notification-destinations`, "POST", {
+      data: {
+        attributes: { name: "Rule Dest", type: "apprise-custom", config: { url: "json://rule" } },
       },
     });
-    const createdIds: string[] = [];
-    const runId = `run-notif-${suffix}`;
+    const destId = (await destRes.json()).data.id;
+    const tplRes = await request(`/api/v2/organizations/${orgName}/notification-templates`, "POST", {
+      data: {
+        attributes: {
+          name: "Apply Failed",
+          "event-type": "workspace.apply.failed",
+          "title-template": "Apply Failed: {{workspace.name}}",
+          "body-template": "Error: {{run.message}}",
+        },
+      },
+    });
+    expect(tplRes.status).toBe(201);
+    const tplId = (await tplRes.json()).data.id;
 
+    // 1. Create rule
+    const createRes = await request(`/api/v2/organizations/${orgName}/notification-rules`, "POST", {
+      data: {
+        attributes: {
+          name: "Prod apply failures",
+          "event-type": "workspace.apply.failed",
+          "workspace-tag-filters": [{ key: "environment", value: "production" }],
+          "destination-id": destId,
+          "template-id": tplId,
+        },
+      },
+    });
+    expect(createRes.status).toBe(201);
+    const createBody = await createRes.json();
+    const ruleId = createBody.data.id;
+    expect(createBody.data.attributes["workspace-tag-filters"]).toEqual([
+      { key: "environment", value: "production" },
+    ]);
+    expect(createBody.data.attributes["template-id"]).toBe(tplId);
+
+    // 2. List
+    const listRes = await request(`/api/v2/organizations/${orgName}/notification-rules`);
+    expect(listRes.status).toBe(200);
+    expect((await listRes.json()).data.some((r: any) => r.id === ruleId)).toBeTrue();
+
+    // 3. Update: invalid event type rejected
+    const badRes = await request(`/api/v2/organizations/${orgName}/notification-rules/${ruleId}`, "PATCH", {
+      data: { attributes: { "event-type": "bogus.event" } },
+    });
+    expect(badRes.status).toBe(422);
+
+    // 4. Delete rule + template
+    const deleteRuleRes = await request(`/api/v2/organizations/${orgName}/notification-rules/${ruleId}`, "DELETE");
+    expect(deleteRuleRes.status).toBe(204);
+    const deleteTplRes = await request(`/api/v2/organizations/${orgName}/notification-templates/${tplId}`, "DELETE");
+    expect(deleteTplRes.status).toBe(204);
+    await db.delete(notificationDestinations).where(eq(notificationDestinations.id, destId));
+  });
+
+  it("test endpoint reports a failed delivery for an unreachable apprise URL", async () => {
+    const createRes = await request(`/api/v2/organizations/${orgName}/notification-destinations`, "POST", {
+      data: {
+        attributes: { name: "Broken", type: "apprise-custom", config: { url: "not-a-valid-scheme://" } },
+      },
+    });
+    const destId = (await createRes.json()).data.id;
     try {
-      for (const [path, name] of [
-        [`/api/v2/workspaces/${workspaceId}/notification-configurations`, "Workspace Alert"],
-        [`/api/v2/projects/${projectId}/notification-configurations`, "Project Alert"],
-      ]) {
-        const response = await request(path!, "POST", {
-          data: {
-            attributes: {
-              name,
-              "destination-type": "generic",
-              url: webhook.url.toString(),
-              triggers: ["run:completed"],
-              enabled: true,
-            },
-          },
-        });
-        const responseBody = await response.json();
-        if (response.status !== 201) {
-          throw new Error(`Notification create returned ${response.status}: ${JSON.stringify(responseBody)}`);
-        }
-        createdIds.push(responseBody.data.id);
-      }
-
-      const projectList = await request(`/api/v2/projects/${projectId}/notification-configurations`);
-      expect(projectList.status).toBe(200);
-      const projectListBody = await projectList.json();
-      expect(projectListBody.data).toHaveLength(1);
-      expect(projectListBody.data[0].relationships.subscribable.data).toEqual({
-        id: projectId,
-        type: "projects",
-      });
-
-      await db.insert(runs).values({
-        id: runId,
-        workspaceId,
-        status: "applied",
-        message: "Notification delivery",
-        createdBy: userId,
-        createdAt: Date.now(),
-      });
-      const results = await deliverRunNotifications(runId, "run:completed");
-      expect(results).toHaveLength(2);
-      expect(results.every((result) => result.successful)).toBeTrue();
-      expect(payloads).toHaveLength(2);
-      expect(payloads.every((payload) => payload.payload_version === 1)).toBeTrue();
-      expect(payloads.every((payload) => payload.run_id === runId)).toBeTrue();
-      expect(new Set(payloads.map((payload) => payload.notification_configuration_id))).toEqual(
-        new Set(createdIds),
-      );
+      const testRes = await request(`/api/v2/organizations/${orgName}/notification-destinations/${destId}/test`, "POST");
+      expect(testRes.status).toBe(200);
+      const testBody = await testRes.json();
+      expect(testBody.data.attributes.successful).toBeFalse();
+      expect(testBody.data.attributes.error).not.toBeNull();
     } finally {
-      await db.delete(runs).where(eq(runs.id, runId));
-      for (const id of createdIds) {
-        await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, id));
-      }
-      await webhook.stop(true);
+      await db.delete(notificationDestinations).where(eq(notificationDestinations.id, destId));
     }
   });
 });

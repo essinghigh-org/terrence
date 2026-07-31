@@ -21,7 +21,7 @@ function dest(overrides: Partial<NotificationDestination>): NotificationDestinat
   };
 }
 
-function rule(overrides: Partial<NotificationRule>): NotificationRule {
+function rule(overrides: Partial<NotificationRule> = {}): NotificationRule {
   return {
     id: "r-1",
     orgId: "org-1",

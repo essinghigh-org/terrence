@@ -18,7 +18,7 @@ import {
   stateVersions,
   workspaces,
 } from "../db/schema";
-import { queueRunNotification } from "./notifications";
+import { emitRunEvent } from "./notify";
 import { reportRunVcsStatus } from "./webhooks";
 import {
   planJsonResourceCounts,
@@ -108,19 +108,14 @@ function timestampsWithStatus(
   };
 }
 
-function notifyRunStatus(runId: string, status: string): void {
-  const trigger = status === "planning"
-    ? "run:planning"
-    : status === "applying"
-      ? "run:applying"
-      : status === "applied" || status === "planned_and_finished"
-        ? "run:completed"
-        : status === "errored"
-          ? "run:errored"
-          : ["planned", "planned_and_saved", "policy_soft_failed"].includes(status)
-            ? "run:needs_attention"
-            : undefined;
-  if (trigger !== undefined) queueRunNotification(runId, trigger, status);
+function notifyRunStatus(runId: string, status: string, phase?: "plan" | "apply"): void {
+  if (status === "applied") {
+    emitRunEvent(runId, "workspace.apply.completed");
+  } else if (status === "planned_and_finished" || status === "planned" || status === "planned_and_saved" || status === "policy_soft_failed") {
+    emitRunEvent(runId, "workspace.plan.completed");
+  } else if (status === "errored") {
+    emitRunEvent(runId, phase === "apply" ? "workspace.apply.failed" : "workspace.plan.failed");
+  }
   void reportRunVcsStatus(runId, status);
 }
 
@@ -527,7 +522,7 @@ export async function claimAgentJob(agent: Agent): Promise<ClaimedAgentJob | und
       continue;
     }
     await db.update(agents).set({ status: "busy", lastPingAt: now }).where(eq(agents.id, agent.id));
-    notifyRunStatus(claimedJob.runId, claimedJob.phase === "plan" ? "planning" : "applying");
+    notifyRunStatus(claimedJob.runId, claimedJob.phase === "plan" ? "planning" : "applying", claimedJob.phase === "plan" ? "plan" : "apply");
     return await claimedJobDetails(claimedJob);
   }
   return undefined;

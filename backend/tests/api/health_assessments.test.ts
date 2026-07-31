@@ -53,18 +53,27 @@ const assessmentPlan = {
 };
 
 test("schedules eligible assessments separately from runs and records drift, checks, and notifications", async () => {
+  // Shim apprise so the child process can invoke the delivery pipeline
+  // without a real notification service. Written before the child spawns;
+  // both paths are passed through env.
+  const shimDir = await mkdtemp(join(tmpdir(), "terrence-apprise-shim-"));
+  const shimPath = join(shimDir, "apprise-shim.sh");
+  const recordPath = join(shimDir, "apprise-record.txt");
+  await Bun.write(shimPath, "#!/bin/sh\n" + "echo \"$@\" >> \"" + recordPath + "\"\n" + "exit 0\n");
+  const { chmod } = await import("fs/promises");
+  await chmod(shimPath, 0o755);
   const result = await runScript(`
     const { db } = await import("./src/db/index.ts");
     const {
       assessmentCheckResults,
       assessmentResults,
       configurationVersions,
-      notificationConfigurations,
+      notificationDestinations,
+      notificationRules,
       organizations,
       runs,
       workspaces,
     } = await import("./src/db/schema.ts");
-    const { deliverAssessmentNotifications } = await import("./src/lib/notifications.ts");
     const { enqueueDueAssessments, pollAssessmentQueue } = await import("./src/worker.ts");
 
     const now = 2_000_000_000_000;
@@ -92,6 +101,29 @@ test("schedules eligible assessments separately from runs and records drift, che
       { id: "paused-error", workspaceId: "paused", configurationVersionId: "paused-cv", status: "errored", createdAt: now - 5_000 },
     ]);
 
+    // Set up the notification rule BEFORE assessments run so the worker's
+    // fire-and-forget drift emit finds it.
+    await db.insert(notificationDestinations).values({
+      id: "health-destination",
+      orgId: "optional-org",
+      name: "health",
+      type: "apprise-custom",
+      config: { url: "json://health" },
+      enabled: true,
+      createdAt: Date.now(),
+    });
+    await db.insert(notificationRules).values({
+      id: "health-rule",
+      orgId: "optional-org",
+      name: "drift alert",
+      eventType: "workspace.drift.detected",
+      workspaceTagFilters: [],
+      destinationId: "health-destination",
+      templateId: null,
+      enabled: true,
+      createdAt: Date.now(),
+    });
+
     const first = await enqueueDueAssessments(now);
     const claimed = await pollAssessmentQueue();
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -104,22 +136,16 @@ test("schedules eligible assessments separately from runs and records drift, che
     const completed = await db.query.assessmentResults.findMany({ orderBy: (row, { asc }) => [asc(row.workspaceId)] });
     const checks = await db.query.assessmentCheckResults.findMany();
 
-    const payloads = [];
-    globalThis.fetch = async (_input, init) => {
-      payloads.push(JSON.parse(String(init?.body)));
-      return new Response("", { status: 200 });
-    };
-    await db.insert(notificationConfigurations).values({
-      id: "health-notification",
-      workspaceId: completed[0].workspaceId,
-      name: "health",
-      destinationType: "generic",
-      url: "https://example.test/notifications",
-      triggers: ["assessment:drifted", "assessment:check_failure"],
-      enabled: true,
-    });
-    await deliverAssessmentNotifications(completed[0].id, "assessment:drifted");
-    await deliverAssessmentNotifications(completed[0].id, "assessment:check_failure");
+    const fs = await import("fs/promises");
+    const recordPath = process.env.TERRENCE_APPRISE_RECORD ?? "";
+    // Wait for the fire-and-forget emit chain (buildDriftContext -> rules ->
+    // invokeApprise -> delivery log) to complete.
+    let deliveries = [];
+    for (let attempt = 0; attempt < 100; attempt++) {
+      deliveries = await db.query.notificationDeliveries.findMany();
+      if (deliveries.length >= 2) break;
+      await Bun.sleep(25);
+    }
 
     const dueAgain = await enqueueDueAssessments(now + 86_400_001);
     console.log(JSON.stringify({
@@ -143,13 +169,17 @@ test("schedules eligible assessments separately from runs and records drift, che
       tooSoon,
       dueAgainCount: dueAgain.length,
       ordinaryRunCount: (await db.query.runs.findMany()).length,
-      notificationTriggers: payloads.map(payload => payload.trigger),
-      notificationScope: payloads[0]?.trigger_scope,
-      notificationResultId: payloads[0]?.details?.new_assessment_result?.id,
+      deliveryEvents: deliveries.map(delivery => delivery.eventType).sort(),
+      deliverySuccessful: deliveries.map(delivery => delivery.successful),
+      shimInvocations: await fs.readFile(recordPath, "utf8").catch(() => ""),
     }));
   `, {
     SIMULATED_ASSESSMENT_JSON: JSON.stringify(assessmentPlan),
+    TERRENCE_APPRISE_BIN: shimPath,
+    TERRENCE_APPRISE_RECORD: recordPath,
   });
+
+  await rm(shimDir, { recursive: true, force: true });
 
   expect(result.firstWorkspaces).toEqual(["enabled", "forced"]);
   expect(result.firstStatuses).toEqual(["completed", "completed"]);
@@ -168,9 +198,9 @@ test("schedules eligible assessments separately from runs and records drift, che
   expect(result.tooSoon).toEqual([]);
   expect(result.dueAgainCount).toBe(2);
   expect(result.ordinaryRunCount).toBe(5);
-  expect(result.notificationTriggers).toEqual(["assessment:drifted", "assessment:check_failure"]);
-  expect(result.notificationScope).toBe("assessment");
-  expect(typeof result.notificationResultId).toBe("string");
+  expect(result.deliveryEvents).toEqual(["workspace.drift.detected"]);
+  expect(result.deliverySuccessful).toEqual([true]);
+  expect(String(result.shimInvocations)).toContain("--body");
 });
 
 test("evaluates and stores plan checks before apply without turning advisory checks into blockers", async () => {
