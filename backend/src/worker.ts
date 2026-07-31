@@ -29,7 +29,6 @@ import {
   assessmentCheckResults,
   agentJobs,
   agentPools,
-  projects,
 } from "./db/schema";
 import { eq, desc, asc, and, inArray, notInArray, sql, isNotNull } from "drizzle-orm";
 import { spawn } from "bun";
@@ -819,15 +818,11 @@ export async function executeRun(runId: string): Promise<void> {
         }
       }
     } else if (workspace.source === "local") {
-      const project = workspace.projectId !== null 
-        ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
-        : null;
-      const projectName = project?.name ?? "Default Project";
       const wsName = workspace.name;
       if (wsName.includes("..") || wsName.startsWith("/") || wsName.includes("\\")) {
         throw new Error(`Invalid workspace name: contains path traversal characters`);
       }
-      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, projectName, wsName);
+      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, workspace.projectId ?? "default", wsName);
       
       await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
       if (!(await exists(localPath))) {

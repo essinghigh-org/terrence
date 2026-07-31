@@ -507,7 +507,13 @@ export function runResource(
       "trigger-reason": (origin as Record<string, unknown> | undefined)?.triggerReason ?? "manual",
       "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
       "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
-      variables: run.variables ?? [],
+      variables: ((): unknown[] => {
+        if (!Array.isArray(run.variables)) return [];
+        return (run.variables as Record<string, unknown>[]).map((v) => ({
+          ...v,
+          value: v.sensitive === true ? "******" : v.value,
+        }));
+      })(),
       "resource-additions": run.planResourceAdditions ?? 0,
       "resource-changes": run.planResourceChanges ?? 0,
       "resource-destructions": run.planResourceDestructions ?? 0,

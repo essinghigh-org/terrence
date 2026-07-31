@@ -198,8 +198,10 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const signature = request.headers.get("x-hub-signature-256");
     const rawBody = typeof body === "string" ? body : "";
-    if (typeof secret === "string" && secret.length > 0) {
-      if (signature === null) {
+    if (typeof secret !== "string" || secret.length === 0) {
+      return webhookUnauthorized(set, "GitHub webhook secret is not configured");
+    }
+    if (signature === null) {
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
       }
@@ -210,7 +212,6 @@ export const miscRoutes = new Elysia({ name: "misc" })
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid signature" }] };
       }
-    }
 
     const eventName = request.headers.get("x-github-event");
     if (eventName !== null) {
@@ -241,7 +242,10 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   .post("/api/webhooks/gitlab", ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): unknown => {
     const secret = process.env.GITLAB_WEBHOOK_SECRET;
-    if (typeof secret === "string" && secret !== "" && !sameSecret(request.headers.get("x-gitlab-token"), secret)) {
+    if (typeof secret !== "string" || secret === "") {
+      return webhookUnauthorized(set, "GitLab webhook secret is not configured");
+    }
+    if (!sameSecret(request.headers.get("x-gitlab-token"), secret)) {
       return webhookUnauthorized(set, "Invalid GitLab webhook token");
     }
     const eventName = request.headers.get("x-gitlab-event");
@@ -255,11 +259,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const parsed = webhookPayload(body);
     if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
     const secret = process.env.BITBUCKET_WEBHOOK_SECRET;
-    if (typeof secret === "string" && secret !== "") {
-      const signature = request.headers.get("x-hub-signature");
-      const expected = `sha256=${createHmac("sha256", secret).update(parsed.rawBody).digest("hex")}`;
-      if (!sameSecret(signature, expected)) return webhookUnauthorized(set, "Invalid Bitbucket webhook signature");
+    if (typeof secret !== "string" || secret === "") {
+      return webhookUnauthorized(set, "Bitbucket webhook secret is not configured");
     }
+    const signature = request.headers.get("x-hub-signature");
+    const expected = `sha256=${createHmac("sha256", secret).update(parsed.rawBody).digest("hex")}`;
+    if (!sameSecret(signature, expected)) return webhookUnauthorized(set, "Invalid Bitbucket webhook signature");
     const eventName = request.headers.get("x-event-key");
     if (eventName === null || eventName === "") return webhookUnprocessable(set, "Missing Bitbucket event header");
     void processProviderDelivery(handleBitbucketWebhook, eventName, parsed.payload);

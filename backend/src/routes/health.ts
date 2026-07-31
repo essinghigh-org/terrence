@@ -62,7 +62,7 @@ export const healthRoutes = new Elysia({ name: "health" })
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
-    return { "signup-enabled": process.env.TERRENCE_DISABLE_LOCAL_SIGNUP !== "true" };
+    return { "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true" };
   })
   .get("/healthz", (): string => "ok")
   .get("/metrics", async ({ request, set }: MetricsCtx): Promise<unknown> => {

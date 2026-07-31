@@ -125,10 +125,12 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: configurationVersionResource(cv, request) };
   })
-  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
+  .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params.cv_id ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "plan");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (cv.status !== "pending" || cv.archivePath !== null) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }
