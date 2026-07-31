@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { notificationDestinations, organizations, type users } from "../db/schema";
-import { appriseUrlFor, invokeApprise, type NotificationDestination } from "../lib/notify";
+import { invokeApprise, type NotificationDestination } from "../lib/notify";
 import { checkOrganizationPermission } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers?: Readonly<Record<string, string | number>> }>;
@@ -221,7 +221,6 @@ export const notificationDestinationRoutes = new Elysia()
           successful: delivery.ok,
           error: delivery.error,
           attempts: delivery.attempts,
-          url: appriseUrlFor(typed),
         },
       },
     };
