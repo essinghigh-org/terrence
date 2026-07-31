@@ -13,7 +13,12 @@ await bootstrapInitialAdmin();
 startWorkerQueue();
 
 app
-  .listen(port);
+  .listen({
+    port,
+    // Reject request bodies larger than the 100 MiB configuration-version
+    // upload limit before Elysia buffers them into memory (memory DoS guard).
+    maxRequestBodySize: 100 * 1024 * 1024,
+  });
 
 console.log(
   `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`

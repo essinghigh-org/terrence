@@ -145,9 +145,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
           ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
           : body instanceof Blob
             ? new Uint8Array(await body.arrayBuffer())
-            : typeof body === "string"
-              ? new TextEncoder().encode(body)
-              : new Uint8Array(await request.arrayBuffer());
+            : new Uint8Array(await request.arrayBuffer());
     } catch {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Could not read configuration archive body" }] };
@@ -167,7 +165,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     }).where(eq(configurationVersions.id, cvId));
     (set as { status: number }).status = 200;
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
-  })
+  }, { isAuth: true })
   .get("/api/v2/configuration-versions/:cv_id/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const cvId = params.cv_id ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });

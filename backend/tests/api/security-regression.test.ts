@@ -55,11 +55,11 @@ describe("Security Regression — Configuration Version Upload Authorization", (
     }]);
   });
 
-  it("returns 404 when uploading without authentication (no auth = 404, not 401, because the handler lacks an isAuth guard)", async () => {
+  it("returns 401 when uploading without authentication (isAuth guard)", async () => {
     const res = await app.handle(
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, { method: "PUT" }),
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   it("returns 404 when uploading with a read-only user (no plan permission)", async () => {
