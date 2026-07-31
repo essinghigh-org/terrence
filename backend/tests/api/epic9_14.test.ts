@@ -291,6 +291,6 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
         body: JSON.stringify({ ref: "refs/heads/main" }),
       })
     );
-    expect(ghWebhook.status).toBe(200);
+    expect(ghWebhook.status).toBe(401); // fail closed without configured secret
   });
 });

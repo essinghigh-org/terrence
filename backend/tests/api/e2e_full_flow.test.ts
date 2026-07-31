@@ -217,6 +217,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, {
         method: "PUT",
         headers: {
+          ...authHeaders,
           "Content-Type": "application/octet-stream",
         },
         body: new Uint8Array([0x1f, 0x8b, 0x08]),

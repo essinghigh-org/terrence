@@ -13,13 +13,13 @@ terrence/
 │   │   ├── lib/      # Shared utilities (response helpers, auth, cost estimation)
 │   │   └── worker.ts # Background run executor (OpenTofu/Terraform)
 │   ├── drizzle/      # Drizzle migrations
-│   └── tests/        # Backend test suite (289 tests)
+│   └── tests/        # Backend test suite
 ├── frontend/         # React 19 + Vite + shadcn/ui
 │   ├── src/
 │   │   ├── views/    # Page-level components (Dashboard, Workspaces, Runs...)
 │   │   ├── components/ # Reusable UI components
 │   │   └── lib/      # API client, auth utilities
-│   └── tests/        # Integration tests (36 tests)
+│   └── tests/        # Integration tests
 └── Dockerfile        # Multi-stage Docker build
 ```
 
@@ -53,15 +53,26 @@ cd backend && bun run typecheck
 
 ### Environment Variables
 
+Terrence runs without any environment variables in development. The table below covers all supported variables.
+
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `3000` | Server port |
-| `STORAGE_DIR` | `./backend/storage` | SQLite DB and artifact storage |
-| `DATABASE_URL` | `file:./backend/storage/terrence.db` | SQLite connection string |
-| `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
-| `GITHUB_APP_PRIVATE_KEY` | — | GitHub App private key |
-| `GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret |
+| `PORT` | `3000` | HTTP listen port |
+| `NODE_ENV` | `development` | Set to `production` for production mode |
+| `DATABASE_URL` | `file:./storage/terrence.db` | SQLite database path |
+| `STORAGE_DIR` | `./storage` | Directory for state archives and binaries |
+| `PUBLIC_URL` | — | Public URL for webhook callbacks (required for GitHub App) |
+| `CORS_ORIGIN` | — | CORS origin (defaults to `*` in non-production) |
 | `SESSION_KEY` | auto-generated | Session encryption key |
+| `INFRACOST_ENABLED` | `false` | Enable Infracost for cost estimation |
+| `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
+| `GITHUB_APP_SLUG` | — | GitHub App slug |
+| `GITHUB_APP_PRIVATE_KEY` | — | GitHub App RSA private key |
+| `GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret |
+| `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub Enterprise HTTP URL |
+| `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub Enterprise API URL |
+| `ADMIN_PASSWORD` | — | Bootstrap admin password on first start (min 10 chars). Used when `TERRENCE_ENABLE_LOCAL_SIGNUP` is not set. |
+| `TERRENCE_ENABLE_LOCAL_SIGNUP` | — | When `true`, local account registration via `POST /api/v2/users` is enabled. Defaults to disabled (only `ADMIN_PASSWORD` bootstrap can create the first admin). |
 
 ### Database Migrations
 
@@ -80,25 +91,6 @@ docker build -t terrence .
 # Run with persistent storage
 docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 ```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | HTTP listen port |
-| `NODE_ENV` | `development` | Set to `production` for production mode |
-| `DATABASE_URL` | `file:./storage/terrence.db` | SQLite database path |
-| `STORAGE_DIR` | `./storage` | Directory for state archives and binaries |
-| `PUBLIC_URL` | — | Public URL for webhook callbacks (required for GitHub App) |
-| `CORS_ORIGIN` | — | CORS origin (defaults to `*` in non-production) |
-| `INFRACOST_ENABLED` | `false` | Enable Infracost for cost estimation |
-| `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
-| `GITHUB_APP_SLUG` | — | GitHub App slug |
-| `GITHUB_APP_PRIVATE_KEY` | — | GitHub App RSA private key |
-| `GITHUB_APP_WEBHOOK_SECRET` | — | GitHub App webhook secret |
-| `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub Enterprise HTTP URL |
-| `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub Enterprise API URL |
-| `TERRENCE_DISABLE_LOCAL_SIGNUP` | `false` | When `true`, local account registration via `POST /api/v2/users` is disabled and the `/register` page redirects to `/login`. Set this on internet-facing instances. |
 
 ## Features
 
@@ -126,16 +118,12 @@ The API follows the TFE JSON:API spec. The full specification is documented in [
 ## Testing
 
 ```bash
-# Backend (289 tests, 1928 assertions)
+# Backend
 cd backend && bun test
 
-# Frontend (36 tests, 168 assertions)
+# Frontend
 cd frontend && bun test
 ```
-
-## GitHub App Integration
-
-See [README > GitHub App Integration](#github-app-integration) above for setup instructions.
 
 ## License
 

@@ -137,15 +137,26 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const tarName = `config-${cvId}.tar.gz`;
     const tarPath = join(CV_STORAGE_DIR, tarName);
     await mkdir(CV_STORAGE_DIR, { recursive: true });
-    const buffer = body instanceof ArrayBuffer
-      ? new Uint8Array(body)
-      : ArrayBuffer.isView(body)
-        ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
-        : body instanceof Blob
-          ? new Uint8Array(await body.arrayBuffer())
-          : new Uint8Array(await request.arrayBuffer());
+    let buffer: Uint8Array;
+    try {
+      buffer = body instanceof ArrayBuffer
+        ? new Uint8Array(body)
+        : ArrayBuffer.isView(body)
+          ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+          : body instanceof Blob
+            ? new Uint8Array(await body.arrayBuffer())
+            : typeof body === "string"
+              ? new TextEncoder().encode(body)
+              : new Uint8Array(await request.arrayBuffer());
+    } catch {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Could not read configuration archive body" }] };
+    }
     if (buffer.byteLength === 0) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
+    }
+    if (buffer.byteLength > 100 * 1024 * 1024) {
+      (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds 100 MiB maximum" }] };
     }
     await writeFile(tarPath, buffer, { mode: 0o600 });
     const uploadedAt = new Date().toISOString();

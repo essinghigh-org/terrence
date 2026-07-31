@@ -127,6 +127,7 @@ describe("Terraform cloud protocol contract", () => {
 
     const uploadResponse = await request(uploadUrl, {
       method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
       body: new Uint8Array([0x1f, 0x8b, 0x08]),
     });
     expect(uploadResponse.status).toBe(200);
