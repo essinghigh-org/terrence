@@ -19,7 +19,7 @@ new Elysia()
 				...models,
 				pepper: t.String()
 			}))
-			// Add prefix
+			// Prefix for decorator-based path binding (unstable schema tag)
 			.prefix('decorator', 'unstable')
 	)
 	.get(

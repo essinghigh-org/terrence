@@ -21,8 +21,8 @@ export function validateVersion(version: string): boolean {
   return false;
 }
 
-function parseSemver(version: string): number[] {
-  // Strip pre-release suffix before numeric parsing
+  // Strip pre-release suffix (everything after the first `-`) before numeric version segment parsing
+  function parseSemver(version: string): number[] {
   const clean = version.replace(/^v/, "").split("-")[0];
   return (clean ?? "").split(".").map((s: string): number => Number.parseInt(s, 10));
 }
@@ -37,7 +37,7 @@ function compareSemver(a: string, b: string): number {
     const bVal = typeof bNum === "number" && !Number.isNaN(bNum) ? bNum : 0;
     if (aVal !== bVal) return aVal - bVal;
   }
-  // Pre-release sorts below stable: if one has a suffix and the other doesn't
+  // Pre-release sorts below stable: a build with a `-` suffix comes before the same version without one
   const aHasPre = a.replace(/^v/, "").includes("-");
   const bHasPre = b.replace(/^v/, "").includes("-");
   if (aHasPre && !bHasPre) return -1;
