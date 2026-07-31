@@ -28,6 +28,8 @@ function planExportResource(pe: PlanExportItem): Record<string, unknown> {
     attributes: {
       "data-type": pe.dataType,
       status: pe.status,
+      "download-url": pe.downloadUrl ?? null,
+      "expires-at": pe.expiresAt !== null && pe.expiresAt !== undefined ? new Date(pe.expiresAt).toISOString() : null,
       "created-at": new Date(pe.createdAt).toISOString(),
     },
     relationships: {
@@ -66,10 +68,14 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
     }
 
     const id = `pe-${crypto.randomUUID()}`;
+    if (typeof attributes["data-type"] !== "string" || !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version" }] };
+    }
     const pe: PlanExportItem = {
       id,
       planId,
-      dataType: typeof attributes["data-type"] === "string" ? attributes["data-type"] : "sentinel-mock-bundle-v0",
+      dataType: attributes["data-type"],
       status: "finished",
       downloadUrl: `/api/v2/plan-exports/${id}/download`,
       expiresAt: Date.now() + 3600 * 1000,
