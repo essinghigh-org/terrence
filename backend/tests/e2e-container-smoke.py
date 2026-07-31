@@ -7,12 +7,20 @@ import time
 import urllib.request
 
 BASE = "http://127.0.0.1:3200"
-WS_ID = "cad75523-d488-4048-ae4c-f48774ebb4d2"
+WS_ID = ""
 TOKEN = ""
 
 
 def login():
     global TOKEN
+    # Fresh containers have an empty DB; signup first, ignore if exists.
+    try:
+        with urllib.request.urlopen(urllib.request.Request(BASE + "/api/v2/users", method="POST",
+                                     data=json.dumps({"data": {"type": "users", "attributes": {"username": "smoke", "password": "smoke-password-123"}}}).encode(),
+                                     headers={"Content-Type": "application/vnd.api+json"}), timeout=30) as resp:
+            pass
+    except urllib.error.HTTPError:
+        pass
     with urllib.request.urlopen(urllib.request.Request(BASE + "/api/v2/users/login", method="POST",
                                  data=json.dumps({"data": {"attributes": {"username": "smoke", "password": "smoke-password-123"}}}).encode(),
                                  headers={"Content-Type": "application/vnd.api+json"}), timeout=30) as resp:
@@ -59,6 +67,14 @@ resource "null_resource" "probe" {
 
 
 login()
+print("== org + workspace ==")
+s, raw = api("POST", "/api/v2/organizations", {"data": {"type": "organizations", "attributes": {"name": f"smoke-org-{int(time.time())}"}}})
+print("org:", s)
+s, raw = api("POST", f"/api/v2/organizations/{json.loads(raw)['data']['attributes']['name']}/workspaces",
+             {"data": {"type": "workspaces", "attributes": {"name": "smoke-ws", "iac-binary": "tofu", "terraform-version": "1.9.3"}}})
+WS_ID = json.loads(raw)["data"]["id"]
+print("workspace:", s, WS_ID)
+
 print("== create config version + upload ==")
 s, raw = api("POST", f"/api/v2/workspaces/{WS_ID}/configuration-versions",
              {"data": {"type": "configuration-versions", "attributes": {"auto-queue-runs": False}}})
@@ -93,12 +109,17 @@ with urllib.request.urlopen(log_url, timeout=30) as resp:
     log_text = resp.read().decode()
 
 print("=" * 60)
-for marker in ["PROBE_CWD", "DB_DENIED_OK", "DB_READABLE_FAIL", "STORAGE_DENIED_OK",
-               "STORAGE_LISTABLE_FAIL", "uid=", "Apply complete", "Error"]:
-    if marker in log_text:
-        line = [l for l in log_text.splitlines() if marker in l]
-        print(f"  {marker}: {line[0].strip()[:150] if line else '(found)'}")
-ok = ("DB_DENIED_OK" in log_text and "DB_READABLE_FAIL" not in log_text
-      and "STORAGE_DENIED_OK" in log_text and "STORAGE_LISTABLE_FAIL" not in log_text
+# Match actual provisioner OUTPUT lines, not the "Executing:" echo of the
+# command string (which contains all markers as literal text).
+output_lines = [l for l in log_text.splitlines()
+                if "(local-exec):" in l and "Executing:" not in l]
+for marker in ["DB_DENIED_OK", "DB_READABLE_FAIL", "STORAGE_DENIED_OK",
+               "STORAGE_LISTABLE_FAIL", "uid=", "PROBE_CWD="]:
+    hit = [l for l in output_lines if marker in l]
+    print(f"  {marker}: {hit[0].strip()[:140] if hit else '(not found)'}")
+ok = (any("DB_DENIED_OK" in l for l in output_lines)
+      and not any("DB_READABLE_FAIL" in l for l in output_lines)
+      and any("STORAGE_DENIED_OK" in l for l in output_lines)
+      and not any("STORAGE_LISTABLE_FAIL" in l for l in output_lines)
       and "Apply complete" in log_text)
 print("ISOLATION-PASS (apply):", ok)

@@ -55,7 +55,7 @@ import {
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { recoverStaleAgentJobs } from "./lib/agent-jobs";
-import { RunSandbox, removeSandboxWorkDir } from "./lib/sandbox";
+import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;
@@ -104,7 +104,7 @@ function noCodeUpgradeTarget(source: string | null): NoCodeUpgradeTarget | undef
 // restrictions, so they cannot see STORAGE_DIR (DB, encryption key, state
 // archives) or other workspaces. Requires a Landlock-enabled kernel; disable
 // with TERRENCE_RUN_SANDBOX=false.
-const RUN_SANDBOX_REQUIRED = (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase() !== "false";
+const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   console.error(

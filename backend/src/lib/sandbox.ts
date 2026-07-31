@@ -34,6 +34,15 @@ const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
   (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase(),
 );
 
+/**
+ * Whether the run sandbox is required on this deployment. Single source of
+ * truth shared by worker.ts (fail-closed guard) and health.ts (meta endpoint).
+ * Any value other than the explicit disable set keeps the sandbox required.
+ */
+export function runSandboxRequired(): boolean {
+  return !SANDBOX_DISABLED;
+}
+
 /** Candidate locations for the landlock-runner helper binary. */
 function runnerCandidates(): string[] {
   const candidates: string[] = [];
@@ -196,10 +205,16 @@ let cachedResolvDir: string | null | undefined;
 
 /**
  * Extra read-write paths for the sandbox allow-list, from
- * TERRENCE_SANDBOX_EXTRA_RW_PATHS (colon-separated). Used by tests to let the
- * sandboxed binary write observability files outside the run workdir.
+ * TERRENCE_SANDBOX_EXTRA_RW_PATHS (colon-separated). TEST-ONLY: lets the
+ * sandboxed fake-tofu write observability files outside the run workdir.
+ *
+ * SECURITY: this widens the sandbox boundary. It is honoured only when the
+ * explicit opt-in TERRENCE_SANDBOX_EXTRA_RW_ALLOWED=true is set, so a
+ * misconfigured deployment cannot silently enlarge the allow-list by setting
+ * only the paths variable.
  */
 function extraRwArgs(): string[] {
+  if (process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED !== "true") return [];
   const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
   if (raw === undefined || raw === "") return [];
   return raw.split(":").filter((p): boolean => p !== "").map((p): string => `--rw=${p}`);

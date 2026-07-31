@@ -19,6 +19,7 @@ async function runWorkerScript(script: string, env: Readonly<Record<string, stri
         INFRACOST_ENABLED: "true",
         // Let the sandboxed fake-tofu write its record files.
         TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
+        TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",
         TERRENCE_RUN_SANDBOX: TEST_RUN_SANDBOX,
         ...env,
       },

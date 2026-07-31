@@ -3,7 +3,7 @@ import { db } from "../db";
 import { organizations, runs, users, workspaces } from "../db/schema";
 import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { probeLandlockAbi } from "../lib/sandbox";
+import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
@@ -76,7 +76,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     };
   } => {
-    const sandboxRequired = (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase() !== "false";
+    const sandboxRequired = runSandboxRequired();
     const abi = probeLandlockAbi();
     let reason: string | null = null;
     if (abi < 1) {
