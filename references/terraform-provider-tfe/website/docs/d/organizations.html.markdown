@@ -1,0 +1,33 @@
+---
+layout: "tfe"
+page_title: "Terraform Enterprise: tfe_organizations"
+description: |-
+  Get information on Organizations.
+---
+
+# Data Source: tfe_organizations
+
+Use this data source to get a list of Organizations and a map of their IDs.
+
+## Example Usage
+
+```hcl
+data "tfe_organizations" "foo" {
+}
+```
+
+## Argument Reference
+
+The following argument(s) are supported:
+
+* `admin` - This field is for Terraform Enterprise only. It is a boolean field that determines
+  the list of organizations that should be retrieved. If it is true, then it will retrieve all
+  the organizations for the entire installation. If it is false, then it will retrieve the
+  organizations available as per permissions of the API Token.
+
+## Attributes Reference
+
+The following attributes are exported:
+
+* `names` - A list of names of every organization.
+* `ids` - A map of organization names and their IDs.

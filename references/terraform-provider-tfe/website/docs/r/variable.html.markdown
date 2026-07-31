@@ -1,0 +1,199 @@
+---
+layout: "tfe"
+page_title: "Terraform Enterprise: tfe_variable"
+description: |-
+  Manages variables.
+---
+
+# tfe_variable
+
+Creates, updates and destroys variables.
+
+## Example Usage
+
+Basic usage for workspaces:
+
+```hcl
+resource "tfe_organization" "test" {
+  name  = "my-org-name"
+  email = "admin@company.com"
+}
+
+resource "tfe_workspace" "test" {
+  name         = "my-workspace-name"
+  organization = tfe_organization.test.name
+}
+
+resource "tfe_variable" "test" {
+  key          = "my_key_name"
+  value        = "my_value_name"
+  category     = "terraform"
+  workspace_id = tfe_workspace.test.id
+  description  = "a useful description"
+}
+```
+
+Basic usage for variable sets:
+
+```hcl
+resource "tfe_organization" "test" {
+  name  = "my-org-name"
+  email = "admin@company.com"
+}
+
+resource "tfe_variable_set" "test" {
+  name         = "Test Varset"
+  description  = "Some description."
+  global       = false
+  organization = tfe_organization.test.name
+}
+
+resource "tfe_variable" "test-a" {
+  key             = "seperate_variable"
+  value           = "my_value_name"
+  category        = "terraform"
+  description     = "a useful description"
+  variable_set_id = tfe_variable_set.test.id
+}
+
+resource "tfe_variable" "test-b" {
+  key             = "another_variable"
+  value           = "my_value_name"
+  category        = "env"
+  description     = "an environment variable"
+  variable_set_id = tfe_variable_set.test.id
+}
+```
+
+Basic usage for the write-only value of tfe_variable:
+
+```hcl
+variable "session_token" {
+  type      = string
+  ephemeral = true
+}
+
+resource "tfe_variable" "test" {
+  key              = "my_key_name"
+  value_wo         = var.session_token
+  value_wo_version = 1
+  category         = "terraform"
+  workspace_id     = tfe_workspace.test.id
+  description      = "a useful description"
+}
+```
+
+## Argument Reference
+
+The following arguments are supported:
+
+* `key` - (Required) Name of the variable.
+* `value` - (Required) Value of the variable.
+* `value_wo` - (Optional, [Write-Only](https://developer.hashicorp.com/terraform/language/v1.11.x/resources/ephemeral#write-only-arguments)) Value of the variable. `Write-only` attributes function similarly to their non-write-only counterparts, but are never stored to state and do not display in the Terraform plan output. Either `value` or `value_wo` can be provided, but not both.
+* `value_wo_version` - (Optional) Version identifier for the write-only value. Required when `value_wo` is specified to trigger updates. Cannot be used with `value`.
+* `category` - (Required) Whether this is a Terraform or environment variable.
+  Valid values are `terraform` or `env`.
+* `description` - (Optional) Description of the variable.
+* `hcl` - (Optional) Whether to evaluate the value of the variable as a string
+  of HCL code. Has no effect for environment variables. Defaults to `false`.
+* `sensitive` - (Optional) Whether the value is sensitive. If true then the
+variable is written once and not visible thereafter. Defaults to `false`.
+* One of the following (Required)
+    * `workspace_id` - ID of the workspace that owns the variable.
+    * `variable_set_id` - ID of the variable set that owns the variable.
+
+~> **NOTE:** When `sensitive` is set to true, Terraform cannot detect and repair
+drift if `value` is later changed out-of-band via the HCP Terraform UI.
+Terraform will only change the value for a sensitive variable if you change
+`value` in the configuration, so that it no longer matches the last known value
+in the state.
+
+-> **Note:** Write-Only argument `value_wo` is available to use in place of `value`. Write-Only arguments are supported in HashiCorp Terraform 1.11.0 and later. [Learn more](https://developer.hashicorp.com/terraform/language/v1.11.x/resources/ephemeral#write-only-arguments).
+
+## Attributes Reference
+
+* `id` - The ID of the variable.
+* `readable_value` - Only present if the variable is non-sensitive. A copy of the value which will not be marked as sensitive in plan outputs.
+
+### Using readable_value
+
+While the `value` field may be referenced in other resources, for safety it is always treated as sensitive. This means that it will always be redacted from plan outputs, and any other resource attributes which depend on it will also be redacted.
+
+The `readable_value` attribute is not sensitive, and will not be redacted; instead, it will be null if the variable is sensitive. This allows other resources to reference it, while keeping their plan outputs readable.
+
+For example:
+```
+resource "tfe_variable" "sensitive_var" {
+  key          = "sensitive_key"
+  value        = "sensitive_value" // this will be redacted from plan outputs
+  category     = "terraform"
+  workspace_id = tfe_workspace.workspace.id
+  sensitive    = true
+}
+
+resource "tfe_variable" "visible_var" {
+  key          = "visible_key"
+  value        = "visible_value" // this will be redacted from plan outputs
+  category     = "terraform"
+  workspace_id = tfe_workspace.workspace.id
+  sensitive    = false
+}
+
+resource "tfe_workspace" "sensitive_workspace" {
+  name = "workspace-${tfe_variable.sensitive_var.value}" // this will be redacted from plan outputs
+  organization = "organization name"
+}
+
+resource "tfe_workspace" "visible_workspace" {
+  name = "workspace-${tfe_variable.visible_var.readable_value}" // this will not be redacted from plan outputs
+  organization = "organization name"
+}
+
+```
+
+`readable_value` will be null if the variable is sensitive. `readable_value` may not be set explicitly in the resource configuration.
+
+
+## Import
+
+Variables can be imported using an identity. For example:
+
+```hcl
+import {
+  to = tfe_variable.test
+  identity = {
+    id              = "var-5rTwnSaRPogw6apb"
+    configurable_id = "ws-66fE3LmF42piTaN2"
+    hostname        = "app.terraform.io"
+  }
+}
+```
+
+```hcl
+import {
+  to = tfe_variable.test
+  identity = {
+    id              = "var-5rTwnSaRPogw6apb"
+    configurable_id = "varset-47qC3LmA47piVan7"
+    hostname        = "app.terraform.io"
+  }
+}
+```
+
+Variables can be imported using the Terraform CLI.
+
+To import a variable that's part of a workspace, use
+`<ORGANIZATION NAME>/<WORKSPACE NAME>/<VARIABLE ID>` as the import ID. For
+example:
+
+```shell
+terraform import tfe_variable.test my-org-name/my-workspace-name/var-5rTwnSaRPogw6apb
+```
+
+To import a variable that's part of a variable set, use
+`<ORGANIZATION NAME>/<VARIABLE SET ID>/<VARIABLE ID>` as the import ID. For
+example:
+
+```shell
+terraform import tfe_variable.test my-org-name/varset-47qC3LmA47piVan7/var-5rTwnSaRPogw6apb
+```

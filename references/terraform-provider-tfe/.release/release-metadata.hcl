@@ -1,0 +1,7 @@
+# Copyright IBM Corp. 2018, 2026
+# SPDX-License-Identifier: MPL-2.0
+
+url_source_repository = "https://github.com/hashicorp/terraform-provider-tfe"
+url_project_website   = "https://registry.terraform.io/providers/hashicorp/tfe"
+url_license           = "https://github.com/hashicorp/terraform-provider-tfe/blob/main/LICENSE"
+url_release_notes     = "https://github.com/hashicorp/terraform-provider-tfe/blob/main/CHANGELOG.md"

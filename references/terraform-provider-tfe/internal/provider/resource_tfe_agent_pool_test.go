@@ -1,0 +1,301 @@
+// Copyright IBM Corp. 2018, 2026
+// SPDX-License-Identifier: MPL-2.0
+
+package provider
+
+import (
+	"fmt"
+	"math/rand"
+	"os"
+	"testing"
+	"time"
+
+	tfe "github.com/hashicorp/go-tfe"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
+	"github.com/hashicorp/terraform-plugin-testing/statecheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+)
+
+func TestAccTFEAgentPool_basic(t *testing.T) {
+	skipIfEnterprise(t)
+
+	tfeClient, err := getClientUsingEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	org, orgCleanup := createBusinessOrganization(t, tfeClient)
+	t.Cleanup(orgCleanup)
+
+	agentPool := &tfe.AgentPool{}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccMuxedProviders,
+		CheckDestroy:             testAccCheckTFEAgentPoolDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTFEAgentPool_basic(org.Name),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTFEAgentPoolExists(
+						"tfe_agent_pool.foobar", agentPool),
+					testAccCheckTFEAgentPoolAttributes(agentPool),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "name", "agent-pool-test"),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "organization_scoped", "true"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccTFEAgentPool_custom_scope(t *testing.T) {
+	skipIfEnterprise(t)
+
+	tfeClient, err := getClientUsingEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	org, orgCleanup := createBusinessOrganization(t, tfeClient)
+	t.Cleanup(orgCleanup)
+
+	agentPool := &tfe.AgentPool{}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccMuxedProviders,
+		CheckDestroy:             testAccCheckTFEAgentPoolDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTFEAgentPool_custom_scope(org.Name),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTFEAgentPoolExists(
+						"tfe_agent_pool.foobar", agentPool),
+					testAccCheckTFEAgentPoolAttributes(agentPool),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "name", "agent-pool-test"),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "organization_scoped", "false"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccTFEAgentPool_update(t *testing.T) {
+	skipIfEnterprise(t)
+
+	tfeClient, err := getClientUsingEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	org, orgCleanup := createBusinessOrganization(t, tfeClient)
+	t.Cleanup(orgCleanup)
+
+	agentPool := &tfe.AgentPool{}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccMuxedProviders,
+		CheckDestroy:             testAccCheckTFEAgentPoolDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTFEAgentPool_basic(org.Name),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTFEAgentPoolExists(
+						"tfe_agent_pool.foobar", agentPool),
+					testAccCheckTFEAgentPoolAttributes(agentPool),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "name", "agent-pool-test"),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "organization_scoped", "true"),
+				),
+			},
+
+			{
+				Config: testAccTFEAgentPool_update(org.Name),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTFEAgentPoolExists(
+						"tfe_agent_pool.foobar", agentPool),
+					testAccCheckTFEAgentPoolAttributesUpdated(agentPool),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "name", "agent-pool-updated"),
+					resource.TestCheckResourceAttr(
+						"tfe_agent_pool.foobar", "organization_scoped", "false"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccTFEAgentPool_import(t *testing.T) {
+	skipIfEnterprise(t)
+
+	tfeClient, err := getClientUsingEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	org, orgCleanup := createBusinessOrganization(t, tfeClient)
+	t.Cleanup(orgCleanup)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccMuxedProviders,
+		CheckDestroy:             testAccCheckTFEAgentPoolDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTFEAgentPool_basic(org.Name),
+			},
+			{
+				ResourceName:      "tfe_agent_pool.foobar",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "tfe_agent_pool.foobar",
+				ImportState:       true,
+				ImportStateId:     fmt.Sprintf("%s/agent-pool-test", org.Name),
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccTFEAgentPool_importByIdentity(t *testing.T) {
+	rInt := rand.New(rand.NewSource(time.Now().UnixNano())).Int()
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccMuxedProviders,
+		CheckDestroy:             testAccCheckTFEAgentPoolDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTFEAgentPool_basicImport(rInt),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectIdentity("tfe_agent_pool.foobar", map[string]knownvalue.Check{
+						"id":       knownvalue.NotNull(),
+						"hostname": knownvalue.StringExact(os.Getenv("TFE_HOSTNAME")),
+					}),
+				},
+			},
+			{
+				ResourceName:    "tfe_agent_pool.foobar",
+				ImportState:     true,
+				ImportStateKind: resource.ImportBlockWithResourceIdentity,
+			},
+		},
+	})
+}
+
+func testAccCheckTFEAgentPoolExists(
+	n string, agentPool *tfe.AgentPool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[n]
+		if !ok {
+			return fmt.Errorf("not found: %s", n)
+		}
+
+		if rs.Primary.ID == "" {
+			return fmt.Errorf("no instance ID is set")
+		}
+
+		sk, err := testAccConfiguredClient.Client.AgentPools.Read(ctx, rs.Primary.ID)
+		if err != nil {
+			return err
+		}
+
+		if sk == nil {
+			return fmt.Errorf("agent pool not found")
+		}
+
+		*agentPool = *sk
+
+		return nil
+	}
+}
+
+func testAccCheckTFEAgentPoolAttributes(
+	agentPool *tfe.AgentPool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if agentPool.Name != "agent-pool-test" {
+			return fmt.Errorf("bad name: %s", agentPool.Name)
+		}
+		return nil
+	}
+}
+
+func testAccCheckTFEAgentPoolAttributesUpdated(
+	agentPool *tfe.AgentPool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		if agentPool.Name != "agent-pool-updated" {
+			return fmt.Errorf("bad name: %s", agentPool.Name)
+		}
+		return nil
+	}
+}
+
+func testAccCheckTFEAgentPoolDestroy(s *terraform.State) error {
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "tfe_agent_pool" {
+			continue
+		}
+
+		if rs.Primary.ID == "" {
+			return fmt.Errorf("no instance ID is set")
+		}
+
+		_, err := testAccConfiguredClient.Client.AgentPools.Read(ctx, rs.Primary.ID)
+		if err == nil {
+			return fmt.Errorf("agent pool %s still exists", rs.Primary.ID)
+		}
+	}
+
+	return nil
+}
+
+func testAccTFEAgentPool_basic(organization string) string {
+	return fmt.Sprintf(`
+resource "tfe_agent_pool" "foobar" {
+  name         = "agent-pool-test"
+  organization = "%s"
+}`, organization)
+}
+
+func testAccTFEAgentPool_basicImport(rInt int) string {
+	return fmt.Sprintf(`
+resource "tfe_organization" "foo" {
+	name = "tst-terraform-%d"
+	email = "admin@mycompany.com"
+}
+resource "tfe_agent_pool" "foobar" {
+  name         = "agent-pool-test"
+  organization = tfe_organization.foo.id
+}`, rInt)
+}
+
+func testAccTFEAgentPool_custom_scope(organization string) string {
+	return fmt.Sprintf(`
+resource "tfe_agent_pool" "foobar" {
+  name         = "agent-pool-test"
+  organization = "%s"
+  organization_scoped = false
+}`, organization)
+}
+
+func testAccTFEAgentPool_update(organization string) string {
+	return fmt.Sprintf(`
+resource "tfe_workspace" "foobar" {
+  name = "foobar"
+  organization = "%s"
+}
+
+resource "tfe_agent_pool" "foobar" {
+  name         = "agent-pool-updated"
+  organization = "%s"
+  organization_scoped = false
+}`, organization, organization)
+}

@@ -1,0 +1,497 @@
+// Copyright IBM Corp. 2018, 2026
+// SPDX-License-Identifier: MPL-2.0
+
+// NOTE: This is a legacy resource and should be migrated to the Plugin
+// Framework if substantial modifications are planned. See
+// docs/new-resources.md if planning to use this code as boilerplate for
+// a new resource.
+
+package provider
+
+import (
+	"errors"
+	"fmt"
+	"log"
+	"net/url"
+	"time"
+
+	tfe "github.com/hashicorp/go-tfe"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-tfe/internal/provider/helpers"
+)
+
+func dataSourceTFEWorkspace() *schema.Resource {
+	return &schema.Resource{
+		Read: dataSourceTFEWorkspaceRead,
+
+		Schema: map[string]*schema.Schema{
+			"name": {
+				Type:     schema.TypeString,
+				Required: true,
+			},
+
+			"organization": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+
+			"description": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"allow_destroy_plan": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"auto_apply": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"auto_apply_run_trigger": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"auto_destroy_at": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"auto_destroy_activity_duration": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"inherits_project_auto_destroy": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"file_triggers_enabled": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"global_remote_state": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"project_remote_state": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"remote_state_consumer_ids": {
+				Type:     schema.TypeSet,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"assessments_enabled": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"operations": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"policy_check_failures": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"project_id": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"queue_all_runs": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"resource_count": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"run_failures": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"runs_count": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"source_name": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"source_url": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"speculative_enabled": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"ssh_key_id": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"structured_run_output_enabled": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"effective_tags": {
+				Type:     schema.TypeMap,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"tag_names": {
+				Type:     schema.TypeSet,
+				Optional: true,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"terraform_version": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"trigger_prefixes": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"trigger_patterns": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"working_directory": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"execution_mode": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"vcs_repo": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"identifier": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+
+						"branch": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+
+						"ingress_submodules": {
+							Type:     schema.TypeBool,
+							Computed: true,
+						},
+
+						"oauth_token_id": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+
+						"tags_regex": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+
+						"github_app_installation_id": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+			"html_url": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"hyok_enabled": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+			"locked": {
+				Type:     schema.TypeBool,
+				Computed: true,
+			},
+
+			"created_at": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"updated_at": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"environment": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"apply_duration_average": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"plan_duration_average": {
+				Type:     schema.TypeInt,
+				Computed: true,
+			},
+
+			"source": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"setting_overwrites": {
+				Type:     schema.TypeMap,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeBool},
+			},
+
+			"permissions": {
+				Type:     schema.TypeMap,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeBool},
+			},
+
+			"actions": {
+				Type:     schema.TypeMap,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeBool},
+			},
+		},
+	}
+}
+
+func fallbackWorkspaceRead(config ConfiguredClient, organization, name string) (*tfe.Workspace, error) {
+	log.Printf("[DEBUG] Workspace %s read failed due to unsupported Include; retrying without it", name)
+	workspace, err := config.Client.Workspaces.Read(ctx, organization, name)
+	if err != nil && errors.Is(err, tfe.ErrResourceNotFound) {
+		return nil, fmt.Errorf("could not find workspace %s/%s", organization, name)
+	} else if err != nil {
+		return nil, fmt.Errorf("error reading workspace %s without include: %w", name, err)
+	}
+
+	return workspace, err
+}
+
+func dataSourceTFEWorkspaceRead(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(ConfiguredClient)
+
+	// Get the name and organization.
+	name := d.Get("name").(string)
+	organization, err := config.schemaOrDefaultOrganization(d)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DEBUG] Read configuration of workspace: %s", name)
+	workspace, err := config.Client.Workspaces.ReadWithOptions(ctx, organization, name, &tfe.WorkspaceReadOptions{
+		Include: []tfe.WSIncludeOpt{tfe.WSEffectiveTagBindings},
+	})
+	if err != nil && errors.Is(err, tfe.ErrResourceNotFound) {
+		return fmt.Errorf("could not find workspace %s/%s", organization, name)
+	}
+	if err != nil && errors.Is(err, tfe.ErrInvalidIncludeValue) {
+		workspace, err = fallbackWorkspaceRead(config, organization, name)
+		if err != nil {
+			return err
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("Error retrieving workspace: %w", err)
+	}
+	// Update the config.
+	d.Set("allow_destroy_plan", workspace.AllowDestroyPlan)
+	d.Set("auto_apply", workspace.AutoApply)
+	d.Set("auto_apply_run_trigger", workspace.AutoApplyRunTrigger)
+	d.Set("description", workspace.Description)
+	d.Set("assessments_enabled", workspace.AssessmentsEnabled)
+	d.Set("file_triggers_enabled", workspace.FileTriggersEnabled)
+	d.Set("operations", workspace.Operations)
+	d.Set("policy_check_failures", workspace.PolicyCheckFailures)
+	d.Set("inherits_project_auto_destroy", workspace.InheritsProjectAutoDestroy)
+
+	autoDestroyAt, err := flattenAutoDestroyAt(workspace.AutoDestroyAt)
+	if err != nil {
+		return fmt.Errorf("Error flattening auto destroy during read: %w", err)
+	}
+	d.Set("auto_destroy_at", autoDestroyAt)
+
+	var autoDestroyDuration string
+	if workspace.AutoDestroyActivityDuration.IsSpecified() {
+		autoDestroyDuration, err = workspace.AutoDestroyActivityDuration.Get()
+		if err != nil {
+			return fmt.Errorf("Error reading auto destroy activity duration: %w", err)
+		}
+	}
+	d.Set("auto_destroy_activity_duration", autoDestroyDuration)
+
+	// If target tfe instance predates projects, then workspace.Project will be nil
+	if workspace.Project != nil {
+		d.Set("project_id", workspace.Project.ID)
+	}
+
+	d.Set("queue_all_runs", workspace.QueueAllRuns)
+	d.Set("resource_count", workspace.ResourceCount)
+	d.Set("run_failures", workspace.RunFailures)
+	d.Set("runs_count", workspace.RunsCount)
+	d.Set("source_name", workspace.SourceName)
+	d.Set("source_url", workspace.SourceURL)
+	d.Set("speculative_enabled", workspace.SpeculativeEnabled)
+	d.Set("structured_run_output_enabled", workspace.StructuredRunOutputEnabled)
+	d.Set("terraform_version", workspace.TerraformVersion)
+	d.Set("trigger_prefixes", workspace.TriggerPrefixes)
+	d.Set("trigger_patterns", workspace.TriggerPatterns)
+	d.Set("working_directory", workspace.WorkingDirectory)
+	d.Set("execution_mode", workspace.ExecutionMode)
+	d.Set("hyok_enabled", workspace.HYOKEnabled)
+	d.Set("locked", workspace.Locked)
+	d.Set("created_at", workspace.CreatedAt.Format(time.RFC3339))
+	d.Set("updated_at", workspace.UpdatedAt.Format(time.RFC3339))
+	d.Set("environment", workspace.Environment)
+	d.Set("source", string(workspace.Source))
+	d.Set("apply_duration_average", int(workspace.ApplyDurationAverage.Milliseconds()))
+	d.Set("plan_duration_average", int(workspace.PlanDurationAverage.Milliseconds()))
+
+	// Set setting overwrites
+	if workspace.SettingOverwrites != nil {
+		settingOverwrites := make(map[string]interface{})
+		if workspace.SettingOverwrites.ExecutionMode != nil {
+			settingOverwrites["execution-mode"] = *workspace.SettingOverwrites.ExecutionMode
+		}
+		if workspace.SettingOverwrites.AgentPool != nil {
+			settingOverwrites["agent-pool"] = *workspace.SettingOverwrites.AgentPool
+		}
+		d.Set("setting_overwrites", settingOverwrites)
+	}
+
+	// Set permissions
+	if workspace.Permissions != nil {
+		permissions := map[string]interface{}{
+			"can-update":           workspace.Permissions.CanUpdate,
+			"can-destroy":          workspace.Permissions.CanDestroy,
+			"can-queue-run":        workspace.Permissions.CanQueueRun,
+			"can-queue-apply":      workspace.Permissions.CanQueueApply,
+			"can-queue-destroy":    workspace.Permissions.CanQueueDestroy,
+			"can-lock":             workspace.Permissions.CanLock,
+			"can-unlock":           workspace.Permissions.CanUnlock,
+			"can-force-unlock":     workspace.Permissions.CanForceUnlock,
+			"can-read-settings":    workspace.Permissions.CanReadSettings,
+			"can-update-variable":  workspace.Permissions.CanUpdateVariable,
+			"can-manage-run-tasks": workspace.Permissions.CanManageRunTasks,
+		}
+		if workspace.Permissions.CanForceDelete != nil {
+			permissions["can-force-delete"] = *workspace.Permissions.CanForceDelete
+		}
+		d.Set("permissions", permissions)
+	}
+
+	// Set actions
+	if workspace.Actions != nil {
+		actions := map[string]interface{}{
+			"is-destroyable": workspace.Actions.IsDestroyable,
+		}
+		d.Set("actions", actions)
+	}
+
+	if workspace.Links["self-html"] != nil {
+		baseAPI := config.Client.BaseURL()
+		htmlURL := url.URL{
+			Scheme: baseAPI.Scheme,
+			Host:   baseAPI.Host,
+			Path:   workspace.Links["self-html"].(string),
+		}
+
+		d.Set("html_url", htmlURL.String())
+	}
+
+	// Set remote_state_consumer_ids if global_remote_state and project_remote_state are false
+	globalRemoteState := workspace.GlobalRemoteState
+	projectRemoteState := workspace.ProjectRemoteState
+	if globalRemoteState || projectRemoteState {
+		if err := d.Set("remote_state_consumer_ids", []string{}); err != nil {
+			return err
+		}
+	} else {
+		legacyGlobalState, remoteStateConsumerIDs, err := readWorkspaceStateConsumers(workspace.ID, config.Client)
+
+		if err != nil {
+			return fmt.Errorf(
+				"Error reading remote state consumers for workspace %s: %w", workspace.ID, err)
+		}
+
+		if legacyGlobalState {
+			globalRemoteState = true
+		}
+		d.Set("remote_state_consumer_ids", remoteStateConsumerIDs)
+	}
+	d.Set("global_remote_state", globalRemoteState)
+	d.Set("project_remote_state", projectRemoteState)
+
+	if workspace.SSHKey != nil {
+		d.Set("ssh_key_id", workspace.SSHKey.ID)
+	}
+
+	tagInfo := helpers.NewTagInfo(nil, workspace.EffectiveTagBindings, false)
+	d.Set("effective_tags", tagInfo.EffectiveTags)
+
+	// Update the tag names
+	var tagNames []interface{}
+	for _, tagName := range workspace.TagNames {
+		tagNames = append(tagNames, tagName)
+	}
+	d.Set("tag_names", tagNames)
+
+	var vcsRepo []interface{}
+	if workspace.VCSRepo != nil {
+		vcsConfig := map[string]interface{}{
+			"identifier":                 workspace.VCSRepo.Identifier,
+			"branch":                     workspace.VCSRepo.Branch,
+			"ingress_submodules":         workspace.VCSRepo.IngressSubmodules,
+			"oauth_token_id":             workspace.VCSRepo.OAuthTokenID,
+			"tags_regex":                 workspace.VCSRepo.TagsRegex,
+			"github_app_installation_id": workspace.VCSRepo.GHAInstallationID,
+		}
+		vcsRepo = append(vcsRepo, vcsConfig)
+	}
+	d.Set("vcs_repo", vcsRepo)
+
+	d.SetId(workspace.ID)
+
+	return nil
+}
