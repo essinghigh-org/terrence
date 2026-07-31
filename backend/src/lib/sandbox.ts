@@ -129,6 +129,8 @@ export class RunSandbox {
   public async prepareWorkDir(runId: string): Promise<string> {
     const workDir = this.workDirFor(runId);
     await mkdir(workDir, { recursive: true, mode: 0o700 });
+    // TMPDIR points inside the workdir (the sandbox only allows writes there).
+    await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
     return workDir;
   }
 
