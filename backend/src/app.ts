@@ -33,6 +33,7 @@ import { agentRoutes } from "./routes/agents";
 import { runTaskRoutes } from "./routes/run-tasks";
 import { oauthClientRoutes } from "./routes/oauth-clients";
 import { notificationRoutes } from "./routes/notifications";
+import { mcpRoutes } from "./routes/mcp";
 import { sshKeyRoutes } from "./routes/ssh-keys";
 import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
@@ -353,6 +354,7 @@ export const app = new Elysia()
   .use(runTaskRoutes)
   .use(oauthClientRoutes)
   .use(notificationRoutes)
+  .use(mcpRoutes)
   .use(sshKeyRoutes)
   .use(githubAppInstallationRoutes)
   .use(miscRoutes)
