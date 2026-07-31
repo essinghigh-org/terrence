@@ -187,48 +187,9 @@ await sqlite.executeMultiple(`
   );
 `);
 
-// Check notification_configurations for missing columns
-const ncTableInfo = await sqlite.execute("PRAGMA table_info(notification_configurations)");
-const existingNcCols = getColumnNames(ncTableInfo);
-const ncAdditions: [string, string][] = [
-  ["team_id", "text REFERENCES teams(id)"],
-  ["project_id", "text REFERENCES projects(id)"],
-];
-for (const [col, def] of ncAdditions) {
-  if (!existingNcCols.has(col)) {
-    await sqlite.execute(`ALTER TABLE notification_configurations ADD COLUMN ${col} ${def}`);
-  }
-}
-const workspaceNotificationColumn = ncTableInfo.rows
-  .map((row: unknown): TableInfoRow => row as TableInfoRow)
-  .find((column: Readonly<TableInfoRow>): boolean => column.name === "workspace_id");
-if (workspaceNotificationColumn?.notnull === 1) {
-  await sqlite.executeMultiple(`
-    PRAGMA foreign_keys = OFF;
-    CREATE TABLE __new_notification_configurations (
-      id TEXT PRIMARY KEY NOT NULL,
-      workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
-      team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
-      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      destination_type TEXT NOT NULL,
-      url TEXT NOT NULL,
-      triggers TEXT NOT NULL,
-      enabled INTEGER DEFAULT true,
-      token TEXT,
-      created_at INTEGER NOT NULL
-    );
-    INSERT INTO __new_notification_configurations (
-      id, workspace_id, team_id, project_id, name, destination_type, url, triggers, enabled, token, created_at
-    )
-    SELECT
-      id, workspace_id, team_id, project_id, name, destination_type, url, triggers, enabled, token, created_at
-    FROM notification_configurations;
-    DROP TABLE notification_configurations;
-    ALTER TABLE __new_notification_configurations RENAME TO notification_configurations;
-    PRAGMA foreign_keys = ON;
-  `);
-}
+// Notification system v2: the legacy notification_configurations table is
+// dropped by migration 0045 and replaced with org-scoped destinations,
+// templates, rules, and a delivery log. No startup patch needed.
 
 // Check policy_checks for missing columns
 const pcTableInfo = await sqlite.execute("PRAGMA table_info(policy_checks)");

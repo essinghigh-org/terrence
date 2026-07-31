@@ -32,7 +32,10 @@ import { policyRoutes } from "./routes/policies";
 import { agentRoutes } from "./routes/agents";
 import { runTaskRoutes } from "./routes/run-tasks";
 import { oauthClientRoutes } from "./routes/oauth-clients";
-import { notificationRoutes } from "./routes/notifications";
+import { notificationDestinationRoutes } from "./routes/notification-destinations";
+import { notificationTemplateRoutes } from "./routes/notification-templates";
+import { notificationRuleRoutes } from "./routes/notification-rules";
+import { notificationDeliveryRoutes } from "./routes/notification-deliveries";
 import { sshKeyRoutes } from "./routes/ssh-keys";
 import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
@@ -352,7 +355,10 @@ export const app = new Elysia()
   .use(agentRoutes)
   .use(runTaskRoutes)
   .use(oauthClientRoutes)
-  .use(notificationRoutes)
+  .use(notificationDestinationRoutes)
+  .use(notificationTemplateRoutes)
+  .use(notificationRuleRoutes)
+  .use(notificationDeliveryRoutes)
   .use(sshKeyRoutes)
   .use(githubAppInstallationRoutes)
   .use(miscRoutes)

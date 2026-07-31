@@ -16,7 +16,6 @@ import {
   WorkspaceRunTriggers,
   WorkspaceSshKey,
 } from "../components/WorkspaceConnections";
-import { WorkspaceNotifications } from "../components/WorkspaceNotifications";
 import { WorkspaceSettings } from "../components/WorkspaceSettings";
 import { WorkspaceTeamAccess } from "../components/WorkspaceTeamAccess";
 import { WorkspaceVariables } from "../components/WorkspaceVariables";
@@ -41,8 +40,6 @@ export type WorkspaceSection =
   | "states"
   | "variables"
   | "team-access"
-  | "notifications"
-  | "webhooks"
   | "policy-sets"
   | "run-tasks"
   | "run-triggers"
@@ -299,7 +296,6 @@ export function WorkspaceDetail({
     (activeSection === "states" && !canReadStateVersions)
     || (activeSection === "variables" && !canReadVariable);
   const updateOnlySection = [
-    "notifications",
     "run-triggers",
     "configuration-versions",
     "ssh-key",
@@ -315,8 +311,6 @@ export function WorkspaceDetail({
     "health",
     "retention",
     "locking",
-    "notifications",
-    "webhooks",
     "policy-sets",
     "run-tasks",
     "run-triggers",
@@ -334,8 +328,6 @@ export function WorkspaceDetail({
     { id: "states", label: "States" },
     { id: "variables", label: "Variables" },
     { id: "team-access", label: "Team access" },
-    { id: "notifications", label: "Notifications" },
-    { id: "webhooks", label: "Webhooks" },
     { id: "policy-sets", label: "Policy sets" },
     { id: "run-tasks", label: "Run tasks" },
     { id: "run-triggers", label: "Run triggers" },
@@ -633,12 +625,6 @@ export function WorkspaceDetail({
         )}
         {activeSection === "team-access" && canUpdate && (
           <WorkspaceTeamAccess orgName={orgName ?? ""} workspaceId={workspace.id} />
-        )}
-        {activeSection === "notifications" && canUpdate && (
-          <WorkspaceNotifications workspaceId={workspace.id} />
-        )}
-        {activeSection === "webhooks" && canUpdate && (
-          <WorkspaceNotifications mode="webhooks" workspaceId={workspace.id} />
         )}
         {activeSection === "policy-sets" && <WorkspacePolicySets workspaceId={workspace.id} />}
         {activeSection === "run-tasks" && (

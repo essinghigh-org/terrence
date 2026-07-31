@@ -277,19 +277,53 @@ export const teamWorkspaces = sqliteTable("team_workspaces", {
   uniqueIndex("team_workspaces_team_workspace_idx").on(table.teamId, table.workspaceId),
 ]);
 
-export const notificationConfigurations = sqliteTable("notification_configurations", {
+export const notificationDestinations = sqliteTable("notification_destinations", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
-  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
-  projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams'
-  url: text("url").notNull(),
-  triggers: text("triggers", { mode: "json" }).$type<string[]>().notNull(),
-  enabled: integer("enabled", { mode: "boolean" }).default(true),
-  token: text("token"),
+  type: text("type").notNull(), // 'slack' | 'discord' | 'sendgrid' | 'apprise-custom'
+  config: text("config", { mode: "json" }).$type<Record<string, string>>().notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const notificationTemplates = sqliteTable("notification_templates", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  eventType: text("event_type").notNull(),
+  titleTemplate: text("title_template").notNull(),
+  bodyTemplate: text("body_template").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const notificationRules = sqliteTable("notification_rules", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  eventType: text("event_type").notNull(),
+  workspaceTagFilters: text("workspace_tag_filters", { mode: "json" }).$type<{ key: string; value: string }[]>().notNull().default([]),
+  destinationId: text("destination_id").notNull().references(() => notificationDestinations.id, { onDelete: "cascade" }),
+  templateId: text("template_id").references(() => notificationTemplates.id, { onDelete: "set null" }),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const notificationDeliveries = sqliteTable("notification_deliveries", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull(),
+  ruleId: text("rule_id").references(() => notificationRules.id, { onDelete: "set null" }),
+  destinationId: text("destination_id").notNull(),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
+  eventType: text("event_type").notNull(),
+  title: text("title"),
+  body: text("body").notNull(),
+  successful: integer("successful", { mode: "boolean" }).notNull(),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(1),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+});
+
 
 export const workspaceVariables = sqliteTable("workspace_variables", {
   id: text("id").primaryKey(),

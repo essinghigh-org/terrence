@@ -38,7 +38,12 @@ RUN apt-get update && apt-get install -y \
     tar \
     git \
     coreutils \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Apprise (notification delivery engine; ~100+ services supported)
+RUN pip3 install --no-cache-dir apprise
 
 
 # Install Infracost with SHA256 verification
