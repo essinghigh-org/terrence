@@ -468,7 +468,6 @@ export function Layout({
       const links = [
         { label: "General", to: `${settingsPath}/general`, icon: Settings },
         { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
-        { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
         { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
         { label: "Run Tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
         { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
@@ -609,6 +608,12 @@ export function Layout({
           icon: Activity,
           label: "Agent pools",
           to: `${organizationSettingsPath}/agents`,
+        },
+        {
+          active: location.pathname === `${organizationSettingsPath}/notifications`,
+          icon: Bell,
+          label: "Notifications",
+          to: `${organizationSettingsPath}/notifications`,
         },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
