@@ -755,6 +755,6 @@ export async function completeAgentJob(
     await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
     return { job: updatedJob, runStatus };
   });
-  if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
+  if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus, outcome.job.phase === "apply" ? "apply" : "plan");
   return outcome;
 }
