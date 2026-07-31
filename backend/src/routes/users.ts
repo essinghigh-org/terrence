@@ -10,7 +10,7 @@ import {
   teams,
   teamMemberships,
 } from "../db/schema";
-import { eq, and, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
@@ -193,26 +193,55 @@ export const userRoutes = new Elysia({ name: "users" })
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 201;
-    return { data: orgMembershipResource(mem, targetUser, teamIds) };
+    return { data: await orgMembershipResource(mem, targetUser, teamIds) };
   })
-  .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const mems = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id) });
+    const { number, size } = pageRequest(request);
+    const [mems, countRows] = await Promise.all([
+      db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)),
+    ]);
     const userIds = mems.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
     const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
     const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
-    const data = mems.map((m: Readonly<typeof organizationMemberships.$inferSelect>): Record<string, unknown> => orgMembershipResource(m, userMap.get(m.userId) ?? null));
-    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[] } = { data };
+    const data = await Promise.all(mems.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
+    const totalCount = countRows[0]?.total ?? 0;
+    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[] } = { data, ...pagination(request, number, size, totalCount) };
     if (includeUsers && userList.length > 0) {
       result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
     }
     return result;
+  })
+  .get("/api/v2/organizations/:org_name/users", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const { number, size } = pageRequest(request);
+    const [rows, countRows] = await Promise.all([
+      db.select({ user: users })
+        .from(organizationMemberships)
+        .innerJoin(users, eq(users.id, organizationMemberships.userId))
+        .where(eq(organizationMemberships.orgId, org.id))
+        .orderBy(asc(organizationMemberships.id))
+        .limit(size)
+        .offset((number - 1) * size),
+      db.select({ total: count() })
+        .from(organizationMemberships)
+        .innerJoin(users, eq(users.id, organizationMemberships.userId))
+        .where(eq(organizationMemberships.orgId, org.id)),
+    ]);
+    const data = rows.map((row: Readonly<{ user: typeof users.$inferSelect }>): Record<string, unknown> => userResource(row.user));
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data, ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organization-memberships/:id", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const memId = params.id ?? "";
@@ -223,7 +252,7 @@ export const userRoutes = new Elysia({ name: "users" })
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, mem.userId) });
     const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
-    const result: { data: Record<string, unknown>; included?: Record<string, unknown>[] } = { data: orgMembershipResource(mem, targetUser) };
+    const result: { data: Record<string, unknown>; included?: Record<string, unknown>[] } = { data: await orgMembershipResource(mem, targetUser) };
     if (includeUsers && targetUser !== undefined) {
       result.included = [userResource(targetUser)];
     }
@@ -261,6 +290,38 @@ export const userRoutes = new Elysia({ name: "users" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     return { data: tokens.map((token: Readonly<typeof apiTokens.$inferSelect>): Record<string, unknown> => tokenResource(token)), ...pagination(request, number, size, totalCount) };
+  })
+  .post("/api/v2/users/:user_id/authentication-tokens", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
+    const userId = params.user_id ?? "";
+    const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (target === undefined || user?.id !== userId) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const description = typeof attributes.description === "string" ? attributes.description : "API token";
+    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (description === "" || Number.isNaN(expiresAt)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    const rawToken = `user-${crypto.randomUUID()}`;
+    const createdToken = {
+      id: crypto.randomUUID(),
+      token: createHash("sha256").update(rawToken).digest("hex"),
+      userId,
+      orgId: null,
+      description,
+      createdAt: Date.now(),
+      lastUsedAt: null,
+      expiresAt,
+      teamId: null,
+    };
+    await db.insert(apiTokens).values(createdToken);
+    (set as { status: number }).status = 201;
+    return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const tokenId = params.token_id ?? "";

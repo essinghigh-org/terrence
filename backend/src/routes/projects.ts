@@ -1,13 +1,39 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, projects, projectTags, organizations, workspaces, type users } from "../db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { agentPools, projects, projectTags, organizations, workspaces, teamWorkspaces, type users } from "../db/schema";
+import { eq, and, inArray, count, countDistinct, asc, isNotNull } from "drizzle-orm";
 import { projectResource, projectTagBindingResource } from "../lib/response";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+
+async function countsByProject(projectIds: readonly string[]): Promise<Map<string, { workspaceCount: number; teamCount: number }>> {
+  const result = new Map<string, { workspaceCount: number; teamCount: number }>();
+  if (projectIds.length === 0) return result;
+  const workspaceRows = await db.select({ projectId: workspaces.projectId, total: count() })
+    .from(workspaces)
+    .where(and(inArray(workspaces.projectId, [...projectIds]), isNotNull(workspaces.projectId)))
+    .groupBy(workspaces.projectId);
+  const teamRows = await db.select({ projectId: workspaces.projectId, total: countDistinct(teamWorkspaces.teamId) })
+    .from(workspaces)
+    .innerJoin(teamWorkspaces, eq(teamWorkspaces.workspaceId, workspaces.id))
+    .where(and(inArray(workspaces.projectId, [...projectIds]), isNotNull(workspaces.projectId)))
+    .groupBy(workspaces.projectId);
+  for (const projectId of projectIds) {
+    result.set(projectId, { workspaceCount: 0, teamCount: 0 });
+  }
+  for (const row of workspaceRows) {
+    const current = result.get(row.projectId as string);
+    if (current !== undefined) current.workspaceCount = row.total;
+  }
+  for (const row of teamRows) {
+    const current = result.get(row.projectId as string);
+    if (current !== undefined) current.teamCount = row.total;
+  }
+  return result;
+}
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -15,6 +41,7 @@ type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
+  request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
 
@@ -170,13 +197,17 @@ async function projectSettings(
   };
 }
 
+function newProjectId(): string {
+  return `prj-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
 export async function ensureDefaultProject(orgId: string): Promise<typeof projects.$inferSelect> {
   let project = await db.query.projects.findFirst({
     where: and(eq(projects.orgId, orgId), eq(projects.isDefault, true)),
   });
   if (project !== undefined) return project;
   await db.insert(projects).values({
-    id: `prj-${crypto.randomUUID()}`,
+    id: newProjectId(),
     orgId,
     name: "Default Project",
     description: "Default Project for Organization",
@@ -194,13 +225,27 @@ export async function ensureDefaultProject(orgId: string): Promise<typeof projec
 
 export const projectRoutes = new Elysia({ name: "projects" })
   .use(authPlugin)
-  .get("/api/v2/organizations/:org_name/projects", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/projects", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await ensureDefaultProject(org.id);
-    const projList = await db.query.projects.findMany({ where: eq(projects.orgId, org.id) });
-    return { data: projList.map((project): Record<string, unknown> => projectResource(project)) };
+    const { number, size } = pageRequest(request);
+    const [projList, countRows] = await Promise.all([
+      db.query.projects.findMany({
+        where: eq(projects.orgId, org.id),
+        orderBy: [asc(projects.name)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(projects).where(eq(projects.orgId, org.id)),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    const counts = await countsByProject(projList.map((p): string => p.id));
+    return { data: await Promise.all(projList.map(async (project): Promise<Record<string, unknown>> => {
+      const projectCounts = counts.get(project.id) ?? { workspaceCount: 0, teamCount: 0 };
+      return projectResource(project, projectCounts.workspaceCount, projectCounts.teamCount);
+    })), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -212,7 +257,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const name = typeof attributes.name === "string" ? attributes.name : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     await ensureDefaultProject(org.id);
-    const id = `prj-${crypto.randomUUID()}`;
+    const id = newProjectId();
     const settings = await projectSettings(org.id, id, data, attributes);
     if ("error" in settings) {
       (set as { status: number }).status = 422;
@@ -231,13 +276,19 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const created = await db.query.projects.findFirst({ where: eq(projects.id, id) });
     if (created === undefined) throw new Error("Unable to create project");
     (set as { status: number }).status = 201;
-    return { data: projectResource(created) };
+    return { data: await projectResource(created, 0, 0) };
   })
   .get("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: projectResource(project) };
+    const projectCounts = (await countsByProject([projectId])).get(projectId) ?? { workspaceCount: 0, teamCount: 0 };
+    const canManage = await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects");
+    return { data: await projectResource(project, projectCounts.workspaceCount, projectCounts.teamCount, {
+      "can-update": canManage,
+      "can-destroy": canManage,
+      "can-create-workspace": canManage,
+    }) };
   })
   .patch("/api/v2/projects/:project_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params.project_id ?? "";
@@ -280,7 +331,8 @@ export const projectRoutes = new Elysia({ name: "projects" })
     });
     const updated = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: projectResource(updated) };
+    const updatedCounts = (await countsByProject([projectId])).get(projectId) ?? { workspaceCount: projectWorkspaces.length, teamCount: 0 };
+    return { data: await projectResource(updated, updatedCounts.workspaceCount, updatedCounts.teamCount) };
   })
   .delete("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params.project_id ?? "";

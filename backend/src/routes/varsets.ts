@@ -64,7 +64,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const global = typeof attributes.global === "boolean" ? attributes.global : false;
     const priority = typeof attributes.priority === "boolean" ? attributes.priority : false;
-    const record = { id: `varset-${crypto.randomUUID()}`, orgId: org.id, name, description, global, priority };
+    const record = { id: `varset-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`, orgId: org.id, name, description, global, priority };
     await db.insert(variableSets).values(record);
     (set as { status: number }).status = 201;
     return { data: await variableSetResource(record) };

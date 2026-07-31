@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, apiTokens, samlSettings, teams, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
-import { organizationResource } from "../lib/response";
+import { organizationResource, organizationName } from "../lib/response";
 import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermission, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
@@ -98,7 +98,7 @@ function reservedTagKeyInput(body: unknown): Readonly<{ key: string; disableOver
   return { key, disableOverrides: attributes["disable-overrides"] };
 }
 
-function reservedTagKeyResource(tag: ReservedTagKey): Record<string, unknown> {
+async function reservedTagKeyResource(tag: ReservedTagKey): Promise<Record<string, unknown>> {
   return {
     id: tag.id,
     type: "reserved-tag-keys",
@@ -109,7 +109,7 @@ function reservedTagKeyResource(tag: ReservedTagKey): Record<string, unknown> {
       "updated-at": new Date(tag.updatedAt).toISOString(),
     },
     relationships: {
-      organization: { data: { id: tag.orgId, type: "organizations" } },
+      organization: { data: { id: (await organizationName(tag.orgId)) ?? tag.orgId, type: "organizations" } },
     },
     links: { self: `/api/v2/reserved-tags/${tag.id}` },
   };
@@ -117,7 +117,7 @@ function reservedTagKeyResource(tag: ReservedTagKey): Record<string, unknown> {
 
 export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
-  .post("/api/v2/organizations", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -164,7 +164,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       });
       await auditLog("create", "organizations", id, user.id, id, { name });
       (set as { status: number }).status = 201;
-      return { data: organizationResource(org) };
+      return { data: await organizationResourceForPrincipal(org, user.id, tokenOrgId, tokenTeamId) };
     } catch (e: unknown) {
       if (isUniqueConstraintError(e)) {
         (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
@@ -172,7 +172,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       throw e;
     }
   })
-  .get("/api/v2/organizations", async ({ user, orgId, request }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations", async ({ user, orgId, request, set }: ParamCtx): Promise<unknown> => {
+    if ((user === null || user === undefined) && (orgId === null || orgId === undefined)) {
+      (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const { number, size } = pageRequest(request);
     const urlParams = new URL(request.url).searchParams;
     const search = (urlParams.get("q[name]") ?? urlParams.get("q") ?? "").trim();
@@ -216,7 +219,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       db.select({ total: count() }).from(reservedTagKeys).where(eq(reservedTagKeys.orgId, org.id)),
     ]);
     return {
-      data: tags.map((tag: ReservedTagKey): Record<string, unknown> => reservedTagKeyResource(tag)),
+      data: await Promise.all(tags.map(async (tag: ReservedTagKey): Promise<Record<string, unknown>> => reservedTagKeyResource(tag))),
       ...pagination(request, number, size, countRows[0]?.total ?? 0),
     };
   })
@@ -251,7 +254,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       throw error;
     }
     (set as { status: number }).status = 201;
-    return { data: reservedTagKeyResource(tag) };
+    return { data: await reservedTagKeyResource(tag) };
   })
   .patch("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const tagId = params.reserved_tag_key_id ?? "";
@@ -279,7 +282,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       }
       throw error;
     }
-    return { data: reservedTagKeyResource(updated) };
+    return { data: await reservedTagKeyResource(updated) };
   })
   .delete("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const tagId = params.reserved_tag_key_id ?? "";
@@ -548,7 +551,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         "instance-count": countVal,
       },
       relationships: {
-        organization: { data: { id: org.id, type: "organizations" } },
+        organization: { data: { id: org.name, type: "organizations" } },
       },
     }));
 

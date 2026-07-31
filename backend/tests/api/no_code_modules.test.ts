@@ -226,7 +226,7 @@ variable "enable_monitoring" {
       type: "no-code-modules",
       attributes: { enabled: true, "version-pin": "1.0.0" },
       relationships: {
-        organization: { data: { id: orgId, type: "organizations" } },
+        organization: { data: { id: orgName, type: "organizations" } },
         "registry-module": { data: { id: moduleId, type: "registry-modules" } },
         "variable-options": { data: [expect.objectContaining({ type: "variable-options" })] },
       },

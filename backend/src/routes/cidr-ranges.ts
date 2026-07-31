@@ -4,6 +4,7 @@ import { cidrRangeLists, cidrRanges, organizations, type users } from "../db/sch
 import { eq, desc, count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrgPermission, pageRequest, pagination } from "../lib/utils";
+import { organizationName } from "../lib/response";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -34,7 +35,7 @@ async function cidrRangeListResource(list: CidrRangeListItem): Promise<Record<st
       "updated-at": new Date(list.updatedAt).toISOString(),
     },
     relationships: {
-      organization: { data: { id: list.orgId, type: "organizations" } },
+      organization: { data: { id: (await organizationName(list.orgId)) ?? list.orgId, type: "organizations" } },
       "cidr-ranges": { data: ranges.map((r) => ({ id: r.id, type: "cidr-ranges" })) },
     },
   };

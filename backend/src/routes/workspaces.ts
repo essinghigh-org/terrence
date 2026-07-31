@@ -368,7 +368,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
       }
     }
-    const id = crypto.randomUUID();
+    const id = `ws-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const rawTagBindings = rels["tag-bindings"] as Record<string, unknown> | undefined;
     const tagBindingsData = rawTagBindings?.data;
@@ -396,15 +396,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsedOverwrites.error }] };
     }
     const suppliedOverwrites = rawSettingOverwrites as Record<string, unknown> | undefined;
-    const executionOverride = suppliedOverwrites?.["execution-mode"] as boolean | undefined ?? executionMode !== undefined;
+    const executionOverride = executionMode !== undefined || suppliedOverwrites?.["execution-mode"] === true;
     const agentPoolOverride = suppliedOverwrites?.["agent-pool"] as boolean | undefined ?? rawAgentPoolId !== undefined;
     if (executionOverride && executionMode === undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode is required when setting-overwrites.execution-mode is true" }] };
-    }
-    if (!executionOverride && executionMode !== undefined && suppliedOverwrites?.["execution-mode"] === false) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode conflicts with project inheritance" }] };
     }
     const effectiveExecutionMode = executionOverride
       ? typeof executionMode === "string" ? executionMode : "remote"
@@ -1196,15 +1192,11 @@ async function updateWorkspaceResponse(
     "agent-pool": false,
     ...parsedOverwrites.value,
   };
-  if (executionMode !== undefined && suppliedOverwrites?.["execution-mode"] === undefined) {
+  if (executionMode !== undefined) {
     workspaceSettingOverwrites["execution-mode"] = true;
   }
   if (rawAgentPoolId !== undefined && suppliedOverwrites?.["agent-pool"] === undefined) {
     workspaceSettingOverwrites["agent-pool"] = true;
-  }
-  if (executionMode !== undefined && workspaceSettingOverwrites["execution-mode"] !== true) {
-    (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "execution-mode conflicts with project inheritance" }] };
   }
   const effectiveExecutionMode = workspaceSettingOverwrites["execution-mode"] === true
     ? typeof executionMode === "string" ? executionMode : workspace.executionMode

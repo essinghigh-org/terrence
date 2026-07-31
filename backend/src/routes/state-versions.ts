@@ -109,6 +109,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const runData = sv.runId !== null
       ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
       : null;
@@ -123,6 +126,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const { number, size } = pageRequest(request);
     const outputs = stateOutputResources(sv);
     const sliced = outputs.slice((number - 1) * size, number * size);
@@ -137,6 +143,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     return { data: stateOutputResources(sv) };
   })
   .get("/api/v2/state-version-outputs/:state_version_output_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -158,6 +167,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
         );
     for (const stateVersion of versions) {
+      if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")) continue;
       const output = stateOutputResources(stateVersion).find(({ id }): boolean => id === stateVersionOutputId);
       if (output === undefined) continue;
       const ws = workspacesById.get(stateVersion.workspaceId);
@@ -346,6 +356,39 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     await db.update(stateVersions).set({ status: "finalized", softDeletedAt: null }).where(eq(stateVersions.id, sv.id));
     return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request) };
+  })
+  .post("/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const stateVersionId = params.state_version_id ?? "";
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (sv.status !== "backing_data_soft_deleted") {
+      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request" }] };
+    }
+    const deleted = await db.update(stateVersions).set({
+      status: "backing_data_permanently_deleted",
+      statePayload: null,
+      jsonState: null,
+      jsonStateOutputs: null,
+    }).where(and(
+      eq(stateVersions.id, sv.id),
+      eq(stateVersions.status, "backing_data_soft_deleted"),
+    )).returning({ id: stateVersions.id });
+    if (deleted.length === 0) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] };
+    }
+    return {
+      data: stateVersionResource({
+        ...sv,
+        status: "backing_data_permanently_deleted",
+        statePayload: null,
+        jsonState: null,
+        jsonStateOutputs: null,
+      }, request),
+    };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

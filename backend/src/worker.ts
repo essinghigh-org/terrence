@@ -1116,7 +1116,7 @@ export async function executeRun(runId: string): Promise<void> {
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
-      } else if (run.autoApply === true || workspace.autoApply === true) {
+      } else if (run.autoApply === true) {
         await writeLog(
           runId,
           "plan",

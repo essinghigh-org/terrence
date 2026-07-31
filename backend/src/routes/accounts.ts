@@ -538,7 +538,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const synthetic = { id: `service-user-${org.id}`, username: `${org.name}-service-user` };
-    return { data: userResource(synthetic, { id: org.id, type: "organizations" }) };
+    return { data: userResource(synthetic, { id: org.name, type: "organizations" }) };
   })
   .get("/api/v2/account/sessions", async ({ user, token, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {

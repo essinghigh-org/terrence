@@ -87,8 +87,8 @@ describe("organization variable set API contract", () => {
       "var-count": 0,
       "workspace-count": 0,
     });
-    expect(createdData.relationships.organization.data).toEqual({ id: orgId, type: "organizations" });
-    expect(createdData.relationships.parent.data).toEqual({ id: orgId, type: "organizations" });
+    expect(createdData.relationships.organization.data).toEqual({ id: orgName, type: "organizations" });
+    expect(createdData.relationships.parent.data).toEqual({ id: orgName, type: "organizations" });
 
     const listed = await request(`/api/v2/organizations/${orgName}/varsets?q=shared&page[size]=1`);
     expect(listed.status).toBe(200);

@@ -10,7 +10,7 @@ describe("TFE API v2 - Variables", () => {
 
   beforeAll(async () => {
     // Need to clean up everything that references orgs/users to avoid FK constraint errors
-    const { stateVersions, runs, organizationMemberships, configurationVersions, logs, workspaceTags } = await import("../../src/db/schema");
+    const { stateVersions, runs, organizationMemberships, configurationVersions, logs, workspaceTags, organizations } = await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -45,6 +45,7 @@ describe("TFE API v2 - Variables", () => {
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
+    const orgName = `var-homelab-${Date.now()}`;
     const orgRes = await app.handle(
       new Request("http://localhost/api/v2/organizations", {
         method: "POST",
@@ -53,12 +54,12 @@ describe("TFE API v2 - Variables", () => {
           "Authorization": `Bearer ${userToken}`
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: `var-homelab-${Date.now()}` } }
+          data: { type: "organizations", attributes: { name: orgName } }
         })
       })
     );
     expect(orgRes.status).toBe(201);
-    const orgId = (await orgRes.json()).data.id;
+    const orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
     workspaceId = crypto.randomUUID();
     await db.insert(workspaces).values({

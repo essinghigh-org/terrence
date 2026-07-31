@@ -60,9 +60,10 @@ describe("organization API contract", () => {
     });
     expect(created.status).toBe(201);
     const resource = (await created.json()).data;
+    expect(resource.id).toBe(createdName);
     expect(resource.attributes).toMatchObject({
       name: createdName,
-      "external-id": resource.id,
+      "external-id": expect.any(String),
       email: null,
       "collaborator-auth-policy": "password",
       "cost-estimation-enabled": false,
@@ -169,7 +170,7 @@ describe("organization API contract", () => {
 
     const orgScoped = await request(`/api/v2/organizations?q=${prefix}`, orgToken);
     const orgScopedBody = await orgScoped.json();
-    expect(orgScopedBody.data.map((item: any) => item.id)).toEqual([betaId]);
+    expect(orgScopedBody.data.map((item: any) => item.id)).toEqual([betaName]);
     expect(orgScopedBody.meta.pagination["total-count"]).toBe(1);
 
     expect((await request(`/api/v2/organizations/${privateName}`)).status).toBe(404);

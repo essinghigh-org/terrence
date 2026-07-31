@@ -4,7 +4,7 @@ import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
@@ -193,7 +193,7 @@ async function createRun(
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
   }
   if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
-  const id = crypto.randomUUID();
+  const id = `run-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
@@ -432,6 +432,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     set.headers["Content-Type"] = "text/plain";
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
+  .get("/api/v2/runs/:run_id/apply", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const runId = params.run_id ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": typeof authorized.run.logToken === "string" && authorized.run.logToken !== "" ? apiURL(request, `/api/v2/runs/${runId}/apply/log/${authorized.run.logToken}`) : null } } };
+  })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
@@ -557,6 +563,42 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     queueRunNotification(runId, "run:needs_attention", "planned");
     return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
+  })
+  .post("/api/v2/runs/:run_id/actions/force-execute", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params.run_id ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (authorized.run.status !== "canceled") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be canceled to force-execute" }] }; }
+    const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, "canceled"))).returning();
+    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] }; }
+    await auditLog("force-execute", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: "canceled",
+      toStatus: "pending",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    queueRunNotification(runId, "run:needs_attention", "pending");
+    return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
+  })
+  .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params.run_id ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const updated = await db.update(runs).set({ status: "pending" }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, authorized.run.status),
+      inArray(runs.status, ["pending", "plan_queued", "apply_queued"]),
+    )).returning();
+    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not queued" }] }; }
+    await auditLog("queue", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: authorized.run.status,
+      toStatus: "pending",
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
   })
   // --- Comments ---
   .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

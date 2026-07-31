@@ -63,7 +63,7 @@ beforeAll(async () => {
     },
   });
   expect(orgResponse.status).toBe(201);
-  orgId = ((await orgResponse.json()) as { data: { id: string } }).data.id;
+  orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
   const workspaceResponse = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
     data: {

@@ -191,7 +191,7 @@ describe("account, token, and variable schema contracts", () => {
     const identity = await request("/api/v2/account/details", "GET", undefined, genericData.attributes.token);
     expect(identity.status).toBe(200);
     expect((await identity.json()).data.relationships["authenticated-resource"].data).toEqual({
-      id: orgId,
+      id: orgName,
       type: "organizations",
     });
 

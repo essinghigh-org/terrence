@@ -414,7 +414,7 @@ function noCodeResource(
     },
     relationships: {
       organization: {
-        data: { id: org.id, type: "organizations" },
+        data: { id: org.name, type: "organizations" },
         links: { related: `/api/v2/organizations/${org.name}` },
       },
       "registry-module": {

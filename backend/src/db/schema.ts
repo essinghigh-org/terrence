@@ -306,6 +306,7 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("pending"),
+  autoQueueRuns: integer("auto_queue_runs", { mode: "boolean" }).notNull().default(true),
   archivePath: text("archive_path"),
   speculative: integer("speculative", { mode: "boolean" }).notNull().default(false),
   provisional: integer("provisional", { mode: "boolean" }).notNull().default(false),

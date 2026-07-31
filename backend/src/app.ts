@@ -263,7 +263,8 @@ export const app = new Elysia()
       && typeof response === "object"
       && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
     const headers = set.headers as Record<string, string | number>;
-    if (new URL(request.url).pathname.startsWith("/api/") && isJsonDocument) {
+    const pathname = new URL(request.url).pathname;
+    if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
     }
     const limit = set.headers["RateLimit-Limit"];
@@ -292,10 +293,15 @@ export const app = new Elysia()
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
-  .get("*", async ({ request }: { request: { url: string } }): Promise<Response | undefined> => {
+  .get("*", async ({ request, set }: { request: { url: string }; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string }[] } | undefined> => {
     const url = new URL(request.url);
     const pathname = url.pathname;
-    if (pathname.startsWith("/api/") || pathname === "/login" || pathname.startsWith("/app")) return;
+    const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
+    if (isApiPath) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (pathname === "/login" || pathname.startsWith("/app")) return;
     const filePath = join(FRONTEND_DIR, pathname);
     if (filePath.startsWith(FRONTEND_DIR) && await Bun.file(filePath).exists()) {
       return new Response(Bun.file(filePath));
@@ -309,7 +315,7 @@ export const app = new Elysia()
     const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
     const pathname = new URL(request.url).pathname;
     if (code === "NOT_FOUND") {
-      if (!pathname.startsWith("/api/")) {
+      if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
         mutableSet.status = 404;
         mutableSet.headers["Content-Type"] = "text/plain";
         return "Not Found";

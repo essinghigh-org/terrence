@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens } from "../../src/db/schema";
+import { apiTokens, organizations } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
@@ -52,7 +52,7 @@ describe("TFE API Authentication - Tokens", () => {
       })
     );
     expect(orgRes.status).toBe(201);
-    orgId = (await orgRes.json()).data.id;
+    orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
   });
 
   it("should block unauthenticated token creation", async () => {

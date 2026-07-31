@@ -186,7 +186,7 @@ describe("workspace run history and state metadata", () => {
     const listed = (await listResponse.json()).data[0];
     expect(listed.attributes).toMatchObject({
       serial: 7,
-      md5: createHash("sha256").update(statePayload).digest("hex"),
+      md5: createHash("md5").update(statePayload).digest("hex"),
       lineage: suffix,
       "terraform-version": "1.8.5",
       "resources-processed": true,

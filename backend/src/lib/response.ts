@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import type {
-  workspaces, stateVersions, apiTokens, organizations, variableSets, workspaceVariables,
+  workspaces, stateVersions, apiTokens, variableSets, workspaceVariables,
   projects, runs
 } from "../db/schema";
-import { workspaceTags, variableSetWorkspaces,
+import { organizations, workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
@@ -21,6 +21,17 @@ type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | bo
 
 type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
+
+// JSON:API convention (matching TFE/Atlas): organizations are identified by their NAME,
+// so every "organizations" resource reference carries the name in `id`. go-tfe decodes
+// `Organization.Name` from the JSON:API primary (`data.id`) field.
+export async function organizationName(orgId: string): Promise<string | null> {
+  const org = await db.query.organizations.findFirst({
+    where: eq(organizations.id, orgId),
+    columns: { name: true },
+  });
+  return org?.name ?? null;
+}
 
 // Keep the precise nested response type available to callers and contract tests.
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
@@ -65,11 +76,11 @@ export function userResource(
 
 type OrgMemParam = DeepReadonly<{ id: string; userId: string; orgId: string; role: string; status?: string | null }>;
 
-export function orgMembershipResource(
+export async function orgMembershipResource(
   mem: OrgMemParam,
   userObj?: UserParam | null,
   teamIds: readonly string[] = []
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   return {
     id: mem.id,
     type: "organization-memberships",
@@ -84,7 +95,7 @@ export function orgMembershipResource(
         links: userObj !== null && userObj !== undefined ? { related: `/api/v2/users/${userObj.id}` } : undefined,
       },
       organization: {
-        data: { id: mem.orgId, type: "organizations" },
+        data: { id: (await organizationName(mem.orgId)) ?? mem.orgId, type: "organizations" },
       },
       teams: {
         data: teamIds.map((id: string): { id: string; type: string } => ({ id, type: "teams" })),
@@ -123,7 +134,7 @@ type OrganizationParam = DeepReadonly<typeof organizations.$inferSelect>;
 export function organizationResource(org: OrganizationParam): Record<string, unknown> {
   const name = encodeURIComponent(org.name);
   return {
-    id: org.id,
+    id: org.name,
     type: "organizations",
     attributes: {
       name: org.name,
@@ -174,10 +185,13 @@ export async function workspaceResource(
   defaultIacBinary: string | null | undefined,
   permissions: WorkspaceResourcePermissions,
 ): Promise<Record<string, unknown>> {
-  const tags = await db.query.workspaceTags.findMany({
-    where: eq(workspaceTags.workspaceId, workspace.id),
-    orderBy: [asc(workspaceTags.key)],
-  });
+  const [tags, orgName] = await Promise.all([
+    db.query.workspaceTags.findMany({
+      where: eq(workspaceTags.workspaceId, workspace.id),
+      orderBy: [asc(workspaceTags.key)],
+    }),
+    organizationName(workspace.orgId),
+  ]);
 
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "tofu";
 
@@ -237,7 +251,7 @@ export async function workspaceResource(
     },
     relationships: {
       organization: {
-        data: { id: workspace.orgId, type: "organizations" },
+        data: { id: orgName ?? workspace.orgId, type: "organizations" },
       },
       project: {
         data: workspace.projectId !== null ? { id: workspace.projectId, type: "projects" } : null,
@@ -264,21 +278,29 @@ export async function workspaceResource(
 
 type ProjectParam = DeepReadonly<typeof projects.$inferSelect>;
 
-export function projectResource(project: ProjectParam): Record<string, unknown> {
+export async function projectResource(
+  project: ProjectParam,
+  workspaceCount = 0,
+  teamCount = 0,
+  permissions: Record<string, boolean> = { "can-update": true, "can-destroy": true, "can-create-workspace": true },
+): Promise<Record<string, unknown>> {
   return {
     id: project.id,
     type: "projects",
     attributes: {
       name: project.name,
       description: project.description,
+      "workspace-count": workspaceCount,
+      "team-count": teamCount,
       "default-execution-mode": project.defaultExecutionMode ?? "remote",
       "auto-destroy-activity-duration": project.autoDestroyActivityDuration ?? null,
       "setting-overwrites": project.settingOverwrites ?? { "execution-mode": false },
       "created-at": new Date(project.createdAt).toISOString(),
+      permissions,
     },
     relationships: {
       organization: {
-        data: { id: project.orgId, type: "organizations" },
+        data: { id: (await organizationName(project.orgId)) ?? project.orgId, type: "organizations" },
       },
       "default-agent-pool": {
         data: project.defaultAgentPoolId === null
@@ -371,7 +393,7 @@ export function variableSetVariableUpdate(
 type VarSetParam = DeepReadonly<typeof variableSets.$inferSelect>;
 
 export async function variableSetResource(variableSet: VarSetParam): Promise<Record<string, unknown>> {
-  const [workspaceLinks, projectLinks, variables] = await Promise.all([
+  const [workspaceLinks, projectLinks, variables, orgName] = await Promise.all([
     db.query.variableSetWorkspaces.findMany({
       where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
     }),
@@ -381,6 +403,7 @@ export async function variableSetResource(variableSet: VarSetParam): Promise<Rec
     db.query.variableSetVariables.findMany({
       where: eq(variableSetVariables.variableSetId, variableSet.id),
     }),
+    organizationName(variableSet.orgId),
   ]);
   return {
     id: variableSet.id,
@@ -395,8 +418,8 @@ export async function variableSetResource(variableSet: VarSetParam): Promise<Rec
       "project-count": projectLinks.length,
     },
     relationships: {
-      organization: { data: { id: variableSet.orgId, type: "organizations" } },
-      parent: { data: { id: variableSet.orgId, type: "organizations" } },
+      organization: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
+      parent: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
       workspaces: {
         data: workspaceLinks.map((link: DeepReadonly<typeof variableSetWorkspaces.$inferSelect>): { id: string; type: string } => ({ id: link.workspaceId, type: "workspaces" })),
       },
@@ -425,6 +448,15 @@ export function workspaceVariableResource(v: WorkspaceVarParam): Record<string, 
       description: v.description,
       hcl: v.hcl === true,
     },
+    relationships: {
+      workspace: {
+        data: { id: v.workspaceId, type: "workspaces" },
+      },
+      configurable: {
+        data: { id: v.workspaceId, type: "workspaces" },
+      },
+    },
+    links: { self: `/api/v2/workspaces/${v.workspaceId}/vars/${v.id}` },
   };
 }
 
@@ -577,6 +609,7 @@ export function runResource(
         data: [],
       },
     },
+    links: { self: `/api/v2/runs/${run.id}` },
   };
 }
 
@@ -626,6 +659,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
         links: { related: `/api/v2/state-versions?filter[run][id]=${run.id}` },
       },
     },
+    links: { self: `/api/v2/plans/plan-${run.id}` },
   };
 }
 
@@ -664,6 +698,7 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
         links: { related: `/api/v2/state-versions?filter[run][id]=${run.id}` },
       },
     },
+    links: { self: `/api/v2/applies/apply-${run.id}` },
   };
 }
 
@@ -771,7 +806,7 @@ export function stateVersionResource(
     attributes: {
       ...(includeState ? { state: state.statePayload } : {}),
       serial: state.serial,
-      md5: createHash("sha256").update(payload).digest("hex"),
+      md5: createHash("md5").update(payload).digest("hex"),
       lineage: typeof parsed?.lineage === "string" ? parsed.lineage : null,
       "terraform-version": typeof parsed?.terraform_version === "string" ? parsed.terraform_version : null,
       "resources-processed": parsed !== null,

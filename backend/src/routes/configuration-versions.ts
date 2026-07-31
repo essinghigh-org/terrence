@@ -30,6 +30,16 @@ type DeepReadonly<T> = T extends null | undefined | boolean | number | string
     ? readonly DeepReadonly<Item>[]
     : { readonly [Key in keyof T]: DeepReadonly<T[Key]> };
 
+function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
+  const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
+  return Object.values(ingress).some(
+    (value): boolean =>
+      (typeof value === "string" && value !== "")
+      || typeof value === "number"
+      || typeof value === "boolean",
+  );
+}
+
 function configurationVersionResource(cv: DeepReadonly<ConfigurationVersion>, request: Readonly<{ url: string }>): Record<string, unknown> {
   const uploadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/upload`);
   const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
@@ -37,7 +47,7 @@ function configurationVersionResource(cv: DeepReadonly<ConfigurationVersion>, re
     id: cv.id,
     type: "configuration-versions",
     attributes: {
-      "auto-queue-runs": false,
+      "auto-queue-runs": cv.autoQueueRuns,
       speculative: cv.speculative,
       provisional: cv.provisional,
       status: cv.status,
@@ -51,6 +61,14 @@ function configurationVersionResource(cv: DeepReadonly<ConfigurationVersion>, re
       "error-message": cv.errorMessage,
       "upload-url": uploadUrl,
       "download-url": downloadUrl,
+    },
+    relationships: {
+      "ingress-attributes": {
+        data: hasIngressData(cv)
+          ? { id: cv.id, type: "ingress-attributes" }
+          : null,
+        links: { related: `/api/v2/configuration-versions/${cv.id}/ingress-attributes` },
+      },
     },
     links: {
       self: `/api/v2/configuration-versions/${cv.id}`,
@@ -87,12 +105,18 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const speculative = typeof attributes.speculative === "boolean" ? attributes.speculative : false;
     const provisional = typeof attributes.provisional === "boolean" ? attributes.provisional : false;
     const source = typeof attributes.source === "string" ? attributes.source : "tfe-api";
-    const autoQueueRuns = typeof attributes["auto-queue-runs"] === "boolean" ? attributes["auto-queue-runs"] : false;
+    const rawAutoQueueRuns = attributes["auto-queue-runs"];
+    if (rawAutoQueueRuns !== undefined && typeof rawAutoQueueRuns !== "boolean") {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "auto-queue-runs must be boolean" }] };
+    }
+    const autoQueueRuns = rawAutoQueueRuns === undefined ? true : rawAutoQueueRuns;
     const createdAt = Date.now();
     const cv: ConfigurationVersion = {
       id,
       workspaceId,
       status: "pending",
+      autoQueueRuns,
       archivePath: null,
       speculative,
       provisional,
@@ -106,16 +130,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     };
     await db.insert(configurationVersions).values(cv);
     (set as { status: number }).status = 201;
-    const resource = configurationVersionResource(cv, request);
-    return {
-      data: {
-        ...resource,
-        attributes: {
-          ...(resource.attributes as Record<string, unknown>),
-          "auto-queue-runs": autoQueueRuns,
-        },
-      },
-    };
+    return { data: configurationVersionResource(cv, request) };
   })
   .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params.cv_id ?? "";
@@ -253,6 +268,9 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, tokenOrgId, teamId);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (!hasIngressData(cv)) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
     return { data: { id: cv.id, type: "ingress-attributes", attributes: { "commit-sha": ingress.commitSha ?? null, "commit-url": ingress.commitUrl ?? null, "commit-message": ingress.commitMessage ?? null, branch: ingress.branch ?? null, tag: ingress.tag ?? null, "pull-request-number": ingress.pullRequestNumber ?? null, "sender-username": ingress.senderUsername ?? null, "clone-url": ingress.cloneUrl ?? null, "compare-url": ingress.compareUrl ?? null } } };
   });

@@ -10,7 +10,7 @@ describe("TFE API v2 - Configuration Versions", () => {
 
   beforeAll(async () => {
     // Clear and setup
-    const { runs, configurationVersions, stateVersions, apiTokens, users, logs, workspaceTags, organizationMemberships } = await import("../../src/db/schema");
+    const { runs, configurationVersions, stateVersions, apiTokens, users, logs, workspaceTags, organizationMemberships, organizations } = await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -44,6 +44,7 @@ describe("TFE API v2 - Configuration Versions", () => {
     userToken = (await loginRes.json()).data.attributes.token;
 
     // Create organization via API to establish ownership membership
+    const orgName = `homelab-cv-${Date.now()}`;
     const orgRes = await app.handle(
       new Request("http://localhost/api/v2/organizations", {
         method: "POST",
@@ -52,12 +53,12 @@ describe("TFE API v2 - Configuration Versions", () => {
           "Authorization": `Bearer ${userToken}`
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: `homelab-cv-${Date.now()}` } }
+          data: { type: "organizations", attributes: { name: orgName } }
         })
       })
     );
     expect(orgRes.status).toBe(201);
-    const orgId = (await orgRes.json()).data.id;
+    const orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
     const ws = await db.insert(workspaces).values({
       id: "ws-cv-test",

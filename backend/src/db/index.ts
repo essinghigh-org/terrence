@@ -451,6 +451,13 @@ const rtInfo = await sqlite.execute("PRAGMA table_info(run_tasks)");
 const existingRtCols = getColumnNames(rtInfo);
 if (!existingRtCols.has("global_configuration")) await sqlite.execute("ALTER TABLE run_tasks ADD COLUMN global_configuration TEXT");
 
+// Check configuration_versions for auto_queue_runs
+const cvInfo = await sqlite.execute("PRAGMA table_info(configuration_versions)");
+const existingCvCols = getColumnNames(cvInfo);
+if (!existingCvCols.has("auto_queue_runs")) {
+  await sqlite.execute("ALTER TABLE configuration_versions ADD COLUMN auto_queue_runs INTEGER NOT NULL DEFAULT 1");
+}
+
 // Check run_task_results for task_stage_id
 const rtrInfo = await sqlite.execute("PRAGMA table_info(run_task_results)");
 const existingRtrCols = getColumnNames(rtrInfo);

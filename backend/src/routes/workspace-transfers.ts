@@ -4,6 +4,7 @@ import { workspaceTransfers, type users } from "../db/schema";
 import { eq, count, desc } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { pageRequest, pagination } from "../lib/utils";
+import { organizationName } from "../lib/response";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -20,7 +21,7 @@ type ParamCtx = Readonly<{
 
 type WorkspaceTransferItem = Readonly<typeof workspaceTransfers.$inferSelect>;
 
-function transferResource(t: WorkspaceTransferItem): Record<string, unknown> {
+async function transferResource(t: WorkspaceTransferItem): Promise<Record<string, unknown>> {
   return {
     id: t.id,
     type: "workspace-transfers",
@@ -39,7 +40,7 @@ function transferResource(t: WorkspaceTransferItem): Record<string, unknown> {
     },
     relationships: {
       "source-workspace": t.sourceWorkspaceId ? { data: { id: t.sourceWorkspaceId, type: "workspaces" } } : { data: null },
-      "destination-organization": t.destinationOrgId ? { data: { id: t.destinationOrgId, type: "organizations" } } : { data: null },
+      "destination-organization": t.destinationOrgId ? { data: { id: (await organizationName(t.destinationOrgId)) ?? t.destinationOrgId, type: "organizations" } } : { data: null },
       "destination-project": t.destinationProjectId ? { data: { id: t.destinationProjectId, type: "projects" } } : { data: null },
     },
   };
@@ -88,7 +89,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
 
     await db.insert(workspaceTransfers).values(transfer);
     (set as { status: number }).status = 201;
-    return { data: transferResource(transfer) };
+    return { data: await transferResource(transfer) };
   })
   .get("/api/v2/workspace-transfers", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
@@ -103,7 +104,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       limit: size,
     });
     return {
-      data: items.map((t) => transferResource(t)),
+      data: await Promise.all(items.map(async (t) => transferResource(t))),
       ...pagination(request, number, size, total),
     };
   })
@@ -117,7 +118,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: transferResource(transfer) };
+    return { data: await transferResource(transfer) };
   })
   .post("/api/v2/workspace-transfers/:transfer_id/actions/cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
@@ -133,7 +134,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     await db.update(workspaceTransfers).set({ status: "canceled", updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
     const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: transferResource(updated) };
+    return { data: await transferResource(updated) };
   })
   .post("/api/v2/workspace-transfers/:transfer_id/actions/resume", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
@@ -149,5 +150,5 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     await db.update(workspaceTransfers).set({ status: "running", pauseReason: null, updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
     const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: transferResource(updated) };
+    return { data: await transferResource(updated) };
   });
