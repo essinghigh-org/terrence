@@ -128,7 +128,12 @@ export async function invokeApprise(
 
   const tmpDir = `${process.env.STORAGE_DIR ?? "/tmp"}/apprise-tmp`;
   const configPath = `${tmpDir}/${destination.id}.yml`;
-  await Bun.write(configPath, `urls:\n  - ${url}\n`);
+  // Quote the URL scalar: unquoted, a leading `#` in a Slack channel
+  // (e.g. slack://token/#general) would be parsed as a YAML comment and
+  // silently truncate the URL. Single quotes are safe here because Apprise
+  // URL schemas never contain them.
+  const quotedUrl = `'${url}'`;
+  await Bun.write(configPath, `urls:\n  - ${quotedUrl}\n`);
 
   const args = [
     "--config", configPath,

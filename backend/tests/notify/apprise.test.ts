@@ -75,4 +75,20 @@ describe("invokeApprise", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("No Apprise URL");
   });
+
+  it("quotes the URL in the apprise config so `#` channels survive (YAML comment regression)", async () => {
+    const port = (server as unknown as { port: number }).port;
+    // `#` inside an unquoted YAML scalar starts a comment; a Slack URL like
+    // slack://token/#general would be truncated to slack://token/ by the
+    // YAML parser. The config writer must quote the URL scalar. Read the
+    // written config back to prove the URL is single-quoted.
+    const url = `json://127.0.0.1:${port}/hook`;
+    const result = await invokeApprise(dest(url), "T", "B", "info");
+    expect(result.ok).toBe(true);
+    const fs = await import("node:fs");
+    const tmpDir = `${process.env.STORAGE_DIR ?? "/tmp"}/apprise-tmp`;
+    const written = fs.readFileSync(`${tmpDir}/d-json.yml`, "utf8");
+    expect(written).toContain(`  - '${url}'`);
+    expect(written).not.toContain(`  - ${url}`);
+  });
 });
