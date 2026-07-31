@@ -38,7 +38,7 @@ import { tmpdir } from "os";
 import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { workspaceExecutionDirectory } from "./workspace";
-import { emitDriftEvent, emitRunEvent } from "./lib/notify";
+import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { FINAL_RUN_STATUSES, signedApiURL, validateExternalUrl } from "./lib/utils";
 import {
   emptyCostEstimate,
@@ -176,6 +176,18 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     console.error(`[terrence] Failed to update run ${runId} status to ${status}:`, err);
     await db.update(runs).set({ status, ...(extra ?? {}) }).where(eq(runs.id, runId));
   }
+  const trigger = status === "planning"
+    ? "run:planning"
+    : status === "applying"
+      ? "run:applying"
+      : status === "applied" || status === "planned_and_finished"
+        ? "run:completed"
+        : status === "errored"
+          ? "run:errored"
+          : status === "policy_soft_failed" || status === "planned_and_saved"
+            ? "run:needs_attention"
+            : undefined;
+  if (trigger !== undefined) queueRunNotification(runId, trigger, status);
   void reportRunVcsStatus(runId, status);
 }
 
@@ -1089,7 +1101,6 @@ export async function executeRun(runId: string): Promise<void> {
         throw new Error("Run blocked by mandatory post-plan task failure.");
       }
       await updateRunStatus(runId, "post_plan_completed");
-      emitRunEvent(runId, "workspace.plan.completed");
 
       const hasNoResourceChanges = resourceCounts.additions === 0
         && resourceCounts.changes === 0
@@ -1120,6 +1131,7 @@ export async function executeRun(runId: string): Promise<void> {
         await updateRunStatus(runId, "planned_and_finished");
       } else {
         await updateRunStatus(runId, "planned");
+        queueRunNotification(runId, "run:needs_attention", "planned");
         keepPlan = true;
       }
     }
@@ -1128,7 +1140,6 @@ export async function executeRun(runId: string): Promise<void> {
     console.error(`Run ${runId} planning failed`, error);
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
-    emitRunEvent(runId, "workspace.plan.failed");
   } finally {
     if (!keepPlan) {
       try {
@@ -1336,7 +1347,6 @@ export async function executeApply(runId: string): Promise<void> {
       applyResourceDestructions: applyResourceCounts.destructions,
       applyResourceImports: applyResourceCounts.imports,
     });
-    emitRunEvent(runId, "workspace.apply.completed");
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
   } catch (error: unknown) {
@@ -1344,7 +1354,6 @@ export async function executeApply(runId: string): Promise<void> {
     console.error(`Run ${runId} apply failed`, error);
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
-    emitRunEvent(runId, "workspace.apply.failed");
   } finally {
     if (applySuccess) {
       try {
@@ -2001,7 +2010,8 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
       logOutput: output.join("\n"),
       completedAt: Date.now(),
     }).where(eq(assessmentResults.id, assessmentResultId));
-    if (resources.drifted > 0) emitDriftEvent(assessmentResultId);
+    if (resources.drifted > 0) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
+    if (!allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     appendOutput(`[terrence ERROR] ${message}`);
@@ -2013,6 +2023,7 @@ export async function executeAssessment(assessmentResultId: string): Promise<voi
       logOutput: output.join("\n"),
       completedAt: Date.now(),
     }).where(eq(assessmentResults.id, assessmentResultId));
+    queueAssessmentNotification(assessmentResultId, "assessment:failed");
   } finally {
     try {
       if (runSandbox !== null) {
@@ -2138,7 +2149,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
           claimedRunIds.push(run.id);
           claimedWorkspaceIds.add(run.workspaceId);
           await writeLog(run.id, "plan", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
-          emitRunEvent(run.id, "workspace.plan.failed");
+          queueRunNotification(run.id, "run:errored", "unreachable");
           void reportRunVcsStatus(run.id, "unreachable");
         }
         continue;

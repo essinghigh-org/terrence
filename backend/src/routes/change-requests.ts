@@ -4,6 +4,7 @@ import { authPlugin } from "../auth";
 import { db } from "../db";
 import { changeRequests, organizations, type users, workspaces } from "../db/schema";
 import { checkOrganizationPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import { queueChangeRequestNotification } from "../lib/notifications";
 
 type SetObject = Readonly<{
   status?: number | string;
@@ -222,6 +223,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     }
     const changeRequest = changeRequestValues(workspace.id, subject, message, user?.id ?? null, Date.now());
     await db.insert(changeRequests).values(changeRequest);
+    queueChangeRequestNotification(changeRequest.id);
     (set as { status: number }).status = 201;
     return { data: resource(changeRequest, true) };
   })
@@ -276,6 +278,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     const records = selectedIds.map((workspaceId): ChangeRequest =>
       changeRequestValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.insert(changeRequests).values(records);
+    for (const record of records) queueChangeRequestNotification(record.id);
     (set as { status: number }).status = 201;
     return {
       data: {

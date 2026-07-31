@@ -9,7 +9,7 @@ import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
 import { authPlugin } from "../auth";
-import { emitRunEvent } from "../lib/notify";
+import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 
@@ -200,7 +200,6 @@ async function createRun(
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : "Triggered via UI";
   const origin = originForConfiguration(configurationVersion);
-  const vcsSource = origin?.source === "github" || origin?.source === "gitlab" || origin?.source === "bitbucket";
   await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
   await auditLog("create", "runs", id, user?.id ?? null, workspace.orgId, {
     workspaceId,
@@ -208,7 +207,7 @@ async function createRun(
     source: origin?.source ?? "tfe-api",
     triggerReason: origin?.triggerReason ?? "manual",
   });
-  emitRunEvent(id, vcsSource ? "workspace.vcs.run.triggered" : "workspace.run.started");
+  queueRunNotification(id, "run:created", "pending");
   (set as { status: number }).status = 201;
   return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
 }
@@ -505,7 +504,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "discarded",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    emitRunEvent(runId, "workspace.run.canceled");
+    queueRunNotification(runId, "run:errored", "discarded");
     return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -522,7 +521,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "canceled",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    emitRunEvent(runId, "workspace.run.canceled");
+    queueRunNotification(runId, "run:errored", "canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -538,7 +537,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "force_canceled",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    emitRunEvent(runId, "workspace.run.canceled");
+    queueRunNotification(runId, "run:errored", "force_canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -556,7 +555,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "planned",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    emitRunEvent(runId, "workspace.plan.completed");
+    queueRunNotification(runId, "run:needs_attention", "planned");
     return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
   })
   // --- Comments ---

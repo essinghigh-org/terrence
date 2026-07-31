@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, organizations, scimGroups, scimSettings, teamScimGroupMappings } from "../db/schema";
+import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, organizations, notificationConfigurations, scimGroups, scimSettings, teamScimGroupMappings } from "../db/schema";
 import { eq, and, count, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission } from "../lib/utils";
@@ -393,6 +393,23 @@ export const teamRoutes = new Elysia({ name: "teams" })
     (set as { status: number }).status = 204;
     return {};
   })
-  // --- End of team routes (legacy team notification-configurations endpoint
-  // removed with notification system v2; org-level destinations/rules replace it)
-
+  // --- Team Notification Configurations ---
+  .post("/api/v2/teams/:team_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const teamId = params.team_id ?? "";
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+    if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const url = typeof attributes.url === "string" ? attributes.url : "";
+    const destinationType = typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "";
+    if (url === "" || destinationType === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL and destination-type are required" }] }; }
+    const id = `nc-${crypto.randomUUID()}`;
+    const name = typeof attributes.name === "string" ? attributes.name : `Team notification for ${team.name}`;
+    const triggers = Array.isArray(attributes.triggers) ? (attributes.triggers as string[]) : ["team:change_request"];
+    const enabled = typeof attributes.enabled === "boolean" ? attributes.enabled : true;
+    const token = typeof attributes.token === "string" ? attributes.token : null;
+    await db.insert(notificationConfigurations).values({ id, workspaceId: null, teamId, name, destinationType, url, triggers, enabled, token, createdAt: Date.now() });
+    (set as { status: number }).status = 201;
+    return { data: { id, type: "notification-configurations", attributes: { name, "destination-type": destinationType, url, triggers, enabled } } };
+  });

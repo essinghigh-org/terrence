@@ -7,7 +7,6 @@ import { Workspaces } from "./views/Workspaces";
 import { WorkspaceDetail } from "./views/WorkspaceDetail";
 import { VariableSets } from "./views/VariableSets";
 import { OrganizationSettings } from "./views/OrganizationSettings";
-import { NotificationSettings } from "./views/NotificationSettings";
 import { AccountSettings } from "./views/AccountSettings";
 import { Projects } from "./views/Projects";
 import { Registry } from "./views/Registry";
@@ -141,8 +140,12 @@ function App(): JSX.Element {
               element={<WorkspaceDetail section="locking" />}
             />
             <Route
-              path=":orgName/settings/notifications"
-              element={<NotificationSettings />}
+              path=":orgName/workspaces/:workspaceName/settings/notifications"
+              element={<WorkspaceDetail section="notifications" />}
+            />
+            <Route
+              path=":orgName/workspaces/:workspaceName/settings/webhooks"
+              element={<WorkspaceDetail section="webhooks" />}
             />
             <Route
               path=":orgName/workspaces/:workspaceName/settings/policies"
