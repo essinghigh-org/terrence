@@ -6,6 +6,7 @@
  */
 export const NOTIFICATION_EVENTS = [
   "workspace.run.started",
+  "workspace.run.canceled",
   "workspace.plan.completed",
   "workspace.plan.failed",
   "workspace.apply.completed",

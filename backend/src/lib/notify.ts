@@ -205,6 +205,14 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, Readonly<{ title: string
       "View: {{run.url}}",
     ].join("\n"),
   },
+  "workspace.run.canceled": {
+    title: "Run Canceled",
+    body: [
+      "Workspace: {{workspace.name}}",
+      "Run: {{run.id}}",
+      "View: {{run.url}}",
+    ].join("\n"),
+  },
   "workspace.plan.completed": {
     title: "Plan Completed",
     body: [
@@ -520,10 +528,11 @@ export function emitContext(context: EventContext, eventType: EventContext["even
   });
 }
 
-/** Fire-and-forget emit for a run-scoped event (started/plan/apply/vcs). */
+/** Fire-and-forget emit for a run-scoped event. */
 export function emitRunEvent(
   runId: string,
   eventType: "workspace.run.started"
+    | "workspace.run.canceled"
     | "workspace.plan.completed"
     | "workspace.plan.failed"
     | "workspace.apply.completed"

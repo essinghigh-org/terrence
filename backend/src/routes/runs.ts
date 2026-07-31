@@ -505,6 +505,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "discarded",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
+    emitRunEvent(runId, "workspace.run.canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -521,6 +522,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "canceled",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
+    emitRunEvent(runId, "workspace.run.canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -536,6 +538,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "force_canceled",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
+    emitRunEvent(runId, "workspace.run.canceled");
     return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
