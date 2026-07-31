@@ -823,7 +823,11 @@ export async function executeRun(runId: string): Promise<void> {
         ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
         : null;
       const projectName = project?.name ?? "Default Project";
-      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, projectName, workspace.name);
+      const wsName = workspace.name;
+      if (wsName.includes("..") || wsName.startsWith("/") || wsName.includes("\\")) {
+        throw new Error(`Invalid workspace name: contains path traversal characters`);
+      }
+      const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, projectName, wsName);
       
       await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
       if (!(await exists(localPath))) {
