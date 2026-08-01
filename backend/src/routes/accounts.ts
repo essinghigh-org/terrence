@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams } from "../db/schema";
+import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
 import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -8,12 +8,18 @@ import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
+const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 // ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
 let refreshRotationQueue = Promise.resolve();
+
+// In-memory MFA login challenges: token -> { userId, expiresAt }.
+// Single-process deployment; challenges expire after 5 minutes.
+const mfaChallenges = new Map<string, { userId: string; expiresAt: number }>();
 
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = refreshRotationQueue;
@@ -155,6 +161,57 @@ async function revokeRefreshFamily(
     }
     return true;
   });
+}
+
+/**
+ * Issue an access token (+ refresh session for browser logins) after
+ * successful authentication. Shared by /users/login and /users/login/mfa.
+ */
+async function issueLoginSession(
+  user: Readonly<typeof users.$inferSelect>,
+  browserSession: boolean,
+  set: SetObj,
+  request: RequestInfo | undefined,
+): Promise<unknown> {
+  const tokenStr = opaqueToken("user");
+  const tokenId = crypto.randomUUID();
+  const createdAt = Date.now();
+  if (!browserSession) {
+    await db.insert(apiTokens).values({
+      id: tokenId,
+      token: tokenHash(tokenStr),
+      userId: user.id,
+      description: "User login token",
+      createdAt,
+    });
+    return accessTokenDocument(tokenId, tokenStr, user);
+  }
+
+  const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
+  const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
+  const refreshToken = opaqueToken("refresh");
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    await t.insert(apiTokens).values({
+      id: tokenId,
+      token: tokenHash(tokenStr),
+      userId: user.id,
+      description: "Browser session access token",
+      expiresAt: accessExpiresAt,
+      createdAt,
+    });
+    await t.insert(refreshSessions).values({
+      id: crypto.randomUUID(),
+      familyId: crypto.randomUUID(),
+      tokenHash: tokenHash(refreshToken),
+      userId: user.id,
+      accessTokenId: tokenId,
+      expiresAt: refreshExpiresAt,
+      createdAt,
+    });
+  });
+  setRefreshCookie(set, request, refreshToken, refreshExpiresAt);
+  return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
 }
 
 function browserSessionResources(
@@ -321,45 +378,68 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
 
-    const tokenStr = opaqueToken("user");
-    const tokenId = crypto.randomUUID();
-    const createdAt = Date.now();
-    if (!browserSession) {
-      await db.insert(apiTokens).values({
-        id: tokenId,
-        token: tokenHash(tokenStr),
-        userId: user.id,
-        description: "User login token",
-        createdAt,
-      });
-      return accessTokenDocument(tokenId, tokenStr, user);
+    // If MFA is enabled for this account, issue a short-lived challenge token
+    // instead of an access token. The client completes login via
+    // POST /users/login/mfa with a valid TOTP code.
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    if (mfa !== undefined && mfa.enabled === true) {
+      const challengeToken = opaqueToken("mfa");
+      mfaChallenges.set(challengeToken, { userId: user.id, expiresAt: Date.now() + MFA_CHALLENGE_TTL_MS });
+      return {
+        data: {
+          type: "users",
+          attributes: {
+            "mfa-required": true,
+            "mfa-challenge-token": challengeToken,
+          },
+        },
+      };
     }
 
-    const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
-    const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
-    const refreshToken = opaqueToken("refresh");
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      await t.insert(apiTokens).values({
-        id: tokenId,
-        token: tokenHash(tokenStr),
-        userId: user.id,
-        description: "Browser session access token",
-        expiresAt: accessExpiresAt,
-        createdAt,
-      });
-      await t.insert(refreshSessions).values({
-        id: crypto.randomUUID(),
-        familyId: crypto.randomUUID(),
-        tokenHash: tokenHash(refreshToken),
-        userId: user.id,
-        accessTokenId: tokenId,
-        expiresAt: refreshExpiresAt,
-        createdAt,
-      });
-    });
-    setRefreshCookie(set, request, refreshToken, refreshExpiresAt);
-    return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
+    return issueLoginSession(user, browserSession, set, request);
+  })
+  .post("/api/v2/users/login/mfa", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
+    let payload: DataPayload | undefined;
+    if (typeof body === "string") {
+      try {
+        payload = JSON.parse(body) as DataPayload;
+      } catch {
+        payload = undefined;
+      }
+    } else if (body !== null && typeof body === "object") {
+      payload = body as DataPayload;
+    }
+    const attrs = payload?.data?.attributes ?? {};
+    const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
+    const code = typeof attrs.code === "string" ? attrs.code : "";
+    const browserSession = attrs["browser-session"] === true;
+
+    if (challengeToken === "" || code === "") {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
+    }
+
+    const challenge = mfaChallenges.get(challengeToken);
+    if (challenge === undefined || challenge.expiresAt < Date.now()) {
+      mfaChallenges.delete(challengeToken);
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };
+    }
+
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
+    if (mfa === undefined || mfa.enabled !== true || !verifyTotp(mfa.secret, code)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
+    if (user === undefined) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
+    }
+
+    mfaChallenges.delete(challengeToken);
+    return issueLoginSession(user, browserSession, set, request);
   })
   .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
     const presentedToken = refreshCookie(request);
@@ -664,4 +744,87 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
     });
     return { data: userResource({ ...user, mustChangePassword: false }) };
+  })
+
+  // ---- Multi-factor authentication (TOTP) ----
+  .get("/api/v2/account/mfa", async ({ user, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    return {
+      data: {
+        type: "mfa",
+        attributes: { enabled: mfa !== undefined && mfa.enabled === true },
+      },
+    };
+  })
+  .post("/api/v2/account/mfa/enroll", async ({ user, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const existing = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    if (existing !== undefined && existing.enabled === true) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "MFA is already enabled" }] };
+    }
+
+    const secret = generateTotpSecret();
+    const account = user.email ?? user.username;
+    const otpauth = otpauthUrl(secret, account);
+    // Store as pending (enabled=false); verify flips it on after a valid code.
+    await db.insert(user2FA).values({ userId: user.id, secret, enabled: false }).onConflictDoUpdate({
+      target: user2FA.userId,
+      set: { secret, enabled: false },
+    });
+    return {
+      data: {
+        type: "mfa",
+        attributes: { secret, "otpauth-url": otpauth },
+      },
+    };
+  })
+  .post("/api/v2/account/mfa/verify", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = extractAttrs(body) ?? {};
+    const code = typeof attrs.code === "string" ? attrs.code : "";
+    if (code === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
+    }
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    if (mfa === undefined || !verifyTotp(mfa.secret, code)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
+    return { data: { type: "mfa", attributes: { enabled: true } } };
+  })
+  .delete("/api/v2/account/mfa", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const attrs = extractAttrs(body) ?? {};
+    const code = typeof attrs.code === "string" ? attrs.code : "";
+    if (code === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
+    }
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    if (mfa === undefined || mfa.enabled !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
+    }
+    if (!verifyTotp(mfa.secret, code)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    await db.delete(user2FA).where(eq(user2FA.userId, user.id));
+    return { data: { type: "mfa", attributes: { enabled: false } } };
   });
