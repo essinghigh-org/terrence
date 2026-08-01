@@ -131,7 +131,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
+      <CardHeader variant="section" className="flex flex-row items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <CardTitle>Tag management</CardTitle>
           <CardDescription>

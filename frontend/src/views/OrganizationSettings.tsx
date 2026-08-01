@@ -571,10 +571,10 @@ export function OrganizationSettings(): React.JSX.Element {
           {activeTab === "general" && (
             <>
               <Card className="border-gray-200 shadow-sm rounded-md">
-                <CardHeader className="border-b border-gray-100 bg-gray-50/50 py-4 px-5">
-                  <CardTitle className="text-base font-semibold text-gray-900">General settings</CardTitle>
+                <CardHeader variant="section">
+                  <CardTitle>General settings</CardTitle>
                 </CardHeader>
-                <CardContent className="p-5">
+                <CardContent>
                   <form onSubmit={saveSettings} className="space-y-6 max-w-lg">
                     {!canUpdateOrganization && (
                       <p className="text-sm text-gray-500">Organization owner access is required to change these settings.</p>
@@ -737,10 +737,10 @@ export function OrganizationSettings(): React.JSX.Element {
 
               {/* Danger Zone */}
               <Card className="border-red-200 shadow-sm rounded-md overflow-hidden">
-                <CardHeader className="bg-red-50/50 py-4 px-5 border-b border-red-100">
-                  <CardTitle className="text-base font-semibold text-red-800">Danger Zone</CardTitle>
+                <CardHeader variant="danger">
+                  <CardTitle>Danger Zone</CardTitle>
                 </CardHeader>
-                <CardContent className="p-5">
+                <CardContent>
                   <p className="text-sm text-gray-700 mb-4">
                     Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
                   </p>
@@ -756,11 +756,11 @@ export function OrganizationSettings(): React.JSX.Element {
               </Card>
 
               <Card className="border-gray-200 shadow-sm rounded-md">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base"><History className="size-4" />Organization data retention</CardTitle>
+                <CardHeader variant="section">
+                  <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
                   <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
                 </CardHeader>
-                <form onSubmit={saveRetention}>
+                <form onSubmit={saveRetention} className="contents">
                   <CardContent>
                     {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
                       <FieldGroup className="grid gap-4 sm:grid-cols-2">
@@ -777,11 +777,11 @@ export function OrganizationSettings(): React.JSX.Element {
 
           {activeTab === "roles" && (
             <Card className="border-gray-200 shadow-sm rounded-md">
-              <CardHeader className="border-b border-gray-100 bg-gray-50/50 py-4 px-5">
-                <CardTitle className="text-base font-semibold text-gray-900">Reusable roles</CardTitle>
+              <CardHeader variant="section">
+                <CardTitle>Reusable roles</CardTitle>
                 <CardDescription>Create named permission bundles that can be assigned to organization members.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-5 p-5">
+              <CardContent className="space-y-5">
                 <form onSubmit={saveRole} className="space-y-3 rounded-md border p-4">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Input aria-label="Role name" placeholder="Role name" value={newRoleName} onChange={(event): void => { setNewRoleName(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
@@ -813,7 +813,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
           {activeTab === "users" && (
             <Card>
-              <CardHeader>
+              <CardHeader variant="section">
                 <CardTitle>Users</CardTitle>
                 <CardDescription>Manage organization memberships and invite new users.</CardDescription>
               </CardHeader>
@@ -906,9 +906,9 @@ export function OrganizationSettings(): React.JSX.Element {
 
           {activeTab === "teams" && (
             <Card className="border-gray-200 shadow-sm rounded-md">
-              <CardHeader className="border-b border-gray-100 bg-gray-50/50 py-4 px-5">
-                <CardTitle className="text-base font-semibold text-gray-900">Teams</CardTitle>
-                <CardDescription className="text-[13px]">Manage access across the organization.</CardDescription>
+              <CardHeader variant="section">
+                <CardTitle>Teams</CardTitle>
+                <CardDescription>Manage access across the organization.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 <div className="p-5 border-b border-gray-100">

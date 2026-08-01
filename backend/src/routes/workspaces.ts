@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
+import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, like, notInArray } from "drizzle-orm";
 import {
   workspaceResource,
@@ -44,6 +44,89 @@ type WsItem = DeepReadonly<typeof workspaces.$inferSelect>;
 type TagItem = DeepReadonly<typeof workspaceTags.$inferSelect>;
 type VarItem = DeepReadonly<typeof workspaceVariables.$inferSelect>;
 type WorkspaceVcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
+
+const MAX_README_BYTES = 256 * 1024;
+const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
+const README_ARCHIVE_TIMEOUT_MS = 5_000;
+
+// Bound tar output so malformed archives cannot make the API buffer unbounded data.
+async function readProcessOutput(process: Readonly<{
+  exited: Promise<number>;
+  stdout: Readonly<ReadableStream<Uint8Array>>;
+  kill: (exitCode?: number | NodeJS.Signals) => void;
+}>, maxBytes: number): Promise<string | null> {
+  const read = async (): Promise<string | null> => {
+    const reader = process.stdout.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let output = "";
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        bytes += result.value.byteLength;
+        if (bytes > maxBytes) {
+          process.kill("SIGKILL");
+          return null;
+        }
+        output += decoder.decode(result.value, { stream: true });
+      }
+      output += decoder.decode();
+      return await process.exited === 0 ? output : null;
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const readPromise = read();
+  const timeoutPromise = new Promise<null>((resolve): void => {
+    timer = setTimeout((): void => {
+      process.kill("SIGKILL");
+      resolve(null);
+    }, README_ARCHIVE_TIMEOUT_MS);
+  });
+  try {
+    const result = await Promise.race([readPromise, timeoutPromise]);
+    if (result === null) {
+      process.kill("SIGKILL");
+      await Promise.allSettled([readPromise, process.exited]);
+    }
+    return result;
+  } catch {
+    process.kill("SIGKILL");
+    await Promise.allSettled([readPromise, process.exited]);
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function readmeFromArchive(archivePath: string): Promise<string | null> {
+  const listing = await readProcessOutput(
+    Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "ignore" }),
+    MAX_ARCHIVE_METADATA_BYTES,
+  );
+  if (listing === null) return null;
+  const member = listing
+    .split("\n")
+    .map((entry: string): string => entry.trim())
+    .find((entry: string): boolean => entry === "README.md" || entry.endsWith("/README.md"));
+  if (member === undefined) return null;
+
+  const details = await readProcessOutput(
+    Bun.spawn(["tar", "-tvzf", archivePath], { stdout: "pipe", stderr: "ignore" }),
+    MAX_ARCHIVE_METADATA_BYTES,
+  );
+  if (details === null) return null;
+  const detail = details.split("\n").find((entry: string): boolean => entry.trimEnd().endsWith(` ${member}`));
+  if (detail?.trimStart().charAt(0) !== "-") return null;
+
+  return readProcessOutput(
+    Bun.spawn(["tar", "-xOzf", archivePath, "--", member], { stdout: "pipe", stderr: "ignore" }),
+    MAX_README_BYTES,
+  );
+}
 
 async function resourcePermissions(
   workspace: WsItem,
@@ -654,6 +737,43 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const total = resources.length;
     const paginated = resources.slice((number - 1) * size, number * size);
     return { data: paginated, ...pagination(request, number, size, total) };
+  })
+  .get("/api/v2/workspaces/:workspace_id/readme", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const latestRun = await db.query.runs.findFirst({
+      where: eq(runs.workspaceId, workspaceId),
+      orderBy: [desc(runs.createdAt)],
+    });
+    const configurationVersionId = latestRun?.configurationVersionId;
+    if (latestRun === undefined || configurationVersionId === null || configurationVersionId === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const configuration = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, configurationVersionId),
+    });
+    if (configuration?.archivePath === null || configuration?.archivePath === undefined || !(await Bun.file(configuration.archivePath).exists())) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const content = await readmeFromArchive(configuration.archivePath);
+    if (content === null) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return {
+      data: {
+        id: `readme-${latestRun.id}`,
+        type: "readmes",
+        attributes: {
+          content,
+          "run-id": latestRun.id,
+          "created-at": new Date(latestRun.createdAt).toISOString(),
+        },
+      },
+    };
   })
   .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

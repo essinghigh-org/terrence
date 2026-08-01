@@ -363,8 +363,8 @@ export function Workspaces(): React.JSX.Element {
         </div>
       )}
 
-      <div className="rounded-lg border">
-        <Table>
+      <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <Table className="min-w-[64rem]">
           <TableHeader>
             <TableRow>
               <TableHead>Workspace</TableHead>
@@ -413,11 +413,11 @@ export function Workspaces(): React.JSX.Element {
                     {workspace.attributes.locked === true && <Badge variant="outline">Locked</Badge>}
                   </div>
                 </TableCell>
-                <TableCell>{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
                 <TableCell>
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex max-w-56 flex-wrap gap-1">
                     {(workspace.attributes["tag-names"] ?? []).map((tag): React.JSX.Element => (
-                      <Badge key={tag} variant="secondary">{tag}</Badge>
+                      <Badge key={tag} variant="secondary" className="max-w-48 truncate">{tag}</Badge>
                     ))}
                     {(workspace.attributes["tag-names"] ?? []).length === 0 && <span className="text-muted-foreground">None</span>}
                   </div>
@@ -438,7 +438,7 @@ export function Workspaces(): React.JSX.Element {
                   {latestRuns.get(workspace.id) === undefined ? (
                     <span className="text-muted-foreground">—</span>
                   ) : (
-                    <div className="max-w-56">
+                    <div className="max-w-64">
                       <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
                       {runDate(latestRuns.get(workspace.id)) !== "" && (
                         <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id))}</p>

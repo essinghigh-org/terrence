@@ -58,7 +58,7 @@ export function StatusBadge({
       <Badge
         variant="outline"
         className={cn(
-          "inline-flex items-center gap-1.5 border-primary/40 bg-primary/10 text-primary font-medium",
+          "inline-flex items-center gap-1.5 border-primary/25 bg-primary/10 text-primary font-medium",
           className,
         )}
       >
@@ -78,11 +78,11 @@ export function StatusBadge({
       <Badge
         variant="secondary"
         className={cn(
-          "inline-flex items-center gap-1.5 border-emerald-500/30 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 font-medium",
+          "inline-flex items-center gap-1.5 border-success/25 bg-success/10 text-success font-medium",
           className,
         )}
       >
-        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <CheckCircle2 className="size-3.5 shrink-0 text-success" />
         <span>{label}</span>
       </Badge>
     );
@@ -94,11 +94,11 @@ export function StatusBadge({
       <Badge
         variant="secondary"
         className={cn(
-          "inline-flex items-center gap-1.5 border-amber-500/30 bg-amber-50 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300 font-medium",
+          "inline-flex items-center gap-1.5 border-warning/30 bg-warning/10 text-warning font-medium",
           className,
         )}
       >
-        <PauseCircle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+        <PauseCircle className="size-3.5 shrink-0 text-warning" />
         <span>{label}</span>
       </Badge>
     );

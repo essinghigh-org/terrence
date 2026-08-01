@@ -11,6 +11,7 @@ type DeepReadonly<T> = T extends null | undefined
   : T;
 
 type CardProps = DeepReadonly<React.ComponentProps<"div">> & Readonly<{ size?: "default" | "sm" }>;
+type CardHeaderProps = DeepReadonly<React.ComponentProps<"div">> & Readonly<{ variant?: "default" | "section" | "danger" }>;
 
 function Card({
   className,
@@ -30,12 +31,15 @@ function Card({
   );
 }
 
-function CardHeader({ className, ...props }: DeepReadonly<React.ComponentProps<"div">>): React.JSX.Element {
+function CardHeader({ className, variant = "default", ...props }: CardHeaderProps): React.JSX.Element {
   return (
     <div
       data-slot="card-header"
+      data-variant={variant}
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
+        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
+        variant === "section" && "-mt-(--card-spacing) border-b bg-muted pt-(--card-spacing)",
+        variant === "danger" && "-mt-(--card-spacing) border-b border-destructive/30 bg-destructive/15 pt-(--card-spacing) text-destructive",
         className
       )}
       {...(props as React.ComponentProps<"div">)}
@@ -94,7 +98,7 @@ function CardFooter({ className, ...props }: DeepReadonly<React.ComponentProps<"
     <div
       data-slot="card-footer"
       className={cn(
-        "flex items-center rounded-b-xl border-t bg-muted/50 p-(--card-spacing)",
+        "flex items-center border-t bg-muted/50 p-(--card-spacing)",
         className
       )}
       {...(props as React.ComponentProps<"div">)}

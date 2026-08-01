@@ -106,7 +106,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
+      <CardHeader variant="section" className="flex flex-row items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <CardTitle>SSH Keys</CardTitle>
           <CardDescription>

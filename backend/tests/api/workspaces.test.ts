@@ -1,4 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
+import { mkdtemp, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { eq } from "drizzle-orm";
@@ -95,5 +98,34 @@ describe("TFE API v2 - Workspaces", () => {
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(data.data.attributes.name).toBe("k8s-cluster");
+  });
+
+  it("should return the README from the most recent run configuration", async () => {
+    const { configurationVersions, runs, workspaces } = await import("../../src/db/schema");
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, "k8s-cluster") });
+    expect(workspace).toBeDefined();
+    const directory = await mkdtemp(join(tmpdir(), "terrence-readme-"));
+    const archivePath = join(directory, "configuration.tar.gz");
+    await writeFile(join(directory, "README.md"), "# Workspace\n\nManaged infrastructure.");
+    const archive = Bun.spawn(["tar", "-czf", archivePath, "-C", directory, "README.md"]);
+    expect(await archive.exited).toBe(0);
+    const configurationVersionId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    await db.insert(configurationVersions).values({ id: configurationVersionId, workspaceId: workspace?.id ?? "", status: "uploaded", archivePath });
+    await db.insert(runs).values({ id: runId, workspaceId: workspace?.id ?? "", configurationVersionId, status: "applied", createdAt: Date.now() + 1 });
+
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/readme", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.data.attributes.content).toContain("Managed infrastructure.");
+      expect(body.data.attributes["run-id"]).toBe(runId);
+    } finally {
+      await db.delete(runs).where(eq(runs.id, runId));
+      await db.delete(configurationVersions).where(eq(configurationVersions.id, configurationVersionId));
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

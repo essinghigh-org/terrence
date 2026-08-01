@@ -54,7 +54,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   };
 
   return <Card>
-    <CardHeader><CardTitle>IP allowlists</CardTitle><CardDescription>Manage organization network ranges used by policy and ingress controls.</CardDescription></CardHeader>
+    <CardHeader variant="section"><CardTitle>IP allowlists</CardTitle><CardDescription>Manage organization network ranges used by policy and ingress controls.</CardDescription></CardHeader>
     <CardContent className="space-y-5">
       <form onSubmit={createList} className="flex gap-2"><Input aria-label="New CIDR list name" value={listName} onInput={(event) => setListName(event.currentTarget.value)} placeholder="New range list name" /><Button type="submit" disabled={saving || listName.trim() === ""}>Create list</Button></form>
       {loading ? <p className="text-sm text-muted-foreground">Loading CIDR lists…</p> : lists.length === 0 ? <p className="text-sm text-muted-foreground">No CIDR range lists yet.</p> : <>
