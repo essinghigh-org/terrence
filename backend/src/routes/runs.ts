@@ -102,6 +102,16 @@ function gravatarUrl(email: string | null | undefined): string {
   return `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
 }
 
+function actionComment(body: unknown): string {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const attributes = typeof data?.attributes === "object" && data.attributes !== null
+    ? data.attributes as Record<string, unknown>
+    : {};
+  const value = payload.comment ?? attributes.comment;
+  return typeof value === "string" ? value.trim() : "";
+}
+
 async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Record<string, unknown>[]> {
   const ids = [...new Set(runList.map((r: RunItem): string | null => r.createdBy).filter((id): id is string => id !== null))];
   if (ids.length === 0) return [];
@@ -478,11 +488,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "confirmed",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const commentVal = payload.comment ?? attrs.comment;
-    const commentStr = typeof commentVal === "string" ? commentVal : "";
+    const commentStr = actionComment(body);
     if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
     if (agentPoolId !== null) {
       const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
@@ -496,7 +502,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     return { data: { id: authorized.run.id, type: "runs", attributes: { status: "applying" } } };
   })
-  .post("/api/v2/runs/:run_id/actions/discard", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -504,6 +510,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
+    const commentStr = actionComment(body);
+    if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
     await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
       fromStatus: authorized.run.status,

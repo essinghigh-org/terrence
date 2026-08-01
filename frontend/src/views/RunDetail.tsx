@@ -33,6 +33,8 @@ type RunActions = {
   "is-force-cancelable"?: boolean;
 };
 
+type ConfirmationAction = "apply" | "discard";
+
 type RunPermissions = {
   "can-apply"?: boolean;
   "can-cancel"?: boolean;
@@ -472,6 +474,8 @@ export function RunDetail({
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [comments, setComments] = useState<RunComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
+  const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
+  const [actionComment, setActionComment] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
@@ -624,6 +628,8 @@ export function RunDetail({
       setCreatorUsername("");
       setCreatorAvatarUrl("");
       setCommentBody("");
+      setConfirmationAction(null);
+      setActionComment("");
       setLoading(true);
     }
     setLoadError("");
@@ -648,19 +654,52 @@ export function RunDetail({
   async function performRunAction(
     action: "apply" | "cancel" | "discard" | "force-cancel" | "override-policy",
     successTitle: string,
-  ): Promise<void> {
+    comment = "",
+  ): Promise<boolean> {
     setPendingAction(action);
     try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, { method: "POST" });
+      const trimmedComment = comment.trim();
+      await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, {
+        method: "POST",
+        ...(trimmedComment === "" ? {} : {
+          body: JSON.stringify({
+            data: {
+              type: "runs",
+              attributes: { comment: trimmedComment },
+            },
+          }),
+        }),
+      });
       toast.add({ title: successTitle, type: "success" });
       setRefreshVersion((value: number): number => value + 1);
+      return true;
     } catch (error: unknown) {
       toast.add({
         title: error instanceof Error ? error.message : `Failed to ${action.replace("-", " ")} run`,
         type: "error",
       });
+      return false;
     } finally {
       setPendingAction("");
+    }
+  }
+
+  function beginRunConfirmation(action: ConfirmationAction): void {
+    setConfirmationAction(action);
+    setActionComment("");
+  }
+
+  async function confirmRunAction(): Promise<void> {
+    if (confirmationAction === null) return;
+    const action = confirmationAction;
+    const succeeded = await performRunAction(
+      action,
+      action === "apply" ? "Run queued for apply" : "Run discarded",
+      actionComment,
+    );
+    if (succeeded) {
+      setConfirmationAction(null);
+      setActionComment("");
     }
   }
 
@@ -1278,50 +1317,99 @@ export function RunDetail({
               aria-labelledby="run-confirmation-heading"
               className="mx-auto w-full max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-5 py-4 shadow-sm"
             >
-              <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
-                Please review the planned changes before continuing
-              </h2>
-              <div className="mt-3">
-                <ResourceCounts
-                  additions={planCounts["resource-additions"]}
-                  changes={planCounts["resource-changes"]}
-                  destructions={planCounts["resource-destructions"]}
-                  imports={planImportCount}
-                  status={planStatus}
-                />
-              </div>
-              <p className="mt-3 text-sm text-amber-900">
-                Confirming will execute the plan shown above against this workspace.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {canApply && (
-                  <Button
-                    className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
-                    disabled={pendingAction !== ""}
-                    onClick={(): void => { void performRunAction("apply", "Run queued for apply"); }}
-                  >
-                    Confirm &amp; Apply
-                  </Button>
-                )}
-                {canDiscard && (
-                  <Button
-                    variant="outline"
-                    disabled={pendingAction !== ""}
-                    onClick={(): void => { void performRunAction("discard", "Run discarded"); }}
-                  >
-                    Discard run
-                  </Button>
-                )}
-                {canComment && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={(): void => { document.getElementById("run-comment")?.focus(); }}
-                  >
-                    Add comment
-                  </Button>
-                )}
-              </div>
+              {confirmationAction === null ? (
+                <>
+                  <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                    Please review the planned changes before continuing
+                  </h2>
+                  <div className="mt-3">
+                    <ResourceCounts
+                      additions={planCounts["resource-additions"]}
+                      changes={planCounts["resource-changes"]}
+                      destructions={planCounts["resource-destructions"]}
+                      imports={planImportCount}
+                      status={planStatus}
+                    />
+                  </div>
+                  <p className="mt-3 text-sm text-amber-900">
+                    Choose an action to review it, then confirm it in the next step.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {canApply && (
+                      <Button
+                        className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
+                        disabled={pendingAction !== ""}
+                        onClick={(): void => { beginRunConfirmation("apply"); }}
+                      >
+                        Review &amp; apply
+                      </Button>
+                    )}
+                    {canDiscard && (
+                      <Button
+                        variant="outline"
+                        disabled={pendingAction !== ""}
+                        onClick={(): void => { beginRunConfirmation("discard"); }}
+                      >
+                        Review &amp; discard
+                      </Button>
+                    )}
+                    {canComment && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={(): void => { document.getElementById("run-comment")?.focus(); }}
+                      >
+                        Add comment
+                      </Button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                    {confirmationAction === "apply" ? "Confirm apply" : "Confirm discard"}
+                  </h2>
+                  <p className="mt-2 text-sm text-amber-900">
+                    {confirmationAction === "apply"
+                      ? "This will execute the planned changes against this workspace."
+                      : "This will discard the plan without changing the workspace."}
+                  </p>
+                  {canComment && (
+                    <div className="mt-4">
+                      <label htmlFor="run-action-comment" className="mb-2 block text-sm font-medium text-amber-950">
+                        Optional comment
+                      </label>
+                      <textarea
+                        id="run-action-comment"
+                        rows={3}
+                        autoFocus
+                        value={actionComment}
+                        onInput={(event): void => { setActionComment(event.currentTarget.value); }}
+                        className="w-full resize-y rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Add context for this decision"
+                      />
+                    </div>
+                  )}
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pendingAction !== ""}
+                      onClick={(): void => { setConfirmationAction(null); setActionComment(""); }}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={confirmationAction === "discard" ? "destructive" : "default"}
+                      disabled={pendingAction !== ""}
+                      onClick={(): void => { void confirmRunAction(); }}
+                    >
+                      {confirmationAction === "apply" ? "Confirm & apply" : "Confirm discard"}
+                    </Button>
+                  </div>
+                </>
+              )}
             </section>
           )}
 

@@ -31,6 +31,7 @@ afterEach((): void => {
 
 test("separates phase logs and only renders backend-authorized run actions", async () => {
   let applied = false;
+  let applyBody: unknown;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -48,6 +49,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
       });
     }
     if (url === "/api/v2/runs/run-polished/actions/apply" && init?.method === "POST") {
+      applyBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
       applied = true;
       return new Response(null, { status: 202 });
     }
@@ -135,6 +137,14 @@ test("separates phase logs and only renders backend-authorized run actions", asy
           { address: "terraform_data.second" },
         ],
         resource_changes: [{
+          address: "aws_vpc.main",
+          type: "aws_vpc",
+          change: {
+            actions: ["create"],
+            before: null,
+            after: { cidr_block: "10.0.0.0/16" },
+          },
+        }, {
           address: "aws_instance.web",
           type: "aws_instance",
           change: {
@@ -144,6 +154,14 @@ test("separates phase logs and only renders backend-authorized run actions", asy
             importing: { id: "i-web" },
           },
         }],
+        configuration: {
+          root_module: {
+            resources: [{ address: "aws_vpc.main", expressions: {} }, {
+              address: "aws_instance.web",
+              expressions: { vpc_id: { references: ["aws_vpc.main.id"] } },
+            }],
+          },
+        },
       });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
@@ -191,7 +209,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   );
 
   await waitFor((): void => {
-    expect(view.getByText("aws_instance.web")).toBeTruthy();
+    expect(view.getByText("aws_instance.web", { selector: "code" })).toBeTruthy();
   });
 
   const planSection = view.getByRole("heading", { name: "Plan finished" }).closest("details");
@@ -221,7 +239,9 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     expect(within(applySection as HTMLElement).getByText(/2 to invoke/)).toBeTruthy();
   });
 
-  expect(view.getByRole("button", { name: "Confirm & Apply" })).toBeTruthy();
+  expect(view.getByText(/Dependency graph/)).toBeTruthy();
+  expect(view.getByRole("img", { name: "Terraform resource dependency graph" })).toBeTruthy();
+  expect(view.getByRole("button", { name: "Review & apply" })).toBeTruthy();
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");
   expect(view.getAllByRole("navigation", { name: "Breadcrumb" })).toHaveLength(1);
@@ -238,9 +258,19 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(within(commentsSection as HTMLElement).getByText("essinghigh")).toBeTruthy();
   expect(within(commentsSection as HTMLElement).getByText("Approved for production")).toBeTruthy();
 
-  fireEvent.click(view.getByRole("button", { name: "Confirm & Apply" }));
+  fireEvent.click(view.getByRole("button", { name: "Review & apply" }));
+  expect(view.getByRole("heading", { name: "Confirm apply" })).toBeTruthy();
+  const actionComment = view.getByLabelText("Optional comment") as HTMLTextAreaElement;
+  fireEvent.input(actionComment, {
+    target: { value: "Approved after reviewing the dependency graph" },
+  });
+  expect(actionComment.value).toBe("Approved after reviewing the dependency graph");
+  fireEvent.click(view.getByRole("button", { name: "Confirm & apply" }));
   await waitFor((): void => {
     expect(view.getByRole("heading", { name: "Apply finished" })).toBeTruthy();
+  });
+  expect(applyBody).toMatchObject({
+    data: { attributes: { comment: "Approved after reviewing the dependency graph" } },
   });
   const finishedApply = view.getByRole("heading", { name: "Apply finished" }).closest("details");
   expect(within(finishedApply as HTMLElement).getByText(/2 invoked/)).toBeTruthy();

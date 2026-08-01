@@ -162,8 +162,18 @@ describe("TFE runs contract", () => {
   });
 
   it("discards and then destroys a run", async () => {
-    const discard = await request(`/api/v2/runs/${runId}/actions/discard`, { method: "POST", headers });
+    const discard = await request(`/api/v2/runs/${runId}/actions/discard`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ data: { type: "runs", attributes: { comment: "Discarded after review" } } }),
+    });
     expect(discard.status).toBe(200);
+    const comments = await request(`/api/v2/runs/${runId}/comments`, { headers });
+    expect((await comments.json()).data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        attributes: expect.objectContaining({ body: "Discarded after review" }),
+      }),
+    ]));
     await expectNoContent(await request(`/api/v2/runs/${runId}`, { method: "DELETE", headers }));
     await expectErrorResponse(await request(`/api/v2/runs/${runId}`, { headers }), 404);
   });
