@@ -553,7 +553,7 @@ export function WorkspaceDetail({
                           : projectName === ""
                             ? "Project unavailable"
                             : (
-                              <Link to={`${orgPath}/projects`} className="text-primary hover:underline">
+                              <Link to={`${orgPath}/projects/${encodeURIComponent(projectId)}`} className="text-primary hover:underline">
                                 {projectName}
                               </Link>
                             )}

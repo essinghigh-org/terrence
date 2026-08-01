@@ -9,6 +9,7 @@ import { VariableSets } from "./views/VariableSets";
 import { OrganizationSettings } from "./views/OrganizationSettings";
 import { AccountSettings } from "./views/AccountSettings";
 import { Projects } from "./views/Projects";
+import { ProjectDetail } from "./views/ProjectDetail";
 import { Registry } from "./views/Registry";
 import { VcsIntegrations } from "./views/VcsIntegrations";
 import { AgentPools } from "./views/AgentPools";
@@ -106,6 +107,9 @@ function App(): JSX.Element {
             <Route path=":orgName/registry" element={<Registry />} />
             <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
             <Route path=":orgName/projects" element={<Projects />} />
+            <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
+            <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
+            <Route path=":orgName/projects/:projectId/settings" element={<ProjectDetail section="settings" />} />
             <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
             <Route path=":orgName/settings/agents" element={<AgentPools />} />
             <Route path=":orgName/variable-sets" element={<VariableSets />} />

@@ -422,7 +422,18 @@ export function Workspaces(): React.JSX.Element {
                     {(workspace.attributes["tag-names"] ?? []).length === 0 && <span className="text-muted-foreground">None</span>}
                   </div>
                 </TableCell>
-                <TableCell>{projectName(workspace)}</TableCell>
+                <TableCell>
+                  {workspace.relationships?.project?.data?.id === undefined ? (
+                    projectName(workspace)
+                  ) : (
+                    <Link
+                      to={`/app/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(workspace.relationships.project.data.id)}`}
+                      className="text-primary hover:underline"
+                    >
+                      {projectName(workspace)}
+                    </Link>
+                  )}
+                </TableCell>
                 <TableCell>
                   {latestRuns.get(workspace.id) === undefined ? (
                     <span className="text-muted-foreground">—</span>

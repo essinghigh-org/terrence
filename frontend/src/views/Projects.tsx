@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { FolderKanban, Layers, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -245,7 +245,14 @@ export function Projects(): React.JSX.Element {
               <TableBody>
                 {projects.map((project): React.JSX.Element => (
                   <TableRow key={project.id}>
-                    <TableCell className="font-medium">{project.attributes.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(project.id)}`}
+                        className="text-primary hover:underline"
+                      >
+                        {project.attributes.name}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{project.attributes.description ?? "—"}</TableCell>
                     <TableCell><Badge variant="secondary">{workspaceCount(project.id)}</Badge></TableCell>
                     {canManageProjects && <TableCell>

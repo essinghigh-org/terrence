@@ -528,7 +528,7 @@ test("renders controlled workspace sections with current resources and project c
   await waitFor((): void => {
     expect(view.getByText("aws_instance.web")).toBeTruthy();
     expect(view.getByRole("link", { name: "Platform foundation" }).getAttribute("href"))
-      .toBe("/app/acme/projects");
+      .toBe("/app/acme/projects/prj-1");
   });
 });
 
