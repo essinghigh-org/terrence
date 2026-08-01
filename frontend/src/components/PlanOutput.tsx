@@ -7,7 +7,6 @@ import {
   Copy,
   Trash2,
 } from "lucide-react";
-import { DependencyGraph } from "./DependencyGraph";
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 
@@ -842,14 +841,6 @@ export function PlanOutput({
           )}
         </div>
       )}
-
-      <DependencyGraph
-        configuration={planJson.configuration}
-        changes={changedResources.map((resource): { address: string; operation: string } => ({
-          address: resource.address,
-          operation: operationForResource(resource),
-        }))}
-      />
 
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-gray-200 px-4 py-3">
         <div className="flex flex-1 flex-wrap gap-2">

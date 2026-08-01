@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DependencyGraph, type DependencyGraphResource } from "@/components/DependencyGraph";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -44,7 +45,11 @@ type Readme = Readonly<{
   "created-at"?: string;
 }>;
 
-type Tab = "outputs" | "resources";
+type Tab = "outputs" | "resources" | "graph";
+
+type DependencyGraphState = Readonly<{
+  nodes: readonly DependencyGraphResource[];
+}>;
 
 type ReadmeBlock =
   | Readonly<{ kind: "heading"; level: 1 | 2 | 3; text: string }>
@@ -225,21 +230,26 @@ export function WorkspaceResources({
   const [tab, setTab] = useState<Tab>("resources");
   const [resources, setResources] = useState<Resource[]>([]);
   const [outputs, setOutputs] = useState<Output[]>([]);
+  const [dependencyGraph, setDependencyGraph] = useState<DependencyGraphState | null>(null);
   const [readme, setReadme] = useState<Readme | null>(null);
   const [search, setSearch] = useState("");
-  const [pages, setPages] = useState<Readonly<Record<Tab, number>>>({ resources: 1, outputs: 1 });
+  const [pages, setPages] = useState<Readonly<Record<Tab, number>>>({ resources: 1, outputs: 1, graph: 1 });
   const [loading, setLoading] = useState(true);
   const [readmeLoading, setReadmeLoading] = useState(true);
+  const [dependencyGraphLoading, setDependencyGraphLoading] = useState(true);
   const [resourceError, setResourceError] = useState("");
   const [outputError, setOutputError] = useState("");
   const [readmeError, setReadmeError] = useState("");
+  const [dependencyGraphError, setDependencyGraphError] = useState("");
 
   const load = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     setLoading(true);
     setReadmeLoading(true);
+    setDependencyGraphLoading(true);
     setResourceError("");
     setOutputError("");
     setReadmeError("");
+    setDependencyGraphError("");
     const stateResults = Promise.allSettled([
       fetchAllApiPages<Resource>(
         `/workspaces/${encodeURIComponent(workspaceId)}/resources?page[size]=100`,
@@ -247,6 +257,10 @@ export function WorkspaceResources({
       ),
       fetchApi(
         `/workspaces/${encodeURIComponent(workspaceId)}/current-state-version-outputs`,
+        signal === undefined ? {} : { signal },
+      ),
+      fetchApi(
+        `/workspaces/${encodeURIComponent(workspaceId)}/dependency-graph`,
         signal === undefined ? {} : { signal },
       ),
     ]);
@@ -257,7 +271,7 @@ export function WorkspaceResources({
       (value: unknown): Readonly<{ status: "fulfilled"; value: unknown }> => ({ status: "fulfilled", value }),
       (reason: unknown): Readonly<{ status: "rejected"; reason: unknown }> => ({ status: "rejected", reason }),
     );
-    const [resourceResult, outputResult] = await stateResults;
+    const [resourceResult, outputResult, dependencyGraphResult] = await stateResults;
     if (isAborted(signal)) return;
     if (resourceResult.status === "fulfilled") {
       setResources(resourceResult.value);
@@ -272,7 +286,24 @@ export function WorkspaceResources({
     } else {
       setOutputError(outputResult.reason instanceof Error ? outputResult.reason.message : "Could not load outputs");
     }
+    if (dependencyGraphResult.status === "fulfilled") {
+      const attributes = (dependencyGraphResult.value as { data?: { attributes?: { nodes?: unknown } } }).data?.attributes;
+      const nodes = Array.isArray(attributes?.nodes)
+        ? attributes.nodes.flatMap((value): DependencyGraphResource[] => {
+            if (value === null || typeof value !== "object") return [];
+            const node = value as { address?: unknown; dependencies?: unknown };
+            if (typeof node.address !== "string" || !Array.isArray(node.dependencies)) return [];
+            return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => typeof dependency === "string") }];
+          })
+        : [];
+      setDependencyGraph({ nodes });
+    } else if (dependencyGraphResult.reason instanceof ApiError && dependencyGraphResult.reason.status === 404) {
+      setDependencyGraph(null);
+    } else {
+      setDependencyGraphError(dependencyGraphResult.reason instanceof Error ? dependencyGraphResult.reason.message : "Could not load dependency graph");
+    }
     setLoading(false);
+    setDependencyGraphLoading(false);
 
     const resolvedReadme = await readmeResult;
     if (isAborted(signal)) return;
@@ -308,12 +339,12 @@ export function WorkspaceResources({
     (): Output[] => outputs.filter((output): boolean => needle === "" || output.attributes.name.toLowerCase().includes(needle)),
     [needle, outputs],
   );
-  const activeTotal = tab === "resources" ? visibleResources.length : visibleOutputs.length;
+  const activeTotal = tab === "resources" ? visibleResources.length : tab === "outputs" ? visibleOutputs.length : 0;
   const pageCount = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const page = Math.min(pages[tab], pageCount);
   const resourcePage = visibleResources.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const outputPage = visibleOutputs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const activeError = tab === "resources" ? resourceError : outputError;
+  const activeError = tab === "resources" ? resourceError : tab === "outputs" ? outputError : dependencyGraphError;
 
   useEffect((): void => {
     if (pages[tab] > pageCount) setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: pageCount }));
@@ -331,7 +362,7 @@ export function WorkspaceResources({
           <p className="mt-1 text-sm text-muted-foreground">Browse resources, outputs, and the README from the most recent run.</p>
         </div>
         <div role="tablist" aria-label="Current state views" className="flex gap-1 rounded-lg bg-muted p-1">
-          {(["resources", "outputs"] as const).map((value): React.JSX.Element => (
+          {(["resources", "outputs", "graph"] as const).map((value): React.JSX.Element => (
             <button
               key={value}
               type="button"
@@ -343,13 +374,13 @@ export function WorkspaceResources({
                 tab === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {value}
+              {value === "graph" ? "Dependency graph" : value}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="border-b p-4">
+      {tab !== "graph" && <div className="border-b p-4">
         <div className="relative max-w-md">
           <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -360,7 +391,7 @@ export function WorkspaceResources({
             onInput={(event): void => { setSearch(event.currentTarget.value); setPage(1); }}
           />
         </div>
-      </div>
+      </div>}
 
       {loading ? (
         <div className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading current state" /></div>
@@ -397,7 +428,7 @@ export function WorkspaceResources({
           </Table>
           <PaginationFooter label="resources" page={page} pageCount={pageCount} total={visibleResources.length} onPageChange={setPage} />
         </>
-      ) : (
+      ) : tab === "outputs" ? (
         <>
           <Table>
             <TableHeader>
@@ -420,6 +451,14 @@ export function WorkspaceResources({
           </Table>
           <PaginationFooter label="outputs" page={page} pageCount={pageCount} total={visibleOutputs.length} onPageChange={setPage} />
         </>
+      ) : dependencyGraphLoading ? (
+        <div className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading dependency graph" /></div>
+      ) : dependencyGraph?.nodes.some((node): boolean => node.dependencies.length > 0) !== true ? (
+        <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+          No dependency relationships are recorded in the current state.
+        </div>
+      ) : (
+        <DependencyGraph resources={dependencyGraph.nodes} />
       )}
 
       {readmeLoading && <div className="border-t px-5 py-4 text-xs text-muted-foreground">Checking for README.md…</div>}

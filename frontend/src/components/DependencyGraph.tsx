@@ -1,14 +1,9 @@
-type GraphResource = Readonly<{
+export type DependencyGraphResource = Readonly<{
   address: string;
   dependencies: readonly string[];
 }>;
 
-type GraphChange = Readonly<{
-  address: string;
-  operation: string;
-}>;
-
-type GraphNode = GraphResource & Readonly<{ operation: string }>;
+type GraphNode = DependencyGraphResource;
 type GraphEdge = Readonly<{ from: string; to: string }>;
 type GraphLayout = Readonly<{
   nodes: readonly GraphNode[];
@@ -18,61 +13,9 @@ type GraphLayout = Readonly<{
   height: number;
 }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function stringValues(value: unknown): readonly string[] {
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
-}
-
-function collectReferences(value: unknown, references: Set<string>): void {
-  if (Array.isArray(value)) {
-    value.forEach((item): void => { collectReferences(item, references); });
-    return;
-  }
-  if (!isRecord(value)) return;
-  stringValues(value["references"]).forEach((reference): void => { references.add(reference); });
-  Object.entries(value).forEach(([key, child]): void => {
-    if (key !== "references") collectReferences(child, references);
-  });
-}
-
-function resourcesFromModule(value: unknown): readonly GraphResource[] {
-  if (!isRecord(value)) return [];
-  const resources = Array.isArray(value["resources"])
-    ? value["resources"].flatMap((resource): readonly GraphResource[] => {
-        if (!isRecord(resource) || typeof resource["address"] !== "string") return [];
-        const dependencies = new Set<string>(stringValues(resource["depends_on"]));
-        collectReferences(resource["expressions"], dependencies);
-        return [{ address: resource["address"], dependencies: [...dependencies] }];
-      })
-    : [];
-  const childModules = Array.isArray(value["child_modules"])
-    ? value["child_modules"].flatMap(resourcesFromModule)
-    : [];
-  const moduleCalls = isRecord(value["module_calls"])
-    ? Object.values(value["module_calls"]).flatMap((call): readonly GraphResource[] =>
-        isRecord(call) ? resourcesFromModule(call["module"]) : [],
-      )
-    : [];
-  return [...resources, ...childModules, ...moduleCalls];
-}
-
-function resolveResourceAddress(reference: string, addresses: readonly string[]): string | undefined {
-  return addresses
-    .filter((address): boolean => reference === address
-      || reference.startsWith(`${address}.`)
-      || reference.startsWith(`${address}[`))
-    .sort((left, right): number => right.length - left.length)[0];
-}
-
-function buildGraph(configuration: unknown, changes: readonly GraphChange[]): GraphLayout | null {
-  if (!isRecord(configuration)) return null;
-  const resourcesByAddress = new Map<string, GraphResource>();
-  resourcesFromModule(configuration["root_module"]).forEach((resource): void => {
+function buildGraph(resources: readonly DependencyGraphResource[]): GraphLayout | null {
+  const resourcesByAddress = new Map<string, DependencyGraphResource>();
+  resources.forEach((resource): void => {
     const existing = resourcesByAddress.get(resource.address);
     resourcesByAddress.set(resource.address, existing === undefined
       ? resource
@@ -81,38 +24,10 @@ function buildGraph(configuration: unknown, changes: readonly GraphChange[]): Gr
           dependencies: [...new Set([...existing.dependencies, ...resource.dependencies])],
         });
   });
-  const addresses = [...resourcesByAddress.keys()];
-  if (addresses.length < 2) return null;
-
-  const resolvedResources = new Map<string, GraphResource>(
-    [...resourcesByAddress].map(([address, resource]): [string, GraphResource] => [address, {
-      address,
-      dependencies: resource.dependencies
-        .map((reference): string | undefined => resolveResourceAddress(reference, addresses))
-        .filter((dependency): dependency is string => dependency !== undefined && dependency !== address),
-    }]),
-  );
-  const operationByAddress = new Map(changes.map((change): [string, string] => [change.address, change.operation]));
-  const selected = new Set(changes.map((change): string => change.address));
-  const queue = [...selected];
-  while (queue.length > 0) {
-    const address = queue.pop();
-    if (address === undefined) continue;
-    resolvedResources.get(address)?.dependencies.forEach((dependency): void => {
-      if (!selected.has(dependency)) {
-        selected.add(dependency);
-        queue.push(dependency);
-      }
-    });
-  }
-
-  const nodes = [...resolvedResources.values()]
-    .filter((resource): boolean => selected.has(resource.address))
-    .map((resource): GraphNode => ({
-      ...resource,
-      operation: operationByAddress.get(resource.address) ?? "unchanged",
-      dependencies: resource.dependencies.filter((dependency): boolean => selected.has(dependency)),
-    }));
+  const nodes = [...resourcesByAddress.values()].map((resource): GraphNode => ({
+    ...resource,
+    dependencies: resource.dependencies.filter((dependency): boolean => resourcesByAddress.has(dependency)),
+  }));
   const nodeAddresses = new Set(nodes.map((node): string => node.address));
   const edges = nodes.flatMap((node): readonly GraphEdge[] => node.dependencies
     .filter((dependency): boolean => nodeAddresses.has(dependency))
@@ -168,38 +83,27 @@ function buildGraph(configuration: unknown, changes: readonly GraphChange[]): Gr
   };
 }
 
-function nodeColors(operation: string): Readonly<{ fill: string; stroke: string; text: string }> {
-  if (operation === "create") return { fill: "color-mix(in srgb, hsl(var(--success)) 12%, hsl(var(--card)))", stroke: "hsl(var(--success))", text: "hsl(var(--success))" };
-  if (operation === "update") return { fill: "color-mix(in srgb, hsl(var(--primary)) 12%, hsl(var(--card)))", stroke: "hsl(var(--primary))", text: "hsl(var(--primary))" };
-  if (operation === "delete") return { fill: "color-mix(in srgb, hsl(var(--destructive)) 12%, hsl(var(--card)))", stroke: "hsl(var(--destructive))", text: "hsl(var(--destructive))" };
-  if (operation === "replace") return { fill: "color-mix(in srgb, hsl(var(--warning)) 12%, hsl(var(--card)))", stroke: "hsl(var(--warning))", text: "hsl(var(--warning))" };
-  if (operation === "import") return { fill: "hsl(var(--muted))", stroke: "hsl(var(--muted-foreground))", text: "hsl(var(--foreground))" };
-  return { fill: "hsl(var(--card))", stroke: "hsl(var(--border))", text: "hsl(var(--muted-foreground))" };
-}
-
 function shortAddress(address: string): string {
   const segments = address.split(".");
   return segments.length > 2 ? `…${segments.slice(-2).join(".")}` : address;
 }
 
 export function DependencyGraph({
-  configuration,
-  changes,
+  resources,
 }: Readonly<{
-  configuration?: unknown;
-  changes: readonly GraphChange[];
+  resources: readonly DependencyGraphResource[];
 }>): React.JSX.Element {
-  const graph = buildGraph(configuration, changes);
+  const graph = buildGraph(resources);
   if (graph === null) return <></>;
 
   return (
-    <details className="border-t border-gray-200">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
-        Dependency graph <span className="font-normal text-gray-500">({graph.nodes.length} resources · {graph.edges.length} dependencies)</span>
+    <details className="border-t border-border">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        Dependency graph <span className="font-normal text-muted-foreground">({graph.nodes.length} resources · {graph.edges.length} dependencies)</span>
       </summary>
-      <div className="border-t border-gray-100 bg-slate-50/60 px-4 py-4">
-        <p className="mb-3 text-xs text-gray-600">Arrows point from a prerequisite to the resource that depends on it.</p>
-        <div className="overflow-x-auto rounded-md border border-slate-200 bg-white p-2">
+      <div className="border-t border-border bg-muted/20 px-4 py-4">
+        <p className="mb-3 text-xs text-muted-foreground">Arrows point from a prerequisite to the resource that depends on it.</p>
+        <div className="overflow-x-auto rounded-md border border-border bg-background p-2">
           <svg
             role="img"
             aria-label="Terraform resource dependency graph"
@@ -231,17 +135,16 @@ export function DependencyGraph({
             </g>
             {graph.nodes.map((node): React.JSX.Element => {
               const position = graph.positions.get(node.address);
-              const colors = nodeColors(node.operation);
               if (position === undefined) return <g key={node.address} />;
               return (
                 <g key={node.address}>
                   <title>{node.address}</title>
-                  <rect x={position.x} y={position.y} width="190" height="48" rx="8" fill={colors.fill} stroke={colors.stroke} />
+                  <rect x={position.x} y={position.y} width="190" height="48" rx="8" fill="hsl(var(--card))" stroke="hsl(var(--border))" />
                   <text x={position.x + 12} y={position.y + 20} fill="hsl(var(--foreground))" fontSize="11" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
                     {shortAddress(node.address)}
                   </text>
-                  <text x={position.x + 12} y={position.y + 37} fill={colors.text} fontSize="10" fontFamily="ui-sans-serif, system-ui, sans-serif">
-                    {node.operation}
+                  <text x={position.x + 12} y={position.y + 37} fill="hsl(var(--muted-foreground))" fontSize="10" fontFamily="ui-sans-serif, system-ui, sans-serif">
+                    Current state
                   </text>
                 </g>
               );

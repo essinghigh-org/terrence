@@ -239,8 +239,6 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     expect(within(applySection as HTMLElement).getByText(/2 to invoke/)).toBeTruthy();
   });
 
-  expect(view.getByText(/Dependency graph/)).toBeTruthy();
-  expect(view.getByRole("img", { name: "Terraform resource dependency graph" })).toBeTruthy();
   expect(view.getByRole("button", { name: "Review & apply" })).toBeTruthy();
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");

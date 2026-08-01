@@ -128,4 +128,56 @@ describe("TFE API v2 - Workspaces", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("should return the dependency graph from the latest finalized state", async () => {
+    const { stateVersions, workspaces } = await import("../../src/db/schema");
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, "k8s-cluster") });
+    expect(workspace).toBeDefined();
+    const stateVersionId = crypto.randomUUID();
+    const pendingStateVersionId = crypto.randomUUID();
+    const state = JSON.stringify({
+      version: 4,
+      serial: 2,
+      resources: [
+        { mode: "managed", type: "aws_vpc", name: "main", instances: [{ dependencies: [] }] },
+        { mode: "managed", type: "aws_subnet", name: "web", instances: [{ dependencies: ["aws_vpc.main"] }] },
+      ],
+    });
+    await db.insert(stateVersions).values({
+      id: stateVersionId,
+      workspaceId: workspace?.id ?? "",
+      serial: 2,
+      statePayload: state,
+      jsonState: state,
+      status: "finalized",
+      intermediate: false,
+      createdAt: Date.now(),
+    });
+    await db.insert(stateVersions).values({
+      id: pendingStateVersionId,
+      workspaceId: workspace?.id ?? "",
+      serial: 3,
+      statePayload: JSON.stringify({ version: 4, serial: 3, resources: [] }),
+      jsonState: JSON.stringify({ version: 4, serial: 3, resources: [] }),
+      status: "pending",
+      intermediate: false,
+      createdAt: Date.now() + 1,
+    });
+
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/workspaces/" + workspace?.id + "/dependency-graph", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.data.attributes.nodes).toEqual([
+        { address: "aws_vpc.main", dependencies: [] },
+        { address: "aws_subnet.web", dependencies: ["aws_vpc.main"] },
+      ]);
+      expect(body.data.attributes.edges).toEqual([{ from: "aws_vpc.main", to: "aws_subnet.web" }]);
+    } finally {
+      await db.delete(stateVersions).where(eq(stateVersions.id, stateVersionId));
+      await db.delete(stateVersions).where(eq(stateVersions.id, pendingStateVersionId));
+    }
+  });
 });

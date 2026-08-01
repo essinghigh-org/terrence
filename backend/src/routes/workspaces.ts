@@ -44,6 +44,60 @@ type WsItem = DeepReadonly<typeof workspaces.$inferSelect>;
 type TagItem = DeepReadonly<typeof workspaceTags.$inferSelect>;
 type VarItem = DeepReadonly<typeof workspaceVariables.$inferSelect>;
 type WorkspaceVcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
+type DependencyGraphNode = Readonly<{ address: string; dependencies: readonly string[] }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValues(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function stateResourceAddress(resource: Record<string, unknown>): string | null {
+  if (typeof resource.type !== "string" || typeof resource.name !== "string") return null;
+  const module = typeof resource.module === "string" && resource.module !== "" ? `${resource.module}.` : "";
+  const mode = resource.mode === "data" ? "data." : "";
+  return `${module}${mode}${resource.type}.${resource.name}`;
+}
+
+function dependencyGraphFromState(statePayload: string | null): readonly DependencyGraphNode[] {
+  if (statePayload === null) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(statePayload) as unknown;
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.resources)) return [];
+
+  const resources = new Map<string, Set<string>>();
+  for (const value of parsed.resources) {
+    if (!isRecord(value)) continue;
+    const address = stateResourceAddress(value);
+    if (address === null) continue;
+    const dependencies = resources.get(address) ?? new Set<string>();
+    stringValues(value.dependencies).forEach((dependency): void => { dependencies.add(dependency); });
+    if (Array.isArray(value.instances)) {
+      for (const instance of value.instances) {
+        if (isRecord(instance)) stringValues(instance.dependencies).forEach((dependency): void => { dependencies.add(dependency); });
+      }
+    }
+    resources.set(address, dependencies);
+  }
+
+  const addresses = [...resources.keys()];
+  const resolve = (reference: string): string | undefined => addresses
+    .filter((address): boolean => reference === address || reference.startsWith(`${address}.`) || reference.startsWith(`${address}[`))
+    .sort((left, right): number => right.length - left.length)[0];
+  return addresses.map((address): DependencyGraphNode => ({
+    address,
+    dependencies: [...new Set([...resources.get(address) ?? []]
+      .map(resolve)
+      .filter((dependency): dependency is string => dependency !== undefined && dependency !== address))],
+  }));
+}
 
 const MAX_README_BYTES = 256 * 1024;
 const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
@@ -674,8 +728,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const latestState = await db.query.stateVersions.findFirst({
-      where: eq(stateVersions.workspaceId, ws.id),
-      orderBy: [desc(stateVersions.createdAt)],
+      where: and(
+        eq(stateVersions.workspaceId, ws.id),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial)],
     });
 
     const resources: Record<string, unknown>[] = [];
@@ -737,6 +795,38 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const total = resources.length;
     const paginated = resources.slice((number - 1) * size, number * size);
     return { data: paginated, ...pagination(request, number, size, total) };
+  })
+  .get("/api/v2/workspaces/:workspace_id/dependency-graph", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "state-read");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const state = await db.query.stateVersions.findFirst({
+      where: and(
+        eq(stateVersions.workspaceId, workspaceId),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+      orderBy: [desc(stateVersions.serial)],
+    });
+    if (state === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const nodes = dependencyGraphFromState(state.jsonState ?? state.statePayload);
+    const addresses = new Set(nodes.map((node): string => node.address));
+    const edges = nodes.flatMap((node): readonly { from: string; to: string }[] => node.dependencies
+      .filter((dependency): boolean => addresses.has(dependency))
+      .map((dependency): { from: string; to: string } => ({ from: dependency, to: node.address })));
+    return {
+      data: {
+        id: `dependency-graph-${state.id}`,
+        type: "dependency-graphs",
+        attributes: {
+          nodes,
+          edges,
+          "state-version-id": state.id,
+          serial: state.serial,
+          "created-at": new Date(state.createdAt).toISOString(),
+        },
+      },
+    };
   })
   .get("/api/v2/workspaces/:workspace_id/readme", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

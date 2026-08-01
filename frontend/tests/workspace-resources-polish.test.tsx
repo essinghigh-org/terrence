@@ -52,6 +52,18 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
         },
       });
     }
+    if (url === "/api/v2/workspaces/ws-1/dependency-graph") {
+      return json({
+        data: {
+          attributes: {
+            nodes: [
+              { address: "aws_vpc.main", dependencies: [] },
+              { address: "aws_subnet.web", dependencies: ["aws_vpc.main"] },
+            ],
+          },
+        },
+      });
+    }
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
 
@@ -69,6 +81,9 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
   expect(view.getByText("example.test")).toBeTruthy();
   expect(view.getByText("Sensitive value")).toBeTruthy();
   expect(view.queryByText("never-render")).toBeNull();
+
+  fireEvent.click(view.getByRole("tab", { name: "Dependency graph" }));
+  await waitFor((): void => { expect(view.getByRole("img", { name: "Terraform resource dependency graph" })).toBeTruthy(); });
 });
 
 test("paginates resources and outputs independently", async () => {
@@ -91,6 +106,7 @@ test("paginates resources and outputs independently", async () => {
       });
     }
     if (url === "/api/v2/workspaces/ws-1/readme") return json({ errors: [{ status: "404" }] }, 404);
+    if (url === "/api/v2/workspaces/ws-1/dependency-graph") return json({ errors: [{ status: "404" }] }, 404);
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
 
