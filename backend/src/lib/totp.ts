@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 // RFC 6238 TOTP — HMAC-SHA1, 6 digits, 30s period. No external deps.
 
@@ -53,21 +53,10 @@ export function otpauthUrl(secret: string, account: string, issuer = "Terrence")
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
-function hmacSha1(key: Buffer, message: Buffer): Buffer {
-  const blockSize = 64;
-  let k = key;
-  if (k.length > blockSize) k = createHash("sha1").update(k).digest();
-  if (k.length < blockSize) k = Buffer.concat([k, Buffer.alloc(blockSize - k.length)]);
-  const ipad = Buffer.from(k.map((b: number): number => b ^ 0x36));
-  const opad = Buffer.from(k.map((b: number): number => b ^ 0x5c));
-  const inner = createHash("sha1").update(ipad).update(message).digest();
-  return createHash("sha1").update(opad).update(inner).digest();
-}
-
 function hotp(key: Buffer, counter: number): number {
   const counterBuffer = Buffer.alloc(8);
   counterBuffer.writeBigUInt64BE(BigInt(counter));
-  const hmac = hmacSha1(key, counterBuffer);
+  const hmac = createHmac("sha1", key).update(counterBuffer).digest();
   const offset = (hmac[hmac.length - 1] ?? 0) & 0x0f;
   const binary = (((hmac[offset] ?? 0) & 0x7f) << 24)
     | (((hmac[offset + 1] ?? 0) & 0xff) << 16)

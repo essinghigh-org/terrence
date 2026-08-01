@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { and, asc, desc, eq, inArray, like } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   apiTokens,
@@ -125,8 +125,9 @@ const TOOLS: ReadonlyArray<{
       const search = typeof args.search === "string" ? args.search : undefined;
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
       const offset = Math.max(Number(args.offset ?? 0), 0);
+      const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
       const where = search !== undefined
-        ? and(eq(projects.orgId, org.id), like(projects.name, `%${search}%`))
+        ? and(eq(projects.orgId, org.id), sql`${projects.name} LIKE ${pattern} ESCAPE '\\'`)
         : eq(projects.orgId, org.id);
       const rows = await db.query.projects.findMany({
         where,
@@ -178,8 +179,9 @@ const TOOLS: ReadonlyArray<{
       // List/search: filter by workspaceIdsForPermission(org.id, ..., "read")
       const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
       if (authorizedIds === null || authorizedIds.length === 0) return [];
+      const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
       const where = search !== undefined
-        ? and(inArray(workspaces.id, authorizedIds as string[]), like(workspaces.name, `%${search}%`))
+        ? and(inArray(workspaces.id, authorizedIds as string[]), sql`${workspaces.name} LIKE ${pattern} ESCAPE '\\'`)
         : inArray(workspaces.id, authorizedIds as string[]);
       const rows = await db.query.workspaces.findMany({
         where,
@@ -311,12 +313,7 @@ const TOOLS: ReadonlyArray<{
 ];
 
 // ---------------------------------------------------------------------------
-// SSE session store (kept for endpoint handshake; auth enforced per POST)
-// ---------------------------------------------------------------------------
-const sessions = new Map<string, { session: McpSession }>();
-
-// ---------------------------------------------------------------------------
-// MCP route
+// MCP route (POST authenticates each request)
 // ---------------------------------------------------------------------------
 export const mcpRoutes = new Elysia()
   .get("/mcp", async ({ request, set }): Promise<Response> => {
@@ -334,12 +331,6 @@ export const mcpRoutes = new Elysia()
       start(controller) {
         controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpoint}\n\n`));
       },
-    });
-
-    sessions.set(sessionId, { session });
-
-    request.signal.addEventListener("abort", () => {
-      sessions.delete(sessionId);
     });
 
     return new Response(stream, {

@@ -384,7 +384,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa !== undefined && mfa.enabled === true) {
       const challengeToken = opaqueToken("mfa");
-      mfaChallenges.set(challengeToken, { userId: user.id, expiresAt: Date.now() + MFA_CHALLENGE_TTL_MS });
+      const expiresAt = Date.now() + MFA_CHALLENGE_TTL_MS;
+      mfaChallenges.set(challengeToken, { userId: user.id, expiresAt });
+      setTimeout((): void => {
+        if (mfaChallenges.get(challengeToken)?.expiresAt === expiresAt) mfaChallenges.delete(challengeToken);
+      }, MFA_CHALLENGE_TTL_MS);
       return {
         data: {
           type: "users",
