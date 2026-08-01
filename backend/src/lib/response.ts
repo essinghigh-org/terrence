@@ -474,6 +474,8 @@ type RunOrigin = Readonly<{
   triggerReason?: string | null;
   branch?: string | null;
   commitSha?: string | null;
+  triggeredBy?: string | null;
+  triggeredByAvatarUrl?: string | null;
 }>;
 
 function runHasChanges(run: RunParam): boolean {
@@ -547,6 +549,8 @@ export function runResource(
       "trigger-reason": (origin as Record<string, unknown> | undefined)?.triggerReason ?? "manual",
       "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
       "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
+      "triggered-by": (origin as Record<string, unknown> | undefined)?.triggeredBy ?? null,
+      "triggered-by-avatar-url": (origin as Record<string, unknown> | undefined)?.triggeredByAvatarUrl ?? null,
       variables: ((): unknown[] => {
         if (!Array.isArray(run.variables)) return [];
         return (run.variables as Record<string, unknown>[]).map((v) => ({

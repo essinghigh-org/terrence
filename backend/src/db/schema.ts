@@ -319,7 +319,7 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   speculative: integer("speculative", { mode: "boolean" }).notNull().default(false),
   provisional: integer("provisional", { mode: "boolean" }).notNull().default(false),
   source: text("source").default("tfe-api"),
-  ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; cloneUrl?: string; compareUrl?: string }>(),
+  ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; senderAvatarUrl?: string; cloneUrl?: string; compareUrl?: string }>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
   error: text("error"),
   errorMessage: text("error_message"),

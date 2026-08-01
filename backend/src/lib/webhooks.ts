@@ -38,6 +38,7 @@ type WebhookDetails = Readonly<{
   readonly pullRequestNumber?: number;
   readonly repoFullName: string;
   readonly senderUsername: string;
+  readonly senderAvatarUrl?: string;
   readonly tag?: string;
 }>;
 type OAuthProvider = "gitlab" | "bitbucket";
@@ -73,6 +74,21 @@ function requiredString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+function httpsUrl(value: unknown): string | undefined {
+  const candidate = requiredString(value);
+  if (candidate === undefined) return undefined;
+  try {
+    return new URL(candidate).protocol === "https:" ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function commitSubject(message: string): string {
+  const subject = message.split(/\r?\n/u, 1)[0]?.trim();
+  return subject === undefined || subject === "" ? message.trim() : subject;
+}
+
 function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined {
   if (!Array.isArray(payload.commits)) return undefined;
   const files = new Set<string>();
@@ -95,6 +111,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
   const repoFullName = requiredString(repository?.full_name);
   const cloneUrl = requiredString(repository?.clone_url);
   const senderUsername = requiredString(sender?.login);
+  const senderAvatarUrl = httpsUrl(sender?.avatar_url);
   if (repoFullName === undefined || cloneUrl === undefined || senderUsername === undefined) return undefined;
 
   if (eventName === "push") {
@@ -103,6 +120,11 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     const headCommit = asRecord(payload.head_commit);
     const commitMessage = requiredString(headCommit?.message);
     const commitUrl = requiredString(headCommit?.url);
+    const author = asRecord(headCommit?.author);
+    const committer = asRecord(headCommit?.committer);
+    const commitUsername = requiredString(committer?.username)
+      ?? requiredString(author?.username)
+      ?? senderUsername;
     const filesChanged = changedFiles(payload);
     if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
@@ -116,7 +138,8 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
       commitUrl,
       filesChanged,
       repoFullName,
-      senderUsername,
+      senderUsername: commitUsername,
+      ...(senderAvatarUrl === undefined ? {} : { senderAvatarUrl }),
       ...(tag === undefined ? {} : { tag }),
     };
   }
@@ -130,7 +153,18 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     const commitUrl = requiredString(pullRequest?.html_url);
     const pullRequestNumber = payload.number;
     if (branch === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
-    return { branch, cloneUrl, commitMessage, commitSha, commitUrl, filesChanged: new Set<string>(), pullRequestNumber, repoFullName, senderUsername };
+    return {
+      branch,
+      cloneUrl,
+      commitMessage,
+      commitSha,
+      commitUrl,
+      filesChanged: new Set<string>(),
+      pullRequestNumber,
+      repoFullName,
+      senderUsername,
+      ...(senderAvatarUrl === undefined ? {} : { senderAvatarUrl }),
+    };
   }
 
   return undefined;
@@ -940,6 +974,7 @@ async function handleOAuthProviderWebhook(
         ...(details.branch === undefined ? {} : { branch: details.branch }),
         ...(details.tag === undefined ? {} : { tag: details.tag }),
         senderUsername: details.senderUsername,
+        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
       },
@@ -949,9 +984,7 @@ async function handleOAuthProviderWebhook(
       id: runId,
       workspaceId: workspace.id,
       configurationVersionId,
-      message: details.tag === undefined
-        ? `Triggered by ${kind === "push" ? "push" : "pull request"} to ${details.repoFullName}`
-        : `Triggered by tag ${details.tag} in ${details.repoFullName}`,
+      message: commitSubject(details.commitMessage),
       status: "pending",
       isDestroy: false,
       autoApply: workspace.autoApply === true && !isSpeculative,
@@ -965,6 +998,8 @@ async function handleOAuthProviderWebhook(
       status: "pending",
       source: provider,
       triggerReason: kind,
+      actorUsername: details.senderUsername,
+      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl }),
     });
     void reportRunVcsStatus(runId, "pending");
 
@@ -1062,6 +1097,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
         ...(details.branch === undefined ? {} : { branch: details.branch }),
         ...(details.tag === undefined ? {} : { tag: details.tag }),
         senderUsername: details.senderUsername,
+        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
       },
@@ -1071,9 +1107,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       id: runId,
       workspaceId: workspace.id,
       configurationVersionId,
-      message: details.tag === undefined
-        ? `Triggered by ${eventName === "push" ? "push" : "pull request"} to ${details.repoFullName}`
-        : `Triggered by tag ${details.tag} in ${details.repoFullName}`,
+      message: commitSubject(details.commitMessage),
       status: "pending",
       isDestroy: false,
       autoApply: workspace.autoApply === true && !isSpeculative,
@@ -1087,6 +1121,8 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       status: "pending",
       source: "github",
       triggerReason: isSpeculative ? "pull_request" : "push",
+      actorUsername: details.senderUsername,
+      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl }),
     });
     void reportRunVcsStatus(runId, "pending");
     configurationVersionIds.push(configurationVersionId);

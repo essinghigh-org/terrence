@@ -31,6 +31,8 @@ type RunItem = {
     "trigger-reason"?: string;
     "branch"?: string | null;
     "commit-sha"?: string | null;
+    "triggered-by"?: string | null;
+    "triggered-by-avatar-url"?: string | null;
     operation?: string;
     "is-destroy"?: boolean;
     "plan-only"?: boolean;
@@ -399,8 +401,8 @@ export function RunList({
                         {(() => {
                           const creatorId = run.relationships?.["created-by"]?.data?.id;
                           const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
-                          const username = creatorUser?.attributes.username ?? "System";
-                          const avatarUrl = creatorUser?.attributes["avatar-url"] ?? "";
+                          const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
+                          const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
                           return (
                             <>
                               <span className="flex items-center gap-1">

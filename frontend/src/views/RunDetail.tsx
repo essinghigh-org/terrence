@@ -67,6 +67,8 @@ type RunAttributes = {
   "status-timestamps"?: Record<string, string> | null;
   "terraform-version"?: string | null;
   "trigger-reason"?: string;
+  "triggered-by"?: string | null;
+  "triggered-by-avatar-url"?: string | null;
 };
 
 type RunResource = {
@@ -513,12 +515,12 @@ export function RunDetail({
           setCreatorUsername(creator.attributes.username);
           setCreatorAvatarUrl(creator.attributes["avatar-url"] ?? "");
         } else {
-          setCreatorUsername("");
-          setCreatorAvatarUrl("");
+          setCreatorUsername(response.data.attributes["triggered-by"] ?? "");
+          setCreatorAvatarUrl(response.data.attributes["triggered-by-avatar-url"] ?? "");
         }
       } else {
-        setCreatorUsername("");
-        setCreatorAvatarUrl("");
+        setCreatorUsername(response.data.attributes["triggered-by"] ?? "");
+        setCreatorAvatarUrl(response.data.attributes["triggered-by-avatar-url"] ?? "");
       }
 
       const [logResult, planResult, applyResult, costResult, policyResult, assessmentResult, eventResult, commentResult] = await Promise.allSettled([

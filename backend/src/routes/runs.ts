@@ -37,7 +37,7 @@ type DeepReadonly<T> = T extends (infer R)[]
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
 const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
-type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string }>;
+type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string; triggeredBy?: string; triggeredByAvatarUrl?: string }>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
@@ -62,6 +62,8 @@ function originForConfiguration(
     triggerReason,
     ...(typeof ingress?.branch === "string" ? { branch: ingress.branch } : {}),
     ...(typeof ingress?.commitSha === "string" ? { commitSha: ingress.commitSha } : {}),
+    ...(typeof ingress?.senderUsername === "string" ? { triggeredBy: ingress.senderUsername } : {}),
+    ...(typeof ingress?.senderAvatarUrl === "string" ? { triggeredByAvatarUrl: ingress.senderAvatarUrl } : {}),
   };
   return origin;
 }
@@ -127,7 +129,7 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
   const source = details as Readonly<Record<string, unknown>>;
   return Object.fromEntries(
-    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason"].flatMap((key): readonly [string, string][] =>
+    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl"].flatMap((key): readonly [string, string][] =>
       typeof source[key] === "string" ? [[key, source[key]]] : [],
     ),
   );
@@ -384,8 +386,8 @@ export const runRoutes = new Elysia({ name: "runs" })
         attributes: {
           action: event.action,
           "created-at": new Date(event.createdAt).toISOString(),
-          "actor-username": event.userId === null ? null : usernames.get(event.userId)?.username ?? null,
-          "actor-avatar-url": event.userId === null ? null : gravatarUrl(usernames.get(event.userId)?.email ?? null),
+          "actor-username": event.userId === null ? safeRunEventDetails(event).actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
+          "actor-avatar-url": event.userId === null ? safeRunEventDetails(event).actorAvatarUrl ?? null : gravatarUrl(usernames.get(event.userId)?.email ?? null),
           details: safeRunEventDetails(event),
         },
       })),

@@ -35,10 +35,12 @@ const pushPayload = {
   ref: "refs/heads/main",
   after: "1234567890abcdef1234567890abcdef12345678",
   head_commit: {
-    message: "Update Terraform",
+    message: "Update Terraform\n\nInclude the latest provider changes",
     url: "https://github.com/hashicorp/terraform/commit/1234567890abcdef1234567890abcdef12345678",
+    author: { username: "commit-author" },
+    committer: { username: "essinghigh" },
   },
-  sender: { login: "octocat" },
+  sender: { login: "octocat", avatar_url: "https://avatars.githubusercontent.com/u/110120257?v=4" },
   repository: {
     full_name: "hashicorp/terraform",
     clone_url: "https://github.com/hashicorp/terraform.git",
@@ -290,7 +292,31 @@ describe("GitHub Webhooks", () => {
     expect((await sendWebhook("push", pushPayload, deliveryId)).status).toBe(200);
     const runList = await waitForRuns((items): boolean => items.some((run): boolean => !run.planOnly));
     await waitForDelivery(deliveryId);
-    expect(runList.find((run): boolean => run.workspaceId === workspaceId && !run.planOnly)).toBeDefined();
+    const run = runList.find((item): boolean => item.workspaceId === workspaceId && !item.planOnly);
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    expect(run.message).toBe("Update Terraform");
+    expect(run.createdBy).toBeNull();
+    const runResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+    const runDocument = await runResponse.json() as {
+      data: { attributes: Record<string, unknown> };
+    };
+    expect(runDocument.data.attributes).toMatchObject({
+      "triggered-by": "essinghigh",
+      "triggered-by-avatar-url": "https://avatars.githubusercontent.com/u/110120257?v=4",
+    });
+    const eventResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+    const eventDocument = await eventResponse.json() as {
+      data: { attributes: Record<string, unknown> }[];
+    };
+    expect(eventDocument.data[0]?.attributes).toMatchObject({
+      "actor-username": "essinghigh",
+      "actor-avatar-url": "https://avatars.githubusercontent.com/u/110120257?v=4",
+    });
     expect(tarballFetches).toBe(1);
     expect(await waitForCommitStatus()).toMatchObject({ state: "pending" });
   });
@@ -369,7 +395,7 @@ describe("GitHub Webhooks", () => {
     const runList = await waitForRuns((items): boolean => items.length === 1);
     await waitForDelivery(deliveryId);
     const run = runList[0];
-    expect(run?.message).toContain("tag v1.2.3");
+    expect(run?.message).toBe("Update Terraform");
     const configurationVersion = await db.query.configurationVersions.findFirst({
       where: eq(configurationVersions.id, run?.configurationVersionId ?? ""),
     });
