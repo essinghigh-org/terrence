@@ -368,7 +368,7 @@ export function AgentPools(): React.JSX.Element {
           <DialogHeader>
             <DialogTitle>Agent Tokens — {selectedPool?.attributes.name}</DialogTitle>
             <DialogDescription>
-              Manage authentication tokens used by `tfe-agent` instances to join this pool.
+              Manage authentication tokens used by `tfc-agent` instances to join this pool.
             </DialogDescription>
           </DialogHeader>
 

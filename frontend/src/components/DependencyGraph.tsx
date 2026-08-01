@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 export type DependencyGraphResource = Readonly<{
   address: string;
   dependencies: readonly string[];
@@ -93,8 +95,10 @@ export function DependencyGraph({
 }: Readonly<{
   resources: readonly DependencyGraphResource[];
 }>): React.JSX.Element {
-  const graph = buildGraph(resources);
-  if (graph === null) return <></>;
+  const graph = useMemo((): GraphLayout | null => buildGraph(resources), [resources]);
+  if (graph === null) {
+    return <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">No dependency relationships are recorded in the current state.</div>;
+  }
 
   return (
     <details className="border-t border-border">
@@ -125,6 +129,8 @@ export function DependencyGraph({
                 return (
                   <line
                     key={`${edge.from}->${edge.to}`}
+                    data-from={edge.from}
+                    data-to={edge.to}
                     x1={from.x + 190}
                     y1={from.y + 24}
                     x2={to.x}
@@ -137,7 +143,7 @@ export function DependencyGraph({
               const position = graph.positions.get(node.address);
               if (position === undefined) return <g key={node.address} />;
               return (
-                <g key={node.address}>
+                <g key={node.address} data-address={node.address}>
                   <title>{node.address}</title>
                   <rect x={position.x} y={position.y} width="190" height="48" rx="8" fill="hsl(var(--card))" stroke="hsl(var(--border))" />
                   <text x={position.x + 12} y={position.y + 20} fill="hsl(var(--foreground))" fontSize="11" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">

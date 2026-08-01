@@ -236,7 +236,6 @@ export function WorkspaceResources({
   const [pages, setPages] = useState<Readonly<Record<Tab, number>>>({ resources: 1, outputs: 1, graph: 1 });
   const [loading, setLoading] = useState(true);
   const [readmeLoading, setReadmeLoading] = useState(true);
-  const [dependencyGraphLoading, setDependencyGraphLoading] = useState(true);
   const [resourceError, setResourceError] = useState("");
   const [outputError, setOutputError] = useState("");
   const [readmeError, setReadmeError] = useState("");
@@ -245,7 +244,6 @@ export function WorkspaceResources({
   const load = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     setLoading(true);
     setReadmeLoading(true);
-    setDependencyGraphLoading(true);
     setResourceError("");
     setOutputError("");
     setReadmeError("");
@@ -303,7 +301,6 @@ export function WorkspaceResources({
       setDependencyGraphError(dependencyGraphResult.reason instanceof Error ? dependencyGraphResult.reason.message : "Could not load dependency graph");
     }
     setLoading(false);
-    setDependencyGraphLoading(false);
 
     const resolvedReadme = await readmeResult;
     if (isAborted(signal)) return;
@@ -451,9 +448,7 @@ export function WorkspaceResources({
           </Table>
           <PaginationFooter label="outputs" page={page} pageCount={pageCount} total={visibleOutputs.length} onPageChange={setPage} />
         </>
-      ) : dependencyGraphLoading ? (
-        <div className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading dependency graph" /></div>
-      ) : dependencyGraph?.nodes.some((node): boolean => node.dependencies.length > 0) !== true ? (
+      ) : dependencyGraph === null ? (
         <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">
           No dependency relationships are recorded in the current state.
         </div>

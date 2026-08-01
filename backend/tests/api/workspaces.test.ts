@@ -134,6 +134,7 @@ describe("TFE API v2 - Workspaces", () => {
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, "k8s-cluster") });
     expect(workspace).toBeDefined();
     const stateVersionId = crypto.randomUUID();
+    const olderStateVersionId = crypto.randomUUID();
     const pendingStateVersionId = crypto.randomUUID();
     const state = JSON.stringify({
       version: 4,
@@ -142,6 +143,16 @@ describe("TFE API v2 - Workspaces", () => {
         { mode: "managed", type: "aws_vpc", name: "main", instances: [{ dependencies: [] }] },
         { mode: "managed", type: "aws_subnet", name: "web", instances: [{ dependencies: ["aws_vpc.main"] }] },
       ],
+    });
+    await db.insert(stateVersions).values({
+      id: olderStateVersionId,
+      workspaceId: workspace?.id ?? "",
+      serial: 1,
+      statePayload: JSON.stringify({ version: 4, serial: 1, resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }] }),
+      jsonState: JSON.stringify({ version: 4, serial: 1, resources: [{ mode: "managed", type: "null_resource", name: "older", instances: [{ dependencies: [] }] }] }),
+      status: "finalized",
+      intermediate: false,
+      createdAt: Date.now() - 1,
     });
     await db.insert(stateVersions).values({
       id: stateVersionId,
@@ -176,6 +187,7 @@ describe("TFE API v2 - Workspaces", () => {
       ]);
       expect(body.data.attributes.edges).toEqual([{ from: "aws_vpc.main", to: "aws_subnet.web" }]);
     } finally {
+      await db.delete(stateVersions).where(eq(stateVersions.id, olderStateVersionId));
       await db.delete(stateVersions).where(eq(stateVersions.id, stateVersionId));
       await db.delete(stateVersions).where(eq(stateVersions.id, pendingStateVersionId));
     }

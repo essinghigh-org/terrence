@@ -60,6 +60,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
               { address: "aws_vpc.main", dependencies: [] },
               { address: "aws_subnet.web", dependencies: ["aws_vpc.main"] },
             ],
+            edges: [{ from: "aws_vpc.main", to: "aws_subnet.web" }],
           },
         },
       });
@@ -83,7 +84,12 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
   expect(view.queryByText("never-render")).toBeNull();
 
   fireEvent.click(view.getByRole("tab", { name: "Dependency graph" }));
-  await waitFor((): void => { expect(view.getByRole("img", { name: "Terraform resource dependency graph" })).toBeTruthy(); });
+  await waitFor((): void => {
+    const graph = view.getByRole("img", { name: "Terraform resource dependency graph" });
+    expect(graph.querySelector("g[data-address=\"aws_vpc.main\"]")).toBeTruthy();
+    expect(graph.querySelector("g[data-address=\"aws_subnet.web\"]")).toBeTruthy();
+    expect(graph.querySelector("line[data-from=\"aws_vpc.main\"][data-to=\"aws_subnet.web\"]")).toBeTruthy();
+  });
 });
 
 test("paginates resources and outputs independently", async () => {

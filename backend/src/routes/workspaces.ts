@@ -88,9 +88,12 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
   }
 
   const addresses = [...resources.keys()];
-  const resolve = (reference: string): string | undefined => addresses
-    .filter((address): boolean => reference === address || reference.startsWith(`${address}.`) || reference.startsWith(`${address}[`))
-    .sort((left, right): number => right.length - left.length)[0];
+  const resolve = (reference: string): string | undefined => {
+    if (resources.has(reference)) return reference;
+    return addresses
+      .filter((address): boolean => reference.startsWith(`${address}.`) || reference.startsWith(`${address}[`))
+      .sort((left, right): number => right.length - left.length)[0];
+  };
   return addresses.map((address): DependencyGraphNode => ({
     address,
     dependencies: [...new Set([...resources.get(address) ?? []]
