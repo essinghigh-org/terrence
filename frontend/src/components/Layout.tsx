@@ -178,6 +178,7 @@ export function Layout({
   const [organizationPermissions, setOrganizationPermissions] =
     useState<OrganizationPermissions | null>(null);
   const [organizationPermissionPath, setOrganizationPermissionPath] = useState("");
+  const [projectName, setProjectName] = useState<string | null>(null);
   const [canReadStateVersions, setCanReadStateVersions] = useState(false);
   const [canReadVariable, setCanReadVariable] = useState(false);
   const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
@@ -249,23 +250,25 @@ export function Layout({
     };
   }, [organizationRouteKey]);
 
-  const workspaceMatch =
-    matchPath(
-      {
-        path: "/app/:orgName/workspaces/:workspaceName/*",
-        end: false,
-      },
-      location.pathname,
-    ) ??
-    matchPath(
-      {
-        path: "/app/:orgName/workspaces/:workspaceName",
-        end: true,
-      },
-      location.pathname,
-    );
+  const workspaceMatch = matchPath(
+    {
+      path: "/app/:orgName/workspaces/:workspaceName/*",
+      end: false,
+    },
+    location.pathname,
+  ) ?? matchPath(
+    {
+      path: "/app/:orgName/workspaces/:workspaceName",
+      end: true,
+    },
+    location.pathname,
+  );
+  const projectMatch =
+    matchPath({ path: "/app/:orgName/projects/:projectId/*", end: false }, location.pathname)
+    ?? matchPath({ path: "/app/:orgName/projects/:projectId", end: true }, location.pathname);
   const organizationMatch =
     workspaceMatch ??
+    projectMatch ??
     matchPath({ path: "/app/:orgName/*", end: false }, location.pathname) ??
     matchPath({ path: "/app/:orgName", end: true }, location.pathname);
   const routeOrgName = readableRouteParam(organizationMatch?.params.orgName);
@@ -274,16 +277,24 @@ export function Layout({
       ? undefined
       : routeOrgName;
   const workspaceName = readableRouteParam(workspaceMatch?.params.workspaceName);
+  const projectId = readableRouteParam(projectMatch?.params.projectId);
   const hasOrg = orgName !== undefined && orgName !== "";
   const hasWorkspace = hasOrg && workspaceName !== undefined && workspaceName !== "";
+  const hasProject = hasOrg && projectId !== undefined && projectId !== "";
   const inAccountSettings = location.pathname === "/app/account";
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
     : "";
+  const projectPath = hasProject
+    ? `${orgPath}/projects/${encodeURIComponent(projectId)}`
+    : "";
   const settingsPath = `${workspacePath}/settings`;
   const inWorkspaceSettings =
     hasWorkspace && isActivePath(location.pathname, settingsPath);
+  const projectSettingsPath = `${projectPath}/settings`;
+  const inProjectSettings =
+    hasProject && isActivePath(location.pathname, projectSettingsPath);
   const organizationSettingsPath = `${orgPath}/settings`;
   const organizationSettingsTab = new URLSearchParams(location.search).get("tab");
   const inOrganizationSettings = hasOrg
@@ -325,7 +336,6 @@ export function Layout({
     setOrganizationPermissions(null);
     setOrganizationPermissionPath("");
     if (!hasOrg) return undefined;
-
     const controller = new AbortController();
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}`, {
       signal: controller.signal,
@@ -376,6 +386,26 @@ export function Layout({
 
     return (): void => { controller.abort(); };
   }, [hasWorkspace, orgName, workspaceName, workspacePath]);
+
+  useEffect((): (() => void) | undefined => {
+    setProjectName(null);
+    if (!hasProject || projectId === undefined) return undefined;
+
+    const controller = new AbortController();
+    void fetchApi(`/projects/${encodeURIComponent(projectId)}`, {
+      signal: controller.signal,
+    }).then((response: unknown): void => {
+      if (controller.signal.aborted) return;
+      const name = (response as {
+        data?: { attributes?: { name?: unknown } };
+      }).data?.attributes?.name;
+      setProjectName(typeof name === "string" && name !== "" ? name : projectId ?? "");
+    }).catch((): void => {
+      setProjectName(projectId ?? "");
+    });
+
+    return (): void => { controller.abort(); };
+  }, [hasProject, projectId]);
 
   const closeMobileNavigation = (): void => {
     setMobileNavigationOpen(false);
@@ -549,6 +579,78 @@ export function Layout({
             {workspaceName}
           </div>
           {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={isActivePath(
+                location.pathname,
+                link.to,
+                "exact" in link && link.exact,
+              )}
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+              trailing={"trailing" in link && link.trailing}
+            />
+          ))}
+        </>
+      );
+    }
+
+    if (hasProject) {
+      const isVariableSetsSection = location.pathname === `${projectSettingsPath}/variable-sets`;
+      const projectLinks = inProjectSettings
+        ? ([
+            {
+              active: location.pathname === projectSettingsPath,
+              icon: Settings,
+              label: "General",
+              to: projectSettingsPath,
+            },
+            {
+              active: isVariableSetsSection,
+              icon: Variable,
+              label: "Variable sets",
+              to: `${projectSettingsPath}/variable-sets`,
+            },
+          ] as const)
+        : ([
+            { label: "Overview", to: projectPath, icon: LayoutDashboard, exact: true },
+            { label: "Workspaces", to: `${projectPath}/workspaces`, icon: Box },
+            { label: "Settings", to: projectSettingsPath, icon: Settings, trailing: true },
+          ] as const);
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label="Projects"
+            onNavigate={closeMobileNavigation}
+            to={`${orgPath}/projects`}
+          />
+          <div
+            className={cn(
+              "truncate px-3 pb-2 pt-4 text-xs font-semibold text-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+            title={projectName ?? projectId}
+          >
+            {projectName ?? projectId}
+          </div>
+          {inProjectSettings && (
+            <div
+              className={cn(
+                "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
+                sidebarCollapsed && "lg:sr-only",
+              )}
+            >
+              Project Settings
+            </div>
+          )}
+          {projectLinks.map((link): JSX.Element => (
             <SidebarNavLink
               key={link.to}
               active={isActivePath(

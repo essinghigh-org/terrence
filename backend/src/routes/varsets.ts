@@ -37,9 +37,24 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);
-    const search = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+    const url = new URL(request.url);
+    const search = url.searchParams.get("q")?.trim() ?? "";
+    const projectFilter = url.searchParams.get("filter[project][id]")?.trim() ?? "";
     const scope = eq(variableSets.orgId, org.id);
-    const where = search !== "" ? and(scope, like(variableSets.name, `%${search}%`)) : scope;
+    const conditions: (typeof scope)[] = [scope];
+    if (search !== "") conditions.push(like(variableSets.name, `%${search}%`));
+    if (projectFilter !== "") {
+      // Only variable sets explicitly linked to this project (TFE: project-scoped).
+      const linked = await db.query.variableSetProjects.findMany({
+        where: eq(variableSetProjects.projectId, projectFilter),
+        columns: { variableSetId: true },
+      });
+      if (linked.length === 0) {
+        return { data: [], ...pagination(request, number, size, 0) };
+      }
+      conditions.push(inArray(variableSets.id, [...new Set(linked.map((l): string => l.variableSetId))]));
+    }
+    const where = and(...conditions);
     const [records, countRows] = await Promise.all([
       db.query.variableSets.findMany({ where, orderBy: [asc(variableSets.name)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(variableSets).where(where),

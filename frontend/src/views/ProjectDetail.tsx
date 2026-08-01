@@ -29,7 +29,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-export type ProjectSection = "overview" | "workspaces" | "settings";
+export type ProjectSection = "overview" | "workspaces" | "settings" | "variable-sets";
 
 type Project = Readonly<{
   id: string;
@@ -59,6 +59,18 @@ type RunSummary = Readonly<{
   relationships: Readonly<{ workspace: Readonly<{ data: Readonly<{ id: string }> }> }>;
 }>;
 
+type VariableSet = Readonly<{
+  id: string;
+  attributes: Readonly<{
+    name: string;
+    description?: string | null;
+    "var-count"?: number;
+    "workspace-count"?: number;
+    "project-count"?: number;
+    global?: boolean;
+  }>;
+}>;
+
 const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
   errored: ["errored"],
@@ -80,10 +92,12 @@ export function ProjectDetail({
   const navigate = useNavigate();
   const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const projectPath = `${orgPath}/projects/${encodeURIComponent(projectId ?? "")}`;
+  const projectSettingsPath = `${projectPath}/settings`;
 
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
+  const [variableSets, setVariableSets] = useState<VariableSet[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [embeddedSection, setEmbeddedSection] = useState<ProjectSection>("overview");
@@ -103,7 +117,7 @@ export function ProjectDetail({
     setLoading(true);
     setLoadError("");
     try {
-      const [projectResponse, workspaceResponse, runResponse] = await Promise.all([
+      const [projectResponse, workspaceResponse, runResponse, varsetResponse] = await Promise.all([
         fetchApi(`/projects/${encodeURIComponent(projectId)}`, signal === undefined ? {} : { signal }),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
@@ -115,11 +129,21 @@ export function ProjectDetail({
             return Array.isArray(data) ? data as RunSummary[] : [];
           })
           .catch((): RunSummary[] => []),
+        fetchApi(
+          `/organizations/${encodeURIComponent(orgName)}/varsets?filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
+          signal === undefined ? {} : { signal },
+        )
+          .then((response): VariableSet[] => {
+            const data = (response as { data?: unknown }).data;
+            return Array.isArray(data) ? data as VariableSet[] : [];
+          })
+          .catch((): VariableSet[] => []),
       ]);
       if (signal?.aborted === true) return;
       setProject((projectResponse as { data?: Project }).data ?? null);
       const wsData = (workspaceResponse as { data?: unknown }).data;
       setWorkspaces(Array.isArray(wsData) ? wsData as Workspace[] : []);
+      setVariableSets(varsetResponse);
       const byWorkspace = new Map<string, RunSummary>();
       for (const run of runResponse) {
         const wsId = run.relationships.workspace.data.id;
@@ -215,7 +239,7 @@ export function ProjectDetail({
     { id: "workspaces", label: "Workspaces" },
     { id: "settings", label: "Settings" },
   ];
-  const isSettings = activeSection === "settings";
+  const isSettings = activeSection === "settings" || activeSection === "variable-sets";
 
   return (
     <div className="w-full max-w-full">
@@ -300,12 +324,20 @@ export function ProjectDetail({
               <button
                 type="button"
                 key={tab.id}
-                onClick={(): void => { setEmbeddedSection(tab.id); }}
+                onClick={(): void => {
+                  setEmbeddedSection(tab.id);
+                  const target = tab.id === "overview"
+                    ? projectPath
+                    : tab.id === "workspaces"
+                      ? `${projectPath}/workspaces`
+                      : projectSettingsPath;
+                  void navigate(target);
+                }}
                 aria-label={tab.label.toLowerCase()}
-                aria-current={activeSection === tab.id ? "page" : undefined}
+                aria-current={isSettings && tab.id === "settings" ? "page" : activeSection === tab.id ? "page" : undefined}
                 className={cn(
                   "border-b-2 pb-3 text-sm font-medium transition-colors",
-                  activeSection === tab.id
+                  (isSettings && tab.id === "settings") || activeSection === tab.id
                     ? "border-primary text-primary"
                     : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                 )}
@@ -455,6 +487,46 @@ export function ProjectDetail({
                             ? <span className="text-muted-foreground">No runs</span>
                             : <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />}
                         </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        ) : activeSection === "variable-sets" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Variable sets</CardTitle>
+              <CardDescription>Variable sets shared with this project's workspaces.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {variableSets.length === 0 ? (
+                <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+                  No variable sets are applied to this project. Manage variable sets from the{" "}
+                  <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">organization Variable sets page</Link>.
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Variables</TableHead>
+                      <TableHead>Workspaces</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {variableSets.map((vs): React.JSX.Element => (
+                      <TableRow key={vs.id}>
+                        <TableCell className="font-medium">
+                          <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">
+                            {vs.attributes.name}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{vs.attributes.description ?? "—"}</TableCell>
+                        <TableCell><Badge variant="secondary">{vs.attributes["var-count"] ?? 0}</Badge></TableCell>
+                        <TableCell><Badge variant="secondary">{vs.attributes["workspace-count"] ?? 0}</Badge></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

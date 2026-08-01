@@ -110,6 +110,7 @@ function App(): JSX.Element {
             <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
             <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
             <Route path=":orgName/projects/:projectId/settings" element={<ProjectDetail section="settings" />} />
+            <Route path=":orgName/projects/:projectId/settings/variable-sets" element={<ProjectDetail section="variable-sets" />} />
             <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
             <Route path=":orgName/settings/agents" element={<AgentPools />} />
             <Route path=":orgName/variable-sets" element={<VariableSets />} />
