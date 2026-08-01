@@ -36,6 +36,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Tag,
   Trash2,
   UserRound,
   Users,
@@ -687,7 +688,8 @@ export function Layout({
           active: location.pathname === organizationSettingsPath
             && organizationSettingsTab !== "teams"
             && organizationSettingsTab !== "roles"
-            && organizationSettingsTab !== "cidr",
+            && organizationSettingsTab !== "cidr"
+            && organizationSettingsTab !== "tags",
           icon: Settings,
           label: "General",
           to: organizationSettingsPath,
@@ -705,6 +707,13 @@ export function Layout({
           icon: Users,
           label: "Roles",
           to: `${organizationSettingsPath}?tab=roles`,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "tags",
+          icon: Tag,
+          label: "Tags",
+          to: `${organizationSettingsPath}?tab=tags`,
         },
         {
           active: location.pathname === organizationSettingsPath
