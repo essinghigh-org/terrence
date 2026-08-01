@@ -366,7 +366,13 @@ resource "null_resource" "probe" {
   }
   expect(status, `run ${runId} did not reach applied`).toBe("applied");
 
-  const sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
+  // The state version is created before the run status is set to "applied",
+  // but under load there can be a small propagation delay. Retry a few times.
+  let sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
+  for (let i = 0; i < 10 && sv.status !== 200; i++) {
+    await sleep(500);
+    sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
+  }
   expect(sv.status).toBe(200);
   const resources = sv.json.data.attributes.resources as Array<{ name: string; type: string }>;
   expect(resources.some((r): boolean => r.name === "probe" && r.type === "null_resource")).toBe(true);
