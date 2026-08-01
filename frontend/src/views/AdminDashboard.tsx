@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Navigate, useOutletContext } from "react-router-dom";
-import { fetchApi } from "../lib/api";
+import { fetchAllApiPages, fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
 import {
   Shield,
@@ -16,6 +16,7 @@ import {
   Trash2,
   RefreshCw,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -69,13 +70,25 @@ export function AdminDashboard(): React.JSX.Element {
     [key: string]: unknown;
   };
   type DataItem = { id: string; attributes: ItemAttrs };
-  const [activeTab, setActiveTab] = useState<"users" | "orgs" | "workspaces" | "runs" | "versions" | "audit" | "auth">("users");
+  type SecuritySummary = Readonly<{
+    signupEnabled: boolean;
+    sandboxEnabled: boolean;
+    sandboxAvailable: boolean;
+    sandboxReason: string | null;
+  }>;
+  const [activeTab, setActiveTab] = useState<"security" | "users" | "orgs" | "workspaces" | "runs" | "versions" | "audit" | "auth">("users");
   const [users, setUsers] = useState<DataItem[]>([]);
   const [orgs, setOrgs] = useState<DataItem[]>([]);
   const [workspaces, setWorkspaces] = useState<DataItem[]>([]);
   const [runs, setRuns] = useState<DataItem[]>([]);
   const [tfVersions, setTfVersions] = useState<DataItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<DataItem[]>([]);
+  const [securitySummary, setSecuritySummary] = useState<SecuritySummary>({
+    signupEnabled: false,
+    sandboxEnabled: false,
+    sandboxAvailable: false,
+    sandboxReason: null,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -179,7 +192,30 @@ export function AdminDashboard(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      if (activeTab === "users") {
+      if (activeTab === "security") {
+        const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse] = await Promise.all([
+          fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
+          fetchApi("/api/v2/admin/audit-logs"),
+          fetchApi("/api/v2/ping"),
+          fetchApi("/api/v2/meta"),
+          fetchApi("/api/v2/admin/saml-settings"),
+          fetchApi("/api/v2/admin/oidc-settings"),
+        ]);
+        setUsers(usersResponse);
+        setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
+        const ping = pingResponse as { "signup-enabled"?: boolean };
+        const sandbox = (metaResponse as {
+          data?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null } };
+        }).data?.["run-sandbox"];
+        setSecuritySummary({
+          signupEnabled: ping["signup-enabled"] === true,
+          sandboxEnabled: sandbox?.enabled === true,
+          sandboxAvailable: sandbox?.available === true,
+          sandboxReason: typeof sandbox?.reason === "string" ? sandbox.reason : null,
+        });
+        setSamlEnabled((samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
+        setOidcEnabled((oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
+      } else if (activeTab === "users") {
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
         setUsers(res.data);
       } else if (activeTab === "orgs") {
@@ -407,8 +443,9 @@ export function AdminDashboard(): React.JSX.Element {
       </div>
 
       {/* Tabs Nav */}
-      <div className="flex border-b border-gray-200 gap-6">
+      <div className="flex overflow-x-auto border-b border-gray-200 gap-6">
         {[
+          { id: "security" as const, label: "Security overview", icon: ShieldCheck },
           { id: "users" as const, label: "Users", icon: Users },
           { id: "orgs" as const, label: "Organizations", icon: Building2 },
           { id: "workspaces" as const, label: "Workspaces", icon: Box },
@@ -421,8 +458,10 @@ export function AdminDashboard(): React.JSX.Element {
           return (
             <button
               key={tab.id}
+              type="button"
               onClick={(): void => { setActiveTab(tab.id); }}
-              className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+              aria-current={isActive ? "page" : undefined}
+              className={`flex min-w-max shrink-0 items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
                 isActive
                   ? "border-blue-600 text-blue-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
@@ -446,6 +485,104 @@ export function AdminDashboard(): React.JSX.Element {
         <div className="py-12 text-center text-gray-500 text-sm">Loading admin resources...</div>
       ) : (
         <>
+          {/* SECURITY OVERVIEW TAB */}
+          {activeTab === "security" && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Security overview</h2>
+                <p className="text-sm text-gray-500">A quick read of the instance-wide controls that protect access and runs.</p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Identity providers</CardTitle>
+                    <CardDescription>Configured sign-in paths for this instance.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>SAML SSO</span>
+                      <span className={samlEnabled ? "font-medium text-green-700" : "text-gray-500"}>{samlEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>OpenID Connect</span>
+                      <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={(): void => { setActiveTab("auth"); }}>
+                      Open authentication settings
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Account safeguards</CardTitle>
+                    <CardDescription>Local access and privileged-account posture.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Local account signup</span>
+                      <span className={securitySummary.signupEnabled ? "font-medium text-amber-700" : "font-medium text-green-700"}>
+                        {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Site administrators</span>
+                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Suspended users</span>
+                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Execution isolation</CardTitle>
+                    <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Sandbox required</span>
+                      <span className={securitySummary.sandboxEnabled ? "font-medium text-green-700" : "font-medium text-amber-700"}>
+                        {securitySummary.sandboxEnabled ? "Yes" : "No"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Sandbox available</span>
+                      <span className={securitySummary.sandboxAvailable ? "font-medium text-green-700" : "font-medium text-red-700"}>
+                        {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
+                      </span>
+                    </div>
+                    {securitySummary.sandboxReason !== null && (
+                      <p className="text-xs text-gray-500">{securitySummary.sandboxReason}</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Recent audit activity</CardTitle>
+                    <CardDescription>Administrative events retained by the instance.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-2xl font-semibold text-gray-900">{auditLogs.length}</p>
+                    <p className="text-sm text-gray-500">
+                      {auditLogs.length === 0 ? "No recent events" : auditLogs.length === 1 ? "Recent event available" : "Recent events available"}
+                    </p>
+                    {auditLogs[0]?.attributes.action !== undefined && (
+                      <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
+                    )}
+                    <Button variant="outline" size="sm" onClick={(): void => { setActiveTab("audit"); }}>
+                      Open audit log
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+
           {/* USERS TAB */}
           {activeTab === "users" && (
             <Card>

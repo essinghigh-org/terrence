@@ -118,8 +118,8 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(view.getByText("OpenID Connect")).toBeTruthy();
 
   // --- SAML section ---
-  const samlSection = view.getByText("SAML SSO").closest("div")?.parentElement ?? document.body;
-  expect(within(samlSection).getByText("Security Assertion Markup Language")).toBeTruthy();
+  const samlSection = view.getByText("SAML SSO").closest('[data-slot="card"]') ?? document.body;
+  expect(within(samlSection).getByText(/Security Assertion Markup Language/)).toBeTruthy();
 
   // Enable SAML
   const samlEnabledCheckbox = within(samlSection).getByLabelText("Enable SAML SSO") as HTMLInputElement;
@@ -142,8 +142,8 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
 
   // --- OIDC section ---
-  const oidcSection = view.getByText("OpenID Connect").closest("div")?.parentElement ?? document.body;
-  expect(within(oidcSection).getByText("OpenID Connect provider")).toBeTruthy();
+  const oidcSection = view.getByText("OpenID Connect").closest('[data-slot="card"]') ?? document.body;
+  expect(within(oidcSection).getByText(/OpenID Connect provider/)).toBeTruthy();
 
   // Fill in OIDC issuer URL
   const issuerInput = within(oidcSection).getByLabelText("Issuer URL") as HTMLInputElement;
@@ -175,4 +175,52 @@ test("hides the authentication tab from non-admin users", async (): Promise<void
   );
 
   expect(view.queryByRole("button", { name: "Authentication" })).toBeNull();
+});
+
+test("shows the security overview from existing admin controls", async (): Promise<void> => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.startsWith("/api/v2/admin/users")) {
+      return json({
+        data: [
+          { id: "admin-1", attributes: { username: "alice", "is-site-admin": true, "is-suspended": false } },
+          { id: "user-1", attributes: { username: "bob", "is-site-admin": false, "is-suspended": true } },
+        ],
+      });
+    }
+    if (url === "/api/v2/admin/audit-logs") {
+      return json({ data: [{ id: "audit-1", attributes: { action: "user.suspend" } }] });
+    }
+    if (url === "/api/v2/ping") return json({ "signup-enabled": false });
+    if (url === "/api/v2/meta") {
+      return json({ data: { "run-sandbox": { enabled: true, available: true, reason: null } } });
+    }
+    if (url === "/api/v2/admin/saml-settings") return json({ data: { attributes: { enabled: true } } });
+    if (url === "/api/v2/admin/oidc-settings") return json({ data: { attributes: { enabled: false } } });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/admin"]}>
+      <Routes>
+        <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: true }} />}>
+          <Route path="/admin" element={<AdminDashboard />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Security overview" }));
+  await waitFor((): void => { expect(view.getByText("Identity providers")).toBeTruthy(); });
+
+  const identityCard = view.getByText("Identity providers").closest('[data-slot="card"]') ?? document.body;
+  expect(within(identityCard).getByText("Enabled")).toBeTruthy();
+  expect(view.getByText("Local account signup")).toBeTruthy();
+  expect(view.getByText("Site administrators").nextElementSibling?.textContent).toBe("1");
+  expect(view.getByText("Suspended users").nextElementSibling?.textContent).toBe("1");
+  expect(view.getByText("Sandbox available")).toBeTruthy();
+  expect(view.getByText("Available")).toBeTruthy();
+  expect(view.getByText("Latest: user.suspend")).toBeTruthy();
 });
