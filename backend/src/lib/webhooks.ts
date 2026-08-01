@@ -8,6 +8,7 @@ import {
   githubAppInstallations,
   oauthClients,
   oauthTokens,
+  organizations,
   policySets,
   runs,
   workspaces,
@@ -445,9 +446,13 @@ async function githubCredentials(
 }
 
 function vcsStatus(runStatus: string): "pending" | "success" | "failure" | undefined {
-  if (runStatus === "pending" || runStatus === "fetching") return "pending";
-  if (["policy_checked", "planned_and_finished", "planned_and_saved", "applied"].includes(runStatus)) return "success";
-  if (["errored", "canceled", "force_canceled", "discarded", "unreachable"].includes(runStatus)) return "failure";
+  if ([
+    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking",
+    "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying",
+  ].includes(runStatus)) return "pending";
+  if (["policy_checked", "planned", "planned_and_finished", "planned_and_saved", "applied"].includes(runStatus)) return "success";
+  if (["policy_override", "policy_soft_failed", "errored", "canceled", "force_canceled", "discarded", "unreachable"].includes(runStatus)) return "failure";
   return undefined;
 }
 
@@ -458,8 +463,77 @@ function validRepository(repoFullName: string, provider: VcsProvider): boolean {
     && parts.every((part: string): boolean => REPOSITORY_PATTERN.test(part));
 }
 
+async function githubPullRequestFiles(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  if (workspace === undefined || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "github")) return undefined;
+  try {
+    const credentials = await githubCredentials(workspace);
+    if (credentials === undefined) return undefined;
+    const response = await fetch(
+      `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(details.pullRequestNumber)}/files?per_page=100`,
+      {
+        headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok || response.headers.get("link")?.includes('rel="next"') === true) return undefined;
+    const body = await response.json() as unknown;
+    if (!Array.isArray(body)) return undefined;
+    const files = new Set<string>();
+    for (const item of body) {
+      const filename = asRecord(item)?.filename;
+      if (typeof filename !== "string" || filename === "") return undefined;
+      files.add(filename);
+    }
+    return files;
+  } catch {
+    return undefined;
+  }
+}
+
+async function reportUntriggeredSpeculativeStatus(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<void> {
+  try {
+    const organization = await db.query.organizations.findFirst({
+      where: eq(organizations.id, workspace.orgId),
+      columns: { name: true, aggregatedCommitStatusEnabled: true, sendPassingStatusesForUntriggeredSpeculativePlans: true },
+    });
+    if (organization?.aggregatedCommitStatusEnabled !== false || organization.sendPassingStatusesForUntriggeredSpeculativePlans !== true) return;
+    if (!validRepository(details.repoFullName, "github") || !COMMIT_SHA_PATTERN.test(details.commitSha)) return;
+    const credentials = await githubCredentials(workspace);
+    if (credentials === undefined) return;
+    const response = await fetch(
+      `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(details.commitSha)}`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${credentials.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          state: "success",
+          context: `terrence/${workspace.name}`.slice(0, 100),
+          description: "No Terraform changes matched this workspace",
+          target_url: details.commitUrl,
+        }),
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) console.error(`[terrence] Failed to report passing GitHub status for workspace ${workspace.id}: ${String(response.status)}`);
+  } catch (error) {
+    console.error(`[terrence] Failed to report passing GitHub status for workspace ${workspace.id}:`, error);
+  }
+}
+
 export async function reportRunVcsStatus(runId: string, runStatus: string): Promise<void> {
-  const state = vcsStatus(runStatus);
+  let state = vcsStatus(runStatus);
   if (state === undefined) return;
   try {
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
@@ -485,8 +559,55 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
     if (credentials === undefined) return;
 
     const context = `terrence/${workspace.name}`.slice(0, 100);
+    const organization = await db.query.organizations.findFirst({
+      where: eq(organizations.id, workspace.orgId),
+      columns: { name: true, aggregatedCommitStatusEnabled: true },
+    });
+    const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, "");
+    const targetUrl = publicUrl === undefined || organization === undefined
+      ? undefined
+      : `${publicUrl}/app/${encodeURIComponent(organization.name)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(runId)}`;
+    const description = `Terraform run ${runStatus}`;
     let response: Response;
     if (provider === "github") {
+      let githubContext = context;
+      let githubDescription = description;
+      if (organization?.aggregatedCommitStatusEnabled !== false) {
+        const relatedWorkspaces = (await db.query.workspaces.findMany({
+          where: and(
+            eq(workspaces.orgId, workspace.orgId),
+            sql`json_extract(${workspaces.vcsRepo}, '$.identifier') = ${repoFullName}`,
+          ),
+        })).filter((candidate): boolean => {
+          const candidateVcs = candidate.vcsRepo;
+          const currentVcs = workspace.vcsRepo;
+          return candidateVcs?.githubAppInstallationId === currentVcs?.githubAppInstallationId
+            && candidateVcs?.oauthTokenId === currentVcs?.oauthTokenId;
+        });
+        const relatedWorkspaceIds = relatedWorkspaces.map((candidate): string => candidate.id);
+        const relatedRuns = relatedWorkspaceIds.length === 0
+          ? []
+          : await db.query.runs.findMany({ where: inArray(runs.workspaceId, relatedWorkspaceIds) });
+        const configurationIds = relatedRuns
+          .map((relatedRun): string | null => relatedRun.configurationVersionId)
+          .filter((id): id is string => id !== null);
+        const relatedConfigurations = configurationIds.length === 0
+          ? []
+          : await db.query.configurationVersions.findMany({ where: inArray(configurationVersions.id, configurationIds) });
+        const configurationsById = new Map(relatedConfigurations.map((item): [string, typeof item] => [item.id, item]));
+        const relatedStates = relatedRuns
+          .filter((relatedRun): boolean => configurationsById.get(relatedRun.configurationVersionId ?? "")?.ingressAttributes?.commitSha === commitSha)
+          .map((relatedRun): "pending" | "success" | "failure" | undefined => vcsStatus(relatedRun.status))
+          .filter((value): value is "pending" | "success" | "failure" => value !== undefined);
+        const aggregateState = relatedStates.some((value): boolean => value === "failure")
+          ? "failure"
+          : relatedStates.length > 0 && relatedStates.every((value): boolean => value === "success")
+            ? "success"
+            : "pending";
+        state = aggregateState;
+        githubContext = "terrence";
+        githubDescription = `${relatedStates.length} workspace run${relatedStates.length === 1 ? "" : "s"}: ${aggregateState}`;
+      }
       response = await fetch(
         `${credentials.apiUrl}/repos/${repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(commitSha)}`,
         {
@@ -496,7 +617,7 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
             Authorization: `Bearer ${credentials.token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ state, context, description: `Terraform run ${runStatus}` }),
+          body: JSON.stringify({ state, context: githubContext, description: githubDescription, ...(targetUrl === undefined ? {} : { target_url: targetUrl }) }),
           signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
         },
       );
@@ -878,13 +999,25 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   const candidates = await db.query.workspaces.findMany({
     where: sql`json_extract(${workspaces.vcsRepo}, '$.identifier') = ${details.repoFullName}`,
   });
-  const matchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
+  const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
     if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
     if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== details.branch) return false;
-    return matchesFileTriggers(workspace, details.filesChanged);
+    return true;
   });
+  let triggerDetails = details;
+  if (eventName === "pull_request") {
+    const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces[0], details);
+    if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
+  }
+  const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace): boolean =>
+    details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
+  if (eventName === "pull_request") {
+    await Promise.all(branchMatchedWorkspaces
+      .filter((workspace): boolean => !matchesFileTriggers(workspace, triggerDetails.filesChanged))
+      .map(async (workspace): Promise<void> => { await reportUntriggeredSpeculativeStatus(workspace, triggerDetails); }));
+  }
 
   const configurationVersionIds: string[] = [];
   const downloadableConfigurationVersionIds: string[] = [];
@@ -967,9 +1100,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   const missingTokenConfigurationVersionIds = configurationVersionIds.filter((id: string): boolean => !downloadableConfigurationVersionIds.includes(id));
   if (missingTokenConfigurationVersionIds.length > 0) {
     console.error(`[terrence] Could not obtain a GitHub token for ${details.repoFullName}`);
-    await db.update(configurationVersions)
-      .set({ status: "errored", error: "GitHub App access token is unavailable" })
-      .where(inArray(configurationVersions.id, missingTokenConfigurationVersionIds));
+    await markConfigurationVersionsErrored(missingTokenConfigurationVersionIds, "GitHub App access token is unavailable");
   }
   if (token !== null && downloadableConfigurationVersionIds.length > 0) {
     await fetchAndSaveTarball(downloadableConfigurationVersionIds, token, details.repoFullName, details.commitSha);
@@ -1168,4 +1299,16 @@ async function markConfigurationVersionsErrored(configurationVersionIds: readonl
   await db.update(configurationVersions)
     .set({ status: "errored", error })
     .where(inArray(configurationVersions.id, [...configurationVersionIds]));
+  const affectedRuns = await db.query.runs.findMany({
+    where: inArray(runs.configurationVersionId, [...configurationVersionIds]),
+    columns: { id: true, statusTimestamps: true },
+  });
+  const erroredAt = new Date().toISOString();
+  for (const run of affectedRuns) {
+    await db.update(runs).set({
+      status: "errored",
+      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": erroredAt },
+    }).where(eq(runs.id, run.id));
+    void reportRunVcsStatus(run.id, "errored");
+  }
 }

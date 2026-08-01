@@ -68,7 +68,7 @@ Terrence runs without any environment variables in development. The table below 
 | `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
 | `GITHUB_APP_SLUG` | — | GitHub App slug |
 | `GITHUB_APP_PRIVATE_KEY` | — | GitHub App RSA private key |
-| `GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret |
+| `GITHUB_WEBHOOK_SECRET` | — | Exact secret configured in the GitHub App's Webhooks settings; required to accept `/api/webhooks/github` deliveries |
 | `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub Enterprise HTTP URL |
 | `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub Enterprise API URL |
 | `ADMIN_PASSWORD` | — | Bootstrap admin password on first start (min 10 chars). Used when `TERRENCE_ENABLE_LOCAL_SIGNUP` is not set. |
@@ -110,6 +110,8 @@ docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 - **Agent Pools** — Remote execution agents
 - **No-Code Provisioning** — Registry module deployments
 - **GitHub App Integration** — Auto-trigger runs on push/PR
+
+For GitHub commit statuses, the GitHub App also needs repository **Commit statuses: Read and write** permission. After changing App permissions, reinstall or approve the updated installation.
 
 ## API
 

@@ -93,6 +93,16 @@ if (!existingWsCols.has("created_at")) {
 if (!existingWsCols.has("updated_at")) {
   await sqlite.execute("ALTER TABLE workspaces ADD COLUMN updated_at INTEGER");
 }
+
+const organizationTableInfo = await sqlite.execute("PRAGMA table_info(organizations)");
+const existingOrganizationColumns = getColumnNames(organizationTableInfo);
+const organizationAdditions: [string, string][] = [
+  ["aggregated_commit_status_enabled", "integer NOT NULL DEFAULT true"],
+  ["send_passing_statuses", "integer NOT NULL DEFAULT false"],
+];
+for (const [col, def] of organizationAdditions) {
+  if (!existingOrganizationColumns.has(col)) await sqlite.execute(`ALTER TABLE organizations ADD COLUMN ${col} ${def}`);
+}
 // Check workspaces for source column
 if (!existingWsCols.has("source")) {
   await sqlite.execute("ALTER TABLE workspaces ADD COLUMN source text DEFAULT 'tfe-api'");

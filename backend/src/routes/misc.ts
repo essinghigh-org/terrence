@@ -198,7 +198,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const signature = request.headers.get("x-hub-signature-256");
-    const rawBody = typeof body === "string" ? body : "";
+    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
     if (typeof secret !== "string" || secret.length === 0) {
       return webhookUnauthorized(set, "GitHub webhook secret is not configured");
     }

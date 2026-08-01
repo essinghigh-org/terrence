@@ -171,6 +171,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         stacksEnabled,
         showPreReleases,
         defaultExecutionMode,
+        aggregatedCommitStatusEnabled: true,
+        sendPassingStatusesForUntriggeredSpeculativePlans: false,
       };
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
@@ -475,6 +477,12 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const showPreReleases = attributes["show-pre-releases"] === undefined
       ? org.showPreReleases
       : attributes["show-pre-releases"] === true;
+    const aggregatedCommitStatusEnabled = attributes["aggregated-commit-status-enabled"] === undefined
+      ? org.aggregatedCommitStatusEnabled
+      : attributes["aggregated-commit-status-enabled"] === true;
+    const sendPassingStatusesForUntriggeredSpeculativePlans = attributes["send-passing-statuses-for-untriggered-speculative-plans"] === undefined
+      ? org.sendPassingStatusesForUntriggeredSpeculativePlans
+      : attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true;
     const defaultExecutionMode = attributes["default-execution-mode"] === undefined
       ? org.defaultExecutionMode
       : typeof attributes["default-execution-mode"] === "string"
@@ -519,6 +527,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         stacksEnabled,
         showPreReleases,
         defaultExecutionMode: defaultExecutionMode as string,
+        aggregatedCommitStatusEnabled,
+        sendPassingStatusesForUntriggeredSpeculativePlans,
       };
       await db.update(organizations).set({
         name: updated.name,
@@ -531,6 +541,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         stacksEnabled: updated.stacksEnabled,
         showPreReleases: updated.showPreReleases,
         defaultExecutionMode: updated.defaultExecutionMode,
+        aggregatedCommitStatusEnabled: updated.aggregatedCommitStatusEnabled,
+        sendPassingStatusesForUntriggeredSpeculativePlans: updated.sendPassingStatusesForUntriggeredSpeculativePlans,
       }).where(eq(organizations.id, org.id));
       return { data: await organizationResourceForPrincipal(updated, user?.id, orgId, teamId) };
     } catch (e: unknown) {

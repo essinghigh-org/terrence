@@ -29,6 +29,8 @@ export const organizations = sqliteTable("organizations", {
   stacksEnabled: integer("stacks_enabled", { mode: "boolean" }).notNull().default(false),
   showPreReleases: integer("show_pre_releases", { mode: "boolean" }).notNull().default(false),
   defaultExecutionMode: text("default_execution_mode").default("remote"),
+  aggregatedCommitStatusEnabled: integer("aggregated_commit_status_enabled", { mode: "boolean" }).notNull().default(true),
+  sendPassingStatusesForUntriggeredSpeculativePlans: integer("send_passing_statuses", { mode: "boolean" }).notNull().default(false),
 });
 
 export const samlSettings = sqliteTable("saml_settings", {

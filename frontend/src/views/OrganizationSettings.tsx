@@ -89,6 +89,8 @@ export function OrganizationSettings(): React.JSX.Element {
   const [stacksEnabled, setStacksEnabled] = useState(false);
   const [showPreReleases, setShowPreReleases] = useState(false);
   const [defaultExecutionMode, setDefaultExecutionMode] = useState("remote");
+  const [aggregatedCommitStatusEnabled, setAggregatedCommitStatusEnabled] = useState(true);
+  const [sendPassingStatusesForUntriggeredSpeculativePlans, setSendPassingStatusesForUntriggeredSpeculativePlans] = useState(false);
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -161,6 +163,8 @@ export function OrganizationSettings(): React.JSX.Element {
       setStacksEnabled(res.data.attributes["stacks-enabled"] === true);
       setShowPreReleases(res.data.attributes["show-pre-releases"] === true);
       setDefaultExecutionMode((res.data.attributes["default-execution-mode"] as string | undefined) ?? "remote");
+      setAggregatedCommitStatusEnabled(res.data.attributes["aggregated-commit-status-enabled"] !== false);
+      setSendPassingStatusesForUntriggeredSpeculativePlans(res.data.attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true);
     } catch (err: unknown) {
       if (activeOrganizationName.current !== orgNameParam) return;
       setLoadError(err instanceof Error ? err.message : "Could not load organization settings");
@@ -277,6 +281,8 @@ export function OrganizationSettings(): React.JSX.Element {
               "stacks-enabled": stacksEnabled,
               "show-pre-releases": showPreReleases,
               "default-execution-mode": defaultExecutionMode,
+              "aggregated-commit-status-enabled": aggregatedCommitStatusEnabled,
+              "send-passing-statuses-for-untriggered-speculative-plans": sendPassingStatusesForUntriggeredSpeculativePlans,
             },
           },
         }),
@@ -627,6 +633,33 @@ export function OrganizationSettings(): React.JSX.Element {
                         className="h-9"
                       />
                       <p className="text-[13px] text-gray-500 mt-1">Email address used for organization notifications.</p>
+                    </div>
+                    <div className="space-y-2 border-t pt-4">
+                      <p className="text-sm font-semibold text-gray-900">VCS status checks</p>
+                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                        <Checkbox
+                          checked={aggregatedCommitStatusEnabled}
+                          onCheckedChange={(checked: boolean): void => { setAggregatedCommitStatusEnabled(checked); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Aggregate status checks
+                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
+                        </span>
+                      </label>
+                      {!aggregatedCommitStatusEnabled && (
+                        <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                          <Checkbox
+                            checked={sendPassingStatusesForUntriggeredSpeculativePlans}
+                            onCheckedChange={(checked: boolean): void => { setSendPassingStatusesForUntriggeredSpeculativePlans(checked); }}
+                            disabled={!canUpdateOrganization}
+                          />
+                          <span>
+                            Send passing statuses for unaffected pull requests
+                            <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
+                          </span>
+                        </label>
+                      )}
                     </div>
                     <div className="space-y-2 border-t pt-4">
                       <label className="flex items-start gap-3 text-sm font-medium text-gray-900">

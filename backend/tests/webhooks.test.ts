@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { eq } from "drizzle-orm";
 import { app } from "../src/app";
 import { db } from "../src/db";
+import { reportRunVcsStatus } from "../src/lib/webhooks";
 import {
   apiTokens,
   configurationVersions,
@@ -74,7 +75,7 @@ async function sendWebhook(eventName: string, payload: Readonly<Record<string, u
   return app.handle(new Request("http://127.0.0.1/api/webhooks/github", {
     method: "POST",
     headers: {
-      "Content-Type": "application/vnd.api+json",
+      "Content-Type": "application/json",
       "x-github-delivery": deliveryId,
       "x-github-event": eventName,
       "x-hub-signature-256": await generateSignature(rawPayload),
@@ -114,6 +115,16 @@ async function waitForCommitStatus(): Promise<Record<string, unknown> | undefine
   return commitStatuses.at(-1);
 }
 
+async function waitForCommitStatusMatching(predicate: (status: Record<string, unknown>) => boolean): Promise<Record<string, unknown> | undefined> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const status = commitStatuses.find(predicate);
+    if (status !== undefined) return status;
+    await Bun.sleep(10);
+  }
+  return commitStatuses.find(predicate);
+}
+
 describe("GitHub Webhooks", () => {
   beforeAll(async () => {
     process.env.GITHUB_WEBHOOK_SECRET = "test-secret";
@@ -126,6 +137,7 @@ describe("GitHub Webhooks", () => {
     const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "test-token" });
+      if (url.includes("/pulls/42/files")) return Response.json([{ filename: "src/main.tf" }]);
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
         return new Response(new Uint8Array([1, 2, 3]));
@@ -189,6 +201,10 @@ describe("GitHub Webhooks", () => {
         vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: installationId },
       })
       .where(eq(workspaces.id, workspaceId));
+    await db.update(organizations).set({
+      aggregatedCommitStatusEnabled: true,
+      sendPassingStatusesForUntriggeredSpeculativePlans: false,
+    }).where(eq(organizations.id, orgId));
   });
 
   afterAll(async () => {
@@ -279,12 +295,53 @@ describe("GitHub Webhooks", () => {
     expect(await waitForCommitStatus()).toMatchObject({ state: "pending" });
   });
 
+  test("supports aggregated and per-workspace commit statuses", async () => {
+    await db.update(organizations).set({ aggregatedCommitStatusEnabled: false }).where(eq(organizations.id, orgId));
+    const nonAggregatedDelivery = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, nonAggregatedDelivery);
+    await waitForDelivery(nonAggregatedDelivery);
+    expect(await waitForCommitStatusMatching((status): boolean => status.context === "terrence/webhook-ws")).toBeDefined();
+
+    commitStatuses.length = 0;
+    await db.update(organizations).set({ aggregatedCommitStatusEnabled: true }).where(eq(organizations.id, orgId));
+    const aggregatedDelivery = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, aggregatedDelivery);
+    await waitForDelivery(aggregatedDelivery);
+    expect(await waitForCommitStatusMatching((status): boolean => status.context === "terrence")).toBeDefined();
+  });
+
+  test("reports failed runs as failure", async () => {
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    const runList = await waitForRuns((items): boolean => items.length === 1);
+    await waitForDelivery(deliveryId);
+    const run = runList[0];
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, run.id));
+    await reportRunVcsStatus(run.id, "errored");
+    expect(await waitForCommitStatusMatching((status): boolean => status.state === "failure")).toMatchObject({ state: "failure" });
+  });
+
   test("matching pull request creates a speculative run", async () => {
     const deliveryId = crypto.randomUUID();
     expect((await sendWebhook("pull_request", pullRequestPayload(), deliveryId)).status).toBe(200);
     const runList = await waitForRuns((items): boolean => items.some((run): boolean => run.planOnly));
     await waitForDelivery(deliveryId);
     expect(runList.find((run): boolean => run.workspaceId === workspaceId && run.planOnly)).toBeDefined();
+  });
+
+  test("can pass unaffected pull requests when non-aggregated statuses are enabled", async () => {
+    await db.update(organizations).set({
+      aggregatedCommitStatusEnabled: false,
+      sendPassingStatusesForUntriggeredSpeculativePlans: true,
+    }).where(eq(organizations.id, orgId));
+    await db.update(workspaces).set({ triggerPrefixes: ["infra/"] }).where(eq(workspaces.id, workspaceId));
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("pull_request", pullRequestPayload(), deliveryId);
+    await waitForDelivery(deliveryId);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+    expect(await waitForCommitStatusMatching((status): boolean => status.state === "success")).toMatchObject({ state: "success" });
   });
 
   test("non-matching branch creates no run", async () => {

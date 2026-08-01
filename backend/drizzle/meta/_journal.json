@@ -337,6 +337,13 @@
       "when": 1786851000000,
       "tag": "0048_vcs_integration_dependencies",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1786852000000,
+      "tag": "0049_vcs_status_modes",
+      "breakpoints": true
     }
   ]
 }
