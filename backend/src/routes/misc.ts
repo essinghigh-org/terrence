@@ -15,6 +15,7 @@ import {
   type CostEstimateTimestamps,
 } from "../lib/cost-estimate";
 import { authPlugin } from "../auth";
+import { log } from "../lib/log";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -233,7 +234,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       }
 
       if (eventName === "push" || eventName === "pull_request") {
-        console.log(`[terrence] Received GitHub ${eventName} event.`);
+        log.info(`Received GitHub ${eventName} event.`);
       }
       void processGithubDelivery(deliveryId, eventName, payload);
     }

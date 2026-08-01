@@ -56,6 +56,7 @@ import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks"
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { recoverStaleAgentJobs } from "./lib/agent-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
+import { log } from "./lib/log";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;
@@ -274,13 +275,14 @@ async function storePlanCheckResults(
   }
 
   const summary = { passed: 0, failed: 0, errored: 0, unknown: 0 };
+  const rows: (typeof assessmentCheckResults.$inferInsert)[] = [];
   for (const [index, rawCheck] of rawChecks.entries()) {
     const check = asObject(rawCheck);
     if (check === undefined) continue;
     const normalizedStatus = checkStatus(check.status);
     summary[normalizedStatus] += 1;
     const address = checkAddress(check, index);
-    await db.insert(assessmentCheckResults).values({
+    rows.push({
       id: `checkrs-${crypto.randomUUID()}`,
       workspaceId,
       assessmentResultId: association.assessmentResultId ?? null,
@@ -293,6 +295,7 @@ async function storePlanCheckResults(
       createdAt: Date.now(),
     });
   }
+  if (rows.length > 0) await db.insert(assessmentCheckResults).values(rows);
   return summary;
 }
 
@@ -659,7 +662,7 @@ async function unnestArchiveDirectory(
         await rename(join(subDir, file), join(destDir, file));
       }
       await rm(subDir, { recursive: true, force: true });
-      console.log(`[terrence] Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
+      log.info(`Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
     }
   } catch (err: unknown) {
     console.warn("[terrence] Could not unnest archive directory:", err);

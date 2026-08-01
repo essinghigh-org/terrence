@@ -130,6 +130,22 @@ describe("Security Regression — Signup Disabled by Default", () => {
   });
 });
 
+describe("Security Regression — CORS Defaults", () => {
+  it("does not expose a wildcard origin in development", async () => {
+    const previous = process.env.CORS_ORIGIN;
+    delete process.env.CORS_ORIGIN;
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/ping", {
+        headers: { Origin: "https://malicious.example" },
+      }));
+      expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+    } finally {
+      if (previous === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previous;
+    }
+  });
+});
+
 describe("Security Regression — VCS Webhooks Fail Closed", () => {
   it("returns 401 when GitHub webhook secret is not configured", async () => {
     const res = await app.handle(

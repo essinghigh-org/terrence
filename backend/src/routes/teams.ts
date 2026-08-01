@@ -350,10 +350,14 @@ export const teamRoutes = new Elysia({ name: "teams" })
               where: inArray(organizationMemberships.id, memIds),
             })).map((m): [string, typeof organizationMemberships.$inferSelect] => [m.id, m]),
           );
+      const batch: (typeof teamMemberships.$inferInsert)[] = [];
       for (const memId of memIds) {
         const mem = memberships.get(memId);
-        if (mem?.orgId === team.orgId) await db.insert(teamMemberships).values({ id: `tm-${crypto.randomUUID()}`, teamId, userId: mem.userId, createdAt: Date.now() }).onConflictDoNothing();
+        if (mem?.orgId === team.orgId) {
+          batch.push({ id: `tm-${crypto.randomUUID()}`, teamId, userId: mem.userId, createdAt: Date.now() });
+        }
       }
+      if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};

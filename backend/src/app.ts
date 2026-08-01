@@ -240,7 +240,7 @@ export const app = new Elysia()
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
 
     const headers = set.headers as Record<string, string | number>;
-    const allowOrigin = process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
+    const allowOrigin = process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "http://localhost:5173");
     if (allowOrigin !== undefined) {
       headers["Access-Control-Allow-Origin"] = allowOrigin;
     }

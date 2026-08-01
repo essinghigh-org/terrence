@@ -559,15 +559,21 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const wsItems = payload.data;
     if (Array.isArray(wsItems)) {
-      const batch: { id: string; policySetId: string; workspaceId: string }[] = [];
-      for (const item of wsItems) {
-        if (item === null || typeof item !== "object" || typeof (item as Record<string, unknown>).id !== "string") continue;
-        const wsId = (item as Record<string, unknown>).id as string;
-        const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
-        if (workspace?.orgId === ps.orgId) {
-          batch.push({ id: `psw-${crypto.randomUUID()}`, policySetId, workspaceId: wsId });
-        }
-      }
+      const workspaceIds = wsItems
+        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
+          ? (item as Record<string, unknown>).id as string
+          : "")
+        .filter((id: string): boolean => id !== "");
+      const workspacesInOrg = workspaceIds.length === 0
+        ? []
+        : await db.query.workspaces.findMany({
+          where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
+        });
+      const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
+        id: `psw-${crypto.randomUUID()}`,
+        policySetId,
+        workspaceId: workspace.id,
+      }));
       if (batch.length > 0) await db.insert(policySetWorkspaces).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
@@ -580,14 +586,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const projItems = payload.data;
     if (Array.isArray(projItems)) {
-      for (const item of projItems) {
-        if (item === null || typeof item !== "object" || typeof (item as Record<string, unknown>).id !== "string") continue;
-        const projId = (item as Record<string, unknown>).id as string;
-        const project = await db.query.projects.findFirst({ where: eq(projects.id, projId) });
-        if (project?.orgId === ps.orgId) {
-          await db.insert(policySetProjects).values({ id: `pspj-${crypto.randomUUID()}`, policySetId, projectId: projId }).onConflictDoNothing();
-        }
-      }
+      const projectIds = projItems
+        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
+          ? (item as Record<string, unknown>).id as string
+          : "")
+        .filter((id: string): boolean => id !== "");
+      const projectsInOrg = projectIds.length === 0
+        ? []
+        : await db.query.projects.findMany({
+          where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
+        });
+      const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
+        id: `pspj-${crypto.randomUUID()}`,
+        policySetId,
+        projectId: project.id,
+      }));
+      if (batch.length > 0) await db.insert(policySetProjects).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};
@@ -609,14 +623,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const wsItems = payload.data;
     if (Array.isArray(wsItems)) {
-      for (const item of wsItems) {
-        if (item === null || typeof item !== "object" || typeof (item as Record<string, unknown>).id !== "string") continue;
-        const wsId = (item as Record<string, unknown>).id as string;
-        const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
-        if (workspace?.orgId === ps.orgId) {
-          await db.insert(policySetExclusions).values({ id: `psex-${crypto.randomUUID()}`, policySetId, workspaceId: wsId }).onConflictDoNothing();
-        }
-      }
+      const workspaceIds = wsItems
+        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
+          ? (item as Record<string, unknown>).id as string
+          : "")
+        .filter((id: string): boolean => id !== "");
+      const workspacesInOrg = workspaceIds.length === 0
+        ? []
+        : await db.query.workspaces.findMany({
+          where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
+        });
+      const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
+        id: `psex-${crypto.randomUUID()}`,
+        policySetId,
+        workspaceId: workspace.id,
+      }));
+      if (batch.length > 0) await db.insert(policySetExclusions).values(batch).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};

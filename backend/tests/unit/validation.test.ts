@@ -1,9 +1,27 @@
 import { describe, expect, it } from "bun:test";
 import {
+  decodeStatePayload,
+  parseStatePayload,
   validVariableAttributes,
   validVariableSetVariableAttributes,
   validVariableSetAttributes,
 } from "../../src/lib/validation";
+
+describe("state payload helpers", () => {
+  it("decodes a base64 JSON payload after the plain JSON parse fails", () => {
+    const encoded = Buffer.from(JSON.stringify({ serial: 3 })).toString("base64");
+    expect(decodeStatePayload(encoded)).toBe('{"serial":3}');
+  });
+
+  it("keeps an undecodable payload unchanged", () => {
+    expect(decodeStatePayload("not-json-or-base64")).toBe("not-json-or-base64");
+  });
+
+  it("returns null when the parsed payload is not an object", () => {
+    expect(parseStatePayload("not-json")).toBeNull();
+    expect(parseStatePayload("[]")).toBeNull();
+  });
+});
 
 describe("validVariableAttributes", () => {
   it("accepts a full valid variable", () => {

@@ -1,6 +1,7 @@
 import { join, resolve } from "path";
 import { mkdir, exists, chmod, unlink, readdir, rm } from "fs/promises";
 import { spawn } from "bun";
+import { log } from "./lib/log";
 
 const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
 const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
@@ -282,7 +283,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       ? `https://github.com/opentofu/opentofu/releases/download/v${version}/${zipFilename}`
       : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
 
-    console.log(`[terrence] Downloading ${tool} v${version} from ${downloadUrl}`);
+    log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
     const res = await fetch(downloadUrl, { signal: AbortSignal.timeout(30000) });
 
     if (!res.ok) {
@@ -330,7 +331,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
 
     if (exitCode === 0 && (await exists(binaryPath))) {
       await chmod(binaryPath, 0o755);
-      console.log(`[terrence] Successfully installed ${tool} v${version} to ${binaryPath}`);
+      log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
       return { binaryPath, tool, version };
     } else {
       console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
@@ -354,7 +355,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
             if (vMatch !== null) {
               const sysVersion = vMatch[1];
               if (sysVersion !== undefined && matchesConstraints(sysVersion, version)) {
-                console.log(`[terrence] System-installed ${tool} v${sysVersion} satisfies constraint "${version}" at ${sysPath}`);
+                log.info(`System-installed ${tool} v${sysVersion} satisfies constraint "${version}" at ${sysPath}`);
                 return { binaryPath: sysPath, tool, version: sysVersion };
               }
             }
