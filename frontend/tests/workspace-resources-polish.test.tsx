@@ -83,7 +83,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
   expect(view.queryByText("never-render")).toBeNull();
 
   fireEvent.click(view.getByRole("tab", { name: "Dependency graph" }));
-  await waitFor((): void => { expect(view.getByRole("img", { name: "Terraform resource dependency graph" })).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByTestId("rf__wrapper")).toBeTruthy(); });
 });
 
 test("paginates resources and outputs independently", async () => {

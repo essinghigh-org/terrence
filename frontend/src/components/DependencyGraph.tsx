@@ -1,41 +1,68 @@
+import React, { useMemo, useState } from "react";
+import {
+  ReactFlow,
+  Controls,
+  Background,
+  type Node,
+  type Edge,
+  MarkerType,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import type { Resource } from "@/components/WorkspaceResources";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+
 export type DependencyGraphResource = Readonly<{
   address: string;
   dependencies: readonly string[];
 }>;
 
 type GraphNode = DependencyGraphResource;
-type GraphEdge = Readonly<{ from: string; to: string }>;
 type GraphLayout = Readonly<{
-  nodes: readonly GraphNode[];
-  edges: readonly GraphEdge[];
-  positions: ReadonlyMap<string, Readonly<{ x: number; y: number }>>;
-  width: number;
-  height: number;
+  nodes: readonly Node[];
+  edges: readonly Edge[];
 }>;
+
+function shortAddress(address: string): string {
+  const segments = address.split(".");
+  return segments.length > 2 ? `…${segments.slice(-2).join(".")}` : address;
+}
 
 function buildGraph(resources: readonly DependencyGraphResource[]): GraphLayout | null {
   const resourcesByAddress = new Map<string, DependencyGraphResource>();
   resources.forEach((resource): void => {
     const existing = resourcesByAddress.get(resource.address);
-    resourcesByAddress.set(resource.address, existing === undefined
-      ? resource
-      : {
-          address: resource.address,
-          dependencies: [...new Set([...existing.dependencies, ...resource.dependencies])],
-        });
+    resourcesByAddress.set(
+      resource.address,
+      existing === undefined
+        ? resource
+        : {
+            address: resource.address,
+            dependencies: [...new Set([...existing.dependencies, ...resource.dependencies])],
+          }
+    );
   });
-  const nodes = [...resourcesByAddress.values()].map((resource): GraphNode => ({
-    ...resource,
-    dependencies: resource.dependencies.filter((dependency): boolean => resourcesByAddress.has(dependency)),
-  }));
-  const nodeAddresses = new Set(nodes.map((node): string => node.address));
-  const edges = nodes.flatMap((node): readonly GraphEdge[] => node.dependencies
-    .filter((dependency): boolean => nodeAddresses.has(dependency))
-    .map((dependency): GraphEdge => ({ from: dependency, to: node.address })));
-  if (nodes.length < 2 || edges.length === 0) return null;
+  const nodesList = [...resourcesByAddress.values()].map(
+    (resource): GraphNode => ({
+      ...resource,
+      dependencies: resource.dependencies.filter((dependency): boolean => resourcesByAddress.has(dependency)),
+    })
+  );
+  const nodeAddresses = new Set(nodesList.map((node): string => node.address));
+  const edgesList = nodesList.flatMap((node): Readonly<{ from: string; to: string }>[] =>
+    node.dependencies
+      .filter((dependency): boolean => nodeAddresses.has(dependency))
+      .map((dependency): Readonly<{ from: string; to: string }> => ({ from: dependency, to: node.address }))
+  );
+  if (nodesList.length < 2 || edgesList.length === 0) return null;
 
   const levels = new Map<string, number>();
-  const nodesByAddress = new Map(nodes.map((node): [string, GraphNode] => [node.address, node]));
+  const nodesByAddress = new Map(nodesList.map((node): [string, GraphNode] => [node.address, node]));
   const visiting = new Set<string>();
   const levelFor = (address: string): number => {
     const cached = levels.get(address);
@@ -43,115 +70,154 @@ function buildGraph(resources: readonly DependencyGraphResource[]): GraphLayout 
     if (visiting.has(address)) return 0;
     visiting.add(address);
     const node = nodesByAddress.get(address);
-    const level = node === undefined
-      ? 0
-      : Math.max(0, ...node.dependencies.map((dependency): number => levelFor(dependency) + 1));
+    const level =
+      node === undefined
+        ? 0
+        : Math.max(0, ...node.dependencies.map((dependency): number => levelFor(dependency) + 1));
     visiting.delete(address);
     levels.set(address, level);
     return level;
   };
-  nodes.forEach((node): void => { levelFor(node.address); });
+  nodesList.forEach((node): void => {
+    levelFor(node.address);
+  });
 
   const byLevel = new Map<number, GraphNode[]>();
-  nodes.forEach((node): void => {
+  nodesList.forEach((node): void => {
     const level = levels.get(node.address) ?? 0;
     const column = byLevel.get(level) ?? [];
     column.push(node);
     byLevel.set(level, column);
   });
-  const nodeWidth = 190;
-  const nodeHeight = 48;
-  const horizontalGap = 52;
-  const verticalGap = 18;
-  const positions = new Map<string, Readonly<{ x: number; y: number }>>();
+
+  const nodeWidth = 220;
+  const nodeHeight = 60;
+  const horizontalGap = 80;
+  const verticalGap = 40;
+  const nodes: Node[] = [];
+
   [...byLevel.entries()].forEach(([level, column]): void => {
     column.sort((left, right): number => left.address.localeCompare(right.address));
     column.forEach((node, index): void => {
-      positions.set(node.address, {
-        x: 24 + level * (nodeWidth + horizontalGap),
-        y: 24 + index * (nodeHeight + verticalGap),
+      nodes.push({
+        id: node.address,
+        position: {
+          x: 24 + level * (nodeWidth + horizontalGap),
+          y: 24 + index * (nodeHeight + verticalGap),
+        },
+        data: { label: shortAddress(node.address), address: node.address },
+        style: {
+          width: nodeWidth,
+          height: nodeHeight,
+          background: "hsl(var(--card))",
+          border: "1px solid hsl(var(--border))",
+          borderRadius: "8px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "12px",
+          color: "hsl(var(--foreground))",
+          padding: "10px",
+          boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+          cursor: "pointer",
+        },
       });
     });
   });
 
-  return {
-    nodes,
-    edges,
-    positions,
-    width: Math.max(720, [...byLevel.keys()].length * (nodeWidth + horizontalGap) + 24),
-    height: Math.max(150, Math.max(...[...byLevel.values()].map((column): number => column.length)) * (nodeHeight + verticalGap) + 30),
-  };
-}
+  const edges: Edge[] = edgesList.map((edge): Edge => ({
+    id: `${edge.from}->${edge.to}`,
+    source: edge.from,
+    target: edge.to,
+    animated: false,
+    style: { stroke: "hsl(var(--muted-foreground))", strokeWidth: 1.5 },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 20,
+      height: 20,
+      color: "hsl(var(--muted-foreground))",
+    },
+  }));
 
-function shortAddress(address: string): string {
-  const segments = address.split(".");
-  return segments.length > 2 ? `…${segments.slice(-2).join(".")}` : address;
+  return { nodes, edges };
 }
 
 export function DependencyGraph({
   resources,
+  allResources,
 }: Readonly<{
   resources: readonly DependencyGraphResource[];
+  allResources: readonly Resource[];
 }>): React.JSX.Element {
-  const graph = buildGraph(resources);
+  const graph = useMemo((): GraphLayout | null => buildGraph(resources), [resources]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const selectedResource = useMemo((): Resource | null => {
+    if (selectedNodeId === null || selectedNodeId === "") return null;
+    return allResources.find((r): boolean => r.attributes.address === selectedNodeId) ?? null;
+  }, [selectedNodeId, allResources]);
+
   if (graph === null) return <></>;
 
   return (
-    <details className="border-t border-border">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        Dependency graph <span className="font-normal text-muted-foreground">({graph.nodes.length} resources · {graph.edges.length} dependencies)</span>
-      </summary>
-      <div className="border-t border-border bg-muted/20 px-4 py-4">
-        <p className="mb-3 text-xs text-muted-foreground">Arrows point from a prerequisite to the resource that depends on it.</p>
-        <div className="overflow-x-auto rounded-md border border-border bg-background p-2">
-          <svg
-            role="img"
-            aria-label="Terraform resource dependency graph"
-            width={graph.width}
-            height={graph.height}
-            viewBox={`0 0 ${graph.width} ${graph.height}`}
-            className="max-w-none"
-          >
-            <defs>
-              <marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-                <path d="M0,0 L8,4 L0,8 z" fill="hsl(var(--muted-foreground))" />
-              </marker>
-            </defs>
-            <g stroke="hsl(var(--muted-foreground))" strokeWidth="1.5" markerEnd="url(#dependency-arrow)">
-              {graph.edges.map((edge): React.JSX.Element | null => {
-                const from = graph.positions.get(edge.from);
-                const to = graph.positions.get(edge.to);
-                if (from === undefined || to === undefined) return null;
-                return (
-                  <line
-                    key={`${edge.from}->${edge.to}`}
-                    x1={from.x + 190}
-                    y1={from.y + 24}
-                    x2={to.x}
-                    y2={to.y + 24}
-                  />
-                );
-              })}
-            </g>
-            {graph.nodes.map((node): React.JSX.Element => {
-              const position = graph.positions.get(node.address);
-              if (position === undefined) return <g key={node.address} />;
-              return (
-                <g key={node.address}>
-                  <title>{node.address}</title>
-                  <rect x={position.x} y={position.y} width="190" height="48" rx="8" fill="hsl(var(--card))" stroke="hsl(var(--border))" />
-                  <text x={position.x + 12} y={position.y + 20} fill="hsl(var(--foreground))" fontSize="11" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
-                    {shortAddress(node.address)}
-                  </text>
-                  <text x={position.x + 12} y={position.y + 37} fill="hsl(var(--muted-foreground))" fontSize="10" fontFamily="ui-sans-serif, system-ui, sans-serif">
-                    Current state
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+    <div className="border-t border-border flex flex-col">
+      <div className="px-5 py-3 border-b border-border bg-muted/20">
+        <h3 className="text-sm font-medium text-foreground">
+          Dependency graph{" "}
+          <span className="font-normal text-muted-foreground">
+            ({graph.nodes.length} resources · {graph.edges.length} dependencies)
+          </span>
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Interactive view: Scroll to zoom, click and drag to pan, and select a node to view its details. Arrows point from a prerequisite to the resource that depends on it.
+        </p>
       </div>
-    </details>
+      <div style={{ width: "100%", height: "600px" }} className="bg-background">
+        <ReactFlow
+          nodes={graph.nodes as Node[]}
+          edges={graph.edges as Edge[]}
+          onNodeClick={(_: React.MouseEvent, node: Node): void => { setSelectedNodeId(node.id); }}
+          fitView
+          attributionPosition="bottom-right"
+        >
+          <Controls />
+          <Background color="hsl(var(--muted-foreground))" gap={16} />
+        </ReactFlow>
+      </div>
+
+      <Sheet open={selectedNodeId !== null} onOpenChange={(open: boolean): void => { if (!open) setSelectedNodeId(null); }}>
+        <SheetContent className="overflow-y-auto sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle className="font-mono text-sm break-all">
+              {selectedNodeId}
+            </SheetTitle>
+            <SheetDescription>Resource Details</SheetDescription>
+          </SheetHeader>
+          <div className="mt-6 space-y-4">
+            {selectedResource !== null ? (
+              <>
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Provider</h4>
+                  <p className="text-sm">{selectedResource.attributes.provider ?? "—"}</p>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Type</h4>
+                  <p className="text-sm">{selectedResource.attributes["provider-type"] ?? "—"}</p>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Module</h4>
+                  <p className="text-sm">{selectedResource.attributes.module ?? "root"}</p>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No additional details available in the current state for this resource.
+              </p>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+    </div>
   );
 }

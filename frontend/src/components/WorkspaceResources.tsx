@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
-type Resource = Readonly<{
+export type Resource = Readonly<{
   id: string;
   attributes: Readonly<{
     address: string;
@@ -74,13 +74,13 @@ function isAborted(signal: Readonly<AbortSignal> | undefined): boolean {
 }
 
 function inlineMarkdown(text: string): React.ReactNode {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^\)]+\))/g).map((part: string, index: number): React.ReactNode => {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g).map((part: string, index: number): React.ReactNode => {
     if (part.startsWith("`") && part.endsWith("`")) {
       return <code key={index} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">{part.slice(1, -1)}</code>;
     }
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
     if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
-    const link = /^\[([^\]]+)\]\(([^\)]+)\)$/.exec(part);
+    const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
     if (link !== null) {
       const href = link[2] ?? "";
       const safe = href.startsWith("/") || href.startsWith("./") || href.startsWith("#") || /^(https?:|mailto:)/.test(href);
@@ -458,7 +458,7 @@ export function WorkspaceResources({
           No dependency relationships are recorded in the current state.
         </div>
       ) : (
-        <DependencyGraph resources={dependencyGraph.nodes} />
+        <DependencyGraph resources={dependencyGraph.nodes} allResources={resources} />
       )}
 
       {readmeLoading && <div className="border-t px-5 py-4 text-xs text-muted-foreground">Checking for README.md…</div>}
