@@ -176,7 +176,7 @@ export class RunSandbox {
       `--rx=${binaryDir}`,
       ...systemRuleArgs(),
       "--ro=/etc",
-      "--rw=/dev",
+      `--rw-files=/dev`,
       ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
       ...extraRwArgs(),
       `--cwd=${opts.cwd}`,

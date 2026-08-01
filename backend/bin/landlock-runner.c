@@ -139,7 +139,7 @@ static int probe(void) {
 static void usage(void) {
     fprintf(stderr,
         "usage: landlock-runner --probe\n"
-        "   or: landlock-runner (--rwx=PATH | --rx=PATH | --ro=PATH)* [--cwd=DIR] -- CMD [ARGS...]\n");
+        "   or: landlock-runner (--rwx=PATH | --rw=PATH | --rw-files=PATH | --rx=PATH | --ro=PATH)* [--cwd=DIR] -- CMD [ARGS...]\n");
 }
 
 int main(int argc, char **argv) {
@@ -177,6 +177,7 @@ int main(int argc, char **argv) {
         uint64_t access = 0;
         if (strncmp(arg, "--rwx=", 6) == 0) { path = arg + 6; access = LL_RW | LL_EXEC | LL_TRUNCATE; }
         else if (strncmp(arg, "--rw=", 5) == 0) { path = arg + 5; access = LL_RW; }
+        else if (strncmp(arg, "--rw-files=", 11) == 0) { path = arg + 11; access = LL_READ | LL_WRITE_FILE; }
         else if (strncmp(arg, "--rx=", 5) == 0) { path = arg + 5; access = LL_EXEC; }
         else if (strncmp(arg, "--ro=", 5) == 0) { path = arg + 5; access = LL_READ; }
         else {
