@@ -158,7 +158,13 @@ export function DependencyGraph({
     return allResources.find((r): boolean => r.attributes.address === selectedNodeId) ?? null;
   }, [selectedNodeId, allResources]);
 
-  if (graph === null) return <></>;
+  if (graph === null) {
+    return (
+      <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground border-t border-border">
+        No dependency relationships are recorded in the current state.
+      </div>
+    );
+  }
 
   return (
     <div className="border-t border-border flex flex-col">

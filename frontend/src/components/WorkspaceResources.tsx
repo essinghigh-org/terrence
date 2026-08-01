@@ -453,12 +453,8 @@ export function WorkspaceResources({
         </>
       ) : dependencyGraphLoading ? (
         <div className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading dependency graph" /></div>
-      ) : dependencyGraph?.nodes.some((node): boolean => node.dependencies.length > 0) !== true ? (
-        <div className="flex min-h-36 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          No dependency relationships are recorded in the current state.
-        </div>
       ) : (
-        <DependencyGraph resources={dependencyGraph.nodes} allResources={resources} />
+        <DependencyGraph resources={dependencyGraph?.nodes ?? []} allResources={resources} />
       )}
 
       {readmeLoading && <div className="border-t px-5 py-4 text-xs text-muted-foreground">Checking for README.md…</div>}
