@@ -599,7 +599,6 @@ export function Layout({
     }
 
     if (hasProject) {
-      const isVariableSetsSection = location.pathname === `${projectSettingsPath}/variable-sets`;
       const projectLinks = inProjectSettings
         ? ([
             {
@@ -609,16 +608,32 @@ export function Layout({
               to: projectSettingsPath,
             },
             {
-              active: isVariableSetsSection,
+              active: location.pathname === `${projectSettingsPath}/variable-sets`,
               icon: Variable,
               label: "Variable sets",
               to: `${projectSettingsPath}/variable-sets`,
             },
           ] as const)
         : ([
-            { label: "Overview", to: projectPath, icon: LayoutDashboard, exact: true },
-            { label: "Workspaces", to: `${projectPath}/workspaces`, icon: Box },
-            { label: "Settings", to: projectSettingsPath, icon: Settings, trailing: true },
+            {
+              active: location.pathname === projectPath,
+              icon: LayoutDashboard,
+              label: "Overview",
+              to: projectPath,
+            },
+            {
+              active: isActivePath(location.pathname, `${projectPath}/workspaces`),
+              icon: Box,
+              label: "Workspaces",
+              to: `${projectPath}/workspaces`,
+            },
+            {
+              active: isActivePath(location.pathname, projectSettingsPath),
+              icon: Settings,
+              label: "Settings",
+              to: projectSettingsPath,
+              trailing: true,
+            },
           ] as const);
 
       return (
@@ -653,11 +668,7 @@ export function Layout({
           {projectLinks.map((link): JSX.Element => (
             <SidebarNavLink
               key={link.to}
-              active={isActivePath(
-                location.pathname,
-                link.to,
-                "exact" in link && link.exact,
-              )}
+              active={link.active}
               collapsed={sidebarCollapsed}
               icon={link.icon}
               label={link.label}

@@ -634,3 +634,75 @@ test("returns to the organization workspace list after deleting a workspace", as
       === "/api/v2/workspaces/ws-1"
     && init?.method === "DELETE")).toBe(true);
 });
+
+test("project settings sidebar marks exactly one section active", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "alice" } } });
+    }
+    if (url === "/api/v2/projects/prj-1") {
+      return json({ data: { id: "prj-1", attributes: { name: "Default Project" } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings"]}>
+      <Routes>
+        <Route path="/app" element={<Layout />}>
+          <Route path=":orgName/projects/:projectId/settings" element={<p>Project settings</p>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Project settings")).toBeTruthy();
+  });
+  const general = view.getByRole("link", { name: "General" });
+  const variableSets = view.getByRole("link", { name: "Variable sets" });
+  expect(general.getAttribute("aria-current")).toBe("page");
+  expect(variableSets.getAttribute("aria-current")).toBeNull();
+});
+
+test("project settings variable sets section marks only variable sets active", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "alice" } } });
+    }
+    if (url === "/api/v2/projects/prj-1") {
+      return json({ data: { id: "prj-1", attributes: { name: "Default Project" } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings/variable-sets"]}>
+      <Routes>
+        <Route path="/app" element={<Layout />}>
+          <Route path=":orgName/projects/:projectId/settings/variable-sets" element={<p>Variable sets content</p>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Variable sets content")).toBeTruthy();
+  });
+  const general = view.getByRole("link", { name: "General" });
+  const variableSets = view.getByRole("link", { name: "Variable sets" });
+  expect(general.getAttribute("aria-current")).toBeNull();
+  expect(variableSets.getAttribute("aria-current")).toBe("page");
+});
