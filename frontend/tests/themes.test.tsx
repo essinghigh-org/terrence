@@ -62,6 +62,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
     expect(view.getByText("Theme updated")).toBeTruthy();
   });
   expect(updatedTheme).toBe("dracula");
+  expect(localStorage.getItem("terrence-theme")).toBe("dracula");
   expect(document.documentElement.dataset.theme).toBe("dracula");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
   expect(document.documentElement.style.getPropertyValue("--topbar")).toBe("232 18% 15%");
@@ -74,4 +75,13 @@ test("ignores an account theme read that started before a newer theme selection"
 
   expect(applyThemeIfUnchanged("original-light", accountReadRevision)).toBeFalse();
   expect(document.documentElement.dataset.theme).toBe("dracula");
+});
+
+test("applies the locally stored theme without an account request", (): void => {
+  localStorage.setItem("terrence-theme", "nord-dark");
+
+  applyTheme();
+
+  expect(document.documentElement.dataset.theme).toBe("nord-dark");
+  expect(document.documentElement.classList.contains("dark")).toBeTrue();
 });

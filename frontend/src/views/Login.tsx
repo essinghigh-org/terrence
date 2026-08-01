@@ -76,8 +76,8 @@ export function Login(): React.JSX.Element {
     <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm shadow-sm">
         <CardHeader>
-          <div aria-hidden="true" className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground text-lg font-bold text-background">
-            T
+          <div className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground/10">
+            <img src="/favicon.svg" alt="" aria-hidden="true" className="size-8" />
           </div>
           <CardTitle>{mfaChallengeToken === null ? "Sign in to Terrence" : "Verify your sign-in"}</CardTitle>
           <CardDescription>{mfaChallengeToken === null ? "Continue to your organizations and workspaces." : "Enter the 6-digit code from your authenticator app."}</CardDescription>

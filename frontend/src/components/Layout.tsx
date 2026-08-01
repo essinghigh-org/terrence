@@ -898,18 +898,7 @@ export function Layout({
               aria-label="Home"
                 className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-topbar-foreground"
             >
-              <svg
-                aria-hidden="true"
-                className="size-7"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
-                <path d="M12 22V12" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M12 12L22 7" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M2 7L12 12" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <img src="/favicon.svg" alt="" aria-hidden="true" className="size-7" />
             </Link>
 
             <div aria-hidden="true" className="hidden h-5 w-px bg-topbar-foreground/20 sm:block" />
