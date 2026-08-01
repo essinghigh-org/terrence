@@ -686,7 +686,8 @@ export function Layout({
         {
           active: location.pathname === organizationSettingsPath
             && organizationSettingsTab !== "teams"
-            && organizationSettingsTab !== "roles",
+            && organizationSettingsTab !== "roles"
+            && organizationSettingsTab !== "cidr",
           icon: Settings,
           label: "General",
           to: organizationSettingsPath,
@@ -704,6 +705,13 @@ export function Layout({
           icon: Users,
           label: "Roles",
           to: `${organizationSettingsPath}?tab=roles`,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "cidr",
+          icon: ShieldCheck,
+          label: "IP allowlists",
+          to: `${organizationSettingsPath}?tab=cidr`,
         },
         {
           active: location.pathname === `${orgPath}/variable-sets`,

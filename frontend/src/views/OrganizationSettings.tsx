@@ -447,11 +447,6 @@ export function OrganizationSettings(): React.JSX.Element {
         <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Organization Settings</h1>
       </div>
 
-      <nav aria-label="Organization settings sections" className="mb-6 flex gap-4 border-b text-sm">
-        <Link className={activeTab === "general" ? "border-b-2 border-primary pb-2 font-medium" : "pb-2 text-muted-foreground"} to={`/app/${encodedOrgName}/settings`}>General</Link>
-        <Link className={activeTab === "teams" ? "border-b-2 border-primary pb-2 font-medium" : "pb-2 text-muted-foreground"} to={`/app/${encodedOrgName}/settings?tab=teams`}>Teams</Link>
-        <Link className={activeTab === "cidr" ? "border-b-2 border-primary pb-2 font-medium" : "pb-2 text-muted-foreground"} to={`/app/${encodedOrgName}/settings?tab=cidr`}>CIDR ranges</Link>
-      </nav>
       <div className="space-y-6">
           {activeTab === "general" && (
             <>
