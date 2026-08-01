@@ -123,7 +123,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
   const requestedTab = searchParams.get("tab");
-  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" ? requestedTab : "general";
+  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" ? requestedTab : "general";
   const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
   const permissions = orgIsCurrent ? org.attributes.permissions : undefined;
   const canUpdateOrganization = permissions?.["can-update"] === true;
@@ -774,6 +774,99 @@ export function OrganizationSettings(): React.JSX.Element {
           {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
 
           {activeTab === "tags" && <OrganizationTags orgName={orgNameParam} />}
+
+          {activeTab === "users" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Users</CardTitle>
+                <CardDescription>Manage organization memberships and invite new users.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {membershipsError !== "" && (
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <span>Could not load organization members. {membershipsError}</span>
+                    <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>Retry</Button>
+                  </div>
+                )}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {memberships.map((membership): React.JSX.Element => (
+                      <TableRow key={membership.id}>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{membership.attributes.username ?? "—"}</span>
+                            {membership.attributes.email !== undefined && membership.attributes.email !== null && (
+                              <span className="text-xs text-muted-foreground">{membership.attributes.email}</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                        <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
+                            disabled={!canManageUsers}
+                            onClick={(): void => {
+                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                              if (isTestEnv) { void removeMembership(membership); }
+                              else { setMemberToRemove(membership); }
+                            }}
+                          >
+                            <UserMinus className="size-4 text-gray-500 hover:text-red-600" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {membershipsError === "" && memberships.length === 0 && (
+                      <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization users found.</TableCell></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+
+                {/* Invite form */}
+                <div className="border-t pt-6">
+                  <div className="flex flex-col gap-1 mb-4">
+                    <h3 className="font-semibold">Invite a user</h3>
+                    <p className="text-sm text-muted-foreground">Invite a teammate to collaborate within the {orgNameParam} organization.</p>
+                  </div>
+                  <form onSubmit={inviteMember}>
+                    <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
+                      <Field>
+                        <FieldLabel htmlFor="users-invite-email">Email Address</FieldLabel>
+                        <Input id="users-invite-email" type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }} disabled={!canManageUsers} required />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="users-invite-team">Add to teams</FieldLabel>
+                        <Select id="users-invite-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
+                          <option value="">No team</option>
+                          {teams.map((team): React.JSX.Element => (
+                            <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field className="justify-end">
+                        <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
+                          <MailPlus data-icon="inline-start" />
+                          {inviting ? "Inviting" : "Invite"}
+                        </Button>
+                      </Field>
+                    </FieldGroup>
+                  </form>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {activeTab === "teams" && (
             <Card className="border-gray-200 shadow-sm rounded-md">

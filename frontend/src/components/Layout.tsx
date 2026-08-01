@@ -689,7 +689,8 @@ export function Layout({
             && organizationSettingsTab !== "teams"
             && organizationSettingsTab !== "roles"
             && organizationSettingsTab !== "cidr"
-            && organizationSettingsTab !== "tags",
+            && organizationSettingsTab !== "tags"
+            && organizationSettingsTab !== "users",
           icon: Settings,
           label: "General",
           to: organizationSettingsPath,
@@ -714,6 +715,13 @@ export function Layout({
           icon: Tag,
           label: "Tags",
           to: `${organizationSettingsPath}?tab=tags`,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "users",
+          icon: Users,
+          label: "Users",
+          to: `${organizationSettingsPath}?tab=users`,
         },
         {
           active: location.pathname === organizationSettingsPath
