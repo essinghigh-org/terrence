@@ -6,6 +6,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { encryptSecret } from "../lib/secrets";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -626,11 +627,23 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .delete("/api/v2/oauth-clients/:oc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/oauth-clients/:oc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(oauthClients).where(eq(oauthClients.id, ocId));
+    const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id });
+    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
+    }
+    try {
+      await db.delete(oauthClients).where(eq(oauthClients.id, ocId));
+    } catch (error: unknown) {
+      if (!isVcsIntegrationReferenceConflict(error)) throw error;
+      const currentUsage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+    }
     (set as { status: number }).status = 204;
     return {};
   })
@@ -815,13 +828,25 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: ot.id, type: "oauth-tokens", attributes: { "service-provider-user": ot.serviceProviderUser, "has-ssh-key": ot.hasSshKey, "created-at": new Date(ot.createdAt).toISOString() } } };
   })
-  .delete("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const otId = params.ot_id ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+    const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id });
+    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
+    }
+    try {
+      await db.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+    } catch (error: unknown) {
+      if (!isVcsIntegrationReferenceConflict(error)) throw error;
+      const currentUsage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+    }
     (set as { status: number }).status = 204;
     return {};
   });

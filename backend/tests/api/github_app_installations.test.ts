@@ -9,9 +9,11 @@ import {
   githubAppInstallations,
   organizationMemberships,
   organizations,
+  policySets,
   teamMemberships,
   teams,
   users,
+  workspaces,
 } from "../../src/db/schema";
 
 const suffix = crypto.randomUUID();
@@ -52,6 +54,13 @@ function request(path: string, token: string | null = apiToken, accept?: string)
       ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
       ...(accept === undefined ? {} : { Accept: accept }),
     },
+  }));
+}
+
+function requestDelete(path: string, token: string | null = apiToken): Promise<Response> {
+  return app.handle(new Request(`http://terrence.test${path}`, {
+    method: "DELETE",
+    headers: token === null ? {} : { Authorization: `Bearer ${token}` },
   }));
 }
 
@@ -297,5 +306,83 @@ describe("GitHub App installation setup", () => {
     expect(await db.query.githubAppInstallations.findFirst({
       where: eq(githubAppInstallations.orgId, orgId),
     })).toBeUndefined();
+  });
+
+  test("allows a VCS manager to remove an installation but denies outsiders", async () => {
+    const localId = `ghain-${crypto.randomUUID()}`;
+    const workspaceId = `ws-github-app-${crypto.randomUUID()}`;
+    const policySetId = `ps-github-app-${crypto.randomUUID()}`;
+    await db.insert(githubAppInstallations).values({
+      id: localId,
+      orgId,
+      name: "removable-installation",
+      installationId: installationId + 1,
+      createdAt: Date.now(),
+    });
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      orgId,
+      name: "connected-workspace",
+      vcsRepo: { identifier: "acme/repository", githubAppInstallationId: localId },
+    });
+    await db.insert(policySets).values({
+      id: policySetId,
+      orgId,
+      name: "connected-policy-set",
+      vcsRepo: { identifier: "acme/repository", githubAppInstallationId: localId },
+    });
+
+    const outsider = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`, outsiderToken);
+    expect(outsider.status).toBe(404);
+
+    const blocked = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`);
+    expect(blocked.status).toBe(409);
+    const blockedBody = await blocked.json() as { errors?: { detail?: string }[] };
+    expect(blockedBody.errors?.[0]?.detail).toContain("connected-workspace");
+    expect(blockedBody.errors?.[0]?.detail).toContain("connected-policy-set");
+
+    await db.delete(policySets).where(eq(policySets.id, policySetId));
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    const removed = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`);
+    expect(removed.status).toBe(204);
+    expect(await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, localId) })).toBeUndefined();
+  });
+
+  test("keeps installation deletion safe when a workspace reference races it", async () => {
+    const localId = `ghain-${crypto.randomUUID()}`;
+    const workspaceId = `ws-github-app-race-${crypto.randomUUID()}`;
+    await db.insert(githubAppInstallations).values({
+      id: localId,
+      orgId,
+      name: "racing-installation",
+      installationId: installationId + 2,
+      createdAt: Date.now(),
+    });
+
+    const [reference, deletion] = await Promise.allSettled([
+      db.insert(workspaces).values({
+        id: workspaceId,
+        orgId,
+        name: "racing-workspace",
+        vcsRepo: { identifier: "acme/repository", githubAppInstallationId: localId },
+      }),
+      requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`),
+    ]);
+    const storedInstallation = await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, localId) });
+    const storedWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+
+    expect(storedInstallation === undefined && storedWorkspace !== undefined).toBe(false);
+    if (storedInstallation === undefined) {
+      expect(reference.status).toBe("rejected");
+      expect(deletion.status).toBe("fulfilled");
+      if (deletion.status === "fulfilled") expect(deletion.value.status).toBe(204);
+    } else {
+      expect(reference.status).toBe("fulfilled");
+      expect(deletion.status).toBe("fulfilled");
+      if (deletion.status === "fulfilled") expect(deletion.value.status).toBe(409);
+    }
+
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
   });
 });

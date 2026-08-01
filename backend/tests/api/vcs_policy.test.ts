@@ -4,6 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
+  oauthClients,
   oauthTokens,
   organizationMemberships,
   organizations,
@@ -95,6 +96,126 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
 
     const deleteOcRes = await request(`/api/v2/oauth-clients/${ocId}`, "DELETE");
     expect(deleteOcRes.status).toBe(204);
+  });
+
+  it("refuses to delete an OAuth client referenced by a workspace", async () => {
+    const createOcRes = await request(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
+      data: { attributes: { name: "In-use OAuth", "service-provider": "github" } },
+    });
+    expect(createOcRes.status).toBe(201);
+    const { data: client } = await createOcRes.json() as { data: { id: string } };
+    const tokenId = `ot-in-use-${crypto.randomUUID()}`;
+    const inUseWorkspaceId = `ws-in-use-${crypto.randomUUID()}`;
+    await db.insert(oauthTokens).values({
+      id: tokenId,
+      oauthClientId: client.id,
+      token: "ghp_in_use_token",
+      createdAt: Date.now(),
+    });
+    await db.insert(workspaces).values({
+      id: inUseWorkspaceId,
+      orgId,
+      name: "oauth-connected-workspace",
+      vcsRepo: { identifier: "acme/repository", oauthTokenId: tokenId },
+    });
+
+    const blocked = await request(`/api/v2/oauth-clients/${client.id}`, "DELETE");
+    expect(blocked.status).toBe(409);
+    const blockedBody = await blocked.json() as { errors?: { detail?: string }[] };
+    expect(blockedBody.errors?.[0]?.detail).toContain("oauth-connected-workspace");
+
+    const tokenBlocked = await request(`/api/v2/oauth-tokens/${tokenId}`, "DELETE");
+    expect(tokenBlocked.status).toBe(409);
+
+    await db.delete(workspaces).where(eq(workspaces.id, inUseWorkspaceId));
+    await db.delete(oauthTokens).where(eq(oauthTokens.id, tokenId));
+    const removed = await request(`/api/v2/oauth-clients/${client.id}`, "DELETE");
+    expect(removed.status).toBe(204);
+  });
+
+  it("keeps OAuth client and token deletion safe when workspace references race them", async () => {
+    const clientId = `oc-race-${crypto.randomUUID()}`;
+    const clientTokenId = `ot-race-client-${crypto.randomUUID()}`;
+    const clientWorkspaceId = `ws-race-client-${crypto.randomUUID()}`;
+    await db.insert(oauthClients).values({
+      id: clientId,
+      orgId,
+      name: "Racing OAuth client",
+      serviceProvider: "github",
+      createdAt: Date.now(),
+    });
+    await db.insert(oauthTokens).values({
+      id: clientTokenId,
+      oauthClientId: clientId,
+      token: "race-client-token",
+      createdAt: Date.now(),
+    });
+
+    const [clientReference, clientDeletion] = await Promise.allSettled([
+      db.insert(workspaces).values({
+        id: clientWorkspaceId,
+        orgId,
+        name: "racing-client-workspace",
+        vcsRepo: { identifier: "acme/repository", oauthTokenId: clientTokenId },
+      }),
+      request(`/api/v2/oauth-clients/${clientId}`, "DELETE"),
+    ]);
+    const storedClient = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, clientId) });
+    const storedClientWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, clientWorkspaceId) });
+    expect(storedClient === undefined && storedClientWorkspace !== undefined).toBe(false);
+    if (storedClient === undefined) {
+      expect(clientReference.status).toBe("rejected");
+      expect(clientDeletion.status).toBe("fulfilled");
+      if (clientDeletion.status === "fulfilled") expect(clientDeletion.value.status).toBe(204);
+    } else {
+      expect(clientReference.status).toBe("fulfilled");
+      expect(clientDeletion.status).toBe("fulfilled");
+      if (clientDeletion.status === "fulfilled") expect(clientDeletion.value.status).toBe(409);
+    }
+
+    const tokenClientId = `oc-race-token-${crypto.randomUUID()}`;
+    const tokenId = `ot-race-token-${crypto.randomUUID()}`;
+    const tokenWorkspaceId = `ws-race-token-${crypto.randomUUID()}`;
+    await db.insert(oauthClients).values({
+      id: tokenClientId,
+      orgId,
+      name: "Racing OAuth token client",
+      serviceProvider: "github",
+      createdAt: Date.now(),
+    });
+    await db.insert(oauthTokens).values({
+      id: tokenId,
+      oauthClientId: tokenClientId,
+      token: "race-token",
+      createdAt: Date.now(),
+    });
+
+    const [tokenReference, tokenDeletion] = await Promise.allSettled([
+      db.insert(workspaces).values({
+        id: tokenWorkspaceId,
+        orgId,
+        name: "racing-token-workspace",
+        vcsRepo: { identifier: "acme/repository", oauthTokenId: tokenId },
+      }),
+      request(`/api/v2/oauth-tokens/${tokenId}`, "DELETE"),
+    ]);
+    const storedToken = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
+    const storedTokenWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tokenWorkspaceId) });
+    expect(storedToken === undefined && storedTokenWorkspace !== undefined).toBe(false);
+    if (storedToken === undefined) {
+      expect(tokenReference.status).toBe("rejected");
+      expect(tokenDeletion.status).toBe("fulfilled");
+      if (tokenDeletion.status === "fulfilled") expect(tokenDeletion.value.status).toBe(204);
+    } else {
+      expect(tokenReference.status).toBe("fulfilled");
+      expect(tokenDeletion.status).toBe("fulfilled");
+      if (tokenDeletion.status === "fulfilled") expect(tokenDeletion.value.status).toBe(409);
+    }
+
+    await db.delete(workspaces).where(eq(workspaces.id, clientWorkspaceId));
+    await db.delete(workspaces).where(eq(workspaces.id, tokenWorkspaceId));
+    await db.delete(oauthClients).where(eq(oauthClients.id, clientId));
+    await db.delete(oauthClients).where(eq(oauthClients.id, tokenClientId));
   });
 
   it("creates, lists, updates policy sets, policies, and policy checks", async () => {

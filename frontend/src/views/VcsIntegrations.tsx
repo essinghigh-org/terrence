@@ -107,6 +107,8 @@ export function VcsIntegrations({
   const [error, setError] = useState("");
   const [connectingClientId, setConnectingClientId] = useState("");
   const [startingGitHubSetup, setStartingGitHubSetup] = useState(false);
+  const [installationToDelete, setInstallationToDelete] = useState<GitHubAppInstallation | null>(null);
+  const [deletingInstallation, setDeletingInstallation] = useState(false);
   const [access, setAccess] = useState<Readonly<{ orgName: string; status: VcsAccess }> | null>(null);
   const loadRequest = useRef<AbortController | null>(null);
   const currentOrgName = orgName ?? "";
@@ -225,6 +227,8 @@ export function VcsIntegrations({
     setFormError("");
     setConnectingClientId("");
     setStartingGitHubSetup(false);
+    setInstallationToDelete(null);
+    setDeletingInstallation(false);
     setCreating(false);
     setName("");
     setServiceProvider("github");
@@ -279,6 +283,28 @@ export function VcsIntegrations({
       }
     } finally {
       if (currentOrgNameRef.current === actionOrgName) setStartingGitHubSetup(false);
+    }
+  };
+
+  const handleDeleteInstallation = async (installation: GitHubAppInstallation): Promise<void> => {
+    if (!canManageVcsSettings) return;
+    const actionOrgName = currentOrgName;
+    setDeletingInstallation(true);
+    setError("");
+    try {
+      await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}`, { method: "DELETE" });
+      if (currentOrgNameRef.current === actionOrgName) {
+        setGhApps((previous): GitHubAppInstallation[] => previous.filter((candidate): boolean => candidate.id !== installation.id));
+      }
+    } catch (caught: unknown) {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setError(caught instanceof Error ? caught.message : "Failed to remove GitHub App installation");
+      }
+    } finally {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setDeletingInstallation(false);
+        setInstallationToDelete(null);
+      }
     }
   };
 
@@ -424,18 +450,19 @@ export function VcsIntegrations({
                     <TableHead>Installation ID</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-24 text-center">
+                      <TableCell colSpan={5} className="h-24 text-center">
                         <Spinner className="mx-auto size-6 text-primary" />
                       </TableCell>
                     </TableRow>
                   ) : ghApps.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
                         No GitHub App installations registered.
                       </TableCell>
                     </TableRow>
@@ -459,6 +486,18 @@ export function VcsIntegrations({
                             <CheckCircle data-icon="inline-start" />
                             Connected
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={(): void => { setInstallationToDelete(app); }}
+                            >
+                              <Trash2 data-icon="inline-start" />
+                              Remove
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
@@ -692,12 +731,30 @@ export function VcsIntegrations({
       </Dialog>
 
       <ConfirmDialog
+        open={installationToDelete !== null}
+        onOpenChange={(open): void => { if (!open && !deletingInstallation) setInstallationToDelete(null); }}
+        title="Remove GitHub App integration"
+        description={
+          <>
+            This removes <strong className="text-foreground">{installationToDelete?.attributes.name}</strong> from Terrence. It does not uninstall the GitHub App from GitHub. It cannot be removed while workspaces or policy sets use it.
+          </>
+        }
+        confirmText="Remove Integration"
+        confirmVariant="destructive"
+        requireText={installationToDelete?.attributes.name}
+        loading={deletingInstallation}
+        onConfirm={async (): Promise<void> => {
+          if (installationToDelete !== null) await handleDeleteInstallation(installationToDelete);
+        }}
+      />
+
+      <ConfirmDialog
         open={clientToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setClientToDelete(null); }}
+        onOpenChange={(open): void => { if (!open && !deletingClient) setClientToDelete(null); }}
         title="Delete VCS Integration"
         description={
           <>
-            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? Workspaces using this VCS integration will lose their repository connection.
+            Are you sure you want to delete VCS client <strong className="text-foreground">{clientToDelete?.attributes.name}</strong>? It cannot be removed while workspaces or policy sets use it.
           </>
         }
         confirmText="Delete Integration"

@@ -7,6 +7,7 @@ import { apiTokens, githubAppInstallations, oauthTokens, organizations, type use
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
+import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -345,6 +346,38 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     await db.insert(githubAppInstallations).values(installation);
     (set as { status: number }).status = 201;
     return { data: installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null }) };
+  })
+  .delete("/api/v2/organizations/:org_name/github-app/installations/:installation_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const installation = await db.query.githubAppInstallations.findFirst({
+      where: and(
+        eq(githubAppInstallations.id, params.installation_id ?? ""),
+        eq(githubAppInstallations.orgId, org.id),
+      ),
+    });
+    if (installation === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const usage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id });
+    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
+    }
+    try {
+      await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installation.id));
+    } catch (error: unknown) {
+      if (!isVcsIntegrationReferenceConflict(error)) throw error;
+      const currentUsage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+    }
+    (set as { status: number }).status = 204;
+    return {};
   })
   .get("/api/v2/organizations/:org_name/github-app/installations/setup", async ({ params, request, user, token, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });

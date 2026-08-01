@@ -330,6 +330,13 @@
       "when": 1786850000000,
       "tag": "0047_organization_general_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1786851000000,
+      "tag": "0048_vcs_integration_dependencies",
+      "breakpoints": true
     }
   ]
 }

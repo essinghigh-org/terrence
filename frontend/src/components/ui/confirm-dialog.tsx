@@ -91,6 +91,9 @@ export function ConfirmDialog({
                 onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
                   setTypedText(e.target.value);
                 }}
+                onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => {
+                  setTypedText(e.currentTarget.value);
+                }}
                 placeholder={requireText}
                 className="h-9 font-mono text-sm"
                 autoFocus

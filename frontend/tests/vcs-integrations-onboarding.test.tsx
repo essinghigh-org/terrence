@@ -39,6 +39,7 @@ afterEach((): void => {
 test("derives VCS status from persisted connections and opens server-issued onboarding URLs", async () => {
   localStorage.setItem("tfe_token", "spa-token");
   const requests: { accept: string | null; authorization: string | null; url: string }[] = [];
+  const deletedInstallations: string[] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const headers = new Headers(init?.headers);
@@ -143,6 +144,10 @@ test("derives VCS status from persisted connections and opens server-issued onbo
         },
       });
     }
+    if (url === "/api/v2/organizations/acme/github-app/installations/ghain-1" && init?.method === "DELETE") {
+      deletedInstallations.push("ghain-1");
+      return new Response(null, { status: 204 });
+    }
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
   const destinations: string[] = [];
@@ -169,6 +174,18 @@ test("derives VCS status from persisted connections and opens server-issued onbo
   expect(within(emptyRow).getByText("Not connected")).toBeTruthy();
   expect(within(unavailableRow).getByText("Status unavailable")).toBeTruthy();
   expect(within(appRow).getByText("Connected")).toBeTruthy();
+
+  fireEvent.click(within(appRow).getByRole("button", { name: "Remove" }));
+  const confirmation = await view.findByPlaceholderText("Acme GitHub");
+  fireEvent.input(confirmation, { target: { value: "Acme GitHub" } });
+  await waitFor((): void => {
+    expect((view.getByRole("button", { name: "Remove Integration" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+  fireEvent.click(view.getByRole("button", { name: "Remove Integration" }));
+  await waitFor((): void => {
+    expect(deletedInstallations).toEqual(["ghain-1"]);
+    expect(view.queryByText("Acme GitHub")).toBeNull();
+  });
 
   fireEvent.click(within(emptyRow).getByRole("button", { name: "Connect" }));
   await waitFor((): void => {
