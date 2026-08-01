@@ -572,52 +572,60 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     });
 
     const resources: Record<string, unknown>[] = [];
-    if (latestState?.jsonState !== null && latestState?.jsonState !== undefined) {
-      try {
-        const parsed: unknown = typeof latestState.jsonState === "string"
-          ? JSON.parse(latestState.jsonState) as unknown
-          : latestState.jsonState;
-        const rawResources = parsed !== null && typeof parsed === "object"
-          ? (parsed as Record<string, unknown>).resources
-          : undefined;
-        const resList = Array.isArray(rawResources) ? rawResources : [];
-        const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0];
+    // Prefer jsonState (parsed at record time); fall back to parsing the raw
+    // statePayload so older versions (recorded before jsonState existed) still
+    // render their resources.
+    if (latestState !== undefined) {
+      const jsonStateSource = latestState.jsonState !== null && latestState.jsonState !== undefined
+        ? latestState.jsonState
+        : latestState.statePayload ?? null;
+      if (jsonStateSource !== null) {
+        try {
+          const parsed: unknown = typeof jsonStateSource === "string"
+            ? JSON.parse(jsonStateSource) as unknown
+            : jsonStateSource;
+          const rawResources = parsed !== null && typeof parsed === "object"
+            ? (parsed as Record<string, unknown>).resources
+            : undefined;
+          const resList = Array.isArray(rawResources) ? rawResources : [];
+          const dateStr = new Date(latestState.createdAt).toISOString().split("T")[0];
 
-        for (const r of resList) {
-          if (r !== null && typeof r === "object") {
-            const rObj = r as Record<string, unknown>;
-            const rType = typeof rObj.type === "string" ? rObj.type : "resource";
-            const rName = typeof rObj.name === "string" ? rObj.name : "unnamed";
-            const mod = typeof rObj.module === "string" && rObj.module !== "" ? rObj.module : "root";
-            const address = mod === "root" ? `${rType}.${rName}` : `${mod}.${rType}.${rName}`;
+          for (const r of resList) {
+            if (r !== null && typeof r === "object") {
+              const rObj = r as Record<string, unknown>;
+              const rType = typeof rObj.type === "string" ? rObj.type : "resource";
+              const rName = typeof rObj.name === "string" ? rObj.name : "unnamed";
+              const mod = typeof rObj.module === "string" && rObj.module !== "" ? rObj.module : "root";
+              const address = mod === "root" ? `${rType}.${rName}` : `${mod}.${rType}.${rName}`;
 
-            let provider = "hashicorp/provider";
-            if (typeof rObj.provider === "string") {
-              const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider)
-                ?? /provider\["([^"]+)"\]/.exec(rObj.provider);
-              const providerName = match?.[1];
-              if (typeof providerName === "string" && providerName !== "") provider = providerName;
+              let provider = "hashicorp/provider";
+              if (typeof rObj.provider === "string") {
+                const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider)
+                  ?? /provider\["([^"]+)"\]/.exec(rObj.provider);
+                const providerName = match?.[1];
+                if (typeof providerName === "string" && providerName !== "") provider = providerName;
+              }
+
+              const id = `wsr-${Bun.hash(`${ws.id}:${address}`).toString(36)}`;
+              resources.push({
+                id,
+                type: "resources",
+                attributes: {
+                  address,
+                  name: rName,
+                  "created-at": dateStr,
+                  "updated-at": dateStr,
+                  module: mod,
+                  provider,
+                  "provider-type": rType,
+                  "modified-by-state-version-id": latestState.id,
+                  "name-index": null,
+                },
+              });
             }
-
-            const id = `wsr-${Bun.hash(`${ws.id}:${address}`).toString(36)}`;
-            resources.push({
-              id,
-              type: "resources",
-              attributes: {
-                address,
-                name: rName,
-                "created-at": dateStr,
-                "updated-at": dateStr,
-                module: mod,
-                provider,
-                "provider-type": rType,
-                "modified-by-state-version-id": latestState.id,
-                "name-index": null,
-              },
-            });
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
 
     const { number, size } = pageRequest(request);

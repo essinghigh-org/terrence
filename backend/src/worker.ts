@@ -1307,6 +1307,20 @@ export async function executeApply(runId: string): Promise<void> {
       if (await exists(stateFilePath)) {
         const statePayload = await readFile(stateFilePath, "utf-8");
 
+        // Derive the JSON state and outputs from the raw payload. The resources
+        // list and outputs endpoints read jsonState/jsonStateOutputs, so a
+        // state version without them renders as "no resources".
+        let jsonState: string | null = statePayload;
+        let jsonStateOutputs: string | null = null;
+        try {
+          const parsed = JSON.parse(statePayload) as Record<string, unknown>;
+          jsonStateOutputs = parsed.outputs !== null && parsed.outputs !== undefined
+            ? JSON.stringify(parsed.outputs)
+            : null;
+        } catch {
+          jsonState = null;
+        }
+
         const nextSerial = await db.transaction(async (tx: unknown): Promise<number> => {
           const t = tx as typeof db;
           const latestState = await t.query.stateVersions.findFirst({
@@ -1319,6 +1333,8 @@ export async function executeApply(runId: string): Promise<void> {
             workspaceId: workspace.id,
             serial,
             statePayload,
+            jsonState,
+            jsonStateOutputs,
             runId,
           });
           return serial;
