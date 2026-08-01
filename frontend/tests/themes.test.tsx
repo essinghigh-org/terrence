@@ -1,0 +1,75 @@
+import { afterEach, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+
+import { AccountSettings } from "../src/views/AccountSettings";
+import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../src/lib/theme";
+
+const originalFetch = globalThis.fetch;
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
+}
+
+function requestUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function account(theme = "original-light"): Response {
+  return json({
+    data: {
+      id: "user-1",
+      type: "users",
+      attributes: { username: "alice", email: "alice@example.com", theme, "must-change-password": false },
+    },
+  });
+}
+
+afterEach((): void => {
+  cleanup();
+  applyTheme("original-light");
+  globalThis.fetch = originalFetch;
+});
+
+test("lists extensible light/dark themes and persists a selection", async () => {
+  let updatedTheme = "";
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/account/details") return account();
+    if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
+    if (url === "/api/v2/account/sessions") return json({ data: [] });
+    if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
+    if (url === "/api/v2/account/update" && init?.method === "PATCH") {
+      const body = typeof init.body === "string" ? init.body : "";
+      updatedTheme = JSON.parse(body).data.attributes.theme as string;
+      return account(updatedTheme);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
+  const select = await view.findByLabelText("Theme") as HTMLSelectElement;
+
+  expect(select.querySelectorAll("optgroup")).toHaveLength(2);
+  expect(view.getByRole("option", { name: "Catppuccin Latte" })).toBeTruthy();
+  expect(view.getByRole("option", { name: "Dracula" })).toBeTruthy();
+
+  fireEvent.change(select, { target: { value: "dracula" } });
+  await waitFor((): void => {
+    expect(view.getByText("Theme updated")).toBeTruthy();
+  });
+  expect(updatedTheme).toBe("dracula");
+  expect(document.documentElement.dataset.theme).toBe("dracula");
+  expect(document.documentElement.classList.contains("dark")).toBeTrue();
+});
+
+test("ignores an account theme read that started before a newer theme selection", (): void => {
+  const accountReadRevision = getThemeRevision();
+  applyTheme("dracula");
+
+  expect(applyThemeIfUnchanged("original-light", accountReadRevision)).toBeFalse();
+  expect(document.documentElement.dataset.theme).toBe("dracula");
+});

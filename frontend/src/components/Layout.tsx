@@ -33,6 +33,7 @@ import {
   PackageOpen,
   PanelLeftClose,
   PanelLeftOpen,
+  Palette,
   Search,
   Settings,
   ShieldCheck,
@@ -64,7 +65,7 @@ import { Button, buttonVariants } from "./ui/button";
 import { CommandPalette } from "./CommandPalette";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
-import { applyThemeMode } from "../lib/theme";
+import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
 import { cn } from "../lib/utils";
 
@@ -187,7 +188,7 @@ export function Layout({
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
 
   useEffect(() => {
-    applyThemeMode();
+    applyTheme();
   }, []);
 
   useEffect(() => {
@@ -212,6 +213,7 @@ export function Layout({
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
+    const themeRevision = getThemeRevision();
     void Promise.allSettled([
       fetchApi("/api/v2/account/details", { signal: controller.signal }),
       fetchAllApiPages<{ attributes: { name: string } }>(
@@ -228,6 +230,7 @@ export function Layout({
               "must-change-password"?: boolean;
               username?: string;
               "avatar-url"?: string;
+              theme?: string;
             };
           };
         }).data?.attributes;
@@ -235,6 +238,7 @@ export function Layout({
         setMustChangePassword(attributes?.["must-change-password"] === true);
         setAccountName(attributes?.username ?? "");
         setAvatarUrl(attributes?.["avatar-url"] ?? "");
+        if (typeof attributes?.theme === "string") applyThemeIfUnchanged(attributes.theme, themeRevision);
       }
       if (organizationsResult.status === "fulfilled") {
         setOrganizationNames(
@@ -434,6 +438,12 @@ export function Layout({
           icon: UserRound,
           label: "Profile",
           to: "/app/account#profile",
+        },
+        {
+          active: location.hash === "#appearance",
+          icon: Palette,
+          label: "Appearance",
+          to: "/app/account#appearance",
         },
         {
           active: location.hash === "#sessions",

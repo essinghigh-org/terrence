@@ -101,6 +101,36 @@ describe("account, token, and variable schema contracts", () => {
     expect(stored).toMatchObject({ username, email: null });
   });
 
+  it("persists a validated account theme", async () => {
+    const theme = "catppuccin-mocha";
+    const update = await request("/api/v2/account/update", "PATCH", {
+      data: { type: "users", attributes: { theme } },
+    });
+    expect(update.status).toBe(200);
+    expect((await update.json()).data.attributes.theme).toBe(theme);
+
+    const invalid = await request("/api/v2/account/update", "PATCH", {
+      data: { type: "users", attributes: { theme: "not a theme" } },
+    });
+    expect(invalid.status).toBe(422);
+
+    for (const invalidTheme of ["", "Catppuccin-Mocha", "a".repeat(65)]) {
+      const response = await request("/api/v2/account/update", "PATCH", {
+        data: { type: "users", attributes: { theme: invalidTheme } },
+      });
+      expect(response.status).toBe(422);
+    }
+
+    const maxLengthTheme = "a".repeat(64);
+    const maxLengthUpdate = await request("/api/v2/account/update", "PATCH", {
+      data: { type: "users", attributes: { theme: maxLengthTheme } },
+    });
+    expect(maxLengthUpdate.status).toBe(200);
+
+    const stored = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    expect(stored?.theme).toBe(maxLengthTheme);
+  });
+
   it("rejects expired tokens and tracks successful token use in milliseconds", async () => {
     const before = Date.now() - 100;
     const valid = await request("/api/v2/account/details");

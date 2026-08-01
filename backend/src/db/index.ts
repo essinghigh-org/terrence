@@ -259,6 +259,7 @@ const usersTableInfo = await sqlite.execute("PRAGMA table_info(users)");
 const existingUsersCols = getColumnNames(usersTableInfo);
 if (!existingUsersCols.has("is_site_auditor")) await sqlite.execute("ALTER TABLE users ADD COLUMN is_site_auditor INTEGER DEFAULT 0");
 if (!existingUsersCols.has("is_suspended")) await sqlite.execute("ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0");
+if (!existingUsersCols.has("theme")) await sqlite.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'original-light'");
 
 // Check teams for missing columns
 const teamsTableInfo = await sqlite.execute("PRAGMA table_info(teams)");

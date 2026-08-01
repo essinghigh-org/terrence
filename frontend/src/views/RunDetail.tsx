@@ -941,7 +941,7 @@ export function RunDetail({
             )}
             {canOverridePolicy && (
               <Button
-                className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
                 disabled={pendingAction !== ""}
                 onClick={(): void => { void performRunAction("override-policy", "Policy check overridden"); }}
               >
@@ -1094,7 +1094,7 @@ export function RunDetail({
               <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
                 Raw plan log
               </summary>
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-gray-800 bg-[#111315] p-4 font-mono text-xs leading-5 text-gray-200">
+              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
                 {planLogs !== "" ? planLogs : "Plan output is not available yet."}
               </pre>
             </details>
@@ -1305,7 +1305,7 @@ export function RunDetail({
               <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
                 Raw apply log
               </summary>
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-gray-800 bg-[#111315] p-4 font-mono text-xs leading-5 text-gray-200">
+              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
                 {applyLogs !== "" ? applyLogs : "Apply output is not available yet."}
               </pre>
             </details>
@@ -1337,7 +1337,7 @@ export function RunDetail({
                   <div className="mt-4 flex flex-wrap gap-2">
                     {canApply && (
                       <Button
-                        className="bg-[#1060ff] text-white hover:bg-[#0d4dcc]"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90"
                         disabled={pendingAction !== ""}
                         onClick={(): void => { beginRunConfirmation("apply"); }}
                       >

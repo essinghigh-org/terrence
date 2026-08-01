@@ -14,6 +14,7 @@ const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
 const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
 let refreshRotationQueue = Promise.resolve();
 
@@ -681,7 +682,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
-    const changes: { username?: string; email?: string | null } = {};
+    const changes: { username?: string; email?: string | null; theme?: string } = {};
     if (Object.hasOwn(attrs, "username")) {
       if (typeof attrs.username !== "string" || attrs.username.trim() === "") {
         (set as { status: number }).status = 422;
@@ -696,6 +697,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
       }
       changes.email = emailVal === null ? null : emailVal.trim();
+    }
+    if (Object.hasOwn(attrs, "theme")) {
+      if (typeof attrs.theme !== "string" || attrs.theme.length > 64 || !THEME_ID_PATTERN.test(attrs.theme)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
+      }
+      changes.theme = attrs.theme;
     }
     if (Object.keys(changes).length === 0) {
       (set as { status: number }).status = 422;

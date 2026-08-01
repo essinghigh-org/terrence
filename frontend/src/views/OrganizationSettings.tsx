@@ -670,7 +670,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         <input
                           type="radio"
                           name="org-exec-mode"
-                          className="size-4 accent-[#2962ff]"
+                          className="size-4 accent-primary"
                           checked={defaultExecutionMode === "remote"}
                           onChange={(): void => { setDefaultExecutionMode("remote"); }}
                           disabled={!canUpdateOrganization}
@@ -684,7 +684,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         <input
                           type="radio"
                           name="org-exec-mode"
-                          className="size-4 accent-[#2962ff]"
+                          className="size-4 accent-primary"
                           checked={defaultExecutionMode === "local"}
                           onChange={(): void => { setDefaultExecutionMode("local"); }}
                           disabled={!canUpdateOrganization}
@@ -695,7 +695,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         </span>
                       </label>
                     </div>
-                    <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-[#2962ff] hover:bg-[#1a4bcf] h-9">
+                    <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-primary hover:bg-primary/90 h-9">
                       {saving ? "Saving..." : "Save settings"}
                     </Button>
                   </form>
@@ -950,7 +950,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                       <input
                                         type="radio"
                                         name={`visibility-${team.id}`}
-                                        className="size-4 accent-[#2962ff]"
+                                        className="size-4 accent-primary"
                                         checked={teamVisibility[team.id] !== "secret"}
                                         onChange={(): void => { void updateTeamSetting(team.id, "visibility", "organization"); }}
                                       />
@@ -960,7 +960,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                       <input
                                         type="radio"
                                         name={`visibility-${team.id}`}
-                                        className="size-4 accent-[#2962ff]"
+                                        className="size-4 accent-primary"
                                         checked={teamVisibility[team.id] === "secret"}
                                         onChange={(): void => { void updateTeamSetting(team.id, "visibility", "secret"); }}
                                       />

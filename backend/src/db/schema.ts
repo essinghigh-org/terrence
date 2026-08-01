@@ -11,6 +11,7 @@ export const users = sqliteTable("users", {
   isSiteAuditor: integer("is_site_auditor", { mode: "boolean" }).default(false),
   isSuspended: integer("is_suspended", { mode: "boolean" }).default(false),
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
+  theme: text("theme").notNull().default("original-light"),
 });
 
 export const organizations = sqliteTable("organizations", {

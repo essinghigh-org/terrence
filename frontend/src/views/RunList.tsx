@@ -327,7 +327,7 @@ export function RunList({
         </div>
         {canStartRun && (
           <Button
-            className="h-9 rounded-[4px] bg-[#1060ff] px-4 text-white shadow-none hover:bg-[#0d4dcc]"
+            className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
             onClick={(): void => { setDialogOpen(true); }}
           >
             Start new run
@@ -355,7 +355,7 @@ export function RunList({
             </p>
             {canStartRun && (
               <Button
-                className="h-9 rounded-[4px] bg-[#1060ff] px-4 text-white shadow-none hover:bg-[#0d4dcc]"
+                className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
                 onClick={(): void => { setDialogOpen(true); }}
               >
                 Start new run
@@ -371,7 +371,7 @@ export function RunList({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[920px] border-collapse text-left text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-[#fafafa] text-xs font-semibold tracking-wide text-gray-800">
+                <tr className="border-b border-gray-200 bg-background text-xs font-semibold tracking-wide text-gray-800">
                   <th className="border-r border-gray-200 px-4 py-3">Run</th>
                   <th className="border-r border-gray-200 px-4 py-3">Status</th>
                   <th className="px-4 py-3">Created</th>

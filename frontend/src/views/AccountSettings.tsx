@@ -8,10 +8,11 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { KeyRound, Lock, MonitorSmartphone, Plus, ShieldCheck, Trash2, User } from "lucide-react";
+import { KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
+import { DEFAULT_THEME_ID, getTheme, applyTheme, THEMES } from "../lib/theme";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -29,7 +30,7 @@ function formatSessionDate(value: string): string {
 }
 
 export function AccountSettings(): React.JSX.Element {
-  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean; "avatar-url"?: string } };
+  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
@@ -43,6 +44,8 @@ export function AccountSettings(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [updatingProfile, setUpdatingProfile] = useState(false);
+  const [themeId, setThemeId] = useState(DEFAULT_THEME_ID);
+  const [updatingTheme, setUpdatingTheme] = useState(false);
 
   // Password Form
   const [currentPassword, setCurrentPassword] = useState("");
@@ -97,6 +100,9 @@ export function AccountSettings(): React.JSX.Element {
       setAccount(me);
       setUsername(me.attributes.username);
       setEmail(me.attributes.email ?? "");
+      const selectedTheme = getTheme(me.attributes.theme).id;
+      setThemeId(selectedTheme);
+      applyTheme(selectedTheme);
       const requiresChange = me.attributes["must-change-password"] === true;
       setMustChangePassword(requiresChange);
       layoutContext?.setMustChangePassword(requiresChange);
@@ -230,6 +236,35 @@ export function AccountSettings(): React.JSX.Element {
       setError(message);
     } finally {
       setUpdatingProfile(false);
+    }
+  }
+
+  async function handleThemeChange(nextThemeId: string): Promise<void> {
+    const previousThemeId = themeId;
+    const selectedTheme = getTheme(nextThemeId).id;
+    setThemeId(selectedTheme);
+    applyTheme(selectedTheme);
+    setUpdatingTheme(true);
+    setError("");
+    setSuccessMsg("");
+    try {
+      const response = await fetchApi("/account/update", {
+        method: "PATCH",
+        body: JSON.stringify({ data: { attributes: { theme: selectedTheme } } }),
+      }) as { data: Account };
+      const persistedTheme = typeof response.data.attributes.theme === "string"
+        ? getTheme(response.data.attributes.theme).id
+        : selectedTheme;
+      setAccount(response.data);
+      setThemeId(persistedTheme);
+      applyTheme(persistedTheme);
+      setSuccessMsg("Theme updated");
+    } catch (err: unknown) {
+      setThemeId(previousThemeId);
+      applyTheme(previousThemeId);
+      setError(err instanceof Error ? err.message : "Failed to update theme");
+    } finally {
+      setUpdatingTheme(false);
     }
   }
 
@@ -402,6 +437,40 @@ export function AccountSettings(): React.JSX.Element {
             {updatingProfile ? "Saving..." : "Save Profile"}
           </Button>
         </CardFooter>
+      </Card>
+
+      <Card id="appearance" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Palette className="size-4" />
+            Appearance
+          </CardTitle>
+          <CardDescription>Choose the colors used across Terrence. Your selection follows your account.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
+          <select
+            id="account-theme"
+            value={themeId}
+            disabled={updatingTheme}
+            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { void handleThemeChange(event.target.value); }}
+            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <optgroup label="Light themes">
+              {THEMES.filter((theme): boolean => theme.mode === "light").map((theme): React.JSX.Element => (
+                <option key={theme.id} value={theme.id}>{theme.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Dark themes">
+              {THEMES.filter((theme): boolean => theme.mode === "dark").map((theme): React.JSX.Element => (
+                <option key={theme.id} value={theme.id}>{theme.label}</option>
+              ))}
+            </optgroup>
+          </select>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {updatingTheme ? "Saving theme…" : "Changes save automatically."}
+          </p>
+        </CardContent>
       </Card>
 
       {/* ── 2. Sessions ── */}

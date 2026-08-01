@@ -169,12 +169,12 @@ function buildGraph(configuration: unknown, changes: readonly GraphChange[]): Gr
 }
 
 function nodeColors(operation: string): Readonly<{ fill: string; stroke: string; text: string }> {
-  if (operation === "create") return { fill: "#ecfdf5", stroke: "#86efac", text: "#166534" };
-  if (operation === "update") return { fill: "#eff6ff", stroke: "#93c5fd", text: "#1d4ed8" };
-  if (operation === "delete") return { fill: "#fef2f2", stroke: "#fca5a5", text: "#b91c1c" };
-  if (operation === "replace") return { fill: "#fffbeb", stroke: "#fcd34d", text: "#b45309" };
-  if (operation === "import") return { fill: "#f9fafb", stroke: "#9ca3af", text: "#374151" };
-  return { fill: "#ffffff", stroke: "#d1d5db", text: "#4b5563" };
+  if (operation === "create") return { fill: "color-mix(in srgb, hsl(var(--success)) 12%, hsl(var(--card)))", stroke: "hsl(var(--success))", text: "hsl(var(--success))" };
+  if (operation === "update") return { fill: "color-mix(in srgb, hsl(var(--primary)) 12%, hsl(var(--card)))", stroke: "hsl(var(--primary))", text: "hsl(var(--primary))" };
+  if (operation === "delete") return { fill: "color-mix(in srgb, hsl(var(--destructive)) 12%, hsl(var(--card)))", stroke: "hsl(var(--destructive))", text: "hsl(var(--destructive))" };
+  if (operation === "replace") return { fill: "color-mix(in srgb, hsl(var(--warning)) 12%, hsl(var(--card)))", stroke: "hsl(var(--warning))", text: "hsl(var(--warning))" };
+  if (operation === "import") return { fill: "hsl(var(--muted))", stroke: "hsl(var(--muted-foreground))", text: "hsl(var(--foreground))" };
+  return { fill: "hsl(var(--card))", stroke: "hsl(var(--border))", text: "hsl(var(--muted-foreground))" };
 }
 
 function shortAddress(address: string): string {
@@ -210,10 +210,10 @@ export function DependencyGraph({
           >
             <defs>
               <marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-                <path d="M0,0 L8,4 L0,8 z" fill="#94a3b8" />
+                <path d="M0,0 L8,4 L0,8 z" fill="hsl(var(--muted-foreground))" />
               </marker>
             </defs>
-            <g stroke="#94a3b8" strokeWidth="1.5" markerEnd="url(#dependency-arrow)">
+            <g stroke="hsl(var(--muted-foreground))" strokeWidth="1.5" markerEnd="url(#dependency-arrow)">
               {graph.edges.map((edge): React.JSX.Element | null => {
                 const from = graph.positions.get(edge.from);
                 const to = graph.positions.get(edge.to);
@@ -237,7 +237,7 @@ export function DependencyGraph({
                 <g key={node.address}>
                   <title>{node.address}</title>
                   <rect x={position.x} y={position.y} width="190" height="48" rx="8" fill={colors.fill} stroke={colors.stroke} />
-                  <text x={position.x + 12} y={position.y + 20} fill="#111827" fontSize="11" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
+                  <text x={position.x + 12} y={position.y + 20} fill="hsl(var(--foreground))" fontSize="11" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
                     {shortAddress(node.address)}
                   </text>
                   <text x={position.x + 12} y={position.y + 37} fill={colors.text} fontSize="10" fontFamily="ui-sans-serif, system-ui, sans-serif">

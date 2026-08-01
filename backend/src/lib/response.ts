@@ -19,7 +19,7 @@ type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | bo
       ? readonly DeepReadonly<R>[]
       : { readonly [K in keyof T]: DeepReadonly<T[K]> };
 
-type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean }>;
+type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 // JSON:API convention (matching TFE/Atlas): organizations are identified by their NAME,
@@ -55,6 +55,7 @@ export function userResource(
       "v2-only": false,
       "is-site-admin": user.isSiteAdmin === true,
       "must-change-password": user.mustChangePassword === true,
+      theme: user.theme ?? "original-light",
       permissions: {
         "can-create-organizations": authenticatedResource.type === "users",
         "can-change-email": authenticatedResource.type === "users",
