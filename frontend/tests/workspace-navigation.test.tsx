@@ -12,6 +12,9 @@ const json = (data: unknown): Response =>
     headers: { "Content-Type": "application/vnd.api+json" },
   });
 
+const getUrl = (input: string | URL | Request): string =>
+  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
 function deferred<T>(): Readonly<{
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -705,4 +708,75 @@ test("project settings variable sets section marks only variable sets active", a
   const variableSets = view.getByRole("link", { name: "Variable sets" });
   expect(general.getAttribute("aria-current")).toBeNull();
   expect(variableSets.getAttribute("aria-current")).toBe("page");
+});
+
+test("confirms workspace locking and unlocking before sending mutations", async () => {
+  let locked = false;
+  let reason: string | null = null;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = getUrl(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            locked,
+            "locked-reason": reason,
+            permissions: { "can-lock": true, "can-unlock": true },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST") {
+      locked = true;
+      reason = JSON.parse(init.body as string).reason as string;
+      return json({ data: { id: "ws-1", attributes: { name: "production", locked: true } } });
+    }
+    if (url === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST") {
+      locked = false;
+      reason = null;
+      return json({ data: { id: "ws-1", attributes: { name: "production", locked: false } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Lock" }));
+  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+    getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST")).toBe(false);
+  fireEvent.input(view.getByLabelText("Reason (Optional)"), { target: { value: "Maintenance" } });
+  fireEvent.click(view.getByRole("button", { name: "Lock workspace" }));
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST")).toBe(true);
+  });
+  const lockCall = fetchMock.mock.calls.find(([input, init]): boolean =>
+    getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST");
+  expect(JSON.parse(lockCall?.[1]?.body as string).reason).toBe("Maintenance");
+
+  await waitFor((): void => { expect(view.getByText("Locked")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Unlock" }));
+  expect(view.getByRole("heading", { name: "Unlock workspace production" })).toBeTruthy();
+  expect(view.getByText(/cannot be undone/)).toBeTruthy();
+  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+    getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST")).toBe(false);
+  fireEvent.click(view.getByRole("button", { name: "Yes, unlock workspace" }));
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      getUrl(input) === "/api/v2/workspaces/ws-1/actions/unlock" && init?.method === "POST")).toBe(true);
+  });
 });

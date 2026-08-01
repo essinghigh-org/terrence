@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button, buttonVariants } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
   Card,
   CardContent,
@@ -10,6 +11,14 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { toast } from "../components/ui/toast";
 import {
   WorkspaceHealth,
@@ -60,6 +69,7 @@ type Workspace = {
   attributes: {
     name: string;
     locked?: boolean;
+    "locked-reason"?: string | null;
     description?: string | null;
     "execution-mode"?: string;
     "iac-binary"?: string;
@@ -72,6 +82,7 @@ type Workspace = {
       "can-manage-run-tasks"?: boolean;
       "can-queue-run"?: boolean;
       "can-read-state-versions"?: boolean;
+      "can-write-state-versions"?: boolean;
       "can-read-variable"?: boolean;
       "can-unlock"?: boolean;
       "can-update"?: boolean;
@@ -119,6 +130,9 @@ export function WorkspaceDetail({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [togglingLock, setTogglingLock] = useState(false);
+  const [lockDialogOpen, setLockDialogOpen] = useState(false);
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
+  const [lockReason, setLockReason] = useState("");
   const [embeddedSection, setEmbeddedSection] = useState<WorkspaceSection>("overview");
   const activeSection = section ?? embeddedSection;
   const activeWorkspaceId = useRef<string | null>(null);
@@ -224,23 +238,49 @@ export function WorkspaceDetail({
     return (): void => { controller.abort(); };
   }, [activeSection, projectId]);
 
-  async function handleLock(): Promise<void> {
+  function handleLock(): void {
     if (workspace == null || togglingLock) return;
     const canToggle = workspace.attributes.locked === true
       ? workspace.attributes.permissions?.["can-unlock"] === true
       : workspace.attributes.permissions?.["can-lock"] === true;
     if (!canToggle) return;
+    if (workspace.attributes.locked === true) {
+      setUnlockDialogOpen(true);
+    } else {
+      setLockReason("");
+      setLockDialogOpen(true);
+    }
+  }
+
+  async function submitLock(): Promise<void> {
+    if (workspace == null || togglingLock || workspace.attributes.locked === true) return;
     setTogglingLock(true);
     try {
-      if (workspace.attributes.locked === true) {
-        await fetchApi(`/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
-      } else {
-        await fetchApi(`/workspaces/${workspace.id}/actions/lock`, { method: "POST" });
-      }
+      await fetchApi(`/workspaces/${workspace.id}/actions/lock`, {
+        method: "POST",
+        body: JSON.stringify({ reason: lockReason.trim() }),
+      });
+      setLockDialogOpen(false);
+      setLockReason("");
       void loadWorkspace();
-      toast.add({ title: workspace.attributes.locked === true ? "Workspace unlocked" : "Workspace locked", type: "success" });
+      toast.add({ title: "Workspace locked", type: "success" });
     } catch {
-      toast.add({ title: "Failed to toggle workspace lock", type: "error" });
+      toast.add({ title: "Failed to lock workspace", type: "error" });
+    } finally {
+      setTogglingLock(false);
+    }
+  }
+
+  async function submitUnlock(): Promise<void> {
+    if (workspace == null || togglingLock || workspace.attributes.locked !== true) return;
+    setTogglingLock(true);
+    try {
+      await fetchApi(`/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
+      setUnlockDialogOpen(false);
+      void loadWorkspace();
+      toast.add({ title: "Workspace unlocked", type: "success" });
+    } catch {
+      toast.add({ title: "Failed to unlock workspace", type: "error" });
     } finally {
       setTogglingLock(false);
     }
@@ -294,6 +334,8 @@ export function WorkspaceDetail({
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
   const canReadStateVersions =
     workspace.attributes.permissions?.["can-read-state-versions"] === true;
+  const canWriteStateVersions =
+    workspace.attributes.permissions?.["can-write-state-versions"] === true;
   const canReadVariable = workspace.attributes.permissions?.["can-read-variable"] === true;
   const inaccessibleDataSection =
     (activeSection === "states" && !canReadStateVersions)
@@ -435,6 +477,79 @@ export function WorkspaceDetail({
           )}
         </div>
       </div>
+
+      <Dialog
+        open={lockDialogOpen}
+        onOpenChange={(open: boolean): void => {
+          if (!open && !togglingLock) {
+            setLockDialogOpen(false);
+            setLockReason("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[720px]">
+          <form onSubmit={(event): void => { event.preventDefault(); void submitLock(); }}>
+            <DialogHeader>
+              <DialogTitle>Lock workspace</DialogTitle>
+              <DialogDescription>
+                Lock this workspace to prevent new plans and applies while you perform maintenance.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-2">
+              <label htmlFor="workspace-lock-reason" className="text-sm font-medium text-foreground">
+                Reason <span className="font-normal text-muted-foreground">(Optional)</span>
+              </label>
+              <textarea
+                id="workspace-lock-reason"
+                rows={4}
+                maxLength={300}
+                autoFocus
+                value={lockReason}
+                onInput={(event): void => { setLockReason(event.currentTarget.value); }}
+                placeholder="Why is this being locked?"
+                className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <p className="text-sm text-muted-foreground">300 characters allowed</p>
+            </div>
+            <DialogFooter className="mt-6 gap-2">
+              <Button type="submit" disabled={togglingLock}>
+                {togglingLock ? "Locking..." : "Lock workspace"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={togglingLock}
+                onClick={(): void => { setLockDialogOpen(false); setLockReason(""); }}
+              >
+                Cancel
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={unlockDialogOpen}
+        onOpenChange={(open: boolean): void => {
+          if (!open && !togglingLock) setUnlockDialogOpen(false);
+        }}
+        title={`Unlock workspace ${workspace.attributes.name}`}
+        description={(
+          <>
+            <span className="block">
+              Unlocking this workspace will allow other users to run Terraform. Be careful: if a remote Terraform run is still using the lock, this may lead to inconsistent state.
+            </span>
+            <span className="mt-4 block">
+              This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
+            </span>
+          </>
+        )}
+        confirmText="Yes, unlock workspace"
+        cancelText="Cancel"
+        confirmVariant="destructive"
+        onConfirm={submitUnlock}
+        loading={togglingLock}
+      />
 
       {section === undefined && (
         <div className="mb-6 border-b">
@@ -613,7 +728,12 @@ export function WorkspaceDetail({
           </Card>
         )}
         {activeSection === "states" && canReadStateVersions && (
-          <StateHistory workspaceId={workspace.id} orgName={orgName ?? ""} workspaceName={workspace.attributes.name} />
+          <StateHistory
+            workspaceId={workspace.id}
+            orgName={orgName ?? ""}
+            workspaceName={workspace.attributes.name}
+            canUpload={canWriteStateVersions}
+          />
         )}
         {activeSection === "variables" && canReadVariable && (
           <WorkspaceVariables
@@ -710,6 +830,11 @@ export function WorkspaceDetail({
               <p className="text-sm text-muted-foreground">
                 This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
               </p>
+              {workspace.attributes.locked === true && typeof workspace.attributes["locked-reason"] === "string" && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Reason: {workspace.attributes["locked-reason"]}
+                </p>
+              )}
             </CardContent>
             {canToggleLock && (
               <CardFooter className="justify-end">

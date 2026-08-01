@@ -85,3 +85,46 @@ export function parseStatePayload(payload: string | null): Record<string, unknow
     return null;
   }
 }
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isTerraformStateInstance(value: unknown): boolean {
+  if (!isObjectRecord(value) || !isObjectRecord(value.attributes)) return false;
+  return (value.schema_version === undefined || Number.isSafeInteger(value.schema_version))
+    && (value.sensitive_attributes === undefined || Array.isArray(value.sensitive_attributes))
+    && (value.dependencies === undefined || Array.isArray(value.dependencies));
+}
+
+function isTerraformStateResource(value: unknown): boolean {
+  if (!isObjectRecord(value)) return false;
+  return (value.mode === "managed" || value.mode === "data")
+    && typeof value.type === "string"
+    && value.type !== ""
+    && typeof value.name === "string"
+    && value.name !== ""
+    && typeof value.provider === "string"
+    && value.provider !== ""
+    && Array.isArray(value.instances)
+    && value.instances.every((instance: unknown): boolean => isTerraformStateInstance(instance));
+}
+
+/** Validate the core Terraform/OpenTofu v4 state shape without rejecting optional fields. */
+export function parseTerraformStatePayload(payload: string | null): Record<string, unknown> | null {
+  const state = parseStatePayload(payload);
+  if (
+    state === null
+    || state.version !== 4
+    || !Number.isSafeInteger(state.serial)
+    || (state.serial as number) < 0
+    || typeof state.lineage !== "string"
+    || state.lineage === ""
+    || !Array.isArray(state.resources)
+    || !state.resources.every((resource: unknown): boolean => isTerraformStateResource(resource))
+  ) return null;
+
+  if (state.terraform_version !== undefined && typeof state.terraform_version !== "string") return null;
+  if (state.outputs !== undefined && !isObjectRecord(state.outputs)) return null;
+  return state;
+}

@@ -179,6 +179,7 @@ export type WorkspaceResourcePermissions = Readonly<{
   canManageRunTasks: boolean;
   canPlan: boolean;
   canReadStateVersions: boolean;
+  canWriteStateVersions?: boolean;
   canReadVariables: boolean;
   canWriteVariables: boolean;
 }>;
@@ -242,6 +243,7 @@ export async function workspaceResource(
         "can-queue-run": permissions.canPlan,
         "can-read-settings": true,
         "can-read-state-versions": permissions.canReadStateVersions,
+        "can-write-state-versions": permissions.canWriteStateVersions === true,
         "can-read-variable": permissions.canReadVariables,
         "can-unlock": permissions.canLock,
         "can-update": permissions.canAdmin,

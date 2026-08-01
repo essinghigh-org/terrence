@@ -3,6 +3,7 @@ import { db } from "../db";
 import { stateVersions, workspaces, runs, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
+import { parseTerraformStatePayload } from "../lib/validation";
 import {
   checkWorkspacePermission,
   findAuthorizedWorkspace,
@@ -22,9 +23,11 @@ type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
-  request: Readonly<{ url: string; arrayBuffer: () => Promise<ArrayBuffer> }>;
+  request: Readonly<{ url: string; headers: Headers; arrayBuffer: () => Promise<ArrayBuffer> }>;
   set: SetObj;
 }>;
+
+const MAX_IMPORTED_STATE_BYTES = 100 * 1024 * 1024;
 
 async function requestBodyText(
   body: unknown,
@@ -441,6 +444,56 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     });
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    (set as { status: number }).status = 201;
+    return { data: stateVersionResource(sv, request) };
+  })
+  .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws.locked === true) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is locked" }] };
+    }
+    const contentLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_IMPORTED_STATE_BYTES) {
+      (set as { status: number }).status = 413;
+      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
+    }
+    const rawState = await requestBodyText(body, request);
+    if (Buffer.byteLength(rawState, "utf8") > MAX_IMPORTED_STATE_BYTES) {
+      (set as { status: number }).status = 413;
+      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
+    }
+    const parsed = parseTerraformStatePayload(rawState);
+    if (parsed === null) {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Uploaded file is not a valid Terraform/OpenTofu state file" }] };
+    }
+
+    const stateVersionId = await db.transaction(async (tx: unknown): Promise<string> => {
+      const t = tx as typeof db;
+      const latest = await t.query.stateVersions.findFirst({
+        where: eq(stateVersions.workspaceId, workspaceId),
+        orderBy: [desc(stateVersions.serial)],
+      });
+      const id = crypto.randomUUID();
+      await t.insert(stateVersions).values({
+        id,
+        workspaceId,
+        serial: (latest?.serial ?? 0) + 1,
+        statePayload: rawState,
+        jsonState: rawState,
+        jsonStateOutputs: parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs),
+        status: "finalized",
+        terraformVersion: typeof parsed.terraform_version === "string" ? parsed.terraform_version : null,
+        intermediate: false,
+        createdAt: Date.now(),
+      });
+      return id;
+    });
+    const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (sv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     (set as { status: number }).status = 201;
     return { data: stateVersionResource(sv, request) };
   });

@@ -138,6 +138,41 @@ describe("TFE workspaces contract", () => {
     expect(resource.attributes.description).toBe("updated");
   });
 
+  it("validates and persists lock reasons, then clears them when unlocked", async () => {
+    const lockWorkspaceId = `lock-workspace-${seed.suffix}`;
+    await db.insert(workspaces).values({ id: lockWorkspaceId, name: `lock-${seed.suffix}`, orgId: seed.orgId });
+    try {
+      const response = await request(`/api/v2/workspaces/${lockWorkspaceId}/actions/lock`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ reason: "x".repeat(301) }),
+      });
+      await expectErrorResponse(response, 422);
+
+      const locked = await expectSuccessResponse(
+        await request(`/api/v2/workspaces/${lockWorkspaceId}/actions/lock`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason: "Migrating state" }),
+        }),
+        200,
+        "workspaces",
+      );
+      expect(locked.attributes.locked).toBe(true);
+      expect(locked.attributes["locked-reason"]).toBe("Migrating state");
+
+      const unlocked = await expectSuccessResponse(
+        await request(`/api/v2/workspaces/${lockWorkspaceId}/actions/unlock`, { method: "POST", headers }),
+        200,
+        "workspaces",
+      );
+      expect(unlocked.attributes.locked).toBe(false);
+      expect(unlocked.attributes["locked-reason"]).toBeNull();
+    } finally {
+      await db.delete(workspaces).where(eq(workspaces.id, lockWorkspaceId));
+    }
+  });
+
   it("destroys a workspace with 204 and empty body", async () => {
     const createResponse = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
       method: "POST",

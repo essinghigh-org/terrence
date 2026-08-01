@@ -92,3 +92,31 @@ test("shows a retryable error separately from the empty state", async () => {
   expect(view.queryByRole("alert")).toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
+
+test("uploads a Terraform state file and adds the new state version", async () => {
+  const uploadedState = JSON.stringify({ version: 4, serial: 17, lineage: "lineage", resources: [] });
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/workspaces/ws-1/state-versions") return json({ data: [], meta: { pagination: { "next-page": null } } });
+    if (url === "/api/v2/workspaces/ws-1/state-versions/upload") {
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(uploadedState);
+      return json({ data: { id: "sv-uploaded", attributes: { serial: 1, status: "Finalized" } } }, 201);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(<StateHistory workspaceId="ws-1" />);
+  await waitFor((): void => {
+    expect(view.getByText("No state versions recorded yet.")).toBeTruthy();
+  });
+
+  const file = new File([uploadedState], "terraform.tfstate", { type: "application/json" });
+  fireEvent.change(view.getByLabelText("Upload Terraform/OpenTofu state"), { target: { files: [file] } });
+
+  await waitFor((): void => {
+    expect(view.getByText("sv-uploaded")).toBeTruthy();
+  });
+  expect(view.getByRole("button", { name: "Upload state" })).toBeTruthy();
+});

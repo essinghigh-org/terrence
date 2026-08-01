@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import {
   Dialog,
@@ -37,6 +38,7 @@ type StateHistoryProps = {
   workspaceId: string;
   orgName?: string;
   workspaceName?: string;
+  canUpload?: boolean;
 }
 
 type LoadState =
@@ -50,11 +52,13 @@ function formatDate(value: unknown): string {
   return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
 }
 
-export function StateHistory({ workspaceId, orgName, workspaceName }: StateHistoryProps): React.JSX.Element {
+export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = true }: StateHistoryProps): React.JSX.Element {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [retry, setRetry] = useState(0);
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [loadingStateId, setLoadingStateId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
@@ -127,11 +131,59 @@ export function StateHistory({ workspaceId, orgName, workspaceName }: StateHisto
     }
   };
 
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (file === undefined) return;
+    setUploading(true);
+    try {
+      const rawState = await file.text();
+      const response = await fetchApi(`/workspaces/${workspaceId}/state-versions/upload`, {
+        method: "POST",
+        body: rawState,
+      }) as { data?: StateItem };
+      const uploadedState = response.data;
+      if (uploadedState !== undefined) {
+        setLoadState((current): LoadState => current.kind === "ready"
+          ? { kind: "ready", states: [uploadedState, ...current.states] }
+          : current);
+      }
+      toast.add({ title: "State uploaded", description: "The imported state is now the latest state version.", type: "success" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to upload Terraform state";
+      toast.add({ title: "Could not upload state", description: msg, type: "error" });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-semibold">State version history</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Browse historical state, inspect the run that produced it, and download a safe copy for recovery.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">State version history</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Browse historical state, inspect the run that produced it, and download a safe copy for recovery.</p>
+        </div>
+        {canUpload && (
+          <>
+            <input
+              ref={fileInputRef}
+              className="hidden"
+              type="file"
+              accept=".tfstate,.json,application/json"
+              aria-label="Upload Terraform/OpenTofu state"
+              onChange={(event): void => { void handleUpload(event); }}
+            />
+            <Button
+              variant="outline"
+              disabled={uploading}
+              onClick={(): void => { fileInputRef.current?.click(); }}
+            >
+              {uploading ? <Spinner className="size-4" /> : <Upload className="size-4" />}
+              {uploading ? "Uploading…" : "Upload state"}
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="border rounded-md">
