@@ -11,6 +11,7 @@ import { Spinner } from "../components/ui/spinner";
 import { KeyRound, Lock, MonitorSmartphone, Plus, ShieldCheck, Trash2, User } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
+import { QrCodeImage } from "../components/QrCodeImage";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -567,12 +568,19 @@ export function AccountSettings(): React.JSX.Element {
               </>
             ) : mfaEnrollment !== null ? (
               <div className="space-y-4 rounded-md border bg-muted/30 p-4">
-                <p className="text-sm">Add this account to your authenticator app, then enter the generated 6-digit code.</p>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">Setup key</p>
-                  <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
+                <p className="text-sm">Scan the QR code with your authenticator app, then enter the generated 6-digit code.</p>
+                <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+                  <div className="shrink-0 rounded-md border bg-background p-2">
+                    {mfaEnrollment["otpauth-url"] !== undefined
+                      ? <QrCodeImage value={mfaEnrollment["otpauth-url"]} />
+                      : null}
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">Setup key</p>
+                    <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
+                    <p className="pt-1 text-xs text-muted-foreground">Can't scan? Enter this key manually.</p>
+                  </div>
                 </div>
-                {mfaEnrollment["otpauth-url"] && <p className="text-xs text-muted-foreground">Or use this URI: <code className="select-all break-all">{mfaEnrollment["otpauth-url"]}</code></p>}
                 <div className="space-y-1.5">
                   <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
                   <Input id="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
