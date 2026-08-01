@@ -11,7 +11,7 @@ import {
   stateVersions,
   workspaces,
 } from "../db/schema";
-import { checkOrgPermission, findAuthorizedWorkspace } from "../lib/utils";
+import { checkOrgPermission, findAuthorizedWorkspace, workspaceIdsForPermission } from "../lib/utils";
 import { createHash, randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -164,15 +164,23 @@ const TOOLS: ReadonlyArray<{
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
       const offset = Math.max(Number(args.offset ?? 0), 0);
       if (exactName !== undefined) {
+        // Fetch by name+org, then authorize via findAuthorizedWorkspace
         const ws = await db.query.workspaces.findFirst({
           where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, exactName)),
           columns: { id: true, name: true, orgId: true, locked: true, createdAt: true },
         });
-        return ws ?? errorRes(null, -32602, `Workspace "${exactName}" not found in org "${orgName}"`);
+        if (ws === undefined) return errorRes(null, -32602, `Workspace "${exactName}" not found in org "${orgName}"`);
+        // Re-authorize with findAuthorizedWorkspace for workspace-level visibility
+        const authorized = await findAuthorizedWorkspace(ws.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
+        if (authorized === undefined) return errorRes(null, -32001, "Not authorized to access this workspace");
+        return { ...ws, id: authorized.id, name: authorized.name };
       }
+      // List/search: filter by workspaceIdsForPermission(org.id, ..., "read")
+      const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
+      if (authorizedIds === null || authorizedIds.length === 0) return [];
       const where = search !== undefined
-        ? and(eq(workspaces.orgId, org.id), like(workspaces.name, `%${search}%`))
-        : eq(workspaces.orgId, org.id);
+        ? and(inArray(workspaces.id, authorizedIds as string[]), like(workspaces.name, `%${search}%`))
+        : inArray(workspaces.id, authorizedIds as string[]);
       const rows = await db.query.workspaces.findMany({
         where,
         orderBy: [asc(workspaces.name)],

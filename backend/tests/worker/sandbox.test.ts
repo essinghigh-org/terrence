@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { writeFile, mkdir, rm, symlink } from "fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { RunSandbox, probeLandlockAbi } from "../../src/lib/sandbox";
@@ -181,7 +182,7 @@ describe("landlock run sandbox", () => {
     }
   });
 
-  it("denies connecting to 127.0.0.1:3000", async (): Promise<void> => {
+  it("checks network connectivity under Landlock (documented: Landlock does not restrict network)", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
     const runsBase = join(tmpdir(), "terrence", "runs");
@@ -203,7 +204,7 @@ describe("landlock run sandbox", () => {
     }
   });
 
-  it("denies sending a signal to another same-UID process", async (): Promise<void> => {
+  it("checks kill permission under Landlock (documented: Landlock does not restrict signal(2))", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
     const runsBase = join(tmpdir(), "terrence", "runs");
@@ -225,20 +226,16 @@ describe("landlock run sandbox", () => {
     }
   });
 
-  it("refuses to construct a sandbox when the helper binary is missing", (): void => {
-    // isUsable() should return a boolean; it's true here because the helper
-    // exists after compilation. The spawn-time guard is the real protection.
-    // Verify the constructor rejects null/empty paths at runtime.
+  it("verifies the sandbox helper binary is present at the resolved path", (): void => {
+    const runnerPath = process.env.TERRENCE_LANDLOCK_RUNNER ?? join(__dirname, "../../bin/landlock-runner");
+    expect(existsSync(runnerPath)).toBe(true);
     expect(RunSandbox.isUsable()).toBe(true);
-    // Simulated: if the binary were deleted, isUsable() would flip to false
-    // and the worker-wiring code would refuse to spawn.  This path is
-    // exercised by the caller gate in sandbox.ts (the guard that refuses
-    // to spawn if !this.isUsable()).
   });
 
-  it("reports zero ABI when Landlock is blocked", (): void => {
-    // Simulate blocked Landlock by checking probeLandlockAbi() directly.
-    // In a real CI environment, this test validates the fallback path.
+  it("returns a numeric ABI version from probeLandlockAbi", (): void => {
+    // Reports the kernel's Landlock ABI (or 0 if unavailable).  This is a
+    // self-describing probe — it confirms the probe surface is callable
+    // without crashing, and the return type is a number.
     expect(typeof probeLandlockAbi()).toBe("number");
   });
 });
