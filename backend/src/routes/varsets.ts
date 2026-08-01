@@ -44,15 +44,24 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const conditions: (typeof scope)[] = [scope];
     if (search !== "") conditions.push(like(variableSets.name, `%${search}%`));
     if (projectFilter !== "") {
-      // Only variable sets explicitly linked to this project (TFE: project-scoped).
-      const linked = await db.query.variableSetProjects.findMany({
+      // Project-scoped variable sets: those owned by the project
+      // (parent_project_id) plus org-owned sets explicitly applied to it.
+      const owned = await db.query.variableSets.findMany({
+        where: eq(variableSets.parentProjectId, projectFilter),
+        columns: { id: true },
+      });
+      const applied = await db.query.variableSetProjects.findMany({
         where: eq(variableSetProjects.projectId, projectFilter),
         columns: { variableSetId: true },
       });
-      if (linked.length === 0) {
+      const ids = new Set<string>([
+        ...owned.map((v): string => v.id),
+        ...applied.map((l): string => l.variableSetId),
+      ]);
+      if (ids.size === 0) {
         return { data: [], ...pagination(request, number, size, 0) };
       }
-      conditions.push(inArray(variableSets.id, [...new Set(linked.map((l): string => l.variableSetId))]));
+      conditions.push(inArray(variableSets.id, [...ids]));
     }
     const where = and(...conditions);
     const [records, countRows] = await Promise.all([
@@ -79,7 +88,30 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const global = typeof attributes.global === "boolean" ? attributes.global : false;
     const priority = typeof attributes.priority === "boolean" ? attributes.priority : false;
-    const record = { id: `varset-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`, orgId: org.id, name, description, global, priority };
+    const parentProjectId = attributes["parent-project-id"] !== undefined && attributes["parent-project-id"] !== null
+      ? String(attributes["parent-project-id"])
+      : null;
+    if (parentProjectId !== null) {
+      const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });
+      if (parent === undefined || parent.orgId !== org.id) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Parent project must belong to the organization" }] };
+      }
+      // TFE: project-owned variable sets cannot be global.
+      if (global === true) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
+      }
+    }
+    const record = {
+      id: `varset-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      orgId: org.id,
+      parentProjectId,
+      name,
+      description,
+      global: parentProjectId !== null ? false : global,
+      priority,
+    };
     await db.insert(variableSets).values(record);
     (set as { status: number }).status = 201;
     return { data: await variableSetResource(record) };
@@ -100,12 +132,20 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (data?.type !== "varsets" || !attributes || !validVariableSetAttributes(attributes, true)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
     }
+    if (attributes["parent-project-id"] !== undefined) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The owning project of a variable set cannot be changed" }] };
+    }
     const updated = {
       name: typeof attributes.name === "string" ? attributes.name.trim() : record.name,
       description: attributes.description === undefined ? record.description : (typeof attributes.description === "string" ? attributes.description : null),
       global: typeof attributes.global === "boolean" ? attributes.global : record.global,
       priority: typeof attributes.priority === "boolean" ? attributes.priority : record.priority,
     };
+    if (record.parentProjectId !== null && updated.global === true) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Project-owned variable sets cannot be global" }] };
+    }
     await db.update(variableSets).set(updated).where(eq(variableSets.id, record.id));
     return { data: await variableSetResource({ ...record, ...updated }) };
   })

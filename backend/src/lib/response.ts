@@ -413,13 +413,16 @@ export async function variableSetResource(variableSet: VarSetParam): Promise<Rec
       description: variableSet.description,
       global: variableSet.global === true,
       priority: variableSet.priority === true,
+      "parent-project-id": variableSet.parentProjectId ?? null,
       "var-count": variables.length,
       "workspace-count": workspaceLinks.length,
       "project-count": projectLinks.length,
     },
     relationships: {
       organization: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
-      parent: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
+      parent: variableSet.parentProjectId === null
+        ? { data: { id: orgName ?? variableSet.orgId, type: "organizations" } }
+        : { data: { id: variableSet.parentProjectId, type: "projects" } },
       workspaces: {
         data: workspaceLinks.map((link: DeepReadonly<typeof variableSetWorkspaces.$inferSelect>): { id: string; type: string } => ({ id: link.workspaceId, type: "workspaces" })),
       },

@@ -68,6 +68,7 @@ type VariableSet = Readonly<{
     "workspace-count"?: number;
     "project-count"?: number;
     global?: boolean;
+    "parent-project-id"?: string | null;
   }>;
 }>;
 
@@ -111,6 +112,13 @@ export function ProjectDetail({
   const [saving, setSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Create project variable set state
+  const [createVsOpen, setCreateVsOpen] = useState(false);
+  const [vsName, setVsName] = useState("");
+  const [vsDescription, setVsDescription] = useState("");
+  const [vsError, setVsError] = useState("");
+  const [savingVs, setSavingVs] = useState(false);
 
   const loadData = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     if (projectId === undefined) return;
@@ -221,6 +229,41 @@ export function ProjectDetail({
       setDeleteOpen(false);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const createVariableSet = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    if (projectId === undefined || vsName.trim() === "") return;
+    setSavingVs(true);
+    setVsError("");
+    try {
+      const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/varsets`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "varsets",
+            attributes: {
+              name: vsName.trim(),
+              description: vsDescription.trim() !== "" ? vsDescription.trim() : null,
+              "parent-project-id": projectId,
+            },
+          },
+        }),
+      }) as { data?: VariableSet };
+      if (response.data !== undefined) {
+        setVariableSets((current: VariableSet[]): VariableSet[] =>
+          [...current, response.data as VariableSet].sort((a, b): number =>
+            a.attributes.name.localeCompare(b.attributes.name)));
+      }
+      setCreateVsOpen(false);
+      setVsName("");
+      setVsDescription("");
+      toast.add({ title: "Project variable set created", type: "success" });
+    } catch (error: unknown) {
+      setVsError(error instanceof Error ? error.message : "Failed to create variable set");
+    } finally {
+      setSavingVs(false);
     }
   };
 
@@ -496,14 +539,31 @@ export function ProjectDetail({
           </Card>
         ) : activeSection === "variable-sets" ? (
           <Card>
-            <CardHeader>
-              <CardTitle>Variable sets</CardTitle>
-              <CardDescription>Variable sets shared with this project's workspaces.</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div className="flex flex-col gap-1">
+                <CardTitle>Variable sets</CardTitle>
+                <CardDescription>
+                  Project-owned variable sets and organization variable sets applied to this project.
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                onClick={(): void => {
+                  setVsName("");
+                  setVsDescription("");
+                  setVsError("");
+                  setCreateVsOpen(true);
+                }}
+              >
+                <Plus data-icon="inline-start" />
+                New variable set
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               {variableSets.length === 0 ? (
                 <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-                  No variable sets are applied to this project. Manage variable sets from the{" "}
+                  No variable sets are applied to this project. Create a project variable set, or apply
+                  one from the{" "}
                   <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">organization Variable sets page</Link>.
                 </p>
               ) : (
@@ -511,7 +571,7 @@ export function ProjectDetail({
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
-                      <TableHead>Description</TableHead>
+                      <TableHead>Scope</TableHead>
                       <TableHead>Variables</TableHead>
                       <TableHead>Workspaces</TableHead>
                     </TableRow>
@@ -524,7 +584,13 @@ export function ProjectDetail({
                             {vs.attributes.name}
                           </Link>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{vs.attributes.description ?? "—"}</TableCell>
+                        <TableCell>
+                          {vs.attributes["parent-project-id"] === projectId
+                            ? <Badge variant="secondary">This project</Badge>
+                            : vs.attributes.global === true
+                              ? <Badge variant="outline">Global</Badge>
+                              : <Badge variant="outline">Applied</Badge>}
+                        </TableCell>
                         <TableCell><Badge variant="secondary">{vs.attributes["var-count"] ?? 0}</Badge></TableCell>
                         <TableCell><Badge variant="secondary">{vs.attributes["workspace-count"] ?? 0}</Badge></TableCell>
                       </TableRow>
@@ -624,6 +690,48 @@ export function ProjectDetail({
         confirmText={deleting ? "Deleting…" : "Delete project"}
         onConfirm={(): Promise<void> => deleteProject()}
       />
+
+      {/* Create project variable set dialog */}
+      <Dialog open={createVsOpen} onOpenChange={setCreateVsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create a new project variable set</DialogTitle>
+            <DialogDescription>
+              This variable set is owned by {project?.attributes.name ?? "this project"} and applies to
+              its workspaces.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={createVariableSet}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="project-vs-name">Name</FieldLabel>
+                <Input
+                  id="project-vs-name"
+                  value={vsName}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVsName(event.currentTarget.value); }}
+                  placeholder="Shared project variables"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="project-vs-description">Description (Optional)</FieldLabel>
+                <Input
+                  id="project-vs-description"
+                  value={vsDescription}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVsDescription(event.currentTarget.value); }}
+                  placeholder="What is this variable set for?"
+                />
+              </Field>
+            </FieldGroup>
+            {vsError !== "" && <FieldError>{vsError}</FieldError>}
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={(): void => { setCreateVsOpen(false); }}>Cancel</Button>
+              <Button type="submit" disabled={savingVs || vsName.trim() === ""}>
+                {savingVs ? "Creating…" : "Create variable set"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

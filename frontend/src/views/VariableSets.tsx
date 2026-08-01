@@ -43,6 +43,7 @@ type VariableSet = {
     name: string;
     description: string | null;
     global: boolean;
+    "parent-project-id"?: string | null;
 
     "var-count": number;
 
@@ -697,7 +698,13 @@ export function VariableSets(): React.JSX.Element {
                   <TableCell className="max-w-72 truncate text-muted-foreground">
                     {variableSet.attributes.description ?? "—"}
                   </TableCell>
-                  <TableCell>{variableSet.attributes.global ? "Global" : "Selected"}</TableCell>
+                  <TableCell>
+                    {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
+                      ? "Project"
+                      : variableSet.attributes.global
+                        ? "Global"
+                        : "Selected"}
+                  </TableCell>
                   <TableCell>{variableSet.attributes["var-count"]}</TableCell>
                   <TableCell>
                     {variableSet.attributes.global

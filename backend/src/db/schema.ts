@@ -463,6 +463,7 @@ export const workspaceTags = sqliteTable("workspace_tags", {
 export const variableSets = sqliteTable("variable_sets", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  parentProjectId: text("parent_project_id").references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   description: text("description"),
   global: integer("global", { mode: "boolean" }).default(false),

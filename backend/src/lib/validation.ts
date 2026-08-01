@@ -34,14 +34,16 @@ export function validVariableSetVariableAttributes(attributes: unknown, partial 
 export function validVariableSetAttributes(attributes: unknown, partial = false): boolean {
   if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
-  const { name, description, global, priority } = attrs;
+  const { name, description, global, priority, "parent-project-id": parentProjectId } = attrs;
   const fields = Object.keys(attrs);
   return fields.length > 0
-    && fields.every((field: string): boolean => ["name", "description", "global", "priority"].includes(field))
+    && fields.every((field: string): boolean =>
+      ["name", "description", "global", "priority", "parent-project-id"].includes(field))
     && ((partial && name === undefined) || (typeof name === "string" && name.trim() !== ""))
     && (description === undefined || description === null || typeof description === "string")
     && (global === undefined || typeof global === "boolean")
-    && (priority === undefined || typeof priority === "boolean");
+    && (priority === undefined || typeof priority === "boolean")
+    && (parentProjectId === undefined || parentProjectId === null || typeof parentProjectId === "string");
 }
 
 export function isUniqueConstraintError(error: unknown): boolean {
