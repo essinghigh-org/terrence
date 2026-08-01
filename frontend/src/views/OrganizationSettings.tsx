@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { HelpTooltip } from "../components/ui/help-tooltip";
 import { OrganizationCidrRanges } from "../components/OrganizationCidrRanges";
 import { OrganizationTags } from "../components/OrganizationTags";
+import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
@@ -123,7 +124,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const activeOrganizationName = useRef(orgNameParam);
   activeOrganizationName.current = orgNameParam;
   const requestedTab = searchParams.get("tab");
-  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" ? requestedTab : "general";
+  const activeTab = requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" || requestedTab === "ssh-keys" ? requestedTab : "general";
   const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
   const permissions = orgIsCurrent ? org.attributes.permissions : undefined;
   const canUpdateOrganization = permissions?.["can-update"] === true;
@@ -774,6 +775,8 @@ export function OrganizationSettings(): React.JSX.Element {
           {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
 
           {activeTab === "tags" && <OrganizationTags orgName={orgNameParam} />}
+
+          {activeTab === "ssh-keys" && <OrganizationSshKeys orgName={orgNameParam} />}
 
           {activeTab === "users" && (
             <Card>

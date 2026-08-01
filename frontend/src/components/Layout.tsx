@@ -690,7 +690,8 @@ export function Layout({
             && organizationSettingsTab !== "roles"
             && organizationSettingsTab !== "cidr"
             && organizationSettingsTab !== "tags"
-            && organizationSettingsTab !== "users",
+            && organizationSettingsTab !== "users"
+            && organizationSettingsTab !== "ssh-keys",
           icon: Settings,
           label: "General",
           to: organizationSettingsPath,
@@ -729,6 +730,13 @@ export function Layout({
           icon: ShieldCheck,
           label: "IP allowlists",
           to: `${organizationSettingsPath}?tab=cidr`,
+        },
+        {
+          active: location.pathname === organizationSettingsPath
+            && organizationSettingsTab === "ssh-keys",
+          icon: KeyRound,
+          label: "SSH keys",
+          to: `${organizationSettingsPath}?tab=ssh-keys`,
         },
         {
           active: location.pathname === `${orgPath}/variable-sets`,
