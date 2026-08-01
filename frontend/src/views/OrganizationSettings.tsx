@@ -82,6 +82,11 @@ export function OrganizationSettings(): React.JSX.Element {
   const [name, setName] = useState("");
   const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
+  const [notificationEmail, setNotificationEmail] = useState("");
+  const [allowForceDeleteWorkspaces, setAllowForceDeleteWorkspaces] = useState(true);
+  const [stacksEnabled, setStacksEnabled] = useState(false);
+  const [showPreReleases, setShowPreReleases] = useState(false);
+  const [defaultExecutionMode, setDefaultExecutionMode] = useState("remote");
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -144,6 +149,11 @@ export function OrganizationSettings(): React.JSX.Element {
       setName(res.data.attributes["name"] as string);
       setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "tofu");
       setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
+      setNotificationEmail((res.data.attributes["email"] as string | null | undefined) ?? "");
+      setAllowForceDeleteWorkspaces(res.data.attributes["allow-force-delete-workspaces"] !== false);
+      setStacksEnabled(res.data.attributes["stacks-enabled"] === true);
+      setShowPreReleases(res.data.attributes["show-pre-releases"] === true);
+      setDefaultExecutionMode((res.data.attributes["default-execution-mode"] as string | undefined) ?? "remote");
     } catch (err: unknown) {
       if (activeOrganizationName.current !== orgNameParam) return;
       setLoadError(err instanceof Error ? err.message : "Could not load organization settings");
@@ -253,8 +263,13 @@ export function OrganizationSettings(): React.JSX.Element {
           data: {
             attributes: {
               name,
+              email: notificationEmail.trim() === "" ? null : notificationEmail.trim(),
               "default-iac-binary": defaultIacBinary,
               "default-terraform-version": defaultTerraformVersion,
+              "allow-force-delete-workspaces": allowForceDeleteWorkspaces,
+              "stacks-enabled": stacksEnabled,
+              "show-pre-releases": showPreReleases,
+              "default-execution-mode": defaultExecutionMode,
             },
           },
         }),
@@ -500,6 +515,86 @@ export function OrganizationSettings(): React.JSX.Element {
                         placeholder="latest"
                         className="h-9"
                       />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label htmlFor="org-email" className="text-sm font-semibold text-gray-900">Notification email</label>
+                      <Input
+                        id="org-email"
+                        type="email"
+                        value={notificationEmail}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNotificationEmail(event.target.value); }}
+                        disabled={!canUpdateOrganization}
+                        placeholder="admin@example.com"
+                        className="h-9"
+                      />
+                      <p className="text-[13px] text-gray-500 mt-1">Email address used for organization notifications.</p>
+                    </div>
+                    <div className="space-y-2 border-t pt-4">
+                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                        <Checkbox
+                          checked={allowForceDeleteWorkspaces}
+                          onCheckedChange={(checked: boolean): void => { setAllowForceDeleteWorkspaces(checked); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Workspace administrators can force delete workspaces
+                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                        <Checkbox
+                          checked={stacksEnabled}
+                          onCheckedChange={(checked: boolean): void => { setStacksEnabled(checked); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Stacks
+                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                        <Checkbox
+                          checked={showPreReleases}
+                          onCheckedChange={(checked: boolean): void => { setShowPreReleases(checked); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Show Terraform pre-releases
+                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
+                        </span>
+                      </label>
+                    </div>
+                    <div className="space-y-2 border-t pt-4">
+                      <p className="text-sm font-semibold text-gray-900">Organizational default execution mode</p>
+                      <p className="text-[13px] text-gray-500">Changing the execution mode discards any active runs in workspaces.</p>
+                      <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                        <input
+                          type="radio"
+                          name="org-exec-mode"
+                          className="size-4 accent-[#2962ff]"
+                          checked={defaultExecutionMode === "remote"}
+                          onChange={(): void => { setDefaultExecutionMode("remote"); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Remote
+                          <span className="block text-[13px] font-normal text-gray-500">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+                        </span>
+                      </label>
+                      <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                        <input
+                          type="radio"
+                          name="org-exec-mode"
+                          className="size-4 accent-[#2962ff]"
+                          checked={defaultExecutionMode === "local"}
+                          onChange={(): void => { setDefaultExecutionMode("local"); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Local
+                          <span className="block text-[13px] font-normal text-gray-500">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+                        </span>
+                      </label>
                     </div>
                     <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-[#2962ff] hover:bg-[#1a4bcf] h-9">
                       {saving ? "Saving..." : "Save settings"}

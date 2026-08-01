@@ -16,6 +16,7 @@ export const users = sqliteTable("users", {
 export const organizations = sqliteTable("organizations", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
+  email: text("email"),
   defaultIacBinary: text("default_iac_binary").default("tofu"),
   defaultTerraformVersion: text("default_terraform_version").default("latest"),
   assessmentsEnforced: integer("assessments_enforced", { mode: "boolean" }).notNull().default(false),
@@ -23,6 +24,10 @@ export const organizations = sqliteTable("organizations", {
   globalProviderSharing: integer("global_provider_sharing", { mode: "boolean" }).notNull().default(false),
   samlEnabled: integer("saml_enabled", { mode: "boolean" }).notNull().default(false),
   ownersTeamSamlRoleId: text("owners_team_saml_role_id"),
+  allowForceDeleteWorkspaces: integer("allow_force_delete_workspaces", { mode: "boolean" }).notNull().default(true),
+  stacksEnabled: integer("stacks_enabled", { mode: "boolean" }).notNull().default(false),
+  showPreReleases: integer("show_pre_releases", { mode: "boolean" }).notNull().default(false),
+  defaultExecutionMode: text("default_execution_mode").default("remote"),
 });
 
 export const samlSettings = sqliteTable("saml_settings", {

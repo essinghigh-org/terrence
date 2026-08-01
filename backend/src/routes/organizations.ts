@@ -125,6 +125,18 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : "tofu";
     const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"].trim() : "latest";
     const assessmentsEnforced = attributes["assessments-enforced"] === true;
+    const email = attributes.email === undefined
+      ? null
+      : typeof attributes.email === "string"
+        ? attributes.email.trim() === "" ? null : attributes.email.trim()
+        : null;
+    const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] !== false;
+    const stacksEnabled = attributes["stacks-enabled"] === true;
+    const showPreReleases = attributes["show-pre-releases"] === true;
+    const defaultExecutionMode = typeof attributes["default-execution-mode"] === "string"
+      && ["remote", "local", "agent"].includes(attributes["default-execution-mode"])
+      ? attributes["default-execution-mode"]
+      : "remote";
     if (name === "") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Missing name" }] };
     }
@@ -147,6 +159,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       const org = {
         id,
         name,
+        email,
         defaultIacBinary,
         defaultTerraformVersion,
         assessmentsEnforced,
@@ -154,6 +167,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         globalProviderSharing: false,
         samlEnabled: saml?.enabled ?? false,
         ownersTeamSamlRoleId: null,
+        allowForceDeleteWorkspaces,
+        stacksEnabled,
+        showPreReleases,
+        defaultExecutionMode,
       };
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
@@ -442,9 +459,34 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         : attributes["owners-team-saml-role-id"] === null
           ? null
           : undefined;
+    const email = attributes.email === undefined
+      ? org.email
+      : typeof attributes.email === "string"
+        ? attributes.email.trim() === "" ? null : attributes.email.trim()
+        : attributes.email === null
+          ? null
+          : undefined;
+    const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] === undefined
+      ? org.allowForceDeleteWorkspaces
+      : attributes["allow-force-delete-workspaces"] === true;
+    const stacksEnabled = attributes["stacks-enabled"] === undefined
+      ? org.stacksEnabled
+      : attributes["stacks-enabled"] === true;
+    const showPreReleases = attributes["show-pre-releases"] === undefined
+      ? org.showPreReleases
+      : attributes["show-pre-releases"] === true;
+    const defaultExecutionMode = attributes["default-execution-mode"] === undefined
+      ? org.defaultExecutionMode
+      : typeof attributes["default-execution-mode"] === "string"
+        ? attributes["default-execution-mode"]
+        : undefined;
     if (newName === "" || !["tofu", "terraform"].includes(defaultIacBinary) || defaultTerraformVersion.trim() === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
+    if (email === undefined || defaultExecutionMode === undefined || (defaultExecutionMode !== "remote" && defaultExecutionMode !== "local" && defaultExecutionMode !== "agent")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid organization settings" }] };
     }
     const nameError = organizationNameError(newName);
     if (nameError !== null) {
@@ -468,17 +510,27 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       const updated = {
         ...org,
         name: newName,
+        email,
         defaultIacBinary,
         defaultTerraformVersion: defaultTerraformVersion.trim(),
         assessmentsEnforced,
         ownersTeamSamlRoleId: ownersTeamSamlRoleId === "" ? null : ownersTeamSamlRoleId,
+        allowForceDeleteWorkspaces,
+        stacksEnabled,
+        showPreReleases,
+        defaultExecutionMode: defaultExecutionMode as string,
       };
       await db.update(organizations).set({
         name: updated.name,
+        email: updated.email,
         defaultIacBinary: updated.defaultIacBinary,
         defaultTerraformVersion: updated.defaultTerraformVersion,
         assessmentsEnforced: updated.assessmentsEnforced,
         ownersTeamSamlRoleId: updated.ownersTeamSamlRoleId,
+        allowForceDeleteWorkspaces: updated.allowForceDeleteWorkspaces,
+        stacksEnabled: updated.stacksEnabled,
+        showPreReleases: updated.showPreReleases,
+        defaultExecutionMode: updated.defaultExecutionMode,
       }).where(eq(organizations.id, org.id));
       return { data: await organizationResourceForPrincipal(updated, user?.id, orgId, teamId) };
     } catch (e: unknown) {
