@@ -1,19 +1,21 @@
 import { Elysia } from "elysia";
-import { and, asc, desc, eq, like } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like } from "drizzle-orm";
 import { db } from "../db";
 import {
   apiTokens,
   assessmentResults,
+  organizationMemberships,
   organizations,
   projects,
   runs,
   stateVersions,
   workspaces,
 } from "../db/schema";
+import { checkOrgPermission, findAuthorizedWorkspace } from "../lib/utils";
 import { createHash, randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
-// Auth — shared between SSE (?token=) and POST (Authorization: Bearer)
+// Auth — Bearer token only (no ?token= query param)
 // ---------------------------------------------------------------------------
 type McpSession = Readonly<{
   userId: string | null;
@@ -32,7 +34,6 @@ async function resolveToken(raw: string): Promise<McpSession | null> {
     where: eq(apiTokens.token, tokenHash),
   });
   if (tok === undefined) {
-    // Legacy fallback: try matching the raw token (pre-hash migration)
     const legacy = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.token, raw),
     });
@@ -42,6 +43,13 @@ async function resolveToken(raw: string): Promise<McpSession | null> {
   }
   if (tok.expiresAt !== null && tok.expiresAt < Date.now()) return null;
   return { userId: tok.userId, orgId: tok.orgId, teamId: null, tokenId: tok.id };
+}
+
+async function bearerSession(request: { headers: Headers }): Promise<McpSession | null> {
+  const authHeader = request.headers.get("authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.slice(7).trim();
+  return token !== "" ? resolveToken(token) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,14 +78,28 @@ const TOOLS: ReadonlyArray<{
 }> = [
   {
     name: "list_organizations",
-    description: "List all organizations accessible by the authenticated token.",
+    description: "List organizations accessible by the authenticated token.",
     inputSchema: { type: "object", properties: {}, required: [] },
-    handler: async (): Promise<unknown> => {
-      const rows = await db.query.organizations.findMany({
+    handler: async (session: McpSession): Promise<unknown> => {
+      if (session.orgId !== null) {
+        const org = await db.query.organizations.findFirst({
+          where: eq(organizations.id, session.orgId),
+          columns: { id: true, name: true },
+        });
+        return org !== undefined ? [org] : [];
+      }
+      if (session.userId === null) return [];
+      const mems = await db.query.organizationMemberships.findMany({
+        where: eq(organizationMemberships.userId, session.userId),
+        columns: { orgId: true },
+      });
+      if (mems.length === 0) return [];
+      const orgRows = await db.query.organizations.findMany({
+        where: inArray(organizations.id, mems.map((m): string => m.orgId)),
         orderBy: [asc(organizations.name)],
         columns: { id: true, name: true },
       });
-      return rows;
+      return orgRows;
     },
   },
   {
@@ -93,10 +115,13 @@ const TOOLS: ReadonlyArray<{
       },
       required: ["org"],
     },
-    handler: async (_session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
+    handler: async (session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
       const orgName = String(args.org);
       const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
       if (org === undefined) return errorRes(null, -32602, `Organization "${orgName}" not found`);
+      if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
+        return errorRes(null, -32001, "Not authorized to access this organization");
+      }
       const search = typeof args.search === "string" ? args.search : undefined;
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
       const offset = Math.max(Number(args.offset ?? 0), 0);
@@ -127,10 +152,13 @@ const TOOLS: ReadonlyArray<{
       },
       required: ["org"],
     },
-    handler: async (_session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
+    handler: async (session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
       const orgName = String(args.org);
       const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
       if (org === undefined) return errorRes(null, -32602, `Organization "${orgName}" not found`);
+      if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
+        return errorRes(null, -32001, "Not authorized to access this organization");
+      }
       const exactName = typeof args.name === "string" ? args.name : undefined;
       const search = typeof args.search === "string" ? args.search : undefined;
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
@@ -168,10 +196,10 @@ const TOOLS: ReadonlyArray<{
       },
       required: ["workspace_id"],
     },
-    handler: async (_session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
+    handler: async (session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
       const wsId = String(args.workspace_id);
-      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
-      if (ws === undefined) return errorRes(null, -32602, `Workspace "${wsId}" not found`);
+      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "read");
+      if (ws === undefined) return errorRes(null, -32001, "Workspace not found or not authorized");
       const runId = typeof args.run_id === "string" ? args.run_id : undefined;
       if (runId !== undefined) {
         const run = await db.query.runs.findFirst({
@@ -179,6 +207,7 @@ const TOOLS: ReadonlyArray<{
           columns: { id: true, workspaceId: true, status: true, message: true, createdAt: true },
         });
         if (run === undefined) return errorRes(null, -32602, `Run "${runId}" not found`);
+        if (run.workspaceId !== wsId) return errorRes(null, -32001, "Run does not belong to the specified workspace");
         return run;
       }
       const limit = Math.min(Math.max(Number(args.limit ?? 20), 1), 100);
@@ -203,10 +232,10 @@ const TOOLS: ReadonlyArray<{
       },
       required: ["workspace_id"],
     },
-    handler: async (_session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
+    handler: async (session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
       const wsId = String(args.workspace_id);
-      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
-      if (ws === undefined) return errorRes(null, -32602, `Workspace "${wsId}" not found`);
+      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
+      if (ws === undefined) return errorRes(null, -32001, "Workspace not found or not authorized");
       const sv = await db.query.stateVersions.findFirst({
         where: eq(stateVersions.workspaceId, wsId),
         orderBy: [desc(stateVersions.createdAt)],
@@ -247,10 +276,10 @@ const TOOLS: ReadonlyArray<{
       },
       required: ["workspace_id"],
     },
-    handler: async (_session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
+    handler: async (session: McpSession, args: Record<string, unknown>): Promise<unknown> => {
       const wsId = String(args.workspace_id);
-      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
-      if (ws === undefined) return errorRes(null, -32602, `Workspace "${wsId}" not found`);
+      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
+      if (ws === undefined) return errorRes(null, -32001, "Workspace not found or not authorized");
       const ar = await db.query.assessmentResults.findMany({
         where: eq(assessmentResults.workspaceId, wsId),
         orderBy: [desc(assessmentResults.createdAt)],
@@ -274,7 +303,7 @@ const TOOLS: ReadonlyArray<{
 ];
 
 // ---------------------------------------------------------------------------
-// SSE session store
+// SSE session store (kept for endpoint handshake; auth enforced per POST)
 // ---------------------------------------------------------------------------
 const sessions = new Map<string, { session: McpSession }>();
 
@@ -282,20 +311,11 @@ const sessions = new Map<string, { session: McpSession }>();
 // MCP route
 // ---------------------------------------------------------------------------
 export const mcpRoutes = new Elysia()
-  .get("/mcp", async ({ query, request, set }): Promise<Response> => {
-    const q = query as Record<string, string> | undefined;
-    const tokenParam = q?.token ?? null;
-    const authHeader = request.headers.get("authorization") ?? "";
-    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
-    const rawToken = tokenParam ?? bearer;
-    if (rawToken === null) {
-      (set as Record<string, unknown>).status = 401;
-      return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide ?token= or Authorization: Bearer")));
-    }
-    const session = await resolveToken(rawToken);
+  .get("/mcp", async ({ request, set }): Promise<Response> => {
+    const session = await bearerSession({ headers: request.headers });
     if (session === null) {
       (set as Record<string, unknown>).status = 401;
-      return new Response(JSON.stringify(errorRes(null, -32001, "Invalid or expired token")));
+      return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer <token>")));
     }
 
     const sessionId = randomUUID();
@@ -324,13 +344,11 @@ export const mcpRoutes = new Elysia()
     });
   })
 
-  .post("/mcp", async ({ body, request, set }): Promise<unknown> => {
-    const authHeader = request.headers.get("authorization") ?? "";
-    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
-    const session = bearer !== null ? await resolveToken(bearer) : null;
+  .post("/mcp", async ({ request, body, set }): Promise<unknown> => {
+    const session = await bearerSession({ headers: request.headers });
     if (session === null) {
       (set as Record<string, unknown>).status = 401;
-      return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer");
+      return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer <token>");
     }
     return handleJsonRpc(session, body);
   });
