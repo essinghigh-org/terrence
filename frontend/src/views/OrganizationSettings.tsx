@@ -105,6 +105,11 @@ export function OrganizationSettings(): React.JSX.Element {
       Object.fromEntries(organizationPermissions.map((permission): [OrganizationPermission, boolean] => [permission, false])) as Record<OrganizationPermission, boolean>,
   );
   const [savingTeamPermissions, setSavingTeamPermissions] = useState(false);
+  const [teamVisibility, setTeamVisibility] = useState<Record<string, string>>({});
+  const [teamTokenMgmt, setTeamTokenMgmt] = useState<Record<string, boolean>>({});
+  const [teamMemberList, setTeamMemberList] = useState<Record<string, { id: string; username: string; email?: string }[]>>({});
+  const [teamMemberCounts, setTeamMemberCounts] = useState<Record<string, number>>({});
+  const [addMemberTeam, setAddMemberTeam] = useState<Record<string, string>>({});
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteTeamId, setInviteTeamId] = useState("");
   const [inviting, setInviting] = useState(false);
@@ -331,6 +336,27 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess) return;
     setEditingTeamId(team.id);
     setTeamPermissions(teamOrganizationAccess(team));
+    setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string) ?? "organization" }));
+    setTeamTokenMgmt((prev) => ({ ...prev, [team.id]: team.attributes["allow-member-token-management"] === true }));
+    // Load team members via include=users (returns included user resources)
+    void fetchApi(`/teams/${encodeURIComponent(team.id)}?include=users`).then((response: unknown): void => {
+      const r = response as {
+        data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined;
+        included?: { id: string; type: string; attributes: { username?: string; email?: string } }[];
+      };
+      if (r.data !== undefined) {
+        const d = r.data;
+        setTeamMemberCounts((prev) => ({ ...prev, [team.id]: (d.attributes["users-count"] as number) ?? 0 }));
+        const userRelations = ((d.relationships as Record<string, unknown> | undefined)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+        const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
+          u.id,
+          { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" },
+        ]));
+        const members = userRelations.map((u): { id: string; username: string; email: string } =>
+          userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
+        setTeamMemberList((prev) => ({ ...prev, [team.id]: members }));
+      }
+    }).catch((): void => { setTeamMemberList((prev) => ({ ...prev, [team.id]: [] })); });
   };
 
   const setTeamPermission = (permission: OrganizationPermission, enabled: boolean): void => {
@@ -371,6 +397,77 @@ export function OrganizationSettings(): React.JSX.Element {
       });
     } finally {
       setSavingTeamPermissions(false);
+    }
+  };
+
+  const updateTeamSetting = async (teamId: string, field: string, value: string | boolean): Promise<void> => {
+    try {
+      const response = await fetchApi(`/teams/${encodeURIComponent(teamId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: { type: "teams", attributes: { [field]: value } },
+        }),
+      }) as { data: Team };
+      setTeams((current: Team[]): Team[] =>
+        current.map((team: Team): Team => team.id === response.data.id ? response.data : team));
+      if (field === "visibility") setTeamVisibility((prev) => ({ ...prev, [teamId]: value as string }));
+      if (field === "allow-member-token-management") setTeamTokenMgmt((prev) => ({ ...prev, [teamId]: value === true }));
+      toast.add({ title: "Team setting updated", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not update team setting",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    }
+  };
+
+  const addTeamMember = async (teamId: string): Promise<void> => {
+    const userId = addMemberTeam[teamId];
+    if (userId === undefined || userId === "") return;
+    try {
+      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/members`, {
+        method: "POST",
+        body: JSON.stringify({ data: [{ id: userId, type: "users" }] }),
+      });
+      setTeamMemberCounts((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
+      // Refresh member list
+      void fetchApi(`/teams/${encodeURIComponent(teamId)}?include=users`).then((response: unknown): void => {
+        const r = response as { data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] };
+        if (r.data !== undefined) {
+          const d = r.data;
+          const userRelations = ((d.relationships as Record<string, unknown> | undefined)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+          const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [u.id, { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" }]));
+          const members = userRelations.map((u): { id: string; username: string; email: string } => userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
+          setTeamMemberList((prev) => ({ ...prev, [teamId]: members }));
+        }
+      }).catch((): void => { /* ignore */ });
+      setAddMemberTeam((prev) => ({ ...prev, [teamId]: "" }));
+      toast.add({ title: "Member added to team", type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not add member",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    }
+  };
+
+  const removeTeamMember = async (teamId: string, member: { id: string; username: string }): Promise<void> => {
+    try {
+      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/members`, {
+        method: "DELETE",
+        body: JSON.stringify({ data: [{ id: member.id, type: "users" }] }),
+      });
+      setTeamMemberList((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? []).filter((m): boolean => m.id !== member.id) }));
+      setTeamMemberCounts((prev) => ({ ...prev, [teamId]: Math.max((prev[teamId] ?? 1) - 1, 0) }));
+      toast.add({ title: `${member.username} removed from team`, type: "success" });
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not remove member",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
     }
   };
 
@@ -745,43 +842,136 @@ export function OrganizationSettings(): React.JSX.Element {
                           </div>
                         </div>
                         {editingTeamId === team.id && (
-                          <form onSubmit={saveTeamPermissions} className="border-t bg-gray-50/70 p-4">
-                            <div className="mb-3">
-                              <p className="text-sm font-semibold text-gray-900">Organization access for {teamName}</p>
-                              <p className="text-xs text-gray-500">
+                          <div className="border-t bg-gray-50/70">
+                            {/* Team settings: visibility + token management */}
+                            <div className="border-b border-gray-100 px-4 py-4">
+                              <p className="mb-3 text-sm font-semibold text-gray-900">Team settings for {teamName}</p>
+                              <div className="mb-3 flex items-center gap-4">
+                                <div>
+                                  <label className="text-xs font-medium text-gray-700">Visibility</label>
+                                  <div className="mt-1 flex gap-3 text-sm">
+                                    <label className="flex items-center gap-1.5 font-medium text-gray-800">
+                                      <input
+                                        type="radio"
+                                        name={`visibility-${team.id}`}
+                                        className="size-4 accent-[#2962ff]"
+                                        checked={teamVisibility[team.id] !== "secret"}
+                                        onChange={(): void => { void updateTeamSetting(team.id, "visibility", "organization"); }}
+                                      />
+                                      Visible
+                                    </label>
+                                    <label className="flex items-center gap-1.5 font-medium text-gray-800">
+                                      <input
+                                        type="radio"
+                                        name={`visibility-${team.id}`}
+                                        className="size-4 accent-[#2962ff]"
+                                        checked={teamVisibility[team.id] === "secret"}
+                                        onChange={(): void => { void updateTeamSetting(team.id, "visibility", "secret"); }}
+                                      />
+                                      Secret
+                                    </label>
+                                  </div>
+                                  <p className="mt-0.5 text-xs text-gray-500">Visible to every member of this organization / Only visible to team members and organization owners.</p>
+                                </div>
+                                <div className="flex items-center gap-3 text-sm">
+                                  <Checkbox
+                                    id={`token-mgmt-${team.id}`}
+                                    checked={teamTokenMgmt[team.id] === true}
+                                    onCheckedChange={(checked: boolean): void => { void updateTeamSetting(team.id, "allow-member-token-management", checked); }}
+                                  />
+                                  <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-gray-900">Team API tokens</label>
+                                </div>
+                              </div>
+                              <p className="mb-3 text-xs text-gray-500">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
+
+                              {/* Organization access permissions */}
+                              <p className="mb-2 text-sm font-semibold text-gray-900">Organization access for {teamName}</p>
+                              <p className="mb-3 text-xs text-gray-500">
                                 Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
                               </p>
+                              <form onSubmit={saveTeamPermissions}>
+                                <div className="grid gap-3 sm:grid-cols-2 mb-3">
+                                  {organizationPermissions.map((permission): React.JSX.Element => {
+                                    const id = `team-${team.id}-${permission}`;
+                                    return (
+                                      <div key={permission} className="flex items-center gap-2">
+                                        <Checkbox
+                                          id={id}
+                                          checked={teamPermissions[permission]}
+                                          onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
+                                          disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
+                                        />
+                                        <label htmlFor={id} className="text-sm text-gray-700">{permissionLabel(permission)}</label>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={savingTeamPermissions}
+                                    onClick={(): void => { setEditingTeamId(""); }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
+                                    {savingTeamPermissions ? "Saving…" : "Save permissions"}
+                                  </Button>
+                                </div>
+                              </form>
                             </div>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              {organizationPermissions.map((permission): React.JSX.Element => {
-                                const id = `team-${team.id}-${permission}`;
-                                return (
-                                  <div key={permission} className="flex items-center gap-2">
-                                    <Checkbox
-                                      id={id}
-                                      checked={teamPermissions[permission]}
-                                      onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
-                                      disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
-                                    />
-                                    <label htmlFor={id} className="text-sm text-gray-700">{permissionLabel(permission)}</label>
-                                  </div>
-                                );
-                              })}
+
+                            {/* Team members */}
+                            <div className="px-4 py-4">
+                              <div className="flex items-center justify-between mb-3">
+                                <p className="text-sm font-semibold text-gray-900">Members ({(teamMemberCounts[team.id] ?? 0)})</p>
+                                <div className="flex gap-2">
+                                  <select
+                                    className="h-8 rounded-md border bg-white px-2 text-xs"
+                                    value={addMemberTeam[team.id] ?? ""}
+                                    onChange={(e): void => { setAddMemberTeam((prev) => ({ ...prev, [team.id]: e.target.value })); }}
+                                  >
+                                    <option value="">Select user…</option>
+                                    {memberships.map((m): React.JSX.Element => (
+                                      <option key={m.id} value={m.attributes.username ?? m.id}>{m.attributes.username ?? m.attributes.email ?? m.id}</option>
+                                    ))}
+                                  </select>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={!addMemberTeam[team.id]}
+                                    onClick={(): void => { void addTeamMember(team.id); }}
+                                  >
+                                    Add member
+                                  </Button>
+                                </div>
+                              </div>
+                              {(teamMemberList[team.id] ?? []).length === 0 ? (
+                                <p className="text-xs text-gray-500">No members in this team.</p>
+                              ) : (
+                                <div className="space-y-1">
+                                  {(teamMemberList[team.id] ?? []).map((member): React.JSX.Element => (
+                                    <div key={member.id} className="flex items-center justify-between rounded border bg-white px-3 py-2 text-sm">
+                                      <div>
+                                        <span className="font-medium">{member.username}</span>
+                                        {member.email !== undefined && <span className="ml-2 text-gray-500">{member.email}</span>}
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        aria-label={`Remove ${member.username}`}
+                                        onClick={(): void => { void removeTeamMember(team.id, member); }}
+                                      >
+                                        <UserMinus className="size-3.5" />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
-                            <div className="mt-4 flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                disabled={savingTeamPermissions}
-                                onClick={(): void => { setEditingTeamId(""); }}
-                              >
-                                Cancel
-                              </Button>
-                              <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
-                                {savingTeamPermissions ? "Saving…" : "Save permissions"}
-                              </Button>
-                            </div>
-                          </form>
+                          </div>
                         )}
                       </div>
                     );
