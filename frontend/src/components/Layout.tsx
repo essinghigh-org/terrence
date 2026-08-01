@@ -867,14 +867,14 @@ export function Layout({
         Skip to main content
       </a>
 
-      <header className="flex h-[52px] shrink-0 items-center justify-between bg-foreground px-2 text-background sm:px-4">
+      <header className="flex h-[52px] shrink-0 items-center justify-between bg-topbar px-2 text-topbar-foreground sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
               <DialogTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="text-background hover:bg-background/10 hover:text-background lg:hidden"
+                  className="text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground lg:hidden"
                   aria-label="Open navigation"
                   aria-controls="mobile-app-sidebar"
                 >
@@ -896,7 +896,7 @@ export function Layout({
             <Link
               to="/app"
               aria-label="Home"
-              className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background"
+                className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-topbar-foreground"
             >
               <svg
                 aria-hidden="true"
@@ -906,13 +906,13 @@ export function Layout({
                 xmlns="http://www.w3.org/2000/svg"
               >
                 <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" fill="currentColor" />
-                <path d="M12 22V12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M12 12L22 7" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M2 7L12 12" stroke="hsl(var(--foreground))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 22V12" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 12L22 7" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M2 7L12 12" stroke="hsl(var(--topbar))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </Link>
 
-            <div aria-hidden="true" className="hidden h-5 w-px bg-background/20 sm:block" />
+            <div aria-hidden="true" className="hidden h-5 w-px bg-topbar-foreground/20 sm:block" />
 
             {hasOrg ? (
               <DropdownMenu>
@@ -920,7 +920,7 @@ export function Layout({
                   render={(
                     <Button
                       variant="ghost"
-                      className="min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56"
+                      className="min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56"
                       aria-label={`Organization menu for ${currentOrgName}`}
                     />
                   )}
@@ -973,7 +973,7 @@ export function Layout({
                 to="/app"
                 className={cn(
                   buttonVariants({ variant: "ghost" }),
-                  "min-w-0 max-w-32 shrink text-background hover:bg-background/10 hover:text-background sm:max-w-56",
+                  "min-w-0 max-w-32 shrink text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground sm:max-w-56",
                 )}
               >
                 <Building2 data-icon="inline-start" />
@@ -987,12 +987,12 @@ export function Layout({
             <Button
               variant="ghost"
               size="sm"
-              className="hidden sm:inline-flex items-center gap-2 text-background/80 hover:bg-background/10 hover:text-background border border-background/20 h-8 px-2.5"
+              className="hidden sm:inline-flex items-center gap-2 text-topbar-foreground/80 hover:bg-topbar-foreground/10 hover:text-topbar-foreground border border-topbar-foreground/20 h-8 px-2.5"
               onClick={() => { setCommandPaletteOpen(true); }}
             >
               <Search className="size-3.5" />
               <span className="text-xs">Search...</span>
-              <kbd className="pointer-events-none rounded bg-background/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-background">
+              <kbd className="pointer-events-none rounded bg-topbar-foreground/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-topbar-foreground">
                 ⌘K
               </kbd>
             </Button>
@@ -1003,7 +1003,7 @@ export function Layout({
                 render={(
                   <Button
                     variant="ghost"
-                    className="text-background hover:bg-background/10 hover:text-background h-8 px-2"
+                    className="text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground h-8 px-2"
                     aria-label="Help and support"
                   />
                 )}
@@ -1042,7 +1042,7 @@ export function Layout({
                 render={(
                   <Button
                     variant="ghost"
-                    className="text-background hover:bg-background/10 hover:text-background h-8 px-2"
+                    className="text-topbar-foreground hover:bg-topbar-foreground/10 hover:text-topbar-foreground h-8 px-2"
                     aria-label="Account menu"
                   />
                 )}
@@ -1051,7 +1051,7 @@ export function Layout({
                   {avatarUrl !== "" ? (
                     <AvatarImage src={avatarUrl} alt={accountName} className="rounded-full object-cover" />
                   ) : (
-                    <AvatarFallback className="rounded-full bg-background/15 text-background text-xs">
+                    <AvatarFallback className="rounded-full bg-topbar-foreground/15 text-topbar-foreground text-xs">
                       {accountName === ""
                         ? <UserRound aria-hidden="true" />
                         : accountName.slice(0, 2).toUpperCase()}

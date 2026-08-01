@@ -52,6 +52,8 @@ function createTheme(
     colors: {
       background: input.background,
       foreground: input.foreground,
+      topbar: mode === "light" ? input.foreground : card,
+      "topbar-foreground": mode === "light" ? input.background : input.codeForeground,
       card,
       "card-foreground": cardForeground,
       popover,

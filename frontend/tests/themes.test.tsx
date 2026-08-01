@@ -64,6 +64,8 @@ test("lists extensible light/dark themes and persists a selection", async () => 
   expect(updatedTheme).toBe("dracula");
   expect(document.documentElement.dataset.theme).toBe("dracula");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
+  expect(document.documentElement.style.getPropertyValue("--topbar")).toBe("232 18% 15%");
+  expect(document.documentElement.style.getPropertyValue("--topbar-foreground")).toBe("60 30% 96%");
 });
 
 test("ignores an account theme read that started before a newer theme selection", (): void => {
