@@ -62,7 +62,7 @@ Terrence runs without any environment variables in development. The table below 
 | `DATABASE_URL` | `file:./storage/terrence.db` | SQLite database path |
 | `STORAGE_DIR` | `./storage` | Directory for state archives and binaries |
 | `PUBLIC_URL` | — | Public URL for webhook callbacks (required for GitHub App) |
-| `CORS_ORIGIN` | — | CORS origin (defaults to `*` in non-production) |
+| `CORS_ORIGIN` | — | CORS origin (defaults to `http://localhost:5173` in non-production) |
 | `SESSION_KEY` | auto-generated | Session encryption key |
 | `INFRACOST_ENABLED` | `false` | Enable Infracost for cost estimation |
 | `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |

@@ -563,13 +563,13 @@ export function AdminDashboard(): React.JSX.Element {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Recent audit activity</CardTitle>
-                    <CardDescription>Administrative events retained by the instance.</CardDescription>
+                    <CardTitle className="text-base">Latest audit events</CardTitle>
+                    <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <p className="text-2xl font-semibold text-gray-900">{auditLogs.length}</p>
                     <p className="text-sm text-gray-500">
-                      {auditLogs.length === 0 ? "No recent events" : auditLogs.length === 1 ? "Recent event available" : "Recent events available"}
+                      {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
                     </p>
                     {auditLogs[0]?.attributes.action !== undefined && (
                       <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
