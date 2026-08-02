@@ -1,17 +1,12 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { existsSync, mkdtempSync, openSync } from "node:fs";
+import { mkdtempSync, openSync } from "node:fs";
 import { createServer } from "node:net";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const BACKEND_DIR = join(REPO_ROOT, "backend");
-const PERSISTENT_STORAGE_DIR = join(BACKEND_DIR, "storage");
-const E2E_DIR = join(PERSISTENT_STORAGE_DIR, "provider-e2e");
-const TLS_DIR = join(E2E_DIR, "tls");
-const CERT_PATH = join(TLS_DIR, "cert.pem");
-const KEY_PATH = join(TLS_DIR, "key.pem");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeout(resolveFn, ms));
 
@@ -54,18 +49,7 @@ function freePort(): Promise<number> {
   });
 }
 
-async function ensureCert(): Promise<void> {
-  if (existsSync(CERT_PATH) && existsSync(KEY_PATH)) return;
-  await mkdir(TLS_DIR, { recursive: true });
-  const proc = Bun.spawn([
-    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
-    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
-    "-keyout", KEY_PATH, "-out", CERT_PATH,
-  ]);
-  if ((await proc.exited) !== 0) throw new Error("openssl certificate generation failed");
-}
-
-type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string };
+type Backend = { port: number; proc: Bun.Subprocess; dbDir: string; logPath: string; storageDir: string };
 
 async function startBackend(workDir: string): Promise<Backend> {
   const dbDir = mkdtempSync(join(tmpdir(), "terrence-provider-e2e-"));
@@ -77,7 +61,7 @@ async function startBackend(workDir: string): Promise<Backend> {
       ...process.env,
       NODE_ENV: "production",
       PORT: String(port),
-      TERRENCE_DATABASE_PATH: join(workDir, "test.db"),
+      TERRENCE_DATABASE_PATH: join(dbDir, "test.db"),
       TERRENCE_JWT_SECRET: "provider-e2e-secret",
       TERRENCE_RUN_SANDBOX: "false",
       TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
@@ -88,7 +72,7 @@ async function startBackend(workDir: string): Promise<Backend> {
   for (let i = 0; i < 300; i++) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-      if (res.ok) return { port, proc, dbDir, logPath };
+      if (res.ok) return { port, proc, dbDir, logPath, storageDir: dbDir };
     } catch {}
     if (proc.exitCode !== null) break;
     await sleep(200);
@@ -98,11 +82,17 @@ async function startBackend(workDir: string): Promise<Backend> {
 }
 
 async function startTlsProxy(backendPort: number): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
-  const cert = await Bun.file(CERT_PATH).arrayBuffer();
-  const key = await Bun.file(KEY_PATH).arrayBuffer();
+  const port = await freePort();
+  const proc = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", "/tmp/key.pem", "-out", "/tmp/cert.pem"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await proc.exited;
+  const cert = await Bun.file("/tmp/cert.pem").arrayBuffer();
+  const key = await Bun.file("/tmp/key.pem").arrayBuffer();
   return Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port,
     tls: { cert, key },
     fetch: (req): Promise<Response> => {
       const url = new URL(req.url);
@@ -387,21 +377,19 @@ resource "null_resource" "probe" {
 
 describe("tfe provider e2e", () => {
   beforeAll(async () => {
-    process.env.STORAGE_DIR = PERSISTENT_STORAGE_DIR;
     const { ensureBinary } = await import("../../src/binaryManager");
     const terraform = await ensureBinary("terraform");
     const tofu = await ensureBinary("tofu");
     if (terraform === null || tofu === null) throw new Error("could not obtain terraform and tofu binaries (network required)");
     terraformBin = terraform.binaryPath;
     tofuBin = tofu.binaryPath;
-    await ensureCert();
   }, 300_000);
 
   for (const cliName of ["terraform", "tofu"] as const) {
     test(`latest hashicorp/tfe provider: full lifecycle against Terrence via ${cliName} CLI`, async () => {
       const bin = cliName === "terraform" ? terraformBin : tofuBin;
       const suffix = `${cliName}${Date.now().toString(36)}`;
-      const workDir = join(E2E_DIR, suffix);
+      const workDir = mkdtempSync(join(tmpdir(), `terrence-provider-e2e-${suffix}-`));
       await mkdir(workDir, { recursive: true });
       const cliEnv: Record<string, string> = {
         ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
@@ -441,6 +429,7 @@ describe("tfe provider e2e", () => {
         }
       } finally {
         backend.proc.kill();
+        await rm(workDir, { recursive: true, force: true }).catch(() => {});
       }
     }, 900_000);
   }
