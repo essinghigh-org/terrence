@@ -85,15 +85,15 @@ export function probeLandlockAbi(): number {
  *  binary or provisioner shell. */
 function systemRuleArgs(): string[] {
   return [
-    "--rx=/bin",
-    "--rx=/usr/bin",
-    "--rx=/sbin",
-    "--rx=/usr/sbin",
-    "--rx=/lib",
-    "--rx=/lib64",
-    "--rx=/usr/lib",
-    "--rx=/usr/lib64",
-  ];
+    "/bin",
+    "/usr/bin",
+    "/sbin",
+    "/usr/sbin",
+    "/lib",
+    "/lib64",
+    "/usr/lib",
+    "/usr/lib64",
+  ].filter(existsSync).map((path): string => `--rx=${path}`);
 }
 
 /**
