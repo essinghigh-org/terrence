@@ -190,3 +190,84 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
     permissions: {},
   });
 });
+
+test("changing the root combinator does not flip nested groups, and empty rows are pruned", async () => {
+  let postedBody: unknown = null;
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/organizations?page[size]=100") {
+      return json({ data: [{ id: "acme-org", type: "organizations", attributes: { name: "acme-org", "external-id": "org-111" } }] });
+    }
+    if (url === "/api/v2/organizations/acme-org/projects?page[size]=100") {
+      return json({ data: [] });
+    }
+    if (url === "/api/v2/organizations/acme-org/workspaces?page[size]=100") {
+      return json({ data: [] });
+    }
+    if (url === "/api/v2/tokens" && init?.method === "POST") {
+      postedBody = JSON.parse(String(init.body));
+      return json({ data: { id: "tok-3", type: "tokens", attributes: { token: "secret", scopes: null } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(): void => { /* noop */ }} />,
+  );
+
+  const dialog = await view.findByRole("dialog");
+  fireEvent.click(within(dialog).getByText("Fine-grained"));
+  await waitFor((): void => {
+    expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
+  });
+
+  const keyInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag key");
+  const valueInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag value");
+  const combinators = (): HTMLElement[] => within(dialog).getAllByLabelText("Combine with");
+
+  // Build (foo=bar AND baz=bing) with the nested group kept at AND.
+  fireEvent.input(keyInputs()[0] as HTMLElement, { target: { value: "foo" } });
+  fireEvent.input(valueInputs()[0] as HTMLElement, { target: { value: "bar" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "group" }));
+  await waitFor((): void => {
+    expect(combinators().length).toBe(2);
+  });
+  fireEvent.change(combinators()[1] as HTMLElement, { target: { value: "AND" } });
+  fireEvent.click(within(dialog).getAllByRole("button", { name: "Add condition" })[1] as HTMLElement);
+  await waitFor((): void => {
+    expect(keyInputs().length).toBe(2);
+  });
+  fireEvent.input(keyInputs()[1] as HTMLElement, { target: { value: "baz" } });
+  fireEvent.input(valueInputs()[1] as HTMLElement, { target: { value: "bing" } });
+
+  // Switch the ROOT combinator to AND; the nested group must stay AND, and
+  // the empty third row (added below) must be pruned from the payload.
+  fireEvent.change(combinators()[0] as HTMLElement, { target: { value: "AND" } });
+  fireEvent.click(within(dialog).getAllByRole("button", { name: "Add condition" })[0] as HTMLElement);
+  await waitFor((): void => {
+    expect(keyInputs().length).toBe(3);
+  });
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
+  await waitFor((): void => {
+    expect(postedBody).not.toBeNull();
+  });
+  const attributes = (postedBody as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  expect(attributes["scopes"]).toEqual({
+    version: 1,
+    orgs: ["org-111"],
+    projects: null,
+    workspaces: null,
+    tags: {
+      combinator: "AND",
+      rules: [
+        { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+      ],
+    },
+    permissions: {},
+  });
+});

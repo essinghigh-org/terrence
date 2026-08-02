@@ -162,18 +162,26 @@ function emptyGroup(): TagGroupNode {
   return { kind: "group", combinator: "OR", rules: [{ kind: "filter", key: "", value: "" }] };
 }
 
-/** Serialize the builder tree into the backend's scope `tags` shape. */
+/**
+ * Serialize the builder tree into the backend's scope `tags` shape. Empty
+ * filters (blank key) and groups that end up empty are pruned at every level,
+ * so a partially-filled builder never emits rows the backend would reject
+ * (`isTagFilter` requires a non-empty key). Returns null when nothing is
+ * filled in, which the caller maps to `tags: null`.
+ */
 function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: unknown[] } | null {
-  const convert = (node: TagRuleNode): unknown => {
-    if (node.kind === "filter") return { key: node.key, value: node.value };
-    return { combinator: node.combinator, rules: node.rules.map(convert) };
+  const convert = (node: TagRuleNode): unknown | null => {
+    if (node.kind === "filter") {
+      if (node.key.trim() === "") return null;
+      return { key: node.key, value: node.value };
+    }
+    const rules = node.rules
+      .map(convert)
+      .filter((rule): rule is unknown => rule !== null);
+    if (rules.length === 0) return null;
+    return { combinator: node.combinator, rules };
   };
-  const rules = root.rules.filter((rule): boolean =>
-    rule.kind === "group"
-      ? rule.rules.length > 0 && serializeTags(rule) !== null
-      : rule.key.trim() !== "");
-  if (rules.length === 0) return null;
-  return { combinator: root.combinator, rules: rules.map(convert) };
+  return convert(root) as { combinator: "AND" | "OR"; rules: unknown[] } | null;
 }
 
 /** Render a node as a human-readable expression like "(foo=bar AND baz=bing)". */
@@ -283,8 +291,13 @@ export function TokenScopeDialog({
   // --- Tag rule builder mutations (immutable tree updates) ---
   const updateRule = (path: readonly number[], mutate: (rule: TagRuleNode) => TagRuleNode): void => {
     setTagTree((root): TagGroupNode => {
+      if (path.length === 0) {
+        // Path [] addresses the root group itself (e.g. its combinator select).
+        const updated = mutate(root);
+        return updated.kind === "group" ? updated : root;
+      }
       const updateAt = (rules: TagRuleNode[], rest: readonly number[]): TagRuleNode[] => {
-        if (rest.length === 0) return rules.map(mutate);
+        if (rest.length === 0) return rules;
         const head = rest[0] as number;
         return rules.map((rule, i): TagRuleNode => {
           if (i !== head) return rule;
