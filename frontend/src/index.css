@@ -89,3 +89,69 @@
     @apply bg-primary/20;
   }
 }
+
+.dependency-graph .react-flow {
+  --dg-card: hsl(var(--card));
+  --dg-foreground: hsl(var(--foreground));
+  --dg-muted: hsl(var(--muted));
+  --dg-muted-foreground: hsl(var(--muted-foreground));
+  --dg-border: hsl(var(--border));
+  --dg-ring: hsl(var(--ring));
+  --dg-background: hsl(var(--background));
+
+  --xy-edge-stroke-selected-default: var(--dg-ring);
+  --xy-controls-button-background-color-default: var(--dg-card);
+  --xy-controls-button-background-color-hover-default: var(--dg-muted);
+  --xy-controls-button-color-default: var(--dg-muted-foreground);
+  --xy-controls-button-color-hover-default: var(--dg-foreground);
+  --xy-controls-button-border-color-default: var(--dg-border);
+  --xy-controls-box-shadow-default: 0 1px 3px hsl(var(--foreground) / 0.1);
+  --xy-minimap-background-color-default: var(--dg-muted);
+  --xy-minimap-mask-background-color-default: hsl(var(--background) / 0.7);
+  --xy-minimap-mask-stroke-color-default: var(--dg-border);
+  --xy-minimap-node-stroke-color-default: var(--dg-border);
+  --xy-selection-background-color-default: hsl(var(--primary) / 0.08);
+  --xy-selection-border-default: 1px dotted var(--dg-ring);
+  --xy-attribution-background-color-default: transparent;
+  font-family: inherit;
+}
+
+.dependency-graph .react-flow__node {
+  cursor: pointer;
+}
+
+.dependency-graph .react-flow__node:focus {
+  outline: none;
+}
+
+.dependency-graph .react-flow__node:focus-visible {
+  outline: 2px solid var(--dg-ring);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) + 2px);
+}
+
+.dependency-graph .react-flow__edge.selected path {
+  opacity: 1;
+  stroke: var(--dg-ring);
+  stroke-width: 2;
+}
+
+.dependency-graph .react-flow__controls {
+  border-radius: calc(var(--radius) + 6px);
+  box-shadow: var(--xy-controls-box-shadow-default);
+  overflow: hidden;
+}
+
+.dependency-graph .react-flow__controls-button {
+  border-bottom: 1px solid var(--dg-border);
+}
+
+.dependency-graph .react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.dependency-graph .react-flow__minimap {
+  border-radius: calc(var(--radius) + 6px);
+  box-shadow: var(--xy-controls-box-shadow-default);
+  overflow: hidden;
+}

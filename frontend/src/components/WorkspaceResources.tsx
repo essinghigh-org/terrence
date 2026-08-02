@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { DependencyGraph, type DependencyGraphResource } from "@/components/DependencyGraph";
+import { DependencyGraph, type DependencyGraphResource, type ResourceDetails } from "@/components/DependencyGraph";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -336,6 +336,18 @@ export function WorkspaceResources({
     (): Output[] => outputs.filter((output): boolean => needle === "" || output.attributes.name.toLowerCase().includes(needle)),
     [needle, outputs],
   );
+  const resourceDetails = useMemo((): Readonly<Record<string, ResourceDetails>> => {
+    const details: Record<string, ResourceDetails> = {};
+    resources.forEach((resource): void => {
+      const entry: { provider?: string; "provider-type"?: string; module?: string; "updated-at"?: string } = {};
+      if (resource.attributes.provider !== undefined) entry.provider = resource.attributes.provider;
+      if (resource.attributes["provider-type"] !== undefined) entry["provider-type"] = resource.attributes["provider-type"];
+      if (resource.attributes.module !== undefined) entry.module = resource.attributes.module;
+      if (resource.attributes["updated-at"] !== undefined) entry["updated-at"] = resource.attributes["updated-at"];
+      details[resource.attributes.address] = entry;
+    });
+    return details;
+  }, [resources]);
   const activeTotal = tab === "resources" ? visibleResources.length : tab === "outputs" ? visibleOutputs.length : 0;
   const pageCount = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const page = Math.min(pages[tab], pageCount);
@@ -453,7 +465,7 @@ export function WorkspaceResources({
           No dependency relationships are recorded in the current state.
         </div>
       ) : (
-        <DependencyGraph resources={dependencyGraph.nodes} />
+        <DependencyGraph resources={dependencyGraph.nodes} details={resourceDetails} />
       )}
 
       {readmeLoading && <div className="border-t px-5 py-4 text-xs text-muted-foreground">Checking for README.md…</div>}

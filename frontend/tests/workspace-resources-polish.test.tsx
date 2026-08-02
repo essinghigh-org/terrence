@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
 import { WorkspaceResources } from "../src/components/WorkspaceResources";
 
@@ -85,10 +85,44 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
 
   fireEvent.click(view.getByRole("tab", { name: "Dependency graph" }));
   await waitFor((): void => {
-    const graph = view.getByRole("img", { name: "Terraform resource dependency graph" });
-    expect(graph.querySelector("g[data-address=\"aws_vpc.main\"]")).toBeTruthy();
-    expect(graph.querySelector("g[data-address=\"aws_subnet.web\"]")).toBeTruthy();
-    expect(graph.querySelector("line[data-from=\"aws_vpc.main\"][data-to=\"aws_subnet.web\"]")).toBeTruthy();
+    const canvas = view.getByRole("region", { name: "Terraform resource dependency graph" });
+    expect(canvas.querySelector(".react-flow__node[data-id=\"aws_vpc.main\"]")).toBeTruthy();
+    expect(canvas.querySelector(".react-flow__node[data-id=\"aws_subnet.web\"]")).toBeTruthy();
+    expect(canvas.querySelector(".react-flow__edge[data-id=\"aws_vpc.main->aws_subnet.web\"]")).toBeTruthy();
+  });
+
+  fireEvent.click(view.getByText("aws_subnet.web"));
+  await waitFor((): void => {
+    const panel = view.getByLabelText("Resource details");
+    expect(within(panel).getByText("aws_subnet.web")).toBeTruthy();
+    expect(within(panel).getByText("aws")).toBeTruthy();
+    expect(within(panel).getByText("aws_subnet")).toBeTruthy();
+    expect(within(panel).getByText("1")).toBeTruthy();
+  });
+
+  const panel = view.getByLabelText("Resource details");
+  fireEvent.click(within(panel).getByText("aws_vpc.main"));
+  await waitFor((): void => {
+    expect(within(view.getByLabelText("Resource details")).getByText("Nothing in this state.")).toBeTruthy();
+  });
+
+  fireEvent.click(within(view.getByLabelText("Resource details")).getByRole("button", { name: "Close details" }));
+  expect(view.queryByLabelText("Resource details")).toBeNull();
+
+  const canvas = view.getByRole("region", { name: "Terraform resource dependency graph" });
+  const edge = canvas.querySelector(".react-flow__edge[data-id=\"aws_vpc.main->aws_subnet.web\"]");
+  expect(edge).not.toBeNull();
+  if (edge !== null) fireEvent.click(edge);
+  await waitFor((): void => {
+    const dependencyDetails = view.getByLabelText("Dependency details");
+    expect(within(dependencyDetails).getByText("aws_vpc.main")).toBeTruthy();
+    expect(within(dependencyDetails).getByText("View source")).toBeTruthy();
+  });
+
+  fireEvent.click(within(view.getByLabelText("Dependency details")).getByRole("button", { name: "View target" }));
+  await waitFor((): void => {
+    const resourceDetails = view.getByLabelText("Resource details");
+    expect(within(resourceDetails).getByText("aws_subnet.web")).toBeTruthy();
   });
 });
 
