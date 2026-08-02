@@ -10,6 +10,8 @@ import {
   teams,
   teamMemberships,
 } from "../db/schema";
+import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
+import { currentTokenScopes } from "../lib/request-scope";
 import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
@@ -298,6 +300,12 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    // A fine-grained token must not be able to mint a new token (which could
+    // be unscoped = full access), or its restrictions are trivially bypassed.
+    if (currentTokenScopes() !== null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
+    }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -307,6 +315,17 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
+    // Fine-grained scopes (optional): when present, the token is restricted
+    // to the listed orgs/projects/workspaces/tags and permission grants.
+    let scopes: TokenScopes | null = null;
+    if (attributes.scopes !== undefined) {
+      try {
+        scopes = parseTokenScopes(attributes.scopes);
+      } catch (error: unknown) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
+      }
+    }
     const rawToken = `user-${crypto.randomUUID()}`;
     const createdToken = {
       id: crypto.randomUUID(),
@@ -314,6 +333,7 @@ export const userRoutes = new Elysia({ name: "users" })
       userId,
       orgId: null,
       description,
+      scopes: scopes === null ? null : JSON.stringify(scopes),
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -385,6 +405,12 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
+    // Same privilege-escalation guard as the per-user endpoint: a fine-grained
+    // token must not be able to mint an unscoped (full-access) token.
+    if (currentTokenScopes() !== null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
+    }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -394,6 +420,17 @@ export const userRoutes = new Elysia({ name: "users" })
     const description = typeof attributes.description === "string" ? attributes.description : "API token";
     const orgId = typeof orgData.id === "string" ? orgData.id : undefined;
     const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    // Fine-grained scopes (optional): when present, the token is restricted
+    // to the listed orgs/projects/workspaces/tags and permission grants.
+    let scopes: TokenScopes | null = null;
+    if (attributes.scopes !== undefined) {
+      try {
+        scopes = parseTokenScopes(attributes.scopes);
+      } catch (error: unknown) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
+      }
+    }
     if (description === "" || Number.isNaN(expiresAt)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
@@ -411,6 +448,7 @@ export const userRoutes = new Elysia({ name: "users" })
       userId: orgId !== undefined ? null : user.id,
       orgId: orgId ?? null,
       description,
+      scopes: scopes === null ? null : JSON.stringify(scopes),
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -464,6 +502,7 @@ export const userRoutes = new Elysia({ name: "users" })
       userId: null,
       orgId: org.id,
       description: null,
+      scopes: null,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,

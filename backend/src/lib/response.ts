@@ -111,6 +111,14 @@ type ApiTokenWithRaw = DeepReadonly<typeof apiTokens.$inferSelect & Partial<Reco
 export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
   const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
   const rawToken = (token as Record<string, unknown>)._rawToken;
+  let scopes: unknown = null;
+  if (typeof token.scopes === "string" && token.scopes !== "") {
+    try {
+      scopes = JSON.parse(token.scopes);
+    } catch {
+      scopes = null;
+    }
+  }
 
   return {
     id: token.id,
@@ -121,6 +129,7 @@ export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Re
       description: token.description,
       token: includeSecret && typeof rawToken === "string" ? rawToken : null,
       "expired-at": iso(token.expiresAt),
+      scopes,
     },
     relationships: {
       "created-by": {

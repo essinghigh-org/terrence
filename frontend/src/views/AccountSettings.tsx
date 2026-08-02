@@ -12,6 +12,7 @@ import { KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, 
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
+import { TokenScopeDialog } from "../components/TokenScopeDialog";
 import { DEFAULT_THEME_ID, getTheme, applyTheme, THEMES } from "../lib/theme";
 
 type BrowserSession = Readonly<{
@@ -54,9 +55,9 @@ export function AccountSettings(): React.JSX.Element {
   const [updatingPassword, setUpdatingPassword] = useState(false);
 
   // Token Modal / Creation
-  const [newTokenDesc, setNewTokenDesc] = useState("");
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
 
   // Browser Sessions
   const [sessions, setSessions] = useState<BrowserSession[]>([]);
@@ -306,25 +307,13 @@ export function AccountSettings(): React.JSX.Element {
   }
 
   /* ---- Token Create ---- */
-  async function handleCreateToken(): Promise<void> {
+  async function handleTokenCreated(created: { id: string; attributes: Record<string, unknown> }): Promise<void> {
     setError("");
     setSuccessMsg("");
-    try {
-      const created = await fetchApi("/tokens", {
-        method: "POST",
-        body: JSON.stringify({
-          data: { attributes: { description: newTokenDesc } },
-        }),
-      }) as { data: { id: string; attributes: { token: string } } };
-      setCreatedTokenSecret(created.data.attributes.token);
-      setNewTokenDesc("");
-      if (account !== null) {
-        const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
-        setTokens(tokensRes.data);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to create token";
-      setError(message);
+    setCreatedTokenSecret(typeof created.attributes["token"] === "string" ? created.attributes["token"] : null);
+    if (account !== null) {
+      const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+      setTokens(tokensRes.data);
     }
   }
 
@@ -684,19 +673,20 @@ export function AccountSettings(): React.JSX.Element {
           <CardDescription>Manage your personal API tokens.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* New token form */}
-          <div className="flex gap-2">
-            <Input
-              value={newTokenDesc}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTokenDesc(event.target.value); }}
-              placeholder="Token description (e.g., CI/CD)"
-              className="flex-1"
-            />
-            <Button onClick={handleCreateToken} disabled={newTokenDesc.trim() === ""}>
+          {/* New token button */}
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Create a token for API access. Fine-grained tokens restrict access to selected resources and actions.</p>
+            <Button onClick={(): void => { setTokenDialogOpen(true); }}>
               <Plus className="w-4 h-4 mr-1" />
-              Create
+              New token
             </Button>
           </div>
+
+          <TokenScopeDialog
+            open={tokenDialogOpen}
+            onOpenChange={setTokenDialogOpen}
+            onCreated={(created): Promise<void> => handleTokenCreated(created)}
+          />
 
           {createdTokenSecret != null && (
             <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md text-sm space-y-1">
@@ -732,6 +722,9 @@ export function AccountSettings(): React.JSX.Element {
                       {typeof token.attributes["description"] === "string" && token.attributes["description"].trim() !== ""
                         ? token.attributes["description"]
                         : "No description"}
+                      {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
+                        <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {typeof token.attributes["created-at"] === "string"

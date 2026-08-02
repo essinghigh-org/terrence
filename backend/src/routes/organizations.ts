@@ -4,6 +4,7 @@ import { organizations, organizationMemberships, organizationDataRetentionPolici
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { organizationResource, organizationName } from "../lib/response";
 import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermission, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
+import { currentTokenScopes } from "../lib/request-scope";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 
@@ -198,7 +199,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const { number, size } = pageRequest(request);
     const urlParams = new URL(request.url).searchParams;
     const search = (urlParams.get("q[name]") ?? urlParams.get("q") ?? "").trim();
-    const organizationIds = orgId !== null && orgId !== undefined
+    let organizationIds = orgId !== null && orgId !== undefined
       ? [orgId]
       : user !== null && user !== undefined
         ? [...new Set((await db.query.organizationMemberships.findMany({
@@ -208,6 +209,12 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
             ),
           })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))]
         : [];
+    // Fine-grained token: intersect with declared org scope.
+    const scopes = currentTokenScopes();
+    if (scopes !== null && scopes.orgs.length > 0) {
+      const scopeSet = new Set(scopes.orgs);
+      organizationIds = organizationIds.filter((id): boolean => scopeSet.has(id));
+    }
     if (organizationIds.length === 0) {
       return { data: [], ...pagination(request, number, size, 0) };
     }
@@ -223,7 +230,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .get("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -317,7 +324,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null, teamId ?? null))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null, teamId ?? null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -326,7 +333,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -346,7 +353,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .get("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const policy = await db.query.organizationDataRetentionPolicies.findFirst({
@@ -653,7 +660,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .get("/api/v2/organizations/:org_name/vcs-events", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const { number, size } = pageRequest(request);

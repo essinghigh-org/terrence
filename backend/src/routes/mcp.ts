@@ -12,6 +12,8 @@ import {
   workspaces,
 } from "../db/schema";
 import { checkOrgPermission, findAuthorizedWorkspace, workspaceIdsForPermission } from "../lib/utils";
+import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
+import { setRequestTokenScopes } from "../lib/request-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -22,7 +24,10 @@ type McpSession = Readonly<{
   orgId: string | null;
   teamId: string | null;
   tokenId: string;
+  scopes: TokenScopes | null;
 }>;
+
+class McpAuthError extends Error {}
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -39,10 +44,34 @@ async function resolveToken(raw: string): Promise<McpSession | null> {
     });
     if (legacy === undefined) return null;
     if (legacy.expiresAt !== null && legacy.expiresAt < Date.now()) return null;
-    return { userId: legacy.userId, orgId: legacy.orgId, teamId: null, tokenId: legacy.id };
+    return {
+      userId: legacy.userId,
+      orgId: legacy.orgId,
+      teamId: null,
+      tokenId: legacy.id,
+      scopes: safeParseScopes(legacy.scopes),
+    };
   }
   if (tok.expiresAt !== null && tok.expiresAt < Date.now()) return null;
-  return { userId: tok.userId, orgId: tok.orgId, teamId: null, tokenId: tok.id };
+  return {
+    userId: tok.userId,
+    orgId: tok.orgId,
+    teamId: null,
+    tokenId: tok.id,
+    scopes: safeParseScopes(tok.scopes),
+  };
+}
+
+/**
+ * Parse a token's scopes column. A malformed scopes field is an auth failure:
+ * fail closed (401) rather than silently granting the token full permissions.
+ */
+function safeParseScopes(raw: string | null): TokenScopes | null {
+  try {
+    return parseTokenScopes(raw);
+  } catch {
+    throw new McpAuthError("Token scopes are malformed");
+  }
 }
 
 async function bearerSession(request: { headers: Headers }): Promise<McpSession | null> {
@@ -81,6 +110,32 @@ const TOOLS: ReadonlyArray<{
     description: "List organizations accessible by the authenticated token.",
     inputSchema: { type: "object", properties: {}, required: [] },
     handler: async (session: McpSession): Promise<unknown> => {
+      // Fine-grained tokens: only the orgs in the scope are visible, AND the
+      // token's own principal must actually hold access (a fine-grained token
+      // can never exceed the underlying user/org access).  Intersect the
+      // scope's orgs with the principal's memberships rather than trusting
+      // the scope list verbatim.
+      if (session.scopes !== null && session.scopes.orgs.length > 0) {
+        const scopeOrgIds = [...session.scopes.orgs];
+        let allowedOrgIds: string[] | null = null;
+        if (session.orgId !== null) {
+          allowedOrgIds = scopeOrgIds.includes(session.orgId) ? [session.orgId] : [];
+        } else if (session.userId !== null) {
+          const mems = await db.query.organizationMemberships.findMany({
+            where: eq(organizationMemberships.userId, session.userId),
+            columns: { orgId: true },
+          });
+          const memberSet = new Set(mems.map((m): string => m.orgId));
+          allowedOrgIds = scopeOrgIds.filter((id): boolean => memberSet.has(id));
+        }
+        if (allowedOrgIds === null || allowedOrgIds.length === 0) return [];
+        const orgRows = await db.query.organizations.findMany({
+          where: inArray(organizations.id, allowedOrgIds),
+          orderBy: [asc(organizations.name)],
+          columns: { id: true, name: true },
+        });
+        return orgRows;
+      }
       if (session.orgId !== null) {
         const org = await db.query.organizations.findFirst({
           where: eq(organizations.id, session.orgId),
@@ -317,11 +372,25 @@ const TOOLS: ReadonlyArray<{
 // ---------------------------------------------------------------------------
 export const mcpRoutes = new Elysia()
   .get("/mcp", async ({ request, set }): Promise<Response> => {
-    const session = await bearerSession({ headers: request.headers });
+    let session: McpSession | null = null;
+    try {
+      session = await bearerSession({ headers: request.headers });
+    } catch (error: unknown) {
+      if (error instanceof McpAuthError) {
+        (set as Record<string, unknown>).status = 401;
+        return new Response(JSON.stringify(errorRes(null, -32001, error.message)));
+      }
+      throw error;
+    }
     if (session === null) {
       (set as Record<string, unknown>).status = 401;
-      return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer <token>")));
+      return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***")));
     }
+
+    // Publish scopes into request-scoped storage so any scope-gated work
+    // performed while the SSE stream is alive (and on re-auth of the same
+    // session) enforces them, identical to the POST handler.
+    setRequestTokenScopes(session.scopes);
 
     const sessionId = randomUUID();
     const endpoint = `/mcp?session_id=${sessionId}`;
@@ -344,11 +413,24 @@ export const mcpRoutes = new Elysia()
   })
 
   .post("/mcp", async ({ request, body, set }): Promise<unknown> => {
-    const session = await bearerSession({ headers: request.headers });
+    let session: McpSession | null = null;
+    try {
+      session = await bearerSession({ headers: request.headers });
+    } catch (error: unknown) {
+      if (error instanceof McpAuthError) {
+        (set as Record<string, unknown>).status = 401;
+        return errorRes(null, -32001, error.message);
+      }
+      throw error;
+    }
     if (session === null) {
       (set as Record<string, unknown>).status = 401;
-      return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer <token>");
+      return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***");
     }
+    // Publish scopes into request-scoped storage so the permission helpers
+    // (checkOrgPermission / findAuthorizedWorkspace / workspaceIdsForPermission)
+    // enforce them on MCP tool calls, identical to the main API.
+    setRequestTokenScopes(session.scopes);
     return handleJsonRpc(session, body);
   });
 
