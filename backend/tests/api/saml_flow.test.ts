@@ -286,6 +286,52 @@ describe("SAML SSO flow", () => {
     expect(response.status).toBe(200);
     const promoted = await db.query.users.findFirst({ where: eq(users.username, `siteadmin-${suffix}`) });
     expect(promoted?.isSiteAdmin).toBeTrue();
+    expect(promoted?.ssoSiteAdmin).toBeTrue();
+  });
+
+  test("demotes a SAML-sourced site admin when the attribute stops matching", async () => {
+    const adminUsername = `revoked-${suffix}`;
+    // First login includes the site-admin attribute and elevates the account.
+    const first = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+      username: adminUsername,
+      email: `${adminUsername}@example.com`,
+      siteAdmin: "site-admins",
+    })));
+    expect(first.status).toBe(200);
+    let admin = await db.query.users.findFirst({ where: eq(users.username, adminUsername) });
+    expect(admin?.isSiteAdmin).toBeTrue();
+
+    // Next login omits the attribute; the SAML-sourced grant must be revoked.
+    const second = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+      username: adminUsername,
+      email: `${adminUsername}@example.com`,
+    })));
+    expect(second.status).toBe(200);
+    admin = await db.query.users.findFirst({ where: eq(users.username, adminUsername) });
+    expect(admin?.isSiteAdmin).toBeFalse();
+    expect(admin?.ssoSiteAdmin).toBeFalse();
+  });
+
+  test("keeps a locally-granted site admin despite a SAML login without the attribute", async () => {
+    const localAdminId = `usr-saml-localadmin-${suffix}`;
+    const localAdminUsername = `localadmin-${suffix}`;
+    await db.insert(users).values({
+      id: localAdminId,
+      username: localAdminUsername,
+      email: `${localAdminUsername}@example.com`,
+      passwordHash: "unused",
+      isSiteAdmin: true,
+    });
+    // Email-links to the existing local admin, but ssoSiteAdmin stays false.
+    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+      username: localAdminUsername,
+      email: `${localAdminUsername}@example.com`,
+    })));
+    expect(response.status).toBe(200);
+    const localAdmin = await db.query.users.findFirst({ where: eq(users.id, localAdminId) });
+    expect(localAdmin?.isSiteAdmin).toBeTrue();
+    expect(localAdmin?.ssoSiteAdmin).toBeFalse();
+    await db.delete(users).where(eq(users.id, localAdminId));
   });
 
   test("routes SLO to the IdP single logout endpoint", async () => {

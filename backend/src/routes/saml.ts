@@ -408,8 +408,19 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     await applySamlGroupMapping(user.id, groups);
     await pruneSamlGroupMappings(user.id, groups);
-    if (siteAdminMatches && user.isSiteAdmin !== true) {
-      await db.update(users).set({ isSiteAdmin: true }).where(eq(users.id, user.id));
+    // The site-admin attribute is authoritative in both directions: matching
+    // promotes, and once an account's admin status is SAML-sourced, losing the
+    // role demotes it so the IdP can revoke elevated access. If the attribute
+    // is misconfigured (empty `attrSiteAdmin`), we never touch the flag.
+    if (settings.attrSiteAdmin !== null && settings.siteAdminRole !== "") {
+      const noLongerSiteAdmin = user.isSiteAdmin && !siteAdminMatches;
+      if (siteAdminMatches && !user.isSiteAdmin) {
+        await db.update(users).set({ isSiteAdmin: true, ssoSiteAdmin: true }).where(eq(users.id, user.id));
+        await auditLog("sso-site-admin", "saml", user.id, user.id, null, { username: user.username, role: settings.siteAdminRole });
+      } else if (noLongerSiteAdmin && user.ssoSiteAdmin) {
+        await db.update(users).set({ isSiteAdmin: false, ssoSiteAdmin: false }).where(eq(users.id, user.id));
+        await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, { username: user.username, role: settings.siteAdminRole });
+      }
     }
 
     const tokenTtlMs = settings.ssoApiTokenSessionTimeout * 1000;

@@ -124,7 +124,11 @@ async function verifyJwtSignature(
 
   if (alg.startsWith("HS")) {
     if (settings.clientSecret === null) throw new Error("ID token uses a symmetric algorithm but no client secret is configured");
-    const expected = createHmac("sha256", settings.clientSecret).update(data).digest();
+    const hsHash: Record<string, string> = { HS256: "sha256", HS384: "sha384", HS512: "sha512" };
+    const hash = hsHash[alg];
+    if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
+    const expected = createHmac(hash, settings.clientSecret).update(data).digest();
+    if (expected.length !== signatureBuffer.length) throw new Error("ID token signature is invalid");
     if (!expected.equals(signatureBuffer)) throw new Error("ID token signature is invalid");
     return;
   }
@@ -140,10 +144,17 @@ async function verifyJwtSignature(
   const jwksResponse = await fetch(discoveryConfig.jwksUri, { redirect: "follow" });
   if (!jwksResponse.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
   const jwks = await jwksResponse.json() as { keys?: Record<string, unknown>[] };
+  const keys = jwks.keys ?? [];
   const kid = typeof header.kid === "string" ? header.kid : undefined;
-  const key = (jwks.keys ?? []).find((candidate): boolean =>
-    kid === undefined ? candidate.kty === "RSA" : candidate.kid === kid
-  );
+  // Prefer a key whose kty matches the token's algorithm family; JWKs that
+  // explicitly declare `use: "sig"` win over encryption-only keys.
+  const algFamily = alg.startsWith("ES") ? "EC" : "RSA";
+  const key = kid === undefined
+    ? keys.find((candidate): boolean =>
+        candidate.kty === algFamily && (candidate.use === undefined || candidate.use === "sig"))
+      ?? keys.find((candidate): boolean =>
+        candidate.kty === "RSA" || candidate.kty === "EC")
+    : keys.find((candidate): boolean => candidate.kid === kid);
   if (key === undefined) throw new Error("No matching key found in the OIDC provider JWKS");
 
   const publicKey = createPublicKey({ key, format: "jwk" });

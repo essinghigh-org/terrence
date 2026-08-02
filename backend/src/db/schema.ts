@@ -16,6 +16,9 @@ export const users = sqliteTable("users", {
   // Both NULL for local accounts. (sso_provider, sso_subject) is unique.
   ssoProvider: text("sso_provider"),
   ssoSubject: text("sso_subject"),
+  // True when the site-admin flag was granted through the SAML site-admin
+  // attribute; such grants are revoked when the attribute stops matching.
+  ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).default(false),
 }, (table) => [
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);

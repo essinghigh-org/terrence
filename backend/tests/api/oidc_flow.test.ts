@@ -1,4 +1,5 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, sign } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -9,9 +10,16 @@ function base64Url(value: Buffer | string): string {
   return Buffer.isBuffer(value) ? value.toString("base64url") : Buffer.from(value).toString("base64url");
 }
 
-function signJwt(header: Record<string, unknown>, payload: Record<string, unknown>, privateKey: unknown): string {
+function signJwt(
+  header: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  privateKey: KeyObject,
+  dsaEncoding?: "ieee-p1363",
+): string {
   const signingInput = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
-  const signature = sign("sha256", Buffer.from(signingInput), privateKey as Parameters<typeof sign>[2]);
+  const signature = sign("sha256", Buffer.from(signingInput), dsaEncoding === undefined
+    ? privateKey
+    : { key: privateKey, dsaEncoding });
   return `${signingInput}.${base64Url(signature)}`;
 }
 
@@ -23,6 +31,14 @@ describe("OIDC SSO flow", () => {
 
   const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const publicJwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+
+  // EC keypair used to regression-test ES* verification. Options keys with
+  // algorithm overrides; the mock IdP signs tokens accordingly.
+  const { publicKey: ecPublicKey, privateKey: ecPrivateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const ecPublicJwk = ecPublicKey.export({ format: "jwk" }) as Record<string, unknown> as Record<string, string>;
+
+  // Signing algorithm the mock IdP uses when issuing the ID token.
+  let mockAlg: "RS256" | "HS256" | "HS384" | "HS512" | "ES256" = "RS256";
 
   // Claim overrides let each test determine who the mock IdP says the user is.
   let mockSubject = `oidc-sub-${suffix}`;
@@ -62,6 +78,13 @@ describe("OIDC SSO flow", () => {
           });
         }
         if (url.pathname === "/jwks") {
+          if (mockAlg === "ES256") {
+            // Deliberately no kid: exercises the EC fallback by key type.
+            return Response.json({ keys: [{ ...ecPublicJwk, use: "sig", alg: "ES256" }] });
+          }
+          if (mockAlg.startsWith("HS")) {
+            return Response.json({ keys: [] });
+          }
           return Response.json({ keys: [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] });
         }
         if (url.pathname === "/authorize") {
@@ -78,21 +101,28 @@ describe("OIDC SSO flow", () => {
           const code = typeof codeParam === "string" ? codeParam : "";
           const state = code.replace("test-code-", "");
           const now = Math.floor(Date.now() / 1000);
-          const idToken = signJwt(
-            { alg: "RS256", kid: "test-key", typ: "JWT" },
-            {
-              iss: baseUrl(),
-              sub: mockSubject,
-              aud: "test-client",
-              exp: now + 300,
-              iat: now,
-              nonce: mockNonce ?? authorizeParams.get(state)?.nonce ?? "",
-              email: mockEmail,
-              email_verified: true,
-              preferred_username: mockUsername,
-            },
-            privateKey,
-          );
+          const payload = {
+            iss: baseUrl(),
+            sub: mockSubject,
+            aud: "test-client",
+            exp: now + 300,
+            iat: now,
+            nonce: mockNonce ?? authorizeParams.get(state)?.nonce ?? "",
+            email: mockEmail,
+            email_verified: true,
+            preferred_username: mockUsername,
+          };
+          let idToken: string;
+          if (mockAlg.startsWith("HS")) {
+            const header = { alg: mockAlg, typ: "JWT" };
+            const input = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
+            const hash = mockAlg === "HS256" ? "sha256" : mockAlg === "HS384" ? "sha384" : "sha512";
+            idToken = `${input}.${base64Url(createHmac(hash, "test-secret").update(input).digest())}`;
+          } else if (mockAlg === "ES256") {
+            idToken = signJwt({ alg: "ES256", typ: "JWT" }, payload, ecPrivateKey, "ieee-p1363");
+          } else {
+            idToken = signJwt({ alg: "RS256", kid: "test-key", typ: "JWT" }, payload, privateKey);
+          }
           return Response.json({ access_token: "mock-access-token", token_type: "Bearer", id_token: idToken });
         }
         return new Response("not found", { status: 404 });
@@ -213,5 +243,33 @@ describe("OIDC SSO flow", () => {
     ));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("refused");
+  });
+
+  test("verifies HS384 ID tokens with the matching digest algorithm", async () => {
+    mockSubject = `oidc-sub-hs384-${suffix}`;
+    mockUsername = `hs384-${suffix}`;
+    mockEmail = `hs384-${suffix}@example.com`;
+    mockAlg = "HS384";
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(200);
+    } finally {
+      mockAlg = "RS256";
+    }
+  });
+
+  test("verifies ES256 ID tokens when the JWKS omits kid", async () => {
+    mockSubject = `oidc-sub-es256-${suffix}`;
+    mockUsername = `es256-${suffix}`;
+    mockEmail = `es256-${suffix}@example.com`;
+    mockAlg = "ES256";
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(200);
+      const created = await db.query.users.findFirst({ where: eq(users.username, `es256-${suffix}`) });
+      expect(created?.ssoProvider).toBe("oidc");
+    } finally {
+      mockAlg = "RS256";
+    }
   });
 });

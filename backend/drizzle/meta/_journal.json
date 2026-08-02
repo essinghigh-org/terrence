@@ -365,6 +365,13 @@
       "when": 1787000000000,
       "tag": "0052_sso_auth_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1787010000000,
+      "tag": "0053_sso_site_admin",
+      "breakpoints": true
     }
   ]
 }
