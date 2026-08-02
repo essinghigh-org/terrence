@@ -1,6 +1,6 @@
 # Terrence
 
-A clean-room reimplementation of Terraform Enterprise (TFE) in TypeScript, built on Bun + Elysia + React.
+Terrence is an alternative to Terraform Enterprise (TFE) built with TypeScript, built on Bun + Elysia + React.
 
 ## Architecture
 
