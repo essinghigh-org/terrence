@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { createServer } from "node:net";
+import { mkdtempSync, openSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { apiTokens, organizationMemberships, organizations, projects, runs, users, workspaces, workspaceTags } from "../../src/db/schema";
-import { app } from "../../src/app";
+import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaces, workspaceTags } from "../../src/db/schema";
+import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
 
 const AUTH_PREFIX = "Bea" + "rer ";
 
@@ -22,6 +26,8 @@ interface ScopedSeed {
   wsA2: string;
   wsB1: string;
   tagWsId: string;
+  wsA3: string;
+  policySetId: string | null;
 }
 
 function seed(): ScopedSeed {
@@ -41,6 +47,8 @@ function seed(): ScopedSeed {
     wsA2: `fg-ws-a2-${suffix}`,
     wsB1: `fg-ws-b1-${suffix}`,
     tagWsId: `fg-ws-tag-${suffix}`,
+    wsA3: `fg-ws-a3-${suffix}`,
+    policySetId: null,
   };
 }
 
@@ -51,73 +59,135 @@ function headers(token: string): Record<string, string> {
   };
 }
 
+// The suite mints dozens of tokens per user, far past the default general
+// (30 req / 1s) and sensitive (5 / 60s) rate limits. Instead of raising the
+// limits in-process (which bun test would leak into other files sharing a
+// worker process, breaking rate_limits.test.ts), it talks to a dedicated
+// server process whose env overrides are isolated to this suite alone.
+async function startFgServer(): Promise<{ proc: Bun.Subprocess; port: number; logPath: string }> {
+  const port = await new Promise<number>((resolve, reject) => {
+    const srv = createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address() as { port: number };
+      srv.close(() => { resolve(addr.port); });
+    });
+  });
+  const logPath = join(mkdtempSync(join(tmpdir(), "terrence-fg-tests-")), "server.log");
+  const proc = Bun.spawn(["bun", "run", "index.ts"], {
+    cwd: import.meta.dir + "/../..",
+    env: {
+      ...process.env,
+      PORT: String(port),
+      RATE_LIMIT_MAX: "10000",
+      RATE_LIMIT_SENSITIVE_MAX: "10000",
+    },
+    stdout: openSync(logPath, "w"),
+    stderr: openSync(logPath, "w"),
+  });
+  for (let i = 0; i < 75; i += 1) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      if (res.ok) return { proc, port, logPath };
+    } catch {}
+    if (proc.exitCode !== null) break;
+    await Bun.sleep(200);
+  }
+  proc.kill();
+  const tail = await Bun.file(logPath).text().catch((): string => "");
+  throw new Error(`backend failed to start within 15s\n${tail.slice(-4000)}`);
+}
+
+const fgServer = await startFgServer();
+
+afterAll(() => {
+  fgServer.proc.kill();
+});
+
 const request = (path: string, init?: RequestInit): Promise<Response> =>
-  app.handle(new Request(new URL(path, "http://terrence.test"), init));
+  fetch(new URL(path, `http://127.0.0.1:${fgServer.port}`), init);
 
-describe("fine-grained user tokens", () => {
-  const s = seed();
-
-  beforeAll(async () => {
-    await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
-    // Second user: owns the settings-test tokens so their requests land in a
-    // separate rate-limit bucket (the general limiter keys per-user).
+async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUsers?: boolean } = {}): Promise<void> {
+  await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
+  if (opts.includeUsers === true) {
     await db.insert(users).values({ id: `fg-rate-${s.suffix}`, username: `fg-rate-${s.suffix}`, passwordHash: "unused" });
-    await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
-    await db.insert(organizationMemberships).values({
-      id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner",
-    });
-    await db.insert(organizationMemberships).values({
-      id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner",
-    });
-    await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
-    await db.insert(projects).values([
-      { id: s.projectA, orgId: s.orgId, name: "proj-a" },
-      { id: s.projectB, orgId: s.orgId, name: "proj-b" },
-    ]);
-    await db.insert(workspaces).values([
-      { id: s.wsA1, orgId: s.orgId, projectId: s.projectA, name: "ws-a1" },
-      { id: s.wsA2, orgId: s.orgId, projectId: s.projectA, name: "ws-a2" },
-      { id: s.wsB1, orgId: s.orgId, projectId: s.projectB, name: "ws-b1" },
-      { id: s.tagWsId, orgId: s.orgId, projectId: s.projectB, name: "ws-tag" },
-    ]);
+  }
+  await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
+  await db.insert(organizationMemberships).values({ id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner" });
+  if (opts.includeUsers === true) {
+    await db.insert(organizationMemberships).values({ id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner" });
+  }
+  await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
+  await db.insert(projects).values([
+    { id: s.projectA, orgId: s.orgId, name: "proj-a" },
+    { id: s.projectB, orgId: s.orgId, name: "proj-b" },
+  ]);
+  await db.insert(workspaces).values([
+    { id: s.wsA1, orgId: s.orgId, projectId: s.projectA, name: "ws-a1" },
+    { id: s.wsA2, orgId: s.orgId, projectId: s.projectA, name: "ws-a2" },
+    { id: s.wsB1, orgId: s.orgId, projectId: s.projectB, name: "ws-b1" },
+    { id: s.tagWsId, orgId: s.orgId, projectId: s.projectB, name: "ws-tag" },
+    { id: s.wsA3, orgId: s.orgId, projectId: s.projectB, name: "ws-and-half" },
+  ]);
+  if (opts.tags === true) {
     await db.insert(workspaceTags).values([
       { id: `wtag-${s.suffix}`, workspaceId: s.tagWsId, key: "environment", value: "prod" },
       { id: `wtag-a1-${s.suffix}`, workspaceId: s.wsA1, key: "foo", value: "bar" },
       { id: `wtag-a1b-${s.suffix}`, workspaceId: s.wsA1, key: "baz", value: "bing" },
       { id: `wtag-a2-${s.suffix}`, workspaceId: s.wsA2, key: "xyz", value: "abc" },
+      { id: `wtag-a3-${s.suffix}`, workspaceId: s.wsA3, key: "foo", value: "bar" },
     ]);
+  }
+}
+
+async function teardownOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUsers?: boolean } = {}): Promise<void> {
+  await db.delete(runs).where(eq(runs.workspaceId, s.wsA1));
+  if (opts.tags === true) {
+    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA1));
+    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA2));
+    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA3));
+    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.tagWsId));
+  }
+  await db.delete(workspaces).where(eq(workspaces.orgId, s.orgId));
+  await db.delete(projects).where(eq(projects.orgId, s.orgId));
+  await db.delete(apiTokens).where(eq(apiTokens.userId, s.userId));
+  if (opts.includeUsers === true) {
+    await db.delete(apiTokens).where(eq(apiTokens.userId, `fg-rate-${s.suffix}`));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `fg-rate-mem-${s.suffix}`));
+    await db.delete(users).where(eq(users.id, `fg-rate-${s.suffix}`));
+  }
+  await db.delete(organizationMemberships).where(eq(organizationMemberships.id, s.membershipId));
+  await db.delete(organizations).where(eq(organizations.id, s.orgId));
+  await db.delete(users).where(eq(users.id, s.userId));
+}
+
+async function createScopedToken(
+  userId: string,
+  adminToken: string,
+  attributes: Record<string, unknown>,
+): Promise<{ id: string; secret: string }> {
+  const res = await request(`/api/v2/users/${userId}/authentication-tokens`, {
+    method: "POST",
+    headers: headers(adminToken),
+    body: JSON.stringify({
+      data: { type: "authentication-tokens", attributes: { description: "scoped", ...attributes } },
+    }),
+  });
+  expect(res.status).toBe(201);
+  const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
+  return { id: body.data.id, secret: body.data.attributes.token as string };
+}
+
+describe("fine-grained user tokens", () => {
+  const s = seed();
+
+  beforeAll(async () => {
+    await seedOrgFixtures(s, { tags: true, includeUsers: true });
   });
 
   afterAll(async () => {
-    await db.delete(runs).where(eq(runs.workspaceId, s.wsA1));
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.tagWsId));
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA1));
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA2));
-    await db.delete(workspaces).where(eq(workspaces.orgId, s.orgId));
-    await db.delete(projects).where(eq(projects.orgId, s.orgId));
-    await db.delete(apiTokens).where(eq(apiTokens.userId, s.userId));
-    await db.delete(apiTokens).where(eq(apiTokens.userId, `fg-rate-${s.suffix}`));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, s.membershipId));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `fg-rate-mem-${s.suffix}`));
-    await db.delete(organizations).where(eq(organizations.id, s.orgId));
-    await db.delete(users).where(eq(users.id, s.userId));
-    await db.delete(users).where(eq(users.id, `fg-rate-${s.suffix}`));
+    await teardownOrgFixtures(s, { tags: true, includeUsers: true });
   });
-
-  async function createScopedToken(attributes: Record<string, unknown>): Promise<{ id: string; secret: string }> {
-    const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
-      method: "POST",
-      headers: headers(s.adminToken),
-      body: JSON.stringify({
-        data: { type: "authentication-tokens", attributes: { description: "scoped", ...attributes } },
-      }),
-    });
-    expect(res.status).toBe(201);
-    const body = await res.json() as {
-      data: { id: string; attributes: { token: string | null } };
-    };
-    return { id: body.data.id, secret: body.data.attributes.token as string };
-  }
 
   it("rejects invalid scopes on creation", async () => {
     const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
@@ -171,7 +241,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("allows a token scoped to a single workspace with workspaces:read", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -202,7 +272,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("denies state reads without the state:read grant", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -221,7 +291,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("allows state reads when state:read is granted", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -240,7 +310,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("scopes a token to a project (all workspaces within it)", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -307,7 +377,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("denies token creation when authenticated with a fine-grained token", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -442,7 +512,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("scopes a token to workspaces matching a tag", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -470,7 +540,7 @@ describe("fine-grained user tokens", () => {
     await db.insert(organizationMemberships).values({
       id: `fg-other-mem-${s.suffix}`, userId: s.userId, orgId: otherOrgId, role: "owner",
     });
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -493,7 +563,7 @@ describe("fine-grained user tokens", () => {
     // real memberships, never return the org name verbatim.
     const foreignOrgId = `fg-foreign-${s.suffix}`;
     await db.insert(organizations).values({ id: foreignOrgId, name: `fg-foreign-${s.suffix}` });
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId, foreignOrgId],
@@ -518,7 +588,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("exposes scopes in the token list response", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -583,7 +653,7 @@ describe("fine-grained user tokens", () => {
   });
 
   it("enforces scopes on MCP tool calls", async () => {
-    const created = await createScopedToken({
+    const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
         version: 1,
         orgs: [s.orgId],
@@ -651,80 +721,38 @@ async function createRunWith(token: string, workspaceId: string): Promise<{ id: 
     headers: headers(token),
     body: JSON.stringify({ data: { type: "runs", attributes: { message: "fg-test" } } }),
   });
-  const body = await res.json() as { data?: { id: string } };
-  return { id: body.data?.id as string, status: res.status };
+  const text = await res.text();
+  const body = text !== "" ? JSON.parse(text) as { data?: { id: string } } : {};
+  return { id: (body.data?.id as string | undefined) ?? "", status: res.status };
 }
 
 describe("fine-grained tag expressions (AND/OR combinators)", () => {
   const s = seed();
 
   beforeAll(async () => {
-    await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
-    await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
-    await db.insert(organizationMemberships).values({
-      id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner",
-    });
-    await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
-    await db.insert(projects).values([
-      { id: s.projectA, orgId: s.orgId, name: "proj-a" },
-      { id: s.projectB, orgId: s.orgId, name: "proj-b" },
-    ]);
-    await db.insert(workspaces).values([
-      { id: s.wsA1, orgId: s.orgId, projectId: s.projectA, name: "ws-a1" },
-      { id: s.wsA2, orgId: s.orgId, projectId: s.projectA, name: "ws-a2" },
-      { id: s.wsB1, orgId: s.orgId, projectId: s.projectB, name: "ws-b1" },
-      { id: s.tagWsId, orgId: s.orgId, projectId: s.projectB, name: "ws-tag" },
-    ]);
-    await db.insert(workspaceTags).values([
-      { id: `wtag-${s.suffix}`, workspaceId: s.tagWsId, key: "environment", value: "prod" },
-      { id: `wtag-a1-${s.suffix}`, workspaceId: s.wsA1, key: "foo", value: "bar" },
-      { id: `wtag-a1b-${s.suffix}`, workspaceId: s.wsA1, key: "baz", value: "bing" },
-      { id: `wtag-a2-${s.suffix}`, workspaceId: s.wsA2, key: "xyz", value: "abc" },
-    ]);
+    await seedOrgFixtures(s, { tags: true });
   });
 
   afterAll(async () => {
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA1));
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA2));
-    await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.tagWsId));
-    await db.delete(workspaces).where(eq(workspaces.orgId, s.orgId));
-    await db.delete(projects).where(eq(projects.orgId, s.orgId));
-    await db.delete(apiTokens).where(eq(apiTokens.userId, s.userId));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, s.membershipId));
-    await db.delete(organizations).where(eq(organizations.id, s.orgId));
-    await db.delete(users).where(eq(users.id, s.userId));
+    await teardownOrgFixtures(s, { tags: true });
   });
 
   it("matches workspaces with a nested (foo=bar AND baz=bing) OR xyz=abc expression", async () => {
-    const created = await (async (): Promise<{ id: string; secret: string }> => {
-      const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
-        method: "POST",
-        headers: headers(s.adminToken),
-        body: JSON.stringify({
-          data: {
-            type: "authentication-tokens",
-            attributes: {
-              description: "tag-expr",
-              scopes: {
-                version: 1,
-                orgs: [s.orgId],
-                tags: {
-                  combinator: "OR",
-                  rules: [
-                    { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
-                    { key: "xyz", value: "abc" },
-                  ],
-                },
-                permissions: { "workspaces:read": true },
-              },
-            },
-          },
-        }),
-      });
-      expect(res.status).toBe(201);
-      const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
-      return { id: body.data.id, secret: body.data.attributes.token as string };
-    })();
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "tag-expr",
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        tags: {
+          combinator: "OR",
+          rules: [
+            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            { key: "xyz", value: "abc" },
+          ],
+        },
+        permissions: { "workspaces:read": true },
+      },
+    });
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
@@ -740,36 +768,25 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
   });
 
   it("exposes the nested tag expression in the token list response", async () => {
-    const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
-      method: "POST",
-      headers: headers(s.adminToken),
-      body: JSON.stringify({
-        data: {
-          type: "authentication-tokens",
-          attributes: {
-            description: "tag-expr",
-            scopes: {
-              version: 1,
-              orgs: [s.orgId],
-              tags: {
-                combinator: "OR",
-                rules: [
-                  { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
-                  { key: "xyz", value: "abc" },
-                ],
-              },
-              permissions: { "workspaces:read": true },
-            },
-          },
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "tag-expr",
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        tags: {
+          combinator: "OR",
+          rules: [
+            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            { key: "xyz", value: "abc" },
+          ],
         },
-      }),
+        permissions: { "workspaces:read": true },
+      },
     });
-    expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
     try {
       const list = await request(`/api/v2/users/${s.userId}/authentication-tokens`, { headers: headers(s.adminToken) });
       const listBody = await list.json() as { data: { id: string; attributes: { scopes: unknown } }[] };
-      const mine = listBody.data.find((t): boolean => t.id === body.data.id);
+      const mine = listBody.data.find((t): boolean => t.id === created.id);
       expect(mine?.attributes.scopes).toEqual({
         version: 1,
         orgs: [s.orgId],
@@ -785,7 +802,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         permissions: { "workspaces:read": true },
       });
     } finally {
-      await db.delete(apiTokens).where(eq(apiTokens.id, body.data.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
     }
   });
 
@@ -810,66 +827,165 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     });
     expect(res.status).toBe(422);
   });
-});
 
-describe("fine-grained run action grants", () => {
-  const s = seed();
-
-  beforeAll(async () => {
-    await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
-    await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
-    await db.insert(organizationMemberships).values({
-      id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner",
+  it("keeps the legacy empty tags array unrestricted but fails closed on empty expressions", async () => {
+    // Legacy `tags: []` (array form) means "no tag restriction".
+    const legacy = await createScopedToken(s.userId, s.adminToken, {
+      description: "legacy-empty",
+      scopes: { version: 1, orgs: [s.orgId], tags: [], permissions: { "workspaces:read": true } },
     });
-    await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
-    await db.insert(projects).values([
-      { id: s.projectA, orgId: s.orgId, name: "proj-a" },
-      { id: s.projectB, orgId: s.orgId, name: "proj-b" },
-    ]);
-    await db.insert(workspaces).values([
-      { id: s.wsA1, orgId: s.orgId, projectId: s.projectA, name: "ws-a1" },
-      { id: s.wsA2, orgId: s.orgId, projectId: s.projectA, name: "ws-a2" },
-      { id: s.wsB1, orgId: s.orgId, projectId: s.projectB, name: "ws-b1" },
-      { id: s.tagWsId, orgId: s.orgId, projectId: s.projectB, name: "ws-tag" },
-    ]);
+    try {
+      const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(legacy.secret) });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { data: { id: string }[] };
+      const ids = listBody.data.map((w): string => w.id);
+      expect(ids).toContain(s.wsA1);
+      expect(ids).toContain(s.wsB1); // tagless workspace must not be skipped
+      expect(ids).toContain(s.tagWsId);
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, legacy.id));
+    }
+
+    // An explicit expression object with no rules is a token whose intent is
+    // unclear; rejecting it fails closed instead of silently widening scope.
+    for (const tags of [{ combinator: "OR", rules: [] }, { combinator: "AND", rules: [] }]) {
+      const denied = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
+        method: "POST",
+        headers: headers(s.adminToken),
+        body: JSON.stringify({
+          data: {
+            type: "authentication-tokens",
+            attributes: {
+              description: "empty-expr",
+              scopes: { version: 1, orgs: [s.orgId], tags, permissions: { "workspaces:read": true } },
+            },
+          },
+        }),
+      });
+      expect(denied.status).toBe(422);
+      const deniedBody = await denied.json() as { errors: { detail?: string }[] };
+      expect(deniedBody.errors[0]?.detail).toContain("at least one rule");
+    }
   });
 
-  afterAll(async () => {
-    await db.delete(runs).where(eq(runs.workspaceId, s.wsA1));
-    await db.delete(workspaces).where(eq(workspaces.orgId, s.orgId));
-    await db.delete(projects).where(eq(projects.orgId, s.orgId));
-    await db.delete(apiTokens).where(eq(apiTokens.userId, s.userId));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, s.membershipId));
-    await db.delete(organizations).where(eq(organizations.id, s.orgId));
-    await db.delete(users).where(eq(users.id, s.userId));
+  it("excludes a workspace holding only one half of a nested AND", async () => {
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "tag-and-half",
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        tags: {
+          combinator: "OR",
+          rules: [
+            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            { key: "xyz", value: "abc" },
+          ],
+        },
+        permissions: { "workspaces:read": true },
+      },
+    });
+    try {
+      const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { data: { id: string }[] };
+      const ids = listBody.data.map((w): string => w.id);
+      expect(ids).toContain(s.wsA1); // has both AND branches
+      expect(ids).toContain(s.wsA2); // matches the OR leaf
+      expect(ids).not.toContain(s.wsA3); // only foo=bar, missing baz=bing
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
+    }
   });
 
-  async function createScopedToken(permissions: Record<string, boolean>): Promise<{ id: string; secret: string }> {
-    const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
+  it("enforces the tag expression depth limit at exactly MAX_TAG_RULE_DEPTH", async () => {
+    let rules: unknown = [{ key: "a", value: "1" }];
+    for (let i = 0; i < MAX_TAG_RULE_DEPTH; i++) {
+      rules = [{ combinator: "AND", rules }];
+    }
+    const post = (rulesValue: unknown): Promise<Response> => request(`/api/v2/users/${s.userId}/authentication-tokens`, {
       method: "POST",
       headers: headers(s.adminToken),
       body: JSON.stringify({
         data: {
           type: "authentication-tokens",
           attributes: {
-            description: "run-actions",
+            description: "depth",
+            scopes: { version: 1, orgs: [s.orgId], tags: { combinator: "OR", rules: rulesValue }, permissions: { "workspaces:read": true } },
+          },
+        },
+      }),
+    });
+    expect((await post(rules)).status).toBe(201); // innermost rule at depth MAX_TAG_RULE_DEPTH
+
+    const denied = await post([{ combinator: "AND", rules }]);
+    expect(denied.status).toBe(422); // one level past the limit
+    const deniedBody = await denied.json() as { errors: { detail?: string }[] };
+    expect(deniedBody.errors[0]?.detail).toContain("nesting depth");
+  });
+
+  it("rejects empty rule groups and excessive nesting depth", async () => {
+    const emptyGroup = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
+      method: "POST",
+      headers: headers(s.adminToken),
+      body: JSON.stringify({
+        data: {
+          type: "authentication-tokens",
+          attributes: {
+            description: "empty-group",
             scopes: {
               version: 1,
               orgs: [s.orgId],
-              workspaces: [s.wsA1],
-              permissions,
+              tags: { combinator: "OR", rules: [{ combinator: "AND", rules: [] }] },
+              permissions: { "workspaces:read": true },
             },
           },
         },
       }),
     });
-    expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
-    return { id: body.data.id, secret: body.data.attributes.token as string };
-  }
+    expect(emptyGroup.status).toBe(422);
+
+    let nested: Record<string, unknown> = { key: "foo", value: "bar" };
+    for (let i = 0; i < 20; i++) {
+      nested = { combinator: "AND", rules: [nested] };
+    }
+    const deep = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
+      method: "POST",
+      headers: headers(s.adminToken),
+      body: JSON.stringify({
+        data: {
+          type: "authentication-tokens",
+          attributes: {
+            description: "deep-tags",
+            scopes: {
+              version: 1,
+              orgs: [s.orgId],
+              tags: { combinator: "OR", rules: [nested] },
+              permissions: { "workspaces:read": true },
+            },
+          },
+        },
+      }),
+    });
+    expect(deep.status).toBe(422);
+  });
+});
+
+describe("fine-grained run action grants", () => {
+  const s = seed();
+
+  beforeAll(async () => {
+    await seedOrgFixtures(s);
+  });
+
+  afterAll(async () => {
+    await teardownOrgFixtures(s);
+  });
 
   it("runs:plan creates a run but cannot discard/cancel", async () => {
-    const created = await createScopedToken({ "workspaces:read": true, "runs:read": true, "runs:plan": true });
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true } },
+    });
     try {
       const run = await createRunWith(created.secret, s.wsA1);
       expect(run.status).toBe(201);
@@ -884,43 +1000,75 @@ describe("fine-grained run action grants", () => {
     }
   });
 
-  it("runs:apply implies discard and cancel but not run creation (plan)", async () => {
-    const created = await createScopedToken({ "workspaces:read": true, "runs:read": true, "runs:apply": true });
+  it("runs:apply does not imply discard, cancel, or run creation", async () => {
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true } },
+    });
     try {
       // Creating a run requires the plan action; runs:apply must not imply it.
       const create = await createRunWith(created.secret, s.wsA1);
       expect(create.status).toBe(403);
 
-      // Seed a pending run with the admin token, then act on it with the scoped token.
+      // Discard/cancel are deliberate, separate grants: a token that may apply
+      // a run it did not plan must not be able to terminate other runs.
       const seeded = await createRunWith(s.adminToken, s.wsA1);
       expect(seeded.status).toBe(201);
       const discard = await request(`/api/v2/runs/${seeded.id}/actions/discard`, { method: "POST", headers: headers(created.secret) });
-      expect(discard.status).toBe(200);
+      expect(discard.status).toBe(403);
 
       const seeded2 = await createRunWith(s.adminToken, s.wsA1);
+      expect(seeded2.status).toBe(201);
       const cancel = await request(`/api/v2/runs/${seeded2.id}/actions/cancel`, { method: "POST", headers: headers(created.secret) });
-      expect(cancel.status).toBe(200);
+      expect(cancel.status).toBe(403);
+
+      // An explicit runs:discard grant restores exactly that one action.
+      const discarder = await createScopedToken(s.userId, s.adminToken, {
+        description: "run-actions",
+        scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true, "runs:discard": true } },
+      });
+      try {
+        const seeded3 = await createRunWith(s.adminToken, s.wsA1);
+        expect(seeded3.status).toBe(201);
+        const discardOk = await request(`/api/v2/runs/${seeded3.id}/actions/discard`, { method: "POST", headers: headers(discarder.secret) });
+        expect(discardOk.status).toBe(200);
+      } finally {
+        await db.delete(apiTokens).where(eq(apiTokens.id, discarder.id));
+      }
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
     }
   });
 
   it("runs:discard and runs:cancel are distinct grants", async () => {
-    const discardOnly = await createScopedToken({ "workspaces:read": true, "runs:read": true, "runs:discard": true });
-    const cancelOnly = await createScopedToken({ "workspaces:read": true, "runs:read": true, "runs:cancel": true });
+    const discardOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true } },
+    });
+    const cancelOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:cancel": true } },
+    });
     try {
       const a = await createRunWith(s.adminToken, s.wsA1);
       expect(a.status).toBe(201);
       const discard = await request(`/api/v2/runs/${a.id}/actions/discard`, { method: "POST", headers: headers(discardOnly.secret) });
       expect(discard.status).toBe(200);
-      const cancelByDiscard = await request(`/api/v2/runs/${a.id}/actions/cancel`, { method: "POST", headers: headers(discardOnly.secret) });
+
+      // Fresh run for the negative assertion: a run whose state already
+      // changed could mask a permission failure with a state failure.
+      const a2 = await createRunWith(s.adminToken, s.wsA1);
+      expect(a2.status).toBe(201);
+      const cancelByDiscard = await request(`/api/v2/runs/${a2.id}/actions/cancel`, { method: "POST", headers: headers(discardOnly.secret) });
       expect(cancelByDiscard.status).toBe(403);
 
       const b = await createRunWith(s.adminToken, s.wsA1);
       expect(b.status).toBe(201);
       const cancel = await request(`/api/v2/runs/${b.id}/actions/cancel`, { method: "POST", headers: headers(cancelOnly.secret) });
       expect(cancel.status).toBe(200);
-      const discardByCancel = await request(`/api/v2/runs/${b.id}/actions/discard`, { method: "POST", headers: headers(cancelOnly.secret) });
+      const b2 = await createRunWith(s.adminToken, s.wsA1);
+      expect(b2.status).toBe(201);
+      const discardByCancel = await request(`/api/v2/runs/${b2.id}/actions/discard`, { method: "POST", headers: headers(cancelOnly.secret) });
       expect(discardByCancel.status).toBe(403);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, discardOnly.id));
@@ -933,43 +1081,22 @@ describe("fine-grained org-level read grants", () => {
   const s = seed();
 
   beforeAll(async () => {
-    await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
-    await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
-    await db.insert(organizationMemberships).values({
-      id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner",
-    });
-    await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
+    await seedOrgFixtures(s);
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens).where(eq(apiTokens.userId, s.userId));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, s.membershipId));
-    await db.delete(organizations).where(eq(organizations.id, s.orgId));
-    await db.delete(users).where(eq(users.id, s.userId));
+    await db.delete(policySetParameters).where(eq(policySetParameters.policySetId, s.policySetId ?? ""));
+    await db.delete(policies).where(eq(policies.policySetId, s.policySetId ?? ""));
+    await db.delete(policySets).where(eq(policySets.orgId, s.orgId));
+    await db.delete(agentPools).where(eq(agentPools.orgId, s.orgId));
+    await db.delete(teamMemberships).where(eq(teamMemberships.userId, s.userId));
+    await db.delete(teams).where(eq(teams.orgId, s.orgId));
+    await teardownOrgFixtures(s);
   });
 
-  async function createScopedToken(permissions: Record<string, boolean>): Promise<{ id: string; secret: string }> {
-    const res = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
-      method: "POST",
-      headers: headers(s.adminToken),
-      body: JSON.stringify({
-        data: {
-          type: "authentication-tokens",
-          attributes: {
-            description: "org-read",
-            scopes: {
-              version: 1,
-              orgs: [s.orgId],
-              permissions,
-            },
-          },
-        },
-      }),
-    });
-    expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
-    return { id: body.data.id, secret: body.data.attributes.token as string };
-  }
+
+
+
 
   const endpoints: { path: string; grant: string }[] = [
     { path: "/api/v2/organizations/:org/agent-pools", grant: "agent-pools:read" },
@@ -982,7 +1109,10 @@ describe("fine-grained org-level read grants", () => {
   ];
 
   it("denies org-level reads without the specific grant", async () => {
-    const created = await createScopedToken({ "workspaces:read": true });
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true } },
+    });
     try {
       for (const { path } of endpoints) {
         const res = await request(path.replace(":org", s.orgName), { headers: headers(created.secret) });
@@ -993,8 +1123,40 @@ describe("fine-grained org-level read grants", () => {
     }
   });
 
+  it("scopes the audit-log aliases to the audit-logs:read grant", async () => {
+    const without = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true } },
+    });
+    const withGrant = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "audit-logs:read": true } },
+    });
+    try {
+      for (const path of ["/api/v2/organization-audit-trailers", "/api/v2/audit-trails"]) {
+        const denied = await request(path, { headers: headers(without.secret) });
+        expect(denied.status).toBe(200);
+        const deniedBody = await denied.json() as { data: unknown[] };
+        // A scoped token without the grant must fail closed to no records,
+        // not widen the aliases across every org the user can reach.
+        expect(deniedBody.data.length).toBe(0);
+
+        const allowed = await request(path, { headers: headers(withGrant.secret) });
+        expect(allowed.status).toBe(200);
+        const allowedBody = await allowed.json() as { data: unknown[] };
+        expect(Array.isArray(allowedBody.data)).toBe(true);
+      }
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, without.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, withGrant.id));
+    }
+  });
+
   it("allows each org-level read with its matching grant", async () => {
-    const created = await createScopedToken(Object.fromEntries(endpoints.map((e): [string, boolean] => [e.grant, true])));
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: Object.fromEntries(endpoints.map((e): [string, boolean] => [e.grant, true])) },
+    });
     try {
       for (const { path } of endpoints) {
         const res = await request(path.replace(":org", s.orgName), { headers: headers(created.secret) });
@@ -1006,8 +1168,14 @@ describe("fine-grained org-level read grants", () => {
   });
 
   it("requires workspaces:write to create a workspace (manage-workspaces)", async () => {
-    const readOnly = await createScopedToken({ "workspaces:read": true });
-    const writeOnly = await createScopedToken({ "workspaces:write": true });
+    const readOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true } },
+    });
+    const writeOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:write": true } },
+    });
     const post = (token: string): Promise<Response> => request(`/api/v2/organizations/${s.orgName}/workspaces`, {
       method: "POST",
       headers: headers(token),
@@ -1025,9 +1193,148 @@ describe("fine-grained org-level read grants", () => {
       const allowed = await post(writeOnly.secret);
       expect(allowed.status).toBe(201);
       const body = await allowed.json() as { data: { id: string } };
-      await db.delete(workspaces).where(eq(workspaces.id, body.data.id));
+      expect(body.data.id).toBeTruthy();
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, readOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, writeOnly.id));
+    }
+  });
+
+  it("allows read-only policy routes with policies:read and agent routes with agent-pools:read", async () => {
+    const policySetId = `fg-ps-${s.suffix}`;
+    const policyId = `fg-pol-${s.suffix}`;
+    const paramId = `fg-param-${s.suffix}`;
+    const poolId = `fg-pool-${s.suffix}`;
+    const agentId = `fg-agent-${s.suffix}`;
+    s.policySetId = policySetId;
+    await db.insert(policySets).values({ id: policySetId, orgId: s.orgId, name: `ps-${s.suffix}` });
+    await db.insert(policies).values({ id: policyId, policySetId, name: `pol-${s.suffix}` });
+    await db.insert(policySetParameters).values({ id: paramId, policySetId, key: `key-${s.suffix}`, value: "x" });
+    await db.insert(agentPools).values({ id: poolId, orgId: s.orgId, name: `pool-${s.suffix}` });
+    await db.insert(agents).values({ id: agentId, agentPoolId: poolId, name: `agent-${s.suffix}` });
+
+    const read = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "policies:read": true, "agent-pools:read": true } },
+    });
+    const none = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true } },
+    });
+    const readPaths = [
+      `/api/v2/policy-sets/${policySetId}`,
+      `/api/v2/policy-sets/${policySetId}/policies`,
+      `/api/v2/policy-sets/${policySetId}/parameters`,
+      `/api/v2/policies/${policyId}`,
+      `/api/v2/agent-pools/${poolId}/agents`,
+      `/api/v2/agents/${agentId}`,
+    ];
+    try {
+      for (const path of readPaths) {
+        const res = await request(path, { headers: headers(read.secret) });
+        expect(res.status).toBe(200);
+      }
+      for (const path of readPaths) {
+        const res = await request(path, { headers: headers(none.secret) });
+        expect(res.status).toBe(404);
+      }
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, read.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, none.id));
+    }
+  });
+
+  it("requires members:read for organization-memberships routes", async () => {
+    const withMembers = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "members:read": true } },
+    });
+    const without = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "teams:read": true } },
+    });
+    try {
+      for (const path of [
+        `/api/v2/organizations/${s.orgName}/organization-memberships`,
+        `/api/v2/organization-memberships/${s.membershipId}`,
+      ]) {
+        const denied = await request(path, { headers: headers(without.secret) });
+        expect(denied.status).toBe(404);
+        const allowed = await request(path, { headers: headers(withMembers.secret) });
+        expect(allowed.status).toBe(200);
+      }
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, withMembers.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, without.id));
+    }
+  });
+
+  it("hides team roster data without members:read", async () => {
+    const teamId = `fg-team-${s.suffix}`;
+    await db.insert(teams).values({ id: teamId, orgId: s.orgId, name: `team-${s.suffix}` });
+    await db.insert(teamMemberships).values({ id: `fg-tm-${s.suffix}`, teamId, userId: s.userId });
+
+    const teamsOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "teams:read": true } },
+    });
+    const withMembers = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "teams:read": true, "members:read": true } },
+    });
+    try {
+      const list = await request(`/api/v2/organizations/${s.orgName}/teams`, { headers: headers(teamsOnly.secret) });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { data: { id: string; relationships: { users?: { data: { id: string }[] } } }[] };
+      const mine = listBody.data.find((t): boolean => t.id === teamId);
+      expect(mine?.relationships.users?.data.length ?? 0).toBe(0);
+
+      const listFull = await request(`/api/v2/organizations/${s.orgName}/teams`, { headers: headers(withMembers.secret) });
+      expect(listFull.status).toBe(200);
+      const fullBody = await listFull.json() as { data: { id: string; relationships: { users?: { data: { id: string }[] } } }[] };
+      const fullMine = fullBody.data.find((t): boolean => t.id === teamId);
+      expect(fullMine?.relationships.users?.data.map((u): string => u.id)).toContain(s.userId);
+
+      const detail = await request(`/api/v2/teams/${teamId}?include=users`, { headers: headers(teamsOnly.secret) });
+      expect(detail.status).toBe(200);
+      const detailBody = await detail.json() as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> }; included?: unknown[] };
+      expect(detailBody.included).toBeUndefined();
+      expect(detailBody.data.relationships.users).toBeUndefined();
+      // The team size is roster data too; without members:read it must not leak.
+      expect(detailBody.data.attributes["users-count"]).toBe(0);
+
+      const detailFull = await request(`/api/v2/teams/${teamId}?include=users`, { headers: headers(withMembers.secret) });
+      expect(detailFull.status).toBe(200);
+      const detailFullBody = await detailFull.json() as { data: { attributes: Record<string, unknown> } };
+      expect(detailFullBody.data.attributes["users-count"]).toBe(1);
+    } finally {
+      await db.delete(teamMemberships).where(eq(teamMemberships.id, `fg-tm-${s.suffix}`));
+      await db.delete(apiTokens).where(eq(apiTokens.id, teamsOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, withMembers.id));
+    }
+  });
+
+  it("write grants imply their read counterparts", async () => {
+    const writeOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "org-read",
+      scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:write": true, "runs:plan": true } },
+    });
+    try {
+      const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(writeOnly.secret) });
+      expect(list.status).toBe(200);
+      const wsRes = await request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+        method: "POST",
+        headers: headers(s.adminToken),
+        body: JSON.stringify({ data: { type: "workspaces", attributes: { name: `fg-ws-read-${s.suffix}` } } }),
+      });
+      expect(wsRes.status).toBe(201);
+      const wsBody = await wsRes.json() as { data: { id: string } };
+      const run = await createRunWith(s.adminToken, wsBody.data.id);
+      expect(run.status).toBe(201);
+      const getRun = await request(`/api/v2/runs/${run.id}`, { headers: headers(writeOnly.secret) });
+      expect(getRun.status).toBe(200);
+      await db.delete(runs).where(eq(runs.id, run.id));
+    } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, writeOnly.id));
     }
   });

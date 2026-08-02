@@ -143,6 +143,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    // Roster (member identifiers) is membership data: only include it when the
+    // token also grants members:read.
+    const canReadMembers = await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read");
     const { number, size } = pageRequest(request);
     const [teamList, countRows] = await Promise.all([
       db.query.teams.findMany({ where: eq(teams.orgId, org.id), orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
@@ -167,7 +170,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     }
     const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
     const data = teamList.map((t: TeamItem): Promise<Record<string, unknown>> => {
-      const userRefs = membersByTeam.get(t.id) ?? [];
+      const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
       const mapping = mappingByTeam.get(t.id);
       const scim = scimEnabled
         ? { enabled: true, mapping, groupName: mapping === undefined ? null : groupById.get(mapping.scimGroupId) ?? null }
@@ -210,8 +213,12 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
     const includeQuery = query !== undefined ? query.include : undefined;
     const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
-    const includeUsers = includes.includes("users");
-    const includeOrgMemberships = includes.includes("organization-memberships");
+    // Membership data (usernames/emails, membership refs, and the exact team
+    // size) requires members:read.
+    const canReadMembers = await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read");
+    const rosterCount = canReadMembers ? userCount : 0;
+    const includeUsers = canReadMembers && includes.includes("users");
+    const includeOrgMemberships = canReadMembers && includes.includes("organization-memberships");
     let included: Record<string, unknown>[] = [];
     const members = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, team.id) });
     const userIds = members.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
@@ -229,13 +236,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
         users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })),
         organizationMemberships: memList.map((m): { id: string; type: string } => ({ id: m.id, type: "organization-memberships" })),
       };
-      return { data: await teamResource(team, userCount, linkage, scim), ...(included.length > 0 ? { included } : {}) };
+      return { data: await teamResource(team, rosterCount, linkage, scim), ...(included.length > 0 ? { included } : {}) };
     }
     if (includeUsers) {
       const linkage: TeamLinkage = { users: members.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) };
-      return { data: await teamResource(team, userCount, linkage, scim), ...(included.length > 0 ? { included } : {}) };
+      return { data: await teamResource(team, rosterCount, linkage, scim), ...(included.length > 0 ? { included } : {}) };
     }
-    return { data: await teamResource(team, userCount, undefined, scim), ...(included.length > 0 ? { included } : {}) };
+    return { data: await teamResource(team, rosterCount, undefined, scim), ...(included.length > 0 ? { included } : {}) };
   })
   .patch("/api/v2/teams/:team_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";

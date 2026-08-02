@@ -44,7 +44,7 @@ async function findManageableWorkspace(
     userId,
     tokenOrgId,
     tokenTeamId,
-    "run-tasks-read",
+    "run-tasks",
   );
   if (workspace === undefined) return undefined;
   return await checkOrganizationPermission(

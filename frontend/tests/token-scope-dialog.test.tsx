@@ -16,39 +16,104 @@ function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+type MockOrg = Readonly<{ id: string; externalId: string }>;
+type MockChild = Readonly<{ id: string; name: string }>;
+
+function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces?: MockChild[] } = {}): {
+  postedBody: () => unknown;
+  fetchMock: typeof fetch;
+} {
+  const orgs: MockOrg[] = options.orgs ?? [{ id: "acme-org", externalId: "org-111" }];
+  const projects: MockChild[] = options.projects ?? [];
+  const workspaces: MockChild[] = options.workspaces ?? [];
+  let posted: unknown = null;
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = requestUrl(input);
+    const orgName = url.split("/")[4] ?? "";
+    const org = orgs.find((o): boolean => o.id === orgName);
+    if (url === "/api/v2/organizations?page[size]=100") {
+      return json({
+        data: orgs.map((o): Record<string, unknown> => ({
+          id: o.id,
+          type: "organizations",
+          attributes: { name: o.id, "external-id": o.externalId },
+        })),
+      });
+    }
+    if (org !== undefined && url === `/api/v2/organizations/${orgName}/projects?page[size]=100`) {
+      return json({
+        data: projects.map((p): Record<string, unknown> => ({ id: p.id, type: "projects", attributes: { name: p.name } })),
+      });
+    }
+    if (org !== undefined && url === `/api/v2/organizations/${orgName}/workspaces?page[size]=100`) {
+      return json({
+        data: workspaces.map((w): Record<string, unknown> => ({ id: w.id, type: "workspaces", attributes: { name: w.name } })),
+      });
+    }
+    if (url === "/api/v2/tokens" && init?.method === "POST") {
+      posted = JSON.parse(String(init.body));
+      return json({ data: { id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  return { postedBody: (): unknown => posted, fetchMock: fetchMock as typeof fetch };
+}
+
+/** Testid anchors the root group plus every nested group (see TokenScopeDialog). */
+function tagGroupQueries(dialog: HTMLElement): {
+  rootKeys: () => HTMLElement[];
+  nestedKeys: () => HTMLElement[];
+  rootCombinator: () => HTMLElement;
+  nestedCombinator: () => HTMLElement;
+  rootAddCondition: () => HTMLElement;
+  nestedAddCondition: () => HTMLElement;
+} {
+  const groups = (): HTMLElement[] => within(dialog).getAllByTestId("tag-group");
+  const root = (): HTMLElement => groups()[0] as HTMLElement;
+  const nested = (): HTMLElement | null => groups()[1] ?? null;
+  const outsideNested = (els: HTMLElement[]): HTMLElement[] =>
+    els.filter((el): boolean => !(nested()?.contains(el) ?? false));
+  const inNested = (): HTMLElement[] => {
+    const n = nested();
+    return n === null ? [] : within(n).getAllByLabelText("Tag key");
+  };
+  return {
+    rootKeys: (): HTMLElement[] => outsideNested(within(root()).getAllByLabelText("Tag key")),
+    nestedKeys: inNested,
+    rootCombinator: (): HTMLElement => outsideNested(within(root()).getAllByLabelText("Combine with"))[0] as HTMLElement,
+    nestedCombinator: (): HTMLElement => (nested() as HTMLElement) ? within(nested() as HTMLElement).getByLabelText("Combine with") : (() => { throw new Error("no nested group"); })(),
+    rootAddCondition: (): HTMLElement => outsideNested(within(root()).getAllByRole("button", { name: "Add condition" }))[0] as HTMLElement,
+    nestedAddCondition: (): HTMLElement => (nested() as HTMLElement) ? within(nested() as HTMLElement).getByRole("button", { name: "Add condition" }) : (() => { throw new Error("no nested group"); })(),
+  };
+}
+
+async function openFineGrainedDialog(): Promise<HTMLElement> {
+  const view = render(
+    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(): void => { /* noop */ }} />,
+  );
+  const dialog = await view.findByRole("dialog");
+  fireEvent.click(within(dialog).getByText("Fine-grained"));
+  return dialog;
+}
+
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
 });
 
 test("lists organizations from JSON:API attributes and scopes the token to the real org id", async () => {
-  let postedBody: unknown = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = requestUrl(input);
-    if (url === "/api/v2/organizations?page[size]=100") {
-      return json({
-        data: [
-          { id: "zorg", type: "organizations", attributes: { name: "zorg", "external-id": "org-222" } },
-          { id: "acme-org", type: "organizations", attributes: { name: "acme-org", "external-id": "org-111" } },
-        ],
-      });
-    }
-    if (url === "/api/v2/organizations/acme-org/projects?page[size]=100") {
-      return json({ data: [{ id: "prj-1", type: "projects", attributes: { name: "payments" } }] });
-    }
-    if (url === "/api/v2/organizations/acme-org/workspaces?page[size]=100") {
-      return json({ data: [{ id: "ws-1", type: "workspaces", attributes: { name: "prod-us" } }] });
-    }
-    if (url === "/api/v2/tokens" && init?.method === "POST") {
-      postedBody = JSON.parse(String(init.body));
-      return json({ data: { id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } } });
-    }
-    throw new Error(`Unexpected request: ${url}`);
+  const { postedBody, fetchMock } = mockApi({
+    orgs: [
+      { id: "zorg", externalId: "org-222" },
+      { id: "acme-org", externalId: "org-111" },
+    ],
+    projects: [{ id: "prj-1", name: "payments" }],
+    workspaces: [{ id: "ws-1", name: "prod-us" }],
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   let created: unknown = null;
   const view = render(
@@ -65,6 +130,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
   expect(orgSelect.options[0]?.textContent).toBe("acme-org");
   expect(orgSelect.options[0]?.value).toBe("org-111");
   expect(orgSelect.options[1]?.textContent).toBe("zorg");
+  expect(orgSelect.options[1]?.value).toBe("org-222");
   expect(orgSelect.value).toBe("org-111");
 
   // Projects + workspaces parse name from attributes.
@@ -76,14 +142,14 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
   // Select a couple of the expanded permission grants.
   fireEvent.click(within(dialog).getByText("Lock and unlock workspaces"));
   fireEvent.click(within(dialog).getByText("Read organization audit logs"));
-  fireEvent.click(within(dialog).getByText("Apply plans (also allows discarding and canceling runs)"));
+  fireEvent.click(within(dialog).getByText("Apply plans to planned runs"));
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
 
   await waitFor((): void => {
-    expect(postedBody).not.toBeNull();
+    expect(postedBody()).not.toBeNull();
   });
-  const attributes = (postedBody as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -100,70 +166,42 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
 });
 
 test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
-  let postedBody: unknown = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = requestUrl(input);
-    if (url === "/api/v2/organizations?page[size]=100") {
-      return json({ data: [{ id: "acme-org", type: "organizations", attributes: { name: "acme-org", "external-id": "org-111" } }] });
-    }
-    if (url === "/api/v2/organizations/acme-org/projects?page[size]=100") {
-      return json({ data: [] });
-    }
-    if (url === "/api/v2/organizations/acme-org/workspaces?page[size]=100") {
-      return json({ data: [] });
-    }
-    if (url === "/api/v2/tokens" && init?.method === "POST") {
-      postedBody = JSON.parse(String(init.body));
-      return json({ data: { id: "tok-2", type: "tokens", attributes: { token: "secret", scopes: null } } });
-    }
-    throw new Error(`Unexpected request: ${url}`);
-  });
-  globalThis.fetch = fetchMock as typeof fetch;
+  const { postedBody, fetchMock } = mockApi();
+  globalThis.fetch = fetchMock;
 
-  const view = render(
-    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(): void => { /* noop */ }} />,
-  );
-
-  const dialog = await view.findByRole("dialog");
-  fireEvent.click(within(dialog).getByText("Fine-grained"));
+  const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
-
-  const keyInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag key");
-  const valueInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag value");
-  const combinators = (): HTMLElement[] => within(dialog).getAllByLabelText("Combine with");
+  const q = tagGroupQueries(dialog);
 
   // First condition: foo=bar at the root.
-  fireEvent.input(keyInputs()[0] as HTMLElement, { target: { value: "foo" } });
-  fireEvent.input(valueInputs()[0] as HTMLElement, { target: { value: "bar" } });
+  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "foo" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0] as HTMLElement, { target: { value: "bar" } });
 
   // Wrap it into a nested group, then switch that group to AND.
   fireEvent.click(within(dialog).getByRole("button", { name: "group" }));
   await waitFor((): void => {
-    expect(combinators().length).toBe(2);
+    expect(within(dialog).getAllByTestId("tag-group").length).toBe(2);
   });
-  fireEvent.change(combinators()[1] as HTMLElement, { target: { value: "AND" } });
+  fireEvent.change(q.nestedCombinator(), { target: { value: "AND" } });
 
   // Add a condition inside the nested group: baz=bing.
-  const addConditionButtons = (): HTMLElement[] => within(dialog).getAllByRole("button", { name: "Add condition" });
-  fireEvent.click(addConditionButtons()[1] as HTMLElement);
+  fireEvent.click(q.nestedAddCondition());
   await waitFor((): void => {
-    expect(keyInputs().length).toBe(2);
+    expect(q.nestedKeys().length).toBe(2);
   });
-  fireEvent.input(keyInputs()[1] as HTMLElement, { target: { value: "baz" } });
-  fireEvent.input(valueInputs()[1] as HTMLElement, { target: { value: "bing" } });
+  fireEvent.input(q.nestedKeys()[1] as HTMLElement, { target: { value: "baz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1] as HTMLElement, { target: { value: "bing" } });
 
-  // Add a sibling condition at the root: xyz=abc.
-  fireEvent.click(addConditionButtons()[0] as HTMLElement);
+  // Add a sibling condition at the root: xyz=abc. (foo=bar was wrapped into
+  // the nested group, so the root has exactly one key row again.)
+  fireEvent.click(q.rootAddCondition());
   await waitFor((): void => {
-    expect(keyInputs().length).toBe(3);
+    expect(q.rootKeys().length).toBe(1);
   });
-  fireEvent.input(keyInputs()[2] as HTMLElement, { target: { value: "xyz" } });
-  fireEvent.input(valueInputs()[2] as HTMLElement, { target: { value: "abc" } });
+  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "xyz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[2] as HTMLElement, { target: { value: "abc" } });
 
   // Live label renders the nested expression.
   await waitFor((): void => {
@@ -172,9 +210,9 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
   await waitFor((): void => {
-    expect(postedBody).not.toBeNull();
+    expect(postedBody()).not.toBeNull();
   });
-  const attributes = (postedBody as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -191,72 +229,46 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   });
 });
 
-test("changing the root combinator does not flip nested groups, and empty rows are pruned", async () => {
-  let postedBody: unknown = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = requestUrl(input);
-    if (url === "/api/v2/organizations?page[size]=100") {
-      return json({ data: [{ id: "acme-org", type: "organizations", attributes: { name: "acme-org", "external-id": "org-111" } }] });
-    }
-    if (url === "/api/v2/organizations/acme-org/projects?page[size]=100") {
-      return json({ data: [] });
-    }
-    if (url === "/api/v2/organizations/acme-org/workspaces?page[size]=100") {
-      return json({ data: [] });
-    }
-    if (url === "/api/v2/tokens" && init?.method === "POST") {
-      postedBody = JSON.parse(String(init.body));
-      return json({ data: { id: "tok-3", type: "tokens", attributes: { token: "secret", scopes: null } } });
-    }
-    throw new Error(`Unexpected request: ${url}`);
-  });
-  globalThis.fetch = fetchMock as typeof fetch;
+test("root combinator changes leave nested groups untouched, and empty rows are pruned", async () => {
+  const { postedBody, fetchMock } = mockApi();
+  globalThis.fetch = fetchMock;
 
-  const view = render(
-    <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(): void => { /* noop */ }} />,
-  );
-
-  const dialog = await view.findByRole("dialog");
-  fireEvent.click(within(dialog).getByText("Fine-grained"));
+  const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
+  const q = tagGroupQueries(dialog);
 
-  const keyInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag key");
-  const valueInputs = (): HTMLElement[] => within(dialog).getAllByLabelText("Tag value");
-  const combinators = (): HTMLElement[] => within(dialog).getAllByLabelText("Combine with");
-
-  // Build (foo=bar AND baz=bing) with the nested group kept at AND.
-  fireEvent.input(keyInputs()[0] as HTMLElement, { target: { value: "foo" } });
-  fireEvent.input(valueInputs()[0] as HTMLElement, { target: { value: "bar" } });
+  // Build foo=bar OR baz=bing inside a nested group (default OR), then flip
+  // the ROOT to AND: the payload must show root AND + nested OR. If a bug
+  // made nested groups follow the root combinator, the nested OR would
+  // silently become AND and the assertion would fail.
+  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "foo" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0] as HTMLElement, { target: { value: "bar" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "group" }));
   await waitFor((): void => {
-    expect(combinators().length).toBe(2);
+    expect(within(dialog).getAllByTestId("tag-group").length).toBe(2);
   });
-  fireEvent.change(combinators()[1] as HTMLElement, { target: { value: "AND" } });
-  fireEvent.click(within(dialog).getAllByRole("button", { name: "Add condition" })[1] as HTMLElement);
+  fireEvent.click(q.nestedAddCondition());
   await waitFor((): void => {
-    expect(keyInputs().length).toBe(2);
+    expect(q.nestedKeys().length).toBe(2);
   });
-  fireEvent.input(keyInputs()[1] as HTMLElement, { target: { value: "baz" } });
-  fireEvent.input(valueInputs()[1] as HTMLElement, { target: { value: "bing" } });
+  fireEvent.input(q.nestedKeys()[1] as HTMLElement, { target: { value: "baz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1] as HTMLElement, { target: { value: "bing" } });
 
-  // Switch the ROOT combinator to AND; the nested group must stay AND, and
-  // the empty third row (added below) must be pruned from the payload.
-  fireEvent.change(combinators()[0] as HTMLElement, { target: { value: "AND" } });
-  fireEvent.click(within(dialog).getAllByRole("button", { name: "Add condition" })[0] as HTMLElement);
+  fireEvent.change(q.rootCombinator(), { target: { value: "AND" } });
+
+  // The empty root row (added below) must be pruned from the payload.
+  fireEvent.click(q.rootAddCondition());
   await waitFor((): void => {
-    expect(keyInputs().length).toBe(3);
+    expect(q.rootKeys().length).toBe(1);
   });
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
   await waitFor((): void => {
-    expect(postedBody).not.toBeNull();
+    expect(postedBody()).not.toBeNull();
   });
-  const attributes = (postedBody as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -265,7 +277,7 @@ test("changing the root combinator does not flip nested groups, and empty rows a
     tags: {
       combinator: "AND",
       rules: [
-        { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+        { combinator: "OR", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
       ],
     },
     permissions: {},

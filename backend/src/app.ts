@@ -101,7 +101,14 @@ type RateLimitServer = Readonly<{
   readonly requestIP?: (request: CustomRequest) => Readonly<{ readonly address?: string }> | null;
 }>;
 
-const SENSITIVE_RATE_LIMIT = 5;
+/** Parse a positive-integer env override, falling back to the default. */
+function envPositiveInt(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 30);
+const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
 const SENSITIVE_RATE_DURATION_MS = 60_000;
 const sensitivePaths = new Set([
   "/admin/initial-admin-user",
@@ -232,7 +239,7 @@ export const app = new Elysia()
     };
   })
   .use(rateLimit({
-    max: 30,
+    max: RATE_LIMIT_MAX,
     duration: 1000,
     generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }> | null): string => {
       return principalRateLimitKey(request, server);

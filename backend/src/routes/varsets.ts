@@ -5,6 +5,8 @@ import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { variableSetResource, variableSetVariableResource, variableSetVariableUpdate } from "../lib/response";
 import { validVariableSetAttributes, validVariableSetVariableAttributes, isUniqueConstraintError } from "../lib/validation";
 import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, variableRelationshipResources } from "../lib/utils";
+import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
+import { currentTokenScopes } from "../lib/request-scope";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -64,11 +66,16 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       conditions.push(inArray(variableSets.id, [...ids]));
     }
     const where = and(...conditions);
-    const [records, countRows] = await Promise.all([
-      db.query.variableSets.findMany({ where, orderBy: [asc(variableSets.name)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(variableSets).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
+    let records = await db.query.variableSets.findMany({ where, orderBy: [asc(variableSets.name)], limit: size, offset: (number - 1) * size });
+    // Mirror findAuthorizedVariableSet: a fine-grained token sees only the
+    // variable sets its scope covers, so the collection cannot out-widen the
+    // item endpoints. The scope check is org-level and pure, so it is cheap.
+    const scopes = currentTokenScopes();
+    if (scopes !== null) {
+      records = records.filter((r: VarSetItem): boolean =>
+        scopeCoversOrg(scopes, r.orgId) && scopeGrants(scopes, "varsets:read"));
+    }
+    const totalCount = records.length;
     const data = await Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> => variableSetResource(r)));
     return { data, ...pagination(request, number, size, totalCount) };
   })

@@ -39,7 +39,7 @@ const PERMISSION_GROUPS: ReadonlyArray<{
     grants: [
       { key: "runs:read", label: "Read run history, plans, and logs" },
       { key: "runs:plan", label: "Create runs and start plans" },
-      { key: "runs:apply", label: "Apply plans (also allows discarding and canceling runs)" },
+      { key: "runs:apply", label: "Apply plans to planned runs" },
       { key: "runs:discard", label: "Discard pending runs" },
       { key: "runs:cancel", label: "Cancel running runs" },
       { key: "runs:policy-override", label: "Override policy checks" },
@@ -172,8 +172,9 @@ function emptyGroup(): TagGroupNode {
 function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: unknown[] } | null {
   const convert = (node: TagRuleNode): unknown | null => {
     if (node.kind === "filter") {
-      if (node.key.trim() === "") return null;
-      return { key: node.key, value: node.value };
+      const key = node.key.trim();
+      if (key === "") return null;
+      return { key, value: node.value.trim() };
     }
     const rules = node.rules
       .map(convert)
@@ -184,16 +185,26 @@ function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: u
   return convert(root) as { combinator: "AND" | "OR"; rules: unknown[] } | null;
 }
 
-/** Render a node as a human-readable expression like "(foo=bar AND baz=bing)". */
-function tagLabel(node: TagRuleNode): string {
-  if (node.kind === "filter") return `${node.key}=${node.value}`;
-  const inner = node.rules.map(tagLabel).join(` ${node.combinator} `);
-  return `(${inner})`;
+/** Render a node as a human-readable expression, or null when it holds no filled-in conditions. */
+function tagLabel(node: TagRuleNode): string | null {
+  if (node.kind === "filter") {
+    const key = node.key.trim();
+    if (key === "") return null;
+    return `${key}=${node.value.trim()}`;
+  }
+  const inner = node.rules
+    .map(tagLabel)
+    .filter((part): part is string => part !== null);
+  if (inner.length === 0) return null;
+  return `(${inner.join(` ${node.combinator} `)})`;
 }
 
-function rootLabel(root: TagGroupNode): string {
-  if (root.rules.length === 0) return "";
-  return root.rules.map(tagLabel).join(` ${root.combinator} `);
+function rootLabel(root: TagGroupNode): string | null {
+  const parts = root.rules
+    .map(tagLabel)
+    .filter((part): part is string => part !== null);
+  if (parts.length === 0) return null;
+  return parts.join(` ${root.combinator} `);
 }
 
 type OrgOption = Readonly<{ id: string; name: string }>;
@@ -249,25 +260,31 @@ export function TokenScopeDialog({
         }))
         .sort((a, b): number => a.name.localeCompare(b.name));
       setOrgs(parsed);
-      if (parsed.length > 0 && orgId === "") setOrgId(parsed[0]?.id ?? "");
+      if (parsed.length > 0) {
+        setOrgId((current): string => (current === "" ? (parsed[0]?.id ?? "") : current));
+      }
     }).catch(() => { setError("Could not load organizations"); });
   }, [open]);
 
   // Load projects + workspaces for the selected org. The org name (not id) is
   // used in the URL path.
-  useEffect((): void => {
+  useEffect((): (() => void) | undefined => {
     if (!open || orgId === "") { setProjects([]); setWorkspaces([]); return; }
     const orgName = orgs.find((o): boolean => o.id === orgId)?.name ?? orgId;
+    let cancelled = false;
     setProjects([]);
     setWorkspaces([]);
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response: unknown): void => {
+      if (cancelled) return;
       const data = (response as { data?: Array<{ id: string; attributes?: Record<string, unknown> }> }).data ?? [];
       setProjects(resourceOptions(data));
     }).catch(() => { /* org may not expose projects */ });
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response: unknown): void => {
+      if (cancelled) return;
       const data = (response as { data?: Array<{ id: string; attributes?: Record<string, unknown> }> }).data ?? [];
       setWorkspaces(resourceOptions(data));
     }).catch(() => { /* workspaces may not be listable */ });
+    return (): void => { cancelled = true; };
   }, [open, orgId, orgs]);
 
   const toggleProject = (id: string): void => {
@@ -428,15 +445,15 @@ export function TokenScopeDialog({
             className="h-9"
           />
           <Button type="button" variant="outline" size="sm" onClick={(): void => { wrapRule(path); }} title="Wrap this condition into a group">group</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} title="Remove">✕</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} aria-label="Remove condition">✕</Button>
         </div>
       );
     }
     const isRoot = path.length === 0;
     return (
-      <div className="space-y-1.5">
+      <div className="space-y-1.5" data-testid="tag-group">
         <div className="flex items-center gap-2">
-          {!isRoot && <span className="text-muted-foreground">(</span>}
+          {!isRoot && <span aria-hidden="true" className="text-muted-foreground">(</span>}
           <select
             aria-label="Combine with"
             className="h-8 rounded-md border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -449,7 +466,7 @@ export function TokenScopeDialog({
           <span className="text-sm text-muted-foreground">{isRoot ? "of the conditions match" : "conditions match"}</span>
           <Button type="button" variant="outline" size="sm" onClick={(): void => { addFilter(path); }}>Add condition</Button>
           <Button type="button" variant="outline" size="sm" onClick={(): void => { addGroup(path); }}>Add group</Button>
-          {!isRoot && <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }}>✕</Button>}
+          {!isRoot && <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} aria-label="Remove group">✕</Button>}
         </div>
         <div className="space-y-1.5 border-l border-gray-200 pl-3">
           {node.rules.map((child, index): React.JSX.Element => (
@@ -458,7 +475,7 @@ export function TokenScopeDialog({
             </div>
           ))}
         </div>
-        {!isRoot && <span className="text-muted-foreground">)</span>}
+        {!isRoot && <span aria-hidden="true" className="text-muted-foreground">)</span>}
       </div>
     );
   };
@@ -543,7 +560,7 @@ export function TokenScopeDialog({
               <div className="space-y-1.5">
                 <p className="text-sm font-medium">Workspace tag rule <span className="text-muted-foreground font-normal">(optional)</span></p>
                 {renderRuleRow(tagTree, rootPath)}
-                {tagLabel(tagTree) !== "" && (
+                {rootLabel(tagTree) !== null && (
                   <p className="text-xs text-muted-foreground">
                     Matches: <span className="font-mono">{rootLabel(tagTree)}</span>
                   </p>

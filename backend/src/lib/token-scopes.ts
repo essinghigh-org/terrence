@@ -87,58 +87,24 @@ export type WorkspacePermissionGrant =
   // Audit logs
   | "audit-logs:read";
 
-export const ALL_PERMISSION_GRANTS: readonly WorkspacePermissionGrant[] = [
-  "workspaces:read",
-  "workspaces:write",
-  "workspaces:lock",
-  "runs:read",
-  "runs:write",
-  "runs:plan",
-  "runs:apply",
-  "runs:discard",
-  "runs:cancel",
-  "runs:policy-override",
-  "run-tasks:read",
-  "run-tasks:write",
-  "variables:read",
-  "variables:write",
-  "state:read",
-  "state:write",
-  "settings:read",
-  "settings:write",
-  "policies:read",
-  "policies:write",
-  "vcs:read",
-  "vcs:write",
-  "agent-pools:read",
-  "agent-pools:write",
-  "registry:read",
-  "registry:write",
-  "projects:read",
-  "projects:write",
-  "teams:read",
-  "teams:write",
-  "members:read",
-  "members:write",
-  "varsets:read",
-  "varsets:write",
-  "audit-logs:read",
-];
-
 /**
  * Grants that imply other grants. Kept deliberately small: legacy catch-all
  * grants (settings:read/write, runs:write, workspaces:write) imply the
  * fine-grained grants they were split into, so tokens created before the
- * split keep exactly the access they had.
+ * split keep exactly the access they had. Write grants imply their read
+ * counterparts.
  */
 const GRANT_IMPLICATIONS: Readonly<Record<WorkspacePermissionGrant, readonly WorkspacePermissionGrant[]>> = {
   "workspaces:read": [],
-  "workspaces:write": ["workspaces:lock"],
+  "workspaces:write": ["workspaces:read", "workspaces:lock"],
   "workspaces:lock": [],
   "runs:read": [],
-  "runs:write": ["runs:plan", "runs:apply", "runs:discard", "runs:cancel"],
-  "runs:plan": [],
-  "runs:apply": ["runs:discard", "runs:cancel"],
+  "runs:write": ["runs:read", "runs:plan", "runs:apply", "runs:discard", "runs:cancel"],
+  "runs:plan": ["runs:read"],
+  // Deliberately narrow: apply lets a token finish a run it planned, but
+  // terminating runs it did not start (discard/cancel) is a separate decision
+  // and requires its own explicit grant.
+  "runs:apply": ["runs:read"],
   "runs:discard": [],
   "runs:cancel": [],
   "runs:policy-override": [],
@@ -192,6 +158,10 @@ const GRANT_IMPLICATIONS: Readonly<Record<WorkspacePermissionGrant, readonly Wor
   "audit-logs:read": [],
 };
 
+export const ALL_PERMISSION_GRANTS: readonly WorkspacePermissionGrant[] = Object.keys(
+  GRANT_IMPLICATIONS,
+) as WorkspacePermissionGrant[];
+
 export type TokenScopeTagFilter = Readonly<{
   key: string;
   value: string;
@@ -241,8 +211,16 @@ function isCombinator(value: unknown): value is "AND" | "OR" {
   return value === "AND" || value === "OR";
 }
 
-/** Normalize a single tag rule (leaf or group) with validation. */
-function parseTagRule(raw: unknown, path: string): TokenScopeTagRule {
+/** Maximum nesting depth of a tag rule tree (attacker-controlled input). */
+export const MAX_TAG_RULE_DEPTH = 16;
+
+/**
+ * Normalize a single tag rule (leaf or group) with validation. `depth` caps
+ * nesting so a crafted scopes payload cannot blow the stack during parse or
+ * on every later auth check that recurses the stored tree.
+ */
+function parseTagRule(raw: unknown, path: string, depth = 0): TokenScopeTagRule {
+  if (depth > MAX_TAG_RULE_DEPTH) throw new Error(`${path} exceeds maximum nesting depth`);
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error(`${path} must be a tag filter or a rule group`);
   }
@@ -250,9 +228,10 @@ function parseTagRule(raw: unknown, path: string): TokenScopeTagRule {
   if (obj.combinator !== undefined) {
     if (!isCombinator(obj.combinator)) throw new Error(`${path}.combinator must be "AND" or "OR"`);
     if (!Array.isArray(obj.rules)) throw new Error(`${path}.rules must be an array`);
+    if (obj.rules.length === 0) throw new Error(`${path}.rules must contain at least one rule`);
     return {
       combinator: obj.combinator,
-      rules: obj.rules.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`)),
+      rules: obj.rules.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`, depth + 1)),
     };
   }
   if (!isTagFilter(obj)) {
@@ -261,11 +240,20 @@ function parseTagRule(raw: unknown, path: string): TokenScopeTagRule {
   return { key: obj.key, value: obj.value };
 }
 
-/** Normalize a raw `tags` value (old array shape or new expression shape). */
+/**
+ * Normalize a raw `tags` value (old array shape or new expression shape).
+ * The legacy array form maps an empty list to null (no tag restriction):
+ * stored `tags: []` meant "any workspace", and an empty OR group would
+ * otherwise silently match no workspaces at all. An explicit expression
+ * object with no rules is rejected instead of failing open: `null` means
+ * "unrestricted", so accepting it would silently widen the token to every
+ * workspace in scope.
+ */
 function parseTagExpression(raw: unknown): TokenScopeTags | null {
   if (raw === null || raw === undefined) return null;
   if (Array.isArray(raw)) {
     // Backward-compatible: `[{ key, value }]` = OR of the listed tags.
+    if (raw.length === 0) return null;
     return {
       combinator: "OR",
       rules: raw.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags[${index}]`)),
@@ -275,6 +263,7 @@ function parseTagExpression(raw: unknown): TokenScopeTags | null {
   const obj = raw as Record<string, unknown>;
   if (!isCombinator(obj.combinator)) throw new Error('scopes.tags.combinator must be "AND" or "OR"');
   if (!Array.isArray(obj.rules)) throw new Error("scopes.tags.rules must be an array");
+  if (obj.rules.length === 0) throw new Error("scopes.tags.rules must contain at least one rule");
   return {
     combinator: obj.combinator,
     rules: obj.rules.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags.rules[${index}]`)),

@@ -4,6 +4,8 @@ import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, organizations, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
+import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
+import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "../lib/webhooks";
@@ -166,12 +168,22 @@ async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<R
 }
 
 async function auditLogsForUser(user: Readonly<typeof users.$inferSelect>): Promise<AuditLogItem[]> {
-  if (user.isSiteAdmin === true) return db.query.auditLogs.findMany({ limit: 100, orderBy: [desc(auditLogs.createdAt)] });
-  const memberships = await db.query.organizationMemberships.findMany({
-    where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
-    columns: { orgId: true },
-  });
-  const orgIds = memberships.map(({ orgId }): string => orgId);
+  let orgIds: string[];
+  if (user.isSiteAdmin === true) {
+    orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
+  } else {
+    const memberships = await db.query.organizationMemberships.findMany({
+      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+      columns: { orgId: true },
+    });
+    orgIds = memberships.map(({ orgId }): string => orgId);
+  }
+  // These aliases span every organization the user can reach; a fine-grained
+  // token must not widen them beyond the audit-logs:read grant per org.
+  const scopes = currentTokenScopes();
+  if (scopes !== null) {
+    orgIds = orgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId) && scopeGrants(scopes, "audit-logs:read"));
+  }
   if (orgIds.length === 0) return [];
   return db.query.auditLogs.findMany({ where: inArray(auditLogs.orgId, orgIds), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
 }

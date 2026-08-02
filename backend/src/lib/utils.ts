@@ -143,10 +143,10 @@ function teamOrganizationAllows(
   if (required === "read-vcs-settings") return access["manage-vcs-settings"] === true;
   if (required === "read-agent-pools") return access["manage-agent-pools"] === true;
   if (required === "read-varsets") {
-    return access["manage-workspaces"] === true
-      || access["read-workspaces"] === true
-      || access["manage-projects"] === true
-      || access["manage-varsets"] === true;
+    // Reuse the read-workspaces cascade (manage-workspaces, read-projects,
+    // manage-projects, manage-agent-pools, manage-policy-overrides) instead
+    // of duplicating a partial copy of it.
+    return teamOrganizationAllows(access, "read-workspaces") || access["manage-varsets"] === true;
   }
   // manage-projects cascades to workspace management, which covers varsets.
   if (required === "manage-varsets") {
@@ -385,8 +385,11 @@ async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string): Promi
         tags.add(`${row.key}=${row.value ?? ""}`);
         tagsByWorkspace.set(row.workspaceId, tags);
       }
-      for (const [workspaceId, tags] of tagsByWorkspace) {
-        if (evaluateTagExpression(scope.tags as TokenScopeTags, tags)) matching.add(workspaceId);
+      // Evaluate every org workspace, including tagless ones (empty tag set).
+      for (const workspaceId of orgWorkspaceIds) {
+        if (evaluateTagExpression(scope.tags as TokenScopeTags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
+          matching.add(workspaceId);
+        }
       }
     }
   }
