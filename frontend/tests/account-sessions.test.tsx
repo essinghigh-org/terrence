@@ -55,6 +55,8 @@ test("shows honest browser-session metadata and revokes a non-current session", 
               "created-at": "2026-07-29T10:00:00.000Z",
               "last-rotated-at": "2026-07-29T11:00:00.000Z",
               "expires-at": "2026-08-28T10:00:00.000Z",
+              "ip-address": "203.0.113.10",
+              "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             },
           },
           {
@@ -65,6 +67,20 @@ test("shows honest browser-session metadata and revokes a non-current session", 
               "created-at": "2026-07-28T10:00:00.000Z",
               "last-rotated-at": null,
               "expires-at": "2026-08-27T10:00:00.000Z",
+              "ip-address": "198.51.100.7",
+              "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+            },
+          },
+          {
+            id: "session-null-meta",
+            type: "browser-sessions",
+            attributes: {
+              current: false,
+              "created-at": "2026-07-27T10:00:00.000Z",
+              "last-rotated-at": null,
+              "expires-at": "2026-08-26T10:00:00.000Z",
+              "ip-address": null,
+              "user-agent": null,
             },
           },
         ],
@@ -83,20 +99,27 @@ test("shows honest browser-session metadata and revokes a non-current session", 
     </MemoryRouter>,
   );
 
-  const currentRow = (await view.findByText("session-current")).closest("tr");
-  const otherRow = (await view.findByText("session-other")).closest("tr");
+  const currentRow = (await view.findByText("203.0.113.10")).closest("tr");
+  const otherRow = (await view.findByText("198.51.100.7")).closest("tr");
   if (currentRow === null || otherRow === null) throw new Error("Expected session rows");
 
-  expect(view.getByText(/Device and location details are not recorded/)).toBeTruthy();
+  expect(view.getByText(/IP address and browser recorded when you signed in/)).toBeTruthy();
+  expect(within(currentRow).getByText("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")).toBeTruthy();
   expect(within(currentRow).getByText("Current")).toBeTruthy();
   expect(within(currentRow).queryByRole("button", { name: /Revoke session/ })).toBeNull();
+  expect(within(otherRow).getByText("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15")).toBeTruthy();
   expect(within(otherRow).getByText("Not rotated yet")).toBeTruthy();
+
+  const nullMetaRow = (await view.findByText("Unknown IP")).closest("tr");
+  if (nullMetaRow === null) throw new Error("Expected null-metadata session row");
+  expect(within(nullMetaRow).getByText("Unknown device")).toBeTruthy();
+  expect(within(nullMetaRow).getByText("Not rotated yet")).toBeTruthy();
 
   fireEvent.click(within(otherRow).getByRole("button", { name: "Revoke session session-other" }));
   await waitFor((): void => {
-    expect(view.queryByText("session-other")).toBeNull();
+    expect(view.queryByText("198.51.100.7")).toBeNull();
   });
-  expect(view.getByText("session-current")).toBeTruthy();
+  expect(view.getByText("203.0.113.10")).toBeTruthy();
   expect(view.getByText("Session revoked")).toBeTruthy();
   expect(fetchMock.mock.calls.some(([input, init]): boolean =>
     requestUrl(input) === "/api/v2/account/sessions/session-other"

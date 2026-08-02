@@ -52,9 +52,14 @@ type RequestInfo = Readonly<{
   headers: Readonly<{ get: (name: string) => string | null }>;
 }>;
 
+type IpServer = Readonly<{
+  readonly requestIP?: (request: RequestInfo | undefined) => Readonly<{ readonly address?: string }> | null;
+}>;
+
 type ReqCtx = Readonly<{
   body?: unknown;
   request?: RequestInfo;
+  server?: unknown;
   set: SetObj;
 }>;
 
@@ -91,6 +96,21 @@ function refreshCookie(request: RequestInfo | undefined): string | undefined {
 function secureRequest(request: RequestInfo | undefined): boolean {
   const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   return forwarded === "https" || (request !== undefined && new URL(request.url).protocol === "https:");
+}
+
+function clientIp(request: RequestInfo | undefined, server: unknown): string | null {
+  const ipServer = server as IpServer | null;
+  const directAddress = typeof ipServer?.requestIP === "function"
+    ? ipServer.requestIP(request)?.address
+    : undefined;
+  if (directAddress !== undefined && directAddress !== "") return directAddress;
+  // app.handle() has no socket address; accept forwarded headers only in that
+  // test-only path so a simulated client address can be supplied. In real
+  // deployments the peer address is authoritative and spoofed headers are ignored.
+  if (server !== null) return null;
+  const forwarded = request?.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (forwarded !== undefined && forwarded !== "") return forwarded;
+  return request?.headers.get("x-real-ip") ?? null;
 }
 
 function setRefreshCookie(
@@ -173,6 +193,7 @@ async function issueLoginSession(
   browserSession: boolean,
   set: SetObj,
   request: RequestInfo | undefined,
+  server: unknown,
 ): Promise<unknown> {
   const tokenStr = opaqueToken("user");
   const tokenId = crypto.randomUUID();
@@ -191,6 +212,8 @@ async function issueLoginSession(
   const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
   const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
   const refreshToken = opaqueToken("refresh");
+  const ipAddress = clientIp(request, server);
+  const userAgent = request?.headers.get("user-agent") ?? null;
   await db.transaction(async (tx: unknown): Promise<void> => {
     const t = tx as typeof db;
     await t.insert(apiTokens).values({
@@ -207,6 +230,8 @@ async function issueLoginSession(
       tokenHash: tokenHash(refreshToken),
       userId: user.id,
       accessTokenId: tokenId,
+      ipAddress,
+      userAgent,
       expiresAt: refreshExpiresAt,
       createdAt,
     });
@@ -224,7 +249,9 @@ function browserSessionResources(
     createdAt: number;
     current: boolean;
     expiresAt: number;
+    ipAddress: string | null;
     lastRotatedAt: number | null;
+    userAgent: string | null;
   }>();
   for (const session of sessions) {
     const existing = families.get(session.familyId);
@@ -233,9 +260,11 @@ function browserSessionResources(
       createdAt: Math.min(existing?.createdAt ?? session.createdAt, session.createdAt),
       current: (existing?.current ?? false) || session.accessTokenId === currentAccessTokenId,
       expiresAt: Math.max(existing?.expiresAt ?? session.expiresAt, session.expiresAt),
+      ipAddress: existing?.ipAddress ?? session.ipAddress ?? null,
       lastRotatedAt: session.rotatedAt === null
         ? existing?.lastRotatedAt ?? null
         : Math.max(existing?.lastRotatedAt ?? session.rotatedAt, session.rotatedAt),
+      userAgent: existing?.userAgent ?? session.userAgent ?? null,
     });
   }
 
@@ -254,6 +283,8 @@ function browserSessionResources(
           ? null
           : new Date(family.lastRotatedAt).toISOString(),
         "expires-at": new Date(family.expiresAt).toISOString(),
+        "ip-address": family.ipAddress,
+        "user-agent": family.userAgent,
         current: family.current,
       },
     }));
@@ -347,7 +378,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     await auditLog("create", "users", userId, userId, createdOrganizationId, { username, source: "IACT_TOKEN" });
     return { status: "created", token };
   })
-  .post("/api/v2/users/login", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
+  .post("/api/v2/users/login", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
     let payload: DataPayload | undefined;
     if (typeof body === "string") {
       try {
@@ -401,9 +432,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       };
     }
 
-    return issueLoginSession(user, browserSession, set, request);
+    return issueLoginSession(user, browserSession, set, request, server);
   })
-  .post("/api/v2/users/login/mfa", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
+  .post("/api/v2/users/login/mfa", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
     let payload: DataPayload | undefined;
     if (typeof body === "string") {
       try {
@@ -412,7 +443,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         payload = undefined;
       }
     } else if (body !== null && typeof body === "object") {
-      payload = body as DataPayload;
+      payload = body;
     }
     const attrs = payload?.data?.attributes ?? {};
     const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
@@ -444,7 +475,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     mfaChallenges.delete(challengeToken);
-    return issueLoginSession(user, browserSession, set, request);
+    return issueLoginSession(user, browserSession, set, request, server);
   })
   .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
     const presentedToken = refreshCookie(request);

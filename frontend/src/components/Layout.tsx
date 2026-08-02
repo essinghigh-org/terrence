@@ -34,6 +34,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Palette,
+  FileCode,
+  PlayCircle,
   Search,
   Settings,
   ShieldCheck,
@@ -287,6 +289,8 @@ export function Layout({
   const hasWorkspace = hasOrg && workspaceName !== undefined && workspaceName !== "";
   const hasProject = hasOrg && projectId !== undefined && projectId !== "";
   const inAccountSettings = location.pathname === "/app/account";
+  const inSiteAdministration =
+    location.pathname === "/app/admin" || location.pathname.startsWith("/app/admin/");
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
@@ -316,7 +320,7 @@ export function Layout({
       ? currentOrgName
       : inAccountSettings
         ? "Account Settings"
-        : location.pathname === "/app/admin"
+        : inSiteAdministration
           ? "Site Administration"
           : "Organizations";
 
@@ -431,6 +435,91 @@ export function Layout({
   };
 
   const renderNavigation = (): JSX.Element => {
+    if (inSiteAdministration && siteAdmin) {
+      const links = [
+        {
+          active: location.pathname === "/app/admin",
+          icon: ShieldCheck,
+          label: "Security overview",
+          to: "/app/admin",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/users"),
+          icon: Users,
+          label: "Users",
+          to: "/app/admin/users",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/organizations"),
+          icon: Building2,
+          label: "Organizations",
+          to: "/app/admin/organizations",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/workspaces"),
+          icon: Box,
+          label: "Workspaces",
+          to: "/app/admin/workspaces",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/runs"),
+          icon: PlayCircle,
+          label: "System Runs",
+          to: "/app/admin/runs",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/versions"),
+          icon: FileCode,
+          label: "Tool Versions",
+          to: "/app/admin/versions",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/audit"),
+          icon: HistoryIcon,
+          label: "Audit Logs",
+          to: "/app/admin/audit",
+        },
+        {
+          active: isActivePath(location.pathname, "/app/admin/auth"),
+          icon: KeyRound,
+          label: "Authentication",
+          to: "/app/admin/auth",
+        },
+      ] as const;
+
+      return (
+        <>
+          <SidebarNavLink
+            active={false}
+            collapsed={sidebarCollapsed}
+            icon={ArrowLeft}
+            label="Organizations"
+            onNavigate={closeMobileNavigation}
+            to="/app"
+          />
+          <div
+            className={cn(
+              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
+              sidebarCollapsed && "lg:sr-only",
+            )}
+          >
+            Site administration
+          </div>
+          {links.map((link): JSX.Element => (
+            <SidebarNavLink
+              key={link.to}
+              active={link.active}
+              collapsed={sidebarCollapsed}
+              icon={link.icon}
+              label={link.label}
+              onNavigate={closeMobileNavigation}
+              to={link.to}
+            />
+          ))}
+        </>
+      );
+    }
+
     if (inAccountSettings) {
       const links = mustChangePassword === false ? [
         {

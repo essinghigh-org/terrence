@@ -1,22 +1,14 @@
 import { useState, useEffect } from "react";
-import { Navigate, useOutletContext } from "react-router-dom";
+import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
 import {
   Shield,
-  Users,
-  Building2,
-  Box,
-  PlayCircle,
-  FileCode,
-  History,
   CheckCircle2,
   AlertCircle,
   Plus,
   Trash2,
   RefreshCw,
-  KeyRound,
-  ShieldCheck,
 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -31,7 +23,18 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { toast } from "../components/ui/toast";
 
-export function AdminDashboard(): React.JSX.Element {
+export type AdminSection =
+  | "security"
+  | "users"
+  | "orgs"
+  | "workspaces"
+  | "runs"
+  | "versions"
+  | "audit"
+  | "auth";
+
+export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>): React.JSX.Element {
+  const navigate = useNavigate();
   const { accountLoaded, siteAdmin } = useOutletContext<LayoutOutletContext>();
   type ItemAttrs = {
     username?: string;
@@ -76,7 +79,7 @@ export function AdminDashboard(): React.JSX.Element {
     sandboxAvailable: boolean;
     sandboxReason: string | null;
   }>;
-  const [activeTab, setActiveTab] = useState<"security" | "users" | "orgs" | "workspaces" | "runs" | "versions" | "audit" | "auth">("users");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [users, setUsers] = useState<DataItem[]>([]);
   const [orgs, setOrgs] = useState<DataItem[]>([]);
   const [workspaces, setWorkspaces] = useState<DataItem[]>([]);
@@ -91,7 +94,6 @@ export function AdminDashboard(): React.JSX.Element {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
 
   // Auth config state
@@ -192,7 +194,9 @@ export function AdminDashboard(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      if (activeTab === "security") {
+      if (section === "auth") {
+        await Promise.all([loadSamlSettings(), loadOidcSettings()]);
+      } else if (section === "security") {
         const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse] = await Promise.all([
           fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
           fetchApi("/api/v2/admin/audit-logs"),
@@ -215,22 +219,22 @@ export function AdminDashboard(): React.JSX.Element {
         });
         setSamlEnabled((samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
         setOidcEnabled((oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
-      } else if (activeTab === "users") {
+      } else if (section === "users") {
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
         setUsers(res.data);
-      } else if (activeTab === "orgs") {
+      } else if (section === "orgs") {
         const res = await fetchApi("/api/v2/admin/organizations") as { data: DataItem[] };
         setOrgs(res.data);
-      } else if (activeTab === "workspaces") {
+      } else if (section === "workspaces") {
         const res = await fetchApi("/api/v2/admin/workspaces") as { data: DataItem[] };
         setWorkspaces(res.data);
-      } else if (activeTab === "runs") {
+      } else if (section === "runs") {
         const res = await fetchApi("/api/v2/admin/runs") as { data: DataItem[] };
         setRuns(res.data);
-      } else if (activeTab === "versions") {
+      } else if (section === "versions") {
         const res = await fetchApi("/api/v2/admin/terraform-versions") as { data: DataItem[] };
         setTfVersions(res.data);
-      } else if (activeTab === "audit") {
+      } else {
         const res = await fetchApi("/api/v2/admin/audit-logs") as { data: DataItem[] };
         setAuditLogs(res.data);
       }
@@ -244,14 +248,16 @@ export function AdminDashboard(): React.JSX.Element {
 
   useEffect((): void => {
     if (siteAdmin) {
-      if (activeTab === "auth") {
+      if (section === "auth") {
+        setError(null);
         void loadSamlSettings();
         void loadOidcSettings();
+        setLoading(false);
       } else {
         void loadAdminData();
       }
     }
-  }, [activeTab, siteAdmin]);
+  }, [section, siteAdmin]);
 
   const handleAddVersion = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
@@ -442,38 +448,6 @@ export function AdminDashboard(): React.JSX.Element {
         </Button>
       </div>
 
-      {/* Tabs Nav */}
-      <div className="flex overflow-x-auto border-b border-gray-200 gap-6">
-        {[
-          { id: "security" as const, label: "Security overview", icon: ShieldCheck },
-          { id: "users" as const, label: "Users", icon: Users },
-          { id: "orgs" as const, label: "Organizations", icon: Building2 },
-          { id: "workspaces" as const, label: "Workspaces", icon: Box },
-          { id: "runs" as const, label: "System Runs", icon: PlayCircle },
-          { id: "versions" as const, label: "Tool Versions", icon: FileCode },
-          { id: "audit" as const, label: "Audit Logs", icon: History },
-          { id: "auth" as const, label: "Authentication", icon: KeyRound },
-        ].map((tab): React.JSX.Element => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={(): void => { setActiveTab(tab.id); }}
-              aria-current={isActive ? "page" : undefined}
-              className={`flex min-w-max shrink-0 items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
-                isActive
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              <tab.icon className="h-4 w-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
       {error != null && error !== "" && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
           <AlertCircle className="h-4 w-4 shrink-0" />
@@ -486,7 +460,7 @@ export function AdminDashboard(): React.JSX.Element {
       ) : (
         <>
           {/* SECURITY OVERVIEW TAB */}
-          {activeTab === "security" && (
+          {section === "security" && (
             <div className="space-y-6">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Security overview</h2>
@@ -508,7 +482,7 @@ export function AdminDashboard(): React.JSX.Element {
                       <span>OpenID Connect</span>
                       <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
                     </div>
-                    <Button variant="outline" size="sm" onClick={(): void => { setActiveTab("auth"); }}>
+                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
                       Open authentication settings
                     </Button>
                   </CardContent>
@@ -574,7 +548,7 @@ export function AdminDashboard(): React.JSX.Element {
                     {auditLogs[0]?.attributes.action !== undefined && (
                       <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
                     )}
-                    <Button variant="outline" size="sm" onClick={(): void => { setActiveTab("audit"); }}>
+                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/audit"); }}>
                       Open audit log
                     </Button>
                   </CardContent>
@@ -584,7 +558,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* USERS TAB */}
-          {activeTab === "users" && (
+          {section === "users" && (
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -730,7 +704,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* ORGANIZATIONS TAB */}
-          {activeTab === "orgs" && (
+          {section === "orgs" && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Organizations</CardTitle>
@@ -776,7 +750,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* WORKSPACES TAB */}
-          {activeTab === "workspaces" && (
+          {section === "workspaces" && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Global Workspaces</CardTitle>
@@ -826,7 +800,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* RUNS TAB */}
-          {activeTab === "runs" && (
+          {section === "runs" && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">System Runs Queue</CardTitle>
@@ -887,7 +861,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* TOOL VERSIONS TAB */}
-          {activeTab === "versions" && (
+          {section === "versions" && (
             <div className="space-y-6">
               <Card>
                 <CardHeader>
@@ -985,7 +959,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* AUDIT LOGS TAB */}
-          {activeTab === "audit" && (
+          {section === "audit" && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Instance Audit Trail</CardTitle>
@@ -1034,7 +1008,7 @@ export function AdminDashboard(): React.JSX.Element {
           )}
 
           {/* AUTHENTICATION TAB */}
-          {activeTab === "auth" && (
+          {section === "auth" && (
             <div className="space-y-8">
               {/* SAML SSO */}
               <Card>

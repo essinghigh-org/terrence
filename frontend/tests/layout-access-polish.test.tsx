@@ -83,7 +83,7 @@ test("redirects non-administrators before loading site data", async () => {
     <MemoryRouter initialEntries={["/admin"]}>
       <Routes>
         <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: false }} />}>
-          <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin" element={<AdminDashboard section="security" />} />
         </Route>
         <Route path="/app" element={<p>Organizations home</p>} />
       </Routes>

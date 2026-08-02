@@ -432,6 +432,8 @@ export const refreshSessions = sqliteTable("refresh_sessions", {
   tokenHash: text("token_hash").notNull().unique(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   accessTokenId: text("access_token_id").notNull(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
   rotatedAt: integer("rotated_at"),
   revokedAt: integer("revoked_at"),
   expiresAt: integer("expires_at").notNull(),

@@ -52,17 +52,15 @@ test("renders and invokes only the advertised admin run actions", async () => {
   globalThis.fetch = fetchMock as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/admin"]}>
+    <MemoryRouter initialEntries={["/admin/runs"]}>
       <Routes>
         <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: true }} />}>
-          <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin" element={<AdminDashboard section="security" />} />
+          <Route path="/admin/runs" element={<AdminDashboard section="runs" />} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
-
-  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "System Runs" }));
 
   const cancelRow = await waitFor((): HTMLElement => view.getByText("Cancel only").closest("tr") as HTMLElement);
   const forceRow = view.getByText("Force only").closest("tr") as HTMLElement;

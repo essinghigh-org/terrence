@@ -100,7 +100,14 @@ function App(): JSX.Element {
           <Route path="/" element={<Navigate to="/app" replace />} />
           <Route path="/app" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
-            <Route path="admin" element={<AdminDashboard />} />
+            <Route path="admin" element={<AdminDashboard section="security" />} />
+            <Route path="admin/users" element={<AdminDashboard section="users" />} />
+            <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
+            <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
+            <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
+            <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
+            <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
+            <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
             <Route path="account" element={<AccountSettings />} />
             <Route path=":orgName" element={<Workspaces />} />
             <Route path=":orgName/workspaces" element={<Workspaces />} />

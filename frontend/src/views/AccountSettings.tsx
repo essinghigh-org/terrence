@@ -21,6 +21,8 @@ type BrowserSession = Readonly<{
     readonly "created-at": string;
     readonly "last-rotated-at": string | null;
     readonly "expires-at": string;
+    readonly "ip-address": string | null;
+    readonly "user-agent": string | null;
     readonly current: boolean;
   }>;
 }>;
@@ -470,7 +472,7 @@ export function AccountSettings(): React.JSX.Element {
             Sessions
           </CardTitle>
           <CardDescription>
-            Active browser sessions. Device and location details are not recorded.
+            Active browser sessions. Showing the IP address and browser recorded when you signed in.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -503,7 +505,12 @@ export function AccountSettings(): React.JSX.Element {
                 {sessions.map((session): React.JSX.Element => (
                   <TableRow key={session.id}>
                     <TableCell>
-                      <code className="text-xs">{session.id}</code>
+                      <p className="text-sm font-medium" title={`Session id ${session.id}`}>
+                        {session.attributes["ip-address"] ?? "Unknown IP"}
+                      </p>
+                      <p className="mt-0.5 break-all text-xs text-muted-foreground" title={session.attributes["user-agent"] ?? undefined}>
+                        {session.attributes["user-agent"] ?? "Unknown device"}
+                      </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         Created {formatSessionDate(session.attributes["created-at"])}
                       </p>

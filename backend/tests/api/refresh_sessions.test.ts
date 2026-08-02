@@ -30,6 +30,7 @@ describe("browser refresh sessions", () => {
   const loginAs = (
     loginUsername: string,
     browserSession: boolean,
+    headers: Record<string, string> = {},
   ): Promise<Response> => request("/api/v2/users/login", {
     data: {
       type: "users",
@@ -39,7 +40,7 @@ describe("browser refresh sessions", () => {
         ...(browserSession ? { "browser-session": true } : {}),
       },
     },
-  });
+  }, headers);
   const login = (browserSession: boolean): Promise<Response> => loginAs(username, browserSession);
 
   const cookie = (response: Readonly<Response>): string => {
@@ -199,7 +200,10 @@ describe("browser refresh sessions", () => {
       data: { id: string; attributes: { token: string } };
     };
 
-    const firstLogin = await login(true);
+    const firstLogin = await loginAs(username, true, {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "X-Forwarded-For": "203.0.113.42, 10.0.0.1",
+    });
     const firstCookie = cookie(firstLogin);
     const firstDocument = await firstLogin.json() as TokenDocument;
     const secondLogin = await login(true);
@@ -248,6 +252,8 @@ describe("browser refresh sessions", () => {
         "created-at": expect.any(String),
         "last-rotated-at": expect.any(String),
         "expires-at": expect.any(String),
+        "ip-address": "203.0.113.42",
+        "user-agent": expect.stringContaining("Chrome/126.0.0.0"),
       },
     });
     expect(listDocument.data.find((session): boolean => session.id === secondSession.familyId)).toMatchObject({
@@ -255,6 +261,8 @@ describe("browser refresh sessions", () => {
       attributes: {
         current: false,
         "last-rotated-at": null,
+        "ip-address": null,
+        "user-agent": null,
       },
     });
     for (const session of listDocument.data) {
@@ -262,7 +270,9 @@ describe("browser refresh sessions", () => {
         "created-at",
         "current",
         "expires-at",
+        "ip-address",
         "last-rotated-at",
+        "user-agent",
       ]);
     }
     const serialized = JSON.stringify(listDocument);

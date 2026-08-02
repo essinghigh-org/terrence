@@ -1,7 +1,8 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 
+import { Layout } from "../src/components/Layout";
 import { AdminDashboard } from "../src/views/AdminDashboard";
 
 const originalFetch = globalThis.fetch;
@@ -20,6 +21,11 @@ afterEach((): void => {
 test("shows SAML and OIDC auth configuration in the admin dashboard", async (): Promise<void> => {
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
+    }
+    if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
+    if (url.startsWith("/api/v2/admin/users")) return json({ data: [] });
     if (url === "/api/v2/admin/saml-settings" && init?.method === undefined) {
       return json({
         data: {
@@ -100,21 +106,39 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   globalThis.fetch = fetchMock as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/admin"]}>
+    <MemoryRouter initialEntries={["/app/admin/auth"]}>
       <Routes>
-        <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: true }} />}>
-          <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/app" element={<Layout />}>
+          <Route path="admin" element={<AdminDashboard section="security" />} />
+          <Route path="admin/users" element={<AdminDashboard section="users" />} />
+          <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 
-  // Wait for admin dashboard to load
-  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
-
-  // Switch to Authentication tab
-  fireEvent.click(view.getByRole("button", { name: "Authentication" }));
+  // The admin sections live in the sidebar, not in a dashboard navbar
   await waitFor((): void => { expect(view.getByText("SAML SSO")).toBeTruthy(); });
+  expect(view.getByRole("link", { name: "Security overview" }).getAttribute("href"))
+    .toBe("/app/admin");
+  expect(view.getByRole("link", { name: "Users" }).getAttribute("href"))
+    .toBe("/app/admin/users");
+  expect(
+    view.getAllByRole("link", { name: "Organizations" })
+      .some((link): boolean => link.getAttribute("href") === "/app/admin/organizations"),
+  ).toBeTrue();
+  expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current"))
+    .toBe("page");
+
+  // Navigate between sections via the sidebar
+  fireEvent.click(view.getByRole("link", { name: "Users" }));
+  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("link", { name: "Authentication" }));
+  await waitFor((): void => {
+    expect(view.getByRole("link", { name: "Authentication" }).getAttribute("aria-current"))
+      .toBe("page");
+    expect(view.getByLabelText("Enable SAML SSO")).toBeTruthy();
+  });
   expect(view.getByText("OpenID Connect")).toBeTruthy();
 
   // --- SAML section ---
@@ -161,25 +185,41 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
 });
 
-test("hides the authentication tab from non-admin users", async (): Promise<void> => {
-  globalThis.fetch = mock(async (): Promise<Response> => json({ data: [] })) as typeof fetch;
+test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "bob", "is-site-admin": false } } });
+    }
+    if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/admin"]}>
+    <MemoryRouter initialEntries={["/app/admin"]}>
       <Routes>
-        <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: false }} />}>
-          <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/app" element={<Layout />}>
+          <Route index element={<p>Redirect target</p>} />
+          <Route path="admin" element={<AdminDashboard section="security" />} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 
-  expect(view.queryByRole("button", { name: "Authentication" })).toBeNull();
+  // Non-admins are redirected to the app home once their account is loaded
+  await waitFor((): void => { expect(view.getByText("Redirect target")).toBeTruthy(); });
+  expect(view.queryByRole("link", { name: "Authentication" })).toBeNull();
+  expect(view.queryByRole("link", { name: "Security overview" })).toBeNull();
+  expect(view.getByRole("link", { name: "Organizations" }).getAttribute("href")).toBe("/app");
 });
 
 test("shows the security overview from existing admin controls", async (): Promise<void> => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
+    }
+    if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     if (url.startsWith("/api/v2/admin/users")) {
       return json({
         data: [
@@ -202,18 +242,18 @@ test("shows the security overview from existing admin controls", async (): Promi
   globalThis.fetch = fetchMock as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/admin"]}>
+    <MemoryRouter initialEntries={["/app/admin"]}>
       <Routes>
-        <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: true }} />}>
-          <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/app" element={<Layout />}>
+          <Route path="admin" element={<AdminDashboard section="security" />} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Registered Users")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "Security overview" }));
   await waitFor((): void => { expect(view.getByText("Identity providers")).toBeTruthy(); });
+  expect(view.getByRole("link", { name: "Security overview" }).getAttribute("aria-current"))
+    .toBe("page");
 
   const identityCard = view.getByText("Identity providers").closest('[data-slot="card"]') ?? document.body;
   expect(within(identityCard).getByText("Enabled")).toBeTruthy();
