@@ -1004,5 +1004,32 @@ describe("fine-grained org-level read grants", () => {
       await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
     }
   });
+
+  it("requires workspaces:write to create a workspace (manage-workspaces)", async () => {
+    const readOnly = await createScopedToken({ "workspaces:read": true });
+    const writeOnly = await createScopedToken({ "workspaces:write": true });
+    const post = (token: string): Promise<Response> => request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({
+        data: {
+          type: "workspaces",
+          attributes: { name: `fg-ws-create-${s.suffix}` },
+        },
+      }),
+    });
+    try {
+      const denied = await post(readOnly.secret);
+      expect(denied.status).toBe(403);
+
+      const allowed = await post(writeOnly.secret);
+      expect(allowed.status).toBe(201);
+      const body = await allowed.json() as { data: { id: string } };
+      await db.delete(workspaces).where(eq(workspaces.id, body.data.id));
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, readOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, writeOnly.id));
+    }
+  });
 });
 

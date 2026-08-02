@@ -184,6 +184,8 @@ function organizationPermissionGrant(required: OrganizationPermission): Workspac
       return "projects:read";
     case "read-workspaces":
       return "workspaces:read";
+    case "manage-workspaces":
+      return "workspaces:write";
     case "manage-membership":
       return "members:write";
     case "manage-teams":
