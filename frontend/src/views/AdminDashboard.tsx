@@ -121,6 +121,31 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [oidcSaving, setOidcSaving] = useState(false);
   const [oidcError, setOidcError] = useState<string | null>(null);
 
+  // Local authentication state
+  const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
+  const [generalSaving, setGeneralSaving] = useState(false);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // LDAP state
+  const [ldapEnabled, setLdapEnabled] = useState(false);
+  const [ldapHost, setLdapHost] = useState("");
+  const [ldapPort, setLdapPort] = useState(389);
+  const [ldapEncryption, setLdapEncryption] = useState("plain");
+  const [ldapBindDn, setLdapBindDn] = useState("");
+  const [ldapBindPassword, setLdapBindPassword] = useState("");
+  const [ldapBaseDn, setLdapBaseDn] = useState("");
+  const [ldapUserFilter, setLdapUserFilter] = useState("(uid={{username}})");
+  const [ldapAttrUsername, setLdapAttrUsername] = useState("uid");
+  const [ldapAttrEmail, setLdapAttrEmail] = useState("mail");
+  const [ldapAttrDisplayName, setLdapAttrDisplayName] = useState("cn");
+  const [ldapLoading, setLdapLoading] = useState(false);
+  const [ldapSaving, setLdapSaving] = useState(false);
+  const [ldapError, setLdapError] = useState<string | null>(null);
+
+  // SAML display URLs
+  const [samlAcsUrl, setSamlAcsUrl] = useState("");
+  const [samlMetadataUrl, setSamlMetadataUrl] = useState("");
+
   // Create user form state
   const [newUsername, setNewUsername] = useState("");
   const [newEmail, setNewEmail] = useState("");
@@ -195,7 +220,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setError(null);
     try {
       if (section === "auth") {
-        await Promise.all([loadSamlSettings(), loadOidcSettings()]);
+        await Promise.all([
+          loadGeneralSettings(),
+          loadLdapSettings(),
+          loadSamlSettings(),
+          loadOidcSettings(),
+        ]);
       } else if (section === "security") {
         const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse] = await Promise.all([
           fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
@@ -250,6 +280,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     if (siteAdmin) {
       if (section === "auth") {
         setError(null);
+        void loadGeneralSettings();
+        void loadLdapSettings();
         void loadSamlSettings();
         void loadOidcSettings();
         setLoading(false);
@@ -333,10 +365,109 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlAttrSiteAdmin(typeof attrs["attr-site-admin"] === "string" ? attrs["attr-site-admin"] : "SiteAdmin");
       setSamlSiteAdminRole(typeof attrs["site-admin-role"] === "string" ? attrs["site-admin-role"] : "site-admins");
       setSamlTimeout(typeof attrs["sso-api-token-session-timeout"] === "number" ? attrs["sso-api-token-session-timeout"] : 1209600);
+      setSamlAcsUrl(typeof attrs["acs-consumer-url"] === "string" ? attrs["acs-consumer-url"] : "");
+      setSamlMetadataUrl(typeof attrs["metadata-url"] === "string" ? attrs["metadata-url"] : "");
     } catch (err: unknown) {
       setSamlError(err instanceof Error ? err.message : "Failed to load SAML settings");
     } finally {
       setSamlLoading(false);
+    }
+  };
+
+  const loadGeneralSettings = async (): Promise<void> => {
+    setGeneralError(null);
+    try {
+      const res = await fetchApi("/api/v2/admin/general-settings") as {
+        data: { attributes: Record<string, unknown> };
+      };
+      setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
+    } catch (err: unknown) {
+      setGeneralError(err instanceof Error ? err.message : "Failed to load general settings");
+    }
+  };
+
+  const loadLdapSettings = async (): Promise<void> => {
+    setLdapLoading(true);
+    setLdapError(null);
+    try {
+      const res = await fetchApi("/api/v2/admin/ldap-settings") as {
+        data: { attributes: Record<string, unknown> };
+      };
+      const attrs = res.data.attributes;
+      setLdapEnabled(attrs["enabled"] === true);
+      setLdapHost(typeof attrs["host"] === "string" ? attrs["host"] : "");
+      setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 389);
+      setLdapEncryption(typeof attrs["encryption"] === "string" ? attrs["encryption"] : "plain");
+      setLdapBindDn(typeof attrs["bind-dn"] === "string" ? attrs["bind-dn"] : "");
+      setLdapBindPassword(typeof attrs["bind-password"] === "string" ? attrs["bind-password"] : "");
+      setLdapBaseDn(typeof attrs["base-dn"] === "string" ? attrs["base-dn"] : "");
+      setLdapUserFilter(typeof attrs["user-filter"] === "string" ? attrs["user-filter"] : "(uid={{username}})");
+      setLdapAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "uid");
+      setLdapAttrEmail(typeof attrs["attr-email"] === "string" ? attrs["attr-email"] : "mail");
+      setLdapAttrDisplayName(typeof attrs["attr-display-name"] === "string" ? attrs["attr-display-name"] : "cn");
+    } catch (err: unknown) {
+      setLdapError(err instanceof Error ? err.message : "Failed to load LDAP settings");
+    } finally {
+      setLdapLoading(false);
+    }
+  };
+
+  const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setGeneralSaving(true);
+    setGeneralError(null);
+    try {
+      await fetchApi("/api/v2/admin/general-settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: {
+            type: "general-settings",
+            attributes: { "local-auth-enabled": localAuthEnabled },
+          },
+        }),
+      });
+      void loadGeneralSettings();
+      toast.add({ title: "Sign-in settings saved", type: "success" });
+    } catch (err: unknown) {
+      setGeneralError(err instanceof Error ? err.message : "Failed to save sign-in settings");
+    } finally {
+      setGeneralSaving(false);
+    }
+  };
+
+  const handleSaveLdap = async (event: React.SyntheticEvent): Promise<void> => {
+    event.preventDefault();
+    setLdapSaving(true);
+    setLdapError(null);
+    try {
+      const body: Record<string, unknown> = {
+        data: {
+          type: "ldap-settings",
+          attributes: {
+            enabled: ldapEnabled,
+            host: ldapHost.trim() !== "" ? ldapHost.trim() : null,
+            port: ldapPort,
+            encryption: ldapEncryption,
+            "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
+            "bind-password": ldapBindPassword.trim() !== "" ? ldapBindPassword.trim() : null,
+            "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
+            "user-filter": ldapUserFilter,
+            "attr-username": ldapAttrUsername,
+            "attr-email": ldapAttrEmail,
+            "attr-display-name": ldapAttrDisplayName,
+          },
+        },
+      };
+      await fetchApi("/api/v2/admin/ldap-settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      void loadLdapSettings();
+      toast.add({ title: "LDAP settings saved", type: "success" });
+    } catch (err: unknown) {
+      setLdapError(err instanceof Error ? err.message : "Failed to save LDAP settings");
+    } finally {
+      setLdapSaving(false);
     }
   };
 
@@ -1010,6 +1141,41 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           {/* AUTHENTICATION TAB */}
           {section === "auth" && (
             <div className="space-y-8">
+              {/* LOCAL AUTHENTICATION */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Local Authentication</CardTitle>
+                  <CardDescription>Username and password sign-in for this instance</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSaveGeneral} className="space-y-5">
+                    {generalError !== null && (
+                      <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                        <AlertCircle className="h-4 w-4 shrink-0" />
+                        <span>{generalError}</span>
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={localAuthEnabled}
+                        onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
+                        className="rounded border-gray-300"
+                        aria-label="Allow local password authentication"
+                      />
+                      Allow local password authentication
+                    </label>
+                    <p className="text-xs text-gray-500">
+                      When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
+                      configured). Existing local accounts cannot sign in with a password until this is re-enabled.
+                    </p>
+                    <Button type="submit" disabled={generalSaving} aria-label="Save sign-in settings">
+                      {generalSaving ? "Saving..." : "Save sign-in settings"}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
               {/* SAML SSO */}
               <Card>
                 <CardHeader>
@@ -1119,6 +1285,22 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                           onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
                         />
                       </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-2">Service provider endpoints</p>
+                        <p className="text-xs text-gray-500">
+                          Use these URLs to register this instance with your identity provider.
+                        </p>
+                        <dl className="mt-2 space-y-1 text-xs">
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="font-medium text-gray-700">ACS consumer URL</dt>
+                            <dd className="break-all text-gray-600 font-mono">{samlAcsUrl !== "" ? samlAcsUrl : "—"}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="font-medium text-gray-700">Metadata URL</dt>
+                            <dd className="break-all text-gray-600 font-mono">{samlMetadataUrl !== "" ? samlMetadataUrl : "—"}</dd>
+                          </div>
+                        </dl>
+                      </div>
                       <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
                         {samlSaving ? "Saving..." : "Save SAML settings"}
                       </Button>
@@ -1197,6 +1379,137 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                       </div>
                       <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
                         {oidcSaving ? "Saving..." : "Save OIDC settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* LDAP */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">LDAP</CardTitle>
+                  <CardDescription>Lightweight Directory Access Protocol password authentication</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {ldapLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading LDAP settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveLdap} className="space-y-5">
+                      {ldapError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{ldapError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ldapEnabled}
+                          onChange={(e): void => { setLdapEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Enable LDAP"
+                        />
+                        Enable LDAP authentication
+                      </label>
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Host</label>
+                          <Input
+                            placeholder="ldap.example.com"
+                            value={ldapHost}
+                            onChange={(e): void => { setLdapHost(e.target.value); }}
+                            aria-label="LDAP host"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Port</label>
+                          <Input
+                            type="number"
+                            value={ldapPort}
+                            onChange={(e): void => { setLdapPort(Number(e.target.value)); }}
+                            aria-label="LDAP port"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Encryption</label>
+                          <select
+                            value={ldapEncryption}
+                            onChange={(e): void => { setLdapEncryption(e.target.value); }}
+                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            aria-label="LDAP encryption"
+                          >
+                            <option value="plain">Plain (LDAP)</option>
+                            <option value="starttls">StartTLS</option>
+                            <option value="ldaps">LDAPS</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Base DN</label>
+                          <Input
+                            placeholder="dc=example,dc=com"
+                            value={ldapBaseDn}
+                            onChange={(e): void => { setLdapBaseDn(e.target.value); }}
+                            aria-label="LDAP base DN"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
+                          <Input
+                            placeholder="cn=service,dc=example,dc=com"
+                            value={ldapBindDn}
+                            onChange={(e): void => { setLdapBindDn(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Bind password</label>
+                          <Input
+                            type="password"
+                            value={ldapBindPassword}
+                            onChange={(e): void => { setLdapBindPassword(e.target.value); }}
+                          />
+                        </div>
+                      </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-3">User mapping</p>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
+                            <Input
+                              value={ldapUserFilter}
+                              onChange={(e): void => { setLdapUserFilter(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <Input
+                              value={ldapAttrUsername}
+                              onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <Input
+                              value={ldapAttrEmail}
+                              onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Display name attribute</label>
+                            <Input
+                              value={ldapAttrDisplayName}
+                              onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs text-gray-500">
+                          The sign-in form first attempts LDAP, then falls back to local passwords (when enabled).
+                          A user who already exists locally with the same username will block LDAP provisioning to
+                          avoid account takeover.
+                        </p>
+                      </div>
+                      <Button type="submit" disabled={ldapSaving} aria-label="Save LDAP settings">
+                        {ldapSaving ? "Saving..." : "Save LDAP settings"}
                       </Button>
                     </form>
                   )}

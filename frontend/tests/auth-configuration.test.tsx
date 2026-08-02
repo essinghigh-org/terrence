@@ -101,6 +101,42 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
         },
       });
     }
+    if (url === "/api/v2/admin/general-settings" && init?.method === undefined) {
+      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": true } } });
+    }
+    if (url === "/api/v2/admin/general-settings" && init?.method === "PATCH") {
+      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": true } } });
+    }
+    if (url === "/api/v2/admin/ldap-settings" && init?.method === undefined) {
+      return json({
+        data: {
+          id: "ldap-settings",
+          type: "ldap-settings",
+          attributes: {
+            enabled: false,
+            host: null,
+            port: 389,
+            encryption: "plain",
+            "bind-dn": null,
+            "bind-password": null,
+            "base-dn": null,
+            "user-filter": "(uid={{username}})",
+            "attr-username": "uid",
+            "attr-email": "mail",
+            "attr-display-name": "cn",
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
+      return json({
+        data: {
+          id: "ldap-settings",
+          type: "ldap-settings",
+          attributes: { enabled: true, host: "ldap.example.com", port: 389, "base-dn": "dc=example,dc=com" },
+        },
+      });
+    }
     throw new Error(`Unexpected request: ${url} method=${init?.method ?? "GET"}`);
   });
   globalThis.fetch = fetchMock as typeof fetch;
@@ -182,6 +218,36 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/oidc-settings" && init?.method === "PATCH")).toBeTrue();
+  });
+
+  // --- Local authentication section ---
+  const localAuthCard = view.getByText("Local Authentication").closest('[data-slot="card"]') ?? document.body;
+  const localAuthCheckbox = within(localAuthCard).getByLabelText("Allow local password authentication") as HTMLInputElement;
+  expect(localAuthCheckbox.checked).toBeTrue();
+  await act(async (): Promise<void> => { fireEvent.click(localAuthCheckbox); });
+  const saveLocalAuth = within(localAuthCard).getByRole("button", { name: "Save sign-in settings" });
+  await act(async (): Promise<void> => { fireEvent.click(saveLocalAuth); });
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      urlOf(input) === "/api/v2/admin/general-settings" && init?.method === "PATCH")).toBeTrue();
+  });
+
+  // --- LDAP section ---
+  const ldapSection = view.getByText("LDAP").closest('[data-slot="card"]') ?? document.body;
+  expect(within(ldapSection).getByText(/directory access protocol password authentication/i)).toBeTruthy();
+  const ldapEnabledCheckbox = within(ldapSection).getByLabelText("Enable LDAP") as HTMLInputElement;
+  expect(ldapEnabledCheckbox.checked).toBeFalse();
+
+  // Fill in a host and base DN, then save.
+  const ldapHost = within(ldapSection).getByLabelText("LDAP host") as HTMLInputElement;
+  await act(async (): Promise<void> => { fireEvent.input(ldapHost, { target: { value: "ldap.example.com" } }); });
+  expect(ldapHost.value).toBe("ldap.example.com");
+  await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
+  const saveLdap = within(ldapSection).getByRole("button", { name: "Save LDAP settings" });
+  await act(async (): Promise<void> => { fireEvent.click(saveLdap); });
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
   });
 });
 

@@ -50,6 +50,8 @@ import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
 import { organizationRoleRoutes } from "./routes/organization-roles";
+import { samlRoutes } from "./routes/saml";
+import { oidcRoutes } from "./routes/oidc";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
@@ -403,10 +405,12 @@ export const app = new Elysia()
   .use(explorerRoutes)
   .use(teamProjectRoutes)
   .use(organizationRoleRoutes)
+  .use(samlRoutes)
+  .use(oidcRoutes)
   .use(policyEvaluationRoutes);
 
 // Start the background worker queue
-import("./worker").then(({ startWorkerQueue }: typeof import("./worker")): void => {
+import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
   startWorkerQueue();
   log.info("Worker queue started");
 }).catch((error: unknown): void => {

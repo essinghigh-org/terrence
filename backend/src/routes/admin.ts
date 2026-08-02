@@ -59,21 +59,22 @@ const SAML_DEFAULTS = {
 } satisfies typeof samlSettings.$inferInsert;
 
 // Settings are persisted as JSON so values survive restarts without changing the API shape.
-type Settings = Record<string, unknown>;
+export type Settings = Record<string, unknown>;
 const settingDefaults: Record<string, Settings> = {
-  general: { "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false },
+  general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false },
   retention: { "delete-older-than-n-days": null },
   cost: { enabled: false, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
   smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain" },
   twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
   customization: { "support-email-address": null, "login-help": null, footer: null },
   oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null },
+  ldap: { enabled: false, host: null, port: 389, encryption: "plain", "bind-dn": null, "bind-password": null, "base-dn": null, "user-filter": "(uid={{username}})", "attr-username": "uid", "attr-email": "mail", "attr-display-name": "cn" },
   // Compatibility aliases for legacy handlers below; the general/site groups use durable storage.
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
 };
-// cost, smtp, twilio, customization, oidc settings are DB-persisted via admin_settings table.
+// cost, smtp, twilio, customization, oidc, ldap settings are DB-persisted via admin_settings table.
 
-async function getSettings(group: string): Promise<Settings> {
+export async function getSettings(group: string): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
   await db.insert(adminSettings).values({ id: group, values: defaults, updatedAt: Date.now() }).onConflictDoNothing();
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
@@ -941,5 +942,87 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    return settingResource("oidc-settings", await updateSettings("oidc", attrs));
+
+    const current = await getSettings("oidc");
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled;
+    const issuer = typeof attrs.issuer === "string" ? attrs.issuer.trim() : current.issuer;
+    const clientId = typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : current["client-id"];
+    if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] };
+    }
+    if (typeof issuer === "string" && issuer !== "") {
+      try {
+        const parsed = new URL(issuer);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
+      } catch {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] };
+      }
+    }
+    const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
+    if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\" or null" }] };
+    }
+
+    return settingResource("oidc-settings", await updateSettings("oidc", { ...attrs, "pkce-method": pkce === "" ? null : pkce }));
+  })
+  // --- B.9 LDAP Settings ---
+  .get("/api/v2/admin/ldap-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return settingResource("ldap-settings", await getSettings("ldap"));
+  })
+  .patch("/api/v2/admin/ldap-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+
+    const current = await getSettings("ldap");
+    for (const key of ["enabled"] as const) {
+      if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
+      }
+    }
+    for (const key of ["host", "bind-dn", "bind-password", "base-dn", "user-filter", "attr-username", "attr-email", "attr-display-name"] as const) {
+      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
+      }
+    }
+    const port = attrs.port === undefined ? current.port : attrs.port;
+    if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] };
+    }
+    const encryption = attrs.encryption === undefined ? current.encryption : attrs.encryption;
+    if (!["plain", "starttls", "ldaps"].includes(String(encryption))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
+    }
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled;
+    const host = attrs.host === null && attrs.host !== undefined ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
+    const baseDn = attrs["base-dn"] === null && attrs["base-dn"] !== undefined ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
+    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
+    }
+    const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
+      ? attrs["user-filter"]
+      : typeof current["user-filter"] === "string" && current["user-filter"] !== ""
+        ? current["user-filter"]
+        : "(uid={{username}})";
+    if (!userFilter.includes("{{username}}")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] };
+    }
+
+    return settingResource("ldap-settings", await updateSettings("ldap", {
+      ...attrs,
+      host: typeof attrs.host === "string" ? host : attrs.host,
+      "base-dn": typeof attrs["base-dn"] === "string" ? baseDn : attrs["base-dn"],
+      "user-filter": userFilter,
+    }));
   });

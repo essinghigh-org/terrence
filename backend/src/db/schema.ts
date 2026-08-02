@@ -12,7 +12,13 @@ export const users = sqliteTable("users", {
   isSuspended: integer("is_suspended", { mode: "boolean" }).default(false),
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
   theme: text("theme").notNull().default("original-light"),
-});
+  // External identity for SAML / OIDC / LDAP provisioned accounts.
+  // Both NULL for local accounts. (sso_provider, sso_subject) is unique.
+  ssoProvider: text("sso_provider"),
+  ssoSubject: text("sso_subject"),
+}, (table) => [
+  uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
+]);
 
 export const organizations = sqliteTable("organizations", {
   id: text("id").primaryKey(),

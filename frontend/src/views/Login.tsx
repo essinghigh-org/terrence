@@ -14,6 +14,9 @@ export function Login(): React.JSX.Element {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [signupEnabled, setSignupEnabled] = useState(false);
+  const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
+  const [samlEnabled, setSamlEnabled] = useState(false);
+  const [oidcEnabled, setOidcEnabled] = useState(false);
   const [mfaChallengeToken, setMfaChallengeToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const navigate = useNavigate();
@@ -21,11 +24,17 @@ export function Login(): React.JSX.Element {
   useEffect((): void => {
     fetchApi("/ping")
       .then((data: unknown): void => {
-        const resp = data as { "signup-enabled"?: boolean };
+        const resp = data as { "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } };
         setSignupEnabled(resp["signup-enabled"] !== false);
+        setLocalAuthEnabled(resp["local-auth-enabled"] !== false);
+        setSamlEnabled(resp.sso?.saml === true);
+        setOidcEnabled(resp.sso?.oidc === true);
       })
-      .catch((): void => { setSignupEnabled(true); });
+      .catch((): void => { setSignupEnabled(true); setLocalAuthEnabled(true); });
   }, []);
+
+  const ssoEnabled = samlEnabled || oidcEnabled;
+  const showLocalForm = localAuthEnabled;
 
   const handleLogin = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -87,14 +96,23 @@ export function Login(): React.JSX.Element {
             <FieldGroup>
               {mfaChallengeToken === null ? (
                 <>
-                  <Field data-invalid={error !== ""}>
-                    <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
-                    <Input id="login-username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }} />
-                  </Field>
-                  <Field data-invalid={error !== ""}>
-                    <FieldLabel htmlFor="login-password">Password</FieldLabel>
-                    <Input id="login-password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }} />
-                  </Field>
+                  {!localAuthEnabled && (
+                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      Local password sign-in is disabled. Use single sign-on below.
+                    </div>
+                  )}
+                  {showLocalForm && (
+                    <>
+                      <Field data-invalid={error !== ""}>
+                        <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
+                        <Input id="login-username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }} />
+                      </Field>
+                      <Field data-invalid={error !== ""}>
+                        <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                        <Input id="login-password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }} />
+                      </Field>
+                    </>
+                  )}
                 </>
               ) : (
                 <Field data-invalid={error !== ""}>
@@ -106,16 +124,33 @@ export function Login(): React.JSX.Element {
             </FieldGroup>
           </CardContent>
           <CardFooter className="flex flex-col gap-2">
-            <Button type="submit" className="w-full" disabled={submitting || (mfaChallengeToken === null ? username === "" || password === "" : mfaCode.trim() === "")}>
-              {submitting && <Spinner data-icon="inline-start" />}
-              {mfaChallengeToken === null ? "Sign in" : "Verify code"}
-            </Button>
+            {mfaChallengeToken === null && ssoEnabled && (
+              <div className="flex w-full flex-col gap-2 border-t pt-3">
+                <p className="text-xs text-muted-foreground">Or sign in with single sign-on</p>
+                {samlEnabled && (
+                  <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/saml/auth"; }}>
+                    Sign in with SAML SSO
+                  </Button>
+                )}
+                {oidcEnabled && (
+                  <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/oidc/auth"; }}>
+                    Sign in with OpenID Connect
+                  </Button>
+                )}
+              </div>
+            )}
+            {showLocalForm && (
+              <Button type="submit" className="w-full" disabled={submitting || (mfaChallengeToken === null ? username === "" || password === "" : mfaCode.trim() === "")}>
+                {submitting && <Spinner data-icon="inline-start" />}
+                {mfaChallengeToken === null ? "Sign in" : "Verify code"}
+              </Button>
+            )}
             {mfaChallengeToken !== null && (
               <Button type="button" variant="link" onClick={(): void => { setMfaChallengeToken(null); setMfaCode(""); setError(""); }}>
                 Use a different account
               </Button>
             )}
-            {mfaChallengeToken === null && signupEnabled && (
+            {mfaChallengeToken === null && showLocalForm && signupEnabled && (
               <Link to="/register" className={buttonVariants({ variant: "link" })}>
                 Create account
               </Link>

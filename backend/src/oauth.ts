@@ -4,6 +4,7 @@ import * as bcrypt from "bcryptjs";
 import { db } from "./db";
 import { apiTokens, users } from "./db/schema";
 import { createHash } from "node:crypto";
+import { ssoSettingsSnapshot } from "./lib/sso";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -88,7 +89,14 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character: string): string => charMap[character] ?? character);
 }
 
-function loginPage(request: Readonly<AuthorizationRequest> | null, error = "", username = ""): string {
+type SsoInfo = Readonly<{ saml: boolean; oidc: boolean; ldap: boolean; localAuthEnabled: boolean }>;
+
+function loginPage(
+  request: Readonly<AuthorizationRequest> | null,
+  error = "",
+  username = "",
+  sso: SsoInfo = { saml: false, oidc: false, ldap: false, localAuthEnabled: true },
+): string {
   const hidden = request !== null
     ? ([
         ["client_id", request.clientId],
@@ -102,19 +110,21 @@ function loginPage(request: Readonly<AuthorizationRequest> | null, error = "", u
       ).join("")
     : "";
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Terraform Login</title>
-</head>
-<body>
-  <main>
-    <h1>Terraform Login</h1>
-    ${request !== null ? `<p>Sign in to authorize Terraform CLI.</p>
-    ${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <form method="post" action="/oauth/authorization">
+  const ssoButtons = request !== null && (sso.saml || sso.oidc)
+    ? `<p class="sso">${
+        sso.saml ? `<a href="/users/saml/auth?RelayState=api">Sign in with SAML SSO</a>` : ""
+      }${
+        sso.oidc ? `<a href="/users/oidc/auth">Sign in with OpenID Connect</a>` : ""
+      }</p>`
+    : "";
+  const localBlocked = !sso.localAuthEnabled
+    ? `<p id="local-auth-disabled">Local password sign-in is disabled by your administrator. Use single sign-on instead.</p>`
+    : "";
+  const intro = request !== null
+    ? `<p>Sign in to authorize Terraform CLI.</p>${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}`
+    : "";
+  const form = request !== null && sso.localAuthEnabled
+    ? `<form method="post" action="/oauth/authorization">
       ${hidden}
       <p>
         <label for="username">Username</label>
@@ -125,7 +135,26 @@ function loginPage(request: Readonly<AuthorizationRequest> | null, error = "", u
         <input id="password" name="password" type="password" autocomplete="current-password" required${error !== "" ? ' aria-describedby="login-error"' : ""}>
       </p>
       <button type="submit">Sign in</button>
-    </form>` : `<p role="alert">Invalid authorization request.</p>`}
+    </form>`
+    : request === null
+      ? `<p role="alert">Invalid authorization request.</p>`
+      : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terraform Login</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem}form p{margin:.6rem 0}label{display:block;font-size:.9rem;margin-bottom:.2rem}input{width:100%;padding:.4rem;box-sizing:border-box}.sso a{display:block;margin:.4rem 0;color:#2563eb}#local-auth-disabled{color:#b91c1c}</style>
+</head>
+<body>
+  <main>
+    <h1>Terraform Login</h1>
+    ${intro}
+    ${localBlocked}
+    ${ssoButtons}
+    ${form}
   </main>
 </body>
 </html>`;
@@ -186,13 +215,32 @@ type TokenCtx = {
 };
 
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
-  .get("/oauth/authorization", ({ query }: QueryCtx): Response => {
+  .get("/oauth/authorization", async ({ query }: QueryCtx): Promise<Response> => {
     const request = parseAuthorizationRequest(query);
-    return htmlResponse(loginPage(request), request !== null ? 200 : 400);
+    const sso = await ssoSettingsSnapshot();
+    return htmlResponse(loginPage(request, "", "", {
+      saml: sso.samlEnabled,
+      oidc: sso.oidcEnabled,
+      ldap: sso.ldapEnabled,
+      localAuthEnabled: sso.localAuthEnabled,
+    }), request !== null ? 200 : 400);
   })
   .post("/oauth/authorization", async ({ body }: BodyCtx): Promise<Response> => {
     const authorization = parseAuthorizationRequest(body);
     if (authorization === null) return htmlResponse(loginPage(null), 400);
+
+    const sso = await ssoSettingsSnapshot();
+    if (!sso.localAuthEnabled) {
+      return htmlResponse(
+        loginPage(authorization, "Local password sign-in is disabled. Use single sign-on.", "", {
+          saml: sso.samlEnabled,
+          oidc: sso.oidcEnabled,
+          ldap: sso.ldapEnabled,
+          localAuthEnabled: false,
+        }),
+        401,
+      );
+    }
 
     const username = field(body, "username");
     const password = field(body, "password");

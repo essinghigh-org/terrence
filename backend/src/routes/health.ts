@@ -4,6 +4,7 @@ import { organizations, runs, users, workspaces } from "../db/schema";
 import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { ssoSettingsSnapshot } from "../lib/sso";
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
@@ -59,11 +60,20 @@ export const healthRoutes = new Elysia({ name: "health" })
     "providers.v1": "/api/registry/v1/providers/",
   }))
   .get("/api", (): string => "Terrence API")
-  .get("/api/v2/ping", ({ set }: SetCtx): { "signup-enabled": boolean } => {
+  .get("/api/v2/ping", async ({ set }: SetCtx): Promise<{
+    "signup-enabled": boolean;
+    "local-auth-enabled": boolean;
+    sso: { saml: boolean; oidc: boolean; ldap: boolean };
+  }> => {
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
-    return { "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true" };
+    const sso = await ssoSettingsSnapshot();
+    return {
+      "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+      "local-auth-enabled": sso.localAuthEnabled,
+      sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
+    };
   })
   .get("/api/v2/meta", (): {
     data: {

@@ -9,6 +9,9 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { getSettings } from "./admin";
+import { authenticateLdap } from "../lib/ldap";
+import { ldapSettings, provisionSsoUser, SsoConflictError } from "../lib/sso";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -131,7 +134,7 @@ function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void
     `${REFRESH_COOKIE}=; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
-function accessTokenDocument(
+export function accessTokenDocument(
   id: string,
   token: string,
   user: Readonly<typeof users.$inferSelect>,
@@ -186,9 +189,10 @@ async function revokeRefreshFamily(
 
 /**
  * Issue an access token (+ refresh session for browser logins) after
- * successful authentication. Shared by /users/login and /users/login/mfa.
+ * successful authentication. Shared by /users/login, /users/login/mfa, and
+ * the SAML / OIDC / LDAP SSO flows.
  */
-async function issueLoginSession(
+export async function issueLoginSession(
   user: Readonly<typeof users.$inferSelect>,
   browserSession: boolean,
   set: SetObj,
@@ -401,13 +405,46 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
     }
 
-    const user = await db.query.users.findFirst({
-      where: or(eq(users.username, username), eq(users.email, username)),
-    });
+    const [generalSettings, ldap] = await Promise.all([getSettings("general"), ldapSettings()]);
+    const localAuthEnabled = generalSettings["local-auth-enabled"] !== false;
 
-    if (user === undefined || !(await bcrypt.compare(password, user.passwordHash))) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    // LDAP is attempted first when enabled; local password auth remains the
+    // fallback unless an administrator has disabled local authentication.
+    let user: typeof users.$inferSelect | null = null;
+    if (ldap.enabled) {
+      const ldapUser = await authenticateLdap(ldap, username, password);
+      if (ldapUser !== null) {
+        try {
+          const provisioned = await provisionSsoUser({
+            provider: "ldap",
+            subject: ldapUser.dn,
+            username: ldapUser.username,
+            email: ldapUser.email,
+          });
+          user = provisioned.user;
+        } catch (error: unknown) {
+          if (error instanceof SsoConflictError) {
+            (set as { status: number }).status = 401;
+            return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
+          }
+          throw error;
+        }
+      }
+    }
+
+    if (user === null) {
+      if (!localAuthEnabled) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+      }
+      const found = await db.query.users.findFirst({
+        where: or(eq(users.username, username), eq(users.email, username)),
+      });
+      if (found === undefined || !(await bcrypt.compare(password, found.passwordHash))) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+      }
+      user = found;
     }
 
     // If MFA is enabled for this account, issue a short-lived challenge token

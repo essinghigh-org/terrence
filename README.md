@@ -111,6 +111,37 @@ docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 - **No-Code Provisioning** — Registry module deployments
 - **GitHub App Integration** — Auto-trigger runs on push/PR
 
+### Authentication & single sign-on
+
+Terrence supports three external identity providers in addition to local
+username/password accounts. All of them are configured by site administrators
+under **Admin → Authentication** in the dashboard (or via the JSON:API admin
+settings endpoints), and only take effect once enabled there.
+
+- **SAML 2.0** — SP-initiated SSO with signed HTTP-POST assertions, SP metadata
+  at `/users/saml/metadata`, single logout, group→team/owner mapping, and
+  certificate rotation (old cert accepted during transitions).
+- **OpenID Connect / OAuth2** — Discovery-based IdP configuration, PKCE (S256)
+  authorization code flow, and ID token verification against the provider's
+  JWKS.
+- **LDAP** — Bind + search against a directory (plain, StartTLS, or LDAPS),
+  configurable bind DN, base DN, user filter with the `{{username}}`
+  placeholder, and attribute mapping for username/email/display name.
+- **Local authentication** — Can be disabled entirely via the **"Allow local
+  password authentication"** toggle in the same settings. When disabled, only
+  enabled SSO providers can sign in. The login page, the CLI (`terraform
+  login`) authorizer, and the login API all honor this setting.
+- **Provisioning conflicts** — External identities are mapped by
+  (provider, subject). A verified email links to an existing account; a
+  username that belongs to a different local account blocks sign-in with a
+  clear error instead of silently taking it over. Auto-provisioned accounts
+  receive an unusable password hash, so SSO identities can never sign in with
+  local credentials.
+
+The public `GET /api/v2/ping` endpoint reports `local-auth-enabled` and the
+enabled state of each provider under `sso`, so clients can render the correct
+login UI.
+
 For GitHub commit statuses, the GitHub App also needs repository **Commit statuses: Read and write** permission. After changing App permissions, reinstall or approve the updated installation.
 
 ## API
