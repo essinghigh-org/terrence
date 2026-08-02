@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && /app/backend/bin/landlock-runner --probe
 
 # Final stage
-FROM oven/bun:1-alpine
+FROM oven/bun:1-slim
 ARG TARGETARCH=amd64
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -31,15 +31,18 @@ ENV NODE_ENV=production \
     INFRACOST_ENABLED=false \
     INFRACOST_API_KEY=""
 
-# Install only the external tools used at runtime.
-RUN apk upgrade --no-cache && \
-    apk add --no-cache git unzip
+# Install only the external tools used at runtime and apply current Debian
+# security updates.
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends ca-certificates git unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Infracost with SHA256 verification
 ENV INFRACOST_VERSION=0.10.45
-RUN ARCH=${TARGETARCH:-amd64} && \
-    wget -qO infracost.tar.gz "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-${ARCH}.tar.gz" && \
-    wget -qO infracost_SHA256SUMS "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-${ARCH}.tar.gz.sha256" && \
+RUN export ARCH=${TARGETARCH:-amd64} && \
+    bun -e \
+    'const arch = process.env.ARCH ?? "amd64"; const version = process.env.INFRACOST_VERSION; const files = [["infracost.tar.gz", `https://github.com/infracost/infracost/releases/download/v${version}/infracost-linux-${arch}.tar.gz`], ["infracost_SHA256SUMS", `https://github.com/infracost/infracost/releases/download/v${version}/infracost-linux-${arch}.tar.gz.sha256`]]; for (const [name, url] of files) { const response = await fetch(url); if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`); await Bun.write(name, await response.arrayBuffer()); }' && \
     grep "$(sha256sum infracost.tar.gz | cut -d' ' -f1)" infracost_SHA256SUMS && \
     tar -xzf infracost.tar.gz -C /tmp && \
     mv /tmp/infracost-linux-${ARCH} /usr/local/bin/infracost && \
@@ -67,7 +70,7 @@ COPY --from=builder /app/frontend/dist /app/frontend/dist
 # Create storage directory & unprivileged user. The Landlock run sandbox needs
 # no privileges (no chroot, no capabilities), so the whole app runs unprivileged.
 RUN mkdir -p /app/backend/storage && \
-    adduser -D -h /home/appuser appuser && \
+    useradd -m appuser && \
     chown -R appuser:appuser /app
 
 VOLUME ["/app/backend/storage"]
