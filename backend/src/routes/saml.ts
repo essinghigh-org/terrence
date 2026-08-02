@@ -120,10 +120,10 @@ function spMetadataXml(entityId: string, acs: string, slo: string): string {
 `;
 }
 
-function authnRequestXml(entityId: string, acs: string, requestId: string): string {
+function authnRequestXml(entityId: string, acs: string, ssoEndpointUrl: string, requestId: string): string {
   const now = new Date().toISOString();
   return `<?xml version="1.0" encoding="UTF-8"?>
-<samlp:AuthnRequest xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="${requestId}" Version="2.0" IssueInstant="${now}" Destination="" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="${xmlEscape(acs)}">
+<samlp:AuthnRequest xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="${requestId}" Version="2.0" IssueInstant="${now}" Destination="${xmlEscape(ssoEndpointUrl)}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="${xmlEscape(acs)}">
   <saml:Issuer>${xmlEscape(entityId)}</saml:Issuer>
   <samlp:NameIDPolicy AllowCreate="true" Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"/>
 </samlp:AuthnRequest>
@@ -246,7 +246,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     const requestId = `_${randomBytes(16).toString("hex")}`;
     const relayState = typeof query.RelayState === "string" ? query.RelayState : null;
-    const authnRequest = encodeRedirect(authnRequestXml(samlIdentityProviderUrl(request), acsUrl(request), requestId));
+    const authnRequest = encodeRedirect(authnRequestXml(samlIdentityProviderUrl(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
     const target = new URL(settings.ssoEndpointUrl);
     target.searchParams.set("SAMLRequest", authnRequest);
     if (relayState !== null) target.searchParams.set("RelayState", relayState);

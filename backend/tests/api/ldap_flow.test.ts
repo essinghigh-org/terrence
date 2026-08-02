@@ -217,6 +217,20 @@ describe("LDAP authentication", () => {
     }
   });
 
+  test("fails closed when a bind DN is set without a bind password", async () => {
+    // A bind DN with an empty password would be an unauthenticated bind
+    // (RFC 4511 §4.2); the login must fail rather than silently downgrade.
+    await setLocalAuth(false);
+    await setLdapSettings(true, { "bind-dn": SERVICE_DN, "bind-password": null });
+    try {
+      const response = await login("alice", VALID_USER_PASSWORD, true);
+      expect(response.status).toBe(401);
+    } finally {
+      await setLdapSettings(true);
+      await setLocalAuth(true);
+    }
+  });
+
   test("exposes the local-auth and SSO state through the public ping endpoint", async () => {
     const enabled = await request("GET", "/api/v2/ping");
     expect(enabled.status).toBe(200);
@@ -263,6 +277,13 @@ describe("LDAP authentication", () => {
       data: { attributes: { "user-filter": "(uid=static)" } },
     });
     expect(missingPlaceholder.status).toBe(422);
+
+    // A bind DN without a bind password would be an unauthenticated bind;
+    // the admin API must reject the configuration up front.
+    const bindDnWithoutPassword = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+      data: { attributes: { "bind-dn": SERVICE_DN, "bind-password": null } },
+    });
+    expect(bindDnWithoutPassword.status).toBe(422);
 
     const saved = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
       data: { attributes: { "user-filter": "(cn={{username}})", encryption: "starttls" } },

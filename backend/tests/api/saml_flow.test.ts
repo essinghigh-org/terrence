@@ -97,7 +97,9 @@ describe("SAML SSO flow", () => {
     expect(location.origin + location.pathname).toBe("https://idp.example.test/sso");
     expect(location.searchParams.has("SAMLRequest")).toBeTrue();
     const authnRequest = inflateAndDecode(location.searchParams.get("SAMLRequest") ?? "");
-    expect(authnRequest).toContain(`Destination=""`);
+    // The AuthnRequest must target the IdP SSO endpoint, not an empty
+    // Destination — strict IdPs reject requests with a missing/mismatched one.
+    expect(authnRequest).toContain(`Destination="https://idp.example.test/sso"`);
     expect(authnRequest).toContain(`ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"`);
     expect(location.searchParams.get("RelayState")).toBe("api");
   });

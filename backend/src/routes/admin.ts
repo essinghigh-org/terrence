@@ -1009,6 +1009,18 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
     }
+    // A bind DN without a password performs an unauthenticated (anonymous)
+    // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
+    // than silently downgrading at login time.
+    const bindDn = attrs["bind-dn"] === null && attrs["bind-dn"] !== undefined ? null
+      : typeof attrs["bind-dn"] === "string" && attrs["bind-dn"] !== ""
+        ? attrs["bind-dn"].trim()
+        : current["bind-dn"];
+    const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
+    if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] };
+    }
     const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
       ? attrs["user-filter"]
       : typeof current["user-filter"] === "string" && current["user-filter"] !== ""

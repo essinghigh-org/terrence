@@ -67,7 +67,13 @@ export async function authenticateLdap(
       await client.startTLS();
     }
     if (settings.bindDn !== null) {
-      await client.bind(settings.bindDn, settings.bindPassword ?? "");
+      // A zero-length password performs an *unauthenticated bind* per
+      // RFC 4511 §4.2 — on permissive servers this silently succeeds with
+      // anonymous permissions. Fail closed instead of downgrading.
+      if (settings.bindPassword === null || settings.bindPassword === "") {
+        return null;
+      }
+      await client.bind(settings.bindDn, settings.bindPassword);
     }
 
     const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
