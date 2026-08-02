@@ -15,6 +15,14 @@ import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
+import { currentTokenScopes, withoutTokenScopes } from "./request-scope";
+import {
+  scopeGrants,
+  scopeCoversOrg,
+  type WorkspacePermissionGrant,
+  type TokenScopes,
+  type TokenScopeTagFilter,
+} from "./token-scopes";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
 
@@ -54,7 +62,20 @@ export async function checkOrgPermission(
   requiredRole: "owner" | "member" = "member",
   tokenOrgId: string | null = null,
   tokenTeamId: string | null = null,
+  requiredGrant: WorkspacePermissionGrant | null = null,
 ): Promise<boolean> {
+  const scopes = currentTokenScopes();
+  if (scopes !== null) {
+    // Fine-grained token: the org MUST be inside the scope, org-level
+    // owner actions additionally require the settings:write grant, and a
+    // caller-specified grant (e.g. settings:read for org-settings reads)
+    // must be present too.  The user's own membership is still verified
+    // below, so a fine-grained token can never exceed the user's
+    // underlying access.
+    if (!scopeCoversOrg(scopes, orgId)) return false;
+    if (requiredRole === "owner" && !scopeGrants(scopes, "settings:write")) return false;
+    if (requiredGrant !== null && !scopeGrants(scopes, requiredGrant)) return false;
+  }
   if (tokenTeamId !== null) {
     const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
     return team?.orgId === orgId && requiredRole === "member";
@@ -113,6 +134,32 @@ function teamOrganizationAllows(
   return false;
 }
 
+/** Map an OrganizationPermission to the fine-grained grant it requires. */
+function organizationPermissionGrant(required: OrganizationPermission): WorkspacePermissionGrant | null {
+  switch (required) {
+    case "manage-policies":
+    case "manage-policy-overrides":
+    case "delegate-policy-overrides":
+    case "manage-run-tasks":
+    case "manage-vcs-settings":
+    case "manage-agent-pools":
+    case "manage-providers":
+    case "manage-modules":
+    case "manage-membership":
+    case "manage-teams":
+    case "manage-organization-access":
+      return "settings:write";
+    case "manage-workspaces":
+    case "manage-projects":
+      return "workspaces:write";
+    case "read-projects":
+    case "read-workspaces":
+      return "workspaces:read";
+    default:
+      return null;
+  }
+}
+
 export async function checkOrganizationPermission(
   orgId: string,
   userId: string | undefined,
@@ -120,37 +167,54 @@ export async function checkOrganizationPermission(
   tokenTeamId: string | null | undefined,
   required: OrganizationPermission,
 ): Promise<boolean> {
+  const scopes = currentTokenScopes();
+  if (scopes !== null) {
+    // Fine-grained token: org must be inside the scope AND the required
+    // org-level action must map to a granted permission.
+    if (!scopeCoversOrg(scopes, orgId)) return false;
+    const grant = organizationPermissionGrant(required);
+    if (grant !== null && !scopeGrants(scopes, grant)) return false;
+    // Fall through: user's own membership/team access must also pass.
+  }
   if (tokenOrgId !== null && tokenOrgId !== undefined) return tokenOrgId === orgId;
   if (tokenTeamId !== null && tokenTeamId !== undefined) {
     const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
     return team?.orgId === orgId && teamOrganizationAllows(team.organizationAccess, required);
   }
   if (userId === undefined) return false;
-  if (await checkOrgPermission(userId, orgId, "owner")) return true;
-  if (!(await checkOrgPermission(userId, orgId, "member"))) return false;
-  const directMembership = await db.query.organizationMemberships.findFirst({
-    where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
-  });
-  if (directMembership !== undefined) {
-    const assigned = await db.query.organizationMembershipRoles.findMany({
-      where: eq(organizationMembershipRoles.membershipId, directMembership.id),
+  // The inner probes below are membership checks ("is this user an owner /
+  // member?"), not additional permission gates.  The scope filter was already
+  // applied above, so resolve underlying access without re-applying it —
+  // otherwise an org owner with a workspaces:write token (no settings:write)
+  // would fail the owner probe and then fall through to team checks that may
+  // also fail, denying a grant the outer check already accepted.
+  return await withoutTokenScopes(async () => {
+    if (await checkOrgPermission(userId, orgId, "owner")) return true;
+    if (!(await checkOrgPermission(userId, orgId, "member"))) return false;
+    const directMembership = await db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
     });
-    if (assigned.length > 0) {
-      const roles = await db.query.organizationRoles.findMany({
-        where: inArray(organizationRoles.id, assigned.map((item) => item.roleId)),
+    if (directMembership !== undefined) {
+      const assigned = await db.query.organizationMembershipRoles.findMany({
+        where: eq(organizationMembershipRoles.membershipId, directMembership.id),
       });
-      if (roles.some((role) => teamOrganizationAllows(role.permissions ?? {}, required))) return true;
+      if (assigned.length > 0) {
+        const roles = await db.query.organizationRoles.findMany({
+          where: inArray(organizationRoles.id, assigned.map((item) => item.roleId)),
+        });
+        if (roles.some((role) => teamOrganizationAllows(role.permissions ?? {}, required))) return true;
+      }
     }
-  }
-  const memberships = await db.query.teamMemberships.findMany({
-    where: eq(teamMemberships.userId, userId),
+    const memberships = await db.query.teamMemberships.findMany({
+      where: eq(teamMemberships.userId, userId),
+    });
+    const teamIds = memberships.map((membership): string => membership.teamId);
+    if (teamIds.length === 0) return false;
+    const userTeams = await db.query.teams.findMany({
+      where: and(eq(teams.orgId, orgId), inArray(teams.id, teamIds)),
+    });
+    return userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, required));
   });
-  const teamIds = memberships.map((membership): string => membership.teamId);
-  if (teamIds.length === 0) return false;
-  const userTeams = await db.query.teams.findMany({
-    where: and(eq(teams.orgId, orgId), inArray(teams.id, teamIds)),
-  });
-  return userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, required));
 }
 
 export async function checkOrganizationVcsReadPermission(
@@ -176,6 +240,7 @@ export async function checkOrganizationVcsReadPermission(
 
 export type WorkspacePermission =
   | "read"
+  | "run-read"
   | "plan"
   | "apply"
   | "lock"
@@ -196,13 +261,13 @@ function teamWorkspaceAllows(
   const permissions = rawPermissions ?? {};
   if (required === "policy-override") return accessLevel === "custom" && permissions["policy-overrides"] === true;
   if (accessLevel === "admin") return true;
-  if (accessLevel === "write") return ["read", "plan", "apply", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"].includes(required);
-  if (accessLevel === "plan") return ["read", "plan", "variables-read", "state-outputs", "state-read"].includes(required);
-  if (accessLevel === "read") return ["read", "variables-read", "state-outputs", "state-read"].includes(required);
+  if (accessLevel === "write") return ["read", "run-read", "plan", "apply", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"].includes(required);
+  if (accessLevel === "plan") return ["read", "run-read", "plan", "variables-read", "state-outputs", "state-read"].includes(required);
+  if (accessLevel === "read") return ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required);
   if (accessLevel !== "custom") return false;
 
   const runs = typeof permissions.runs === "string" ? permissions.runs : "read";
-  if (required === "read") return ["read", "plan", "apply"].includes(runs);
+  if (required === "read" || required === "run-read") return ["read", "plan", "apply"].includes(runs);
   if (required === "plan") return runs === "plan" || runs === "apply";
   if (required === "apply") return runs === "apply";
   if (required === "run-tasks") return permissions["run-tasks"] === true;
@@ -217,7 +282,114 @@ function teamWorkspaceAllows(
   return false;
 }
 
+/**
+ * Resolve the set of workspace IDs a fine-grained token scope allows within an
+ * org. Returns null when the scope covers ALL workspaces in the org (no
+ * workspace/project/tag restriction). Returns [] when the scope cannot reach
+ * any workspace in the org.
+ */
+async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string): Promise<readonly string[] | null> {
+  if (!scopeCoversOrg(scope, orgId)) return [];
+
+  const projectRestriction = scope.projects !== null && scope.projects.length > 0;
+  const workspaceRestriction = scope.workspaces !== null && scope.workspaces.length > 0;
+  const tagRestriction = scope.tags !== null && scope.tags.length > 0;
+  if (!projectRestriction && !workspaceRestriction && !tagRestriction) return null;
+
+  // Gather matching workspace IDs.
+  const matching = new Set<string>();
+
+  if (projectRestriction) {
+    const rows = await db.query.workspaces.findMany({
+      where: and(
+        eq(workspaces.orgId, orgId),
+        inArray(workspaces.projectId, scope.projects as string[]),
+      ),
+      columns: { id: true },
+    });
+    for (const row of rows) matching.add(row.id);
+  }
+
+  if (workspaceRestriction) {
+    const rows = await db.query.workspaces.findMany({
+      where: and(eq(workspaces.orgId, orgId), inArray(workspaces.id, scope.workspaces as string[])),
+      columns: { id: true },
+    });
+    for (const row of rows) matching.add(row.id);
+  }
+
+  if (tagRestriction) {
+    const tagRows = await db.query.workspaceTags.findMany({
+      where: or(
+        ...(scope.tags as readonly TokenScopeTagFilter[]).map((tag) =>
+          and(eq(workspaceTags.key, tag.key), eq(workspaceTags.value, tag.value))),
+      ),
+      columns: { workspaceId: true },
+    });
+    if (tagRows.length > 0) {
+      const wsRows = await db.query.workspaces.findMany({
+        where: and(
+          eq(workspaces.orgId, orgId),
+          inArray(workspaces.id, [...new Set(tagRows.map((r): string => r.workspaceId))]),
+        ),
+        columns: { id: true },
+      });
+      for (const row of wsRows) matching.add(row.id);
+    }
+  }
+
+  return [...matching];
+}
+
+/** Map a WorkspacePermission to the fine-grained grant(s) it requires. */
+function workspacePermissionGrant(required: WorkspacePermission): readonly WorkspacePermissionGrant[] {
+  switch (required) {
+    case "read": return ["workspaces:read"];
+    case "run-read": return ["runs:read"];
+    case "admin": return ["workspaces:write"];
+    case "plan": return ["runs:write"];
+    case "apply": return ["runs:write"];
+    case "lock": return ["workspaces:write"];
+    case "run-tasks": return ["settings:write"];
+    case "policy-override": return ["settings:write"];
+    case "variables-read": return ["variables:read"];
+    case "variables-write": return ["variables:write"];
+    case "state-outputs": return ["state:read"];
+    case "state-read": return ["state:read"];
+    case "state-write": return ["state:write"];
+    default: return [];
+  }
+}
+
 export async function workspaceIdsForPermission(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+  required: WorkspacePermission,
+): Promise<readonly string[] | null> {
+  const scopes = currentTokenScopes();
+  if (scopes !== null) {
+    // Fine-grained token: (1) the required action must be granted, (2) the
+    // workspace must be inside the scope's org/project/workspace/tag set,
+    // AND (3) the user's own membership/team access must pass.  Enforce
+    // (1)+(2) here, then intersect with the base result below.
+    const grants = workspacePermissionGrant(required);
+    if (grants.length === 0 || !grants.some((grant): boolean => scopeGrants(scopes, grant))) return [];
+    const scopeIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
+    // Compute the user's base access WITHOUT scope influence — the base is
+    // "what this user can do on their own", which the scope then narrows.
+    const base = await withoutTokenScopes(() =>
+      workspaceIdsForPermissionUnscoped(orgId, userId, tokenOrgId, tokenTeamId, required));
+    if (base === null) return scopeIds; // user has org-wide access; scope narrows
+    if (scopeIds === null) return base; // scope covers all; user's own access applies
+    const scopeSet = new Set(scopeIds);
+    return base.filter((id): boolean => scopeSet.has(id));
+  }
+  return workspaceIdsForPermissionUnscoped(orgId, userId, tokenOrgId, tokenTeamId, required);
+}
+
+async function workspaceIdsForPermissionUnscoped(
   orgId: string,
   userId: string | undefined,
   tokenOrgId: string | null,
@@ -233,7 +405,7 @@ export async function workspaceIdsForPermission(
     if (teamOrganizationAllows(team.organizationAccess, "manage-workspaces")) return null;
     if (required === "read" && team.organizationAccess["manage-policies"] === true) return null;
     if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return null;
-    if (["read", "variables-read", "state-outputs", "state-read"].includes(required) && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return null;
+    if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return null;
     return accesses
       .filter((entry): boolean =>
         teamWorkspaceAllows(entry.access, entry.permissions, required)
@@ -260,7 +432,7 @@ export async function workspaceIdsForPermission(
   if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces"))) return null;
   if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true)) return null;
   if (required === "policy-override" && userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)) return null;
-  if (["read", "variables-read", "state-outputs", "state-read"].includes(required)
+  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
     && userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))) return null;
   const delegateTeamIds = required === "policy-override"
     ? new Set(userTeams
@@ -396,7 +568,7 @@ export async function findAuthorizedRun(
   userId: string | undefined,
   tokenOrgId: string | null,
   tokenTeamId: string | null = null,
-  required: WorkspacePermission = "read",
+  required: WorkspacePermission = "run-read",
 ): Promise<{ run: typeof runs.$inferSelect; workspace: typeof workspaces.$inferSelect } | undefined> {
   const run = (await db.query.runs.findFirst({ where: eq(runs.id, runId) })) as typeof runs.$inferSelect | undefined;
   if (run === undefined) return undefined;

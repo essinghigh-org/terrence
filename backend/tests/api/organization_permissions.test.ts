@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -184,10 +184,28 @@ describe("granular organization permissions", () => {
   });
 
   afterAll(async () => {
-    await db.delete(organizations).where(eq(organizations.id, orgId));
-    await db.delete(organizations).where(eq(organizations.id, otherOrgId));
-    await db.delete(users).where(eq(users.id, ownerId));
-    await db.delete(users).where(eq(users.id, memberId));
+    // Delete in dependency order, one pass per table:
+    // policyChecks -> runs -> teamWorkspaces -> apiTokens -> workspaces
+    // (workspaces/policy_sets reference installations via vcs_repo JSON, so they
+    // must go before the installation or the reference-check trigger aborts)
+    // -> githubAppInstallations -> oauthTokens -> oauthClients -> projects
+    // -> organizationMemberships -> teams -> organizations -> users.
+    await db.delete(policyChecks).where(inArray(policyChecks.runId, Object.values(runIds)));
+    await db.delete(teamWorkspaces).where(inArray(teamWorkspaces.workspaceId, [workspaceId, otherWorkspaceId]));
+    await db.delete(runs).where(inArray(runs.workspaceId, [workspaceId, otherWorkspaceId]));
+    await db.delete(apiTokens).where(eq(apiTokens.orgId, orgId));
+    await db.delete(apiTokens).where(inArray(apiTokens.teamId, Object.values(teamIds)));
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, [ownerId, memberId]));
+    await db.delete(workspaces).where(eq(workspaces.orgId, orgId));
+    await db.delete(workspaces).where(eq(workspaces.orgId, otherOrgId));
+    await db.delete(githubAppInstallations).where(eq(githubAppInstallations.orgId, orgId));
+    await db.delete(oauthTokens).where(inArray(oauthTokens.oauthClientId, [oauthClientId, otherOauthClientId]));
+    await db.delete(oauthClients).where(inArray(oauthClients.id, [oauthClientId, otherOauthClientId]));
+    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.delete(organizationMemberships).where(inArray(organizationMemberships.orgId, [orgId, otherOrgId]));
+    await db.delete(teams).where(inArray(teams.orgId, [orgId, otherOrgId]));
+    await db.delete(organizations).where(inArray(organizations.id, [orgId, otherOrgId]));
+    await db.delete(users).where(inArray(users.id, [ownerId, memberId]));
   });
 
   it("denies management APIs to a team without organization permissions", async () => {

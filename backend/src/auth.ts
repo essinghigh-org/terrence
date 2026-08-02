@@ -12,6 +12,7 @@ type AuthToken = {
   orgId: string | null;
   expiresAt: number | null;
   lastUsedAt: number | null;
+  scopes?: string | null;
 };
 
 function hashToken(token: string): string {

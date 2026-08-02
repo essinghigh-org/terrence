@@ -420,6 +420,7 @@ export const apiTokens = sqliteTable("api_tokens", {
   orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
   teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
   description: text("description"),
+  scopes: text("scopes"), // JSON-encoded fine-grained scope definition (null = legacy full-permission token)
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   lastUsedAt: integer("last_used_at"),
   expiresAt: integer("expires_at"),

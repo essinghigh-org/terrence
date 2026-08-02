@@ -391,7 +391,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const id = `tok-${crypto.randomUUID()}`;
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
     await db.delete(apiTokens).where(eq(apiTokens.teamId, teamId));
-    await db.insert(apiTokens).values({ id, token: tokenHash, teamId, orgId: team.orgId, description: `Team token for ${team.name}`, createdAt: Date.now() });
+    await db.insert(apiTokens).values({ id, token: tokenHash, teamId, orgId: team.orgId, description: `Team token for ${team.name}`, scopes: null, createdAt: Date.now() });
     (set as { status: number }).status = 201;
     return { data: { id, type: "authentication-tokens", attributes: { token: rawToken, "created-at": new Date().toISOString() } } };
   })

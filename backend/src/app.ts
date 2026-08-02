@@ -5,6 +5,8 @@ import { join } from "path";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
+import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
+import { setRequestTokenScopes } from "./lib/request-scope";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -194,6 +196,26 @@ export const app = new Elysia()
       (set as { status: number }).status = 503;
       return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
     }
+  })
+  .onBeforeHandle(({ token, set }: { readonly token: { readonly scopes?: string | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
+    // Publish fine-grained token scopes into request-scoped storage BEFORE
+    // handlers run, so permission helpers enforce them automatically. Legacy
+    // tokens (scopes null/absent) resolve to null = full permissions.
+    // A malformed scopes field is an auth failure: fail closed (401) rather
+    // than silently escalating a scoped token to full permissions.
+    if (token !== null && typeof token.scopes === "string" && token.scopes !== "") {
+      let parsed: TokenScopes | null;
+      try {
+        parsed = parseTokenScopes(token.scopes);
+      } catch {
+        (set as Record<string, unknown>).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
+      }
+      setRequestTokenScopes(parsed);
+    } else {
+      setRequestTokenScopes(null);
+    }
+    return undefined;
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;

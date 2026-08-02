@@ -140,7 +140,7 @@ async function authorizedOrgWorkspaces(
   userId: string | undefined,
   orgId: string | null,
   teamId: string | null,
-  required: WorkspacePermission = "read",
+  required: WorkspacePermission = "run-read",
 ): Promise<(typeof workspaces.$inferSelect)[]> {
   const ids = await workspaceIdsForPermission(organizationId, userId, orgId, teamId, required);
   if (ids !== null && ids.length === 0) return [];
