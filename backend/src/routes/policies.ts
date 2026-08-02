@@ -283,7 +283,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
   .get("/api/v2/organizations/:org_name/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
     const data = await Promise.all(psList.map(async (ps: PsItem): Promise<Record<string, unknown>> => {
       const [projLinks, exclLinks] = await Promise.all([

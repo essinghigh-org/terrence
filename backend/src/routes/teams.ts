@@ -142,7 +142,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
   .get("/api/v2/organizations/:org_name/teams", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
     const [teamList, countRows] = await Promise.all([
       db.query.teams.findMany({ where: eq(teams.orgId, org.id), orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
@@ -206,7 +206,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
   .get("/api/v2/teams/:team_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, query, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
     const includeQuery = query !== undefined ? query.include : undefined;
     const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];

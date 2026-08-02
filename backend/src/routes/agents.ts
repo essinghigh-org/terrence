@@ -396,7 +396,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
   .get("/api/v2/organizations/:org_name/agent-pools", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
     const poolData = await Promise.all(pools.map(agentPoolResource));
     return { data: poolData };
@@ -456,7 +456,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
   .get("/api/v2/agent-pools/:pool_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const poolId = params.pool_id ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
-    if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await agentPoolResource(pool) };
   })
   .patch("/api/v2/agent-pools/:pool_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

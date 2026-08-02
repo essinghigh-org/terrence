@@ -556,7 +556,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .get("/api/v2/oauth-clients/:oc_id", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await oauthClientResource(oc, request) };
   })
   .patch("/api/v2/oauth-clients/:oc_id", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
