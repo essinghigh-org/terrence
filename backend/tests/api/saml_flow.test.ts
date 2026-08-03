@@ -378,6 +378,8 @@ describe("SAML SSO flow", () => {
     const location = new URL(response.headers.get("Location") ?? "");
     expect(location.origin + location.pathname).toBe("https://idp.example.test/slo");
     expect(location.searchParams.has("SAMLRequest")).toBeTrue();
+    expect(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))
+      .toContain('Destination="https://idp.example.test/slo"');
   });
 
   test("revokes the local session on IdP-initiated logout", async () => {

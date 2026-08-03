@@ -666,7 +666,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       // sides. The IdP acknowledges via its own LogoutResponse; we do not
       // block the local redirect on it.
       const requestId = `_${randomBytes(16).toString("hex")}`;
-      const logoutRequest = logoutRequestXml(samlSpEntityId(request), sloUrl(request), requestId);
+      const logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId);
       let target: URL;
       try {
         target = new URL(settings.sloEndpointUrl);
