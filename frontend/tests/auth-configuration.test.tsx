@@ -12,17 +12,16 @@ const json = (data: unknown): Response =>
   });
 
 /**
- * React-DOM records the last value on each controlled input in an internal
- * tracker; bun's testing DOM does not sync it before dispatching, so a plain
- * fireEvent is ignored by React's onChange. Reset the tracker first — the same
- * workaround flows.test.tsx uses.
+ * React-dom's `isInputEventSupported` flag is computed when react-dom loads
+ * (before this suite's jsdom setup), so text-input `onChange` only fires
+ * through the keyup polyfill path: focus the field, update its value, then
+ * dispatch keyup so the change is detected. Plain fireEvent.change alone is
+ * ignored by React's onChange in this environment.
  */
 const typeInput = (element: HTMLInputElement, value: string): void => {
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (v: string) => void } | undefined;
-  if (tracker !== undefined) tracker.setValue(value === "" ? "x" : "");
-  Reflect.set(element, "value", value);
-  fireEvent.input(element, { target: { value } });
+  fireEvent.focusIn(element);
   fireEvent.change(element, { target: { value } });
+  fireEvent.keyUp(element, { key: "a" });
 };
 const urlOf = (input: string | URL | Request): string =>
   typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -256,10 +255,13 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   const oidcSection = view.getByText("OpenID Connect").closest('[data-slot="card"]') ?? document.body;
   expect(within(oidcSection).getByText(/OpenID Connect provider/)).toBeTruthy();
 
-  // Fill in OIDC issuer URL
+  // Fill in OIDC issuer URL and client ID
   const issuerInput = within(oidcSection).getByLabelText("Issuer URL") as HTMLInputElement;
   await act(async (): Promise<void> => { typeInput(issuerInput, "https://accounts.example.com"); });
   expect(issuerInput.value).toBe("https://accounts.example.com");
+  const clientIdInput = within(oidcSection).getByLabelText("Client ID") as HTMLInputElement;
+  await act(async (): Promise<void> => { typeInput(clientIdInput, "my-client-id"); });
+  expect(clientIdInput.value).toBe("my-client-id");
 
   // Save OIDC settings
   const saveOidc = within(oidcSection).getByRole("button", { name: "Save OIDC settings" });
@@ -268,6 +270,8 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/oidc-settings" && init?.method === "PATCH")).toBeTrue();
   });
+  // The secret field was left untouched: with a client ID configured, an
+  // empty secret preserves the stored value instead of clearing it.
   expect(oidcPatchAttributes?.["client-secret"]).toBeUndefined();
 
   // --- Local authentication section ---
@@ -302,6 +306,10 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
   await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
   const saveLdap = within(ldapSection).getByRole("button", { name: "Save LDAP settings" });
+  // Fill in a service account bind DN
+  const bindDnInput = within(ldapSection).getByLabelText("LDAP bind DN") as HTMLInputElement;
+  await act(async (): Promise<void> => { typeInput(bindDnInput, "cn=service,dc=example,dc=com"); });
+  expect(bindDnInput.value).toBe("cn=service,dc=example,dc=com");
   await act(async (): Promise<void> => {
     fireEvent.click(saveLdap);
   });
@@ -309,6 +317,8 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
   });
+  // The bind password field was left untouched: with a bind DN configured,
+  // an empty password preserves the stored value instead of clearing it.
   expect(ldapPatchAttributes?.["bind-password"]).toBeUndefined();
   expect(ldapPatchAttributes?.enabled).toBeTrue();
 });
