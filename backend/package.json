@@ -19,7 +19,6 @@
   },
   "dependencies": {
     "@elysiajs/static": "^1.4.10",
-    "@libsql/client": "^0.17.4",
     "@types/bcryptjs": "^3.0.0",
     "@xmldom/xmldom": "^0.9.10",
     "bcryptjs": "^3.0.3",

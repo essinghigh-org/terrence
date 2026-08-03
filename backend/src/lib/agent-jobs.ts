@@ -298,102 +298,104 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
     ? configuredTimeout
     : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
   const cutoff = now - timeout;
-  const recovered = await db.transaction(async (transaction): Promise<
-    readonly Readonly<{ jobId: string; runId: string; runStatus: string }>[]
-  > => {
-    const tx = transaction as unknown as typeof db;
-    // ponytail: global sweep is fine for homelab; add heartbeat indexes only if agent volume makes it measurable.
-    const unavailableAgents = await tx.select({ id: agents.id })
-      .from(agents)
-      .where(or(
-        lt(agents.lastPingAt, cutoff),
-        inArray(agents.status, ["unknown", "exited", "errored"]),
-      ));
-    const unavailableAgentIds = unavailableAgents.map((agent): string => agent.id);
+  // ponytail: run the sweep on the shared connection WITHOUT a write transaction.
+  // The process shares a single stable bun:sqlite connection, so a write
+  // transaction here would hold that connection's write lock across the entire
+  // sweep and stall concurrent queries on this worker poll. Recovery is
+  // race-safe without the transaction: every update below is conditional on the
+  // row's current status and its returning() is checked, and a partially-
+  // recovered job is simply picked up by the next poll (1.5s later).
+  // ponytail: global sweep is fine for homelab; add heartbeat indexes only if agent volume makes it measurable.
+  const unavailableAgents = await db.select({ id: agents.id })
+    .from(agents)
+    .where(or(
+      lt(agents.lastPingAt, cutoff),
+      inArray(agents.status, ["unknown", "exited", "errored"]),
+    ));
+  const unavailableAgentIds = unavailableAgents.map((agent): string => agent.id);
 
-    if (unavailableAgentIds.length > 0) {
-      await tx.update(agents).set({ status: "unknown" }).where(and(
-        inArray(agents.id, unavailableAgentIds),
-        inArray(agents.status, ["idle", "busy"]),
-        lt(agents.lastPingAt, cutoff),
-      ));
+  if (unavailableAgentIds.length > 0) {
+    await db.update(agents).set({ status: "unknown" }).where(and(
+      inArray(agents.id, unavailableAgentIds),
+      inArray(agents.status, ["idle", "busy"]),
+      lt(agents.lastPingAt, cutoff),
+    ));
+  }
+
+  const unavailableClaim = unavailableAgentIds.length === 0
+    ? isNull(agentJobs.agentId)
+    : or(
+        isNull(agentJobs.agentId),
+        inArray(agentJobs.agentId, unavailableAgentIds),
+      );
+  const staleJobs = await db.query.agentJobs.findMany({
+    where: and(eq(agentJobs.status, "claimed"), unavailableClaim),
+    orderBy: [asc(agentJobs.claimedAt)],
+  });
+  const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
+
+  // Pre-fetch all affected runs in a single query to avoid N+1
+  const staleRunIds = [...new Set(staleJobs.map((job): string => job.runId))];
+  const staleRuns = staleRunIds.length === 0
+    ? new Map<string, typeof runs.$inferSelect>()
+    : new Map(
+        (await db.query.runs.findMany({
+          where: inArray(runs.id, staleRunIds),
+        })).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
+      );
+
+  for (const job of staleJobs) {
+    const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
+    const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
+    const owner = job.agentId === null
+      ? isNull(agentJobs.agentId)
+      : eq(agentJobs.agentId, job.agentId);
+
+    const updatedJobs = await db.update(agentJobs).set({
+      agentId: null,
+      status: "queued",
+      claimedAt: null,
+      completedAt: null,
+      errorMessage: null,
+    }).where(and(
+      eq(agentJobs.id, job.id),
+      eq(agentJobs.status, "claimed"),
+      owner,
+    )).returning({ id: agentJobs.id });
+    if (updatedJobs.length === 0) {
+      // An agent claimed or completed this job mid-sweep; leave the run alone.
+      continue;
     }
 
-    const unavailableClaim = unavailableAgentIds.length === 0
-      ? isNull(agentJobs.agentId)
-      : or(
-          isNull(agentJobs.agentId),
-          inArray(agentJobs.agentId, unavailableAgentIds),
-        );
-    const staleJobs = await tx.query.agentJobs.findMany({
-      where: and(eq(agentJobs.status, "claimed"), unavailableClaim),
-      orderBy: [asc(agentJobs.claimedAt)],
-    });
-    const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
-
-    // Pre-fetch all affected runs in a single query to avoid N+1
-    const staleRunIds = [...new Set(staleJobs.map((job): string => job.runId))];
-    const staleRuns = staleRunIds.length === 0
-      ? new Map<string, typeof runs.$inferSelect>()
-      : new Map(
-          (await tx.query.runs.findMany({
-            where: inArray(runs.id, staleRunIds),
-          })).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
-        );
-
-    for (const job of staleJobs) {
-      const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-      const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
-      const run = staleRuns.get(job.runId);
-      const updatedRuns = run === undefined
-        ? []
-        : await tx.update(runs).set({
-            agentId: null,
-            status: queuedRunStatus,
-            statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
-          }).where(and(
-            eq(runs.id, job.runId),
-            eq(runs.status, expectedRunStatus),
-          )).returning({ id: runs.id });
-      const owner = job.agentId === null
-        ? isNull(agentJobs.agentId)
-        : eq(agentJobs.agentId, job.agentId);
-
-      if (updatedRuns.length === 0) {
-        await tx.update(agentJobs).set({
-          status: "canceled",
-          completedAt: now,
-          errorMessage: "Run is no longer waiting for this job",
+    const run = staleRuns.get(job.runId);
+    const updatedRuns = run === undefined
+      ? []
+      : await db.update(runs).set({
+          agentId: null,
+          status: queuedRunStatus,
+          statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
         }).where(and(
-          eq(agentJobs.id, job.id),
-          eq(agentJobs.status, "claimed"),
-          owner,
-        ));
-        continue;
-      }
-
-      const updatedJobs = await tx.update(agentJobs).set({
-        agentId: null,
-        status: "queued",
-        claimedAt: null,
-        completedAt: null,
-        errorMessage: null,
+          eq(runs.id, job.runId),
+          eq(runs.status, expectedRunStatus),
+        )).returning({ id: runs.id });
+    if (updatedRuns.length === 0) {
+      // The run is no longer waiting for this job; drop the requeued job so it
+      // is not left orphaned, the claim path reconciles any in-flight claim.
+      await db.update(agentJobs).set({
+        status: "canceled",
+        completedAt: now,
+        errorMessage: "Run is no longer waiting for this job",
       }).where(and(
         eq(agentJobs.id, job.id),
-        eq(agentJobs.status, "claimed"),
-        owner,
-      )).returning({ id: agentJobs.id });
-      if (updatedJobs.length === 0) {
-        throw new Error("Agent job changed while its stale claim was recovered");
-      }
-      recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
+        eq(agentJobs.status, "queued"),
+      ));
+      continue;
     }
+    recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
+  }
 
-    return recoveredJobs;
-  });
-
-  for (const item of recovered) void reportRunVcsStatus(item.runId, item.runStatus);
-  return recovered.map((item): string => item.jobId);
+  for (const item of recoveredJobs) void reportRunVcsStatus(item.runId, item.runStatus);
+  return recoveredJobs.map((item): string => item.jobId);
 }
 
 export async function authenticateAgent(

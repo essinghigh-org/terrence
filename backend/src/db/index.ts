@@ -1,6 +1,8 @@
-import { drizzle } from 'drizzle-orm/libsql';
-import { migrate } from 'drizzle-orm/libsql/migrator';
-import { createClient } from '@libsql/client';
+import { Database } from 'bun:sqlite';
+import { drizzle, SQLiteBunTransaction } from 'drizzle-orm/bun-sqlite';
+import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
+import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { mkdir } from 'fs/promises';
 import { join, resolve } from 'path';
 import * as schema from './schema';
@@ -9,27 +11,65 @@ import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
 await mkdir(storageDir, { recursive: true });
 
-const sqlite = createClient({
-  url: process.env.DATABASE_URL ?? `file:${join(storageDir, 'terrence.db')}`,
-});
-await sqlite.executeMultiple(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
-`);
+// bun:sqlite is built into Bun and keeps a single stable native connection; the
+// @libsql/client driver leaked native memory per query and churned a fresh native
+// connection for every transaction (the source of terrence's multi-GB RSS growth).
+const dbUrl = process.env.DATABASE_URL ?? `file:${join(storageDir, 'terrence.db')}`;
+const client = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
+client.run('PRAGMA journal_mode = WAL;');
+client.run('PRAGMA busy_timeout = 5000;');
 
 type TableInfoRow = { name: string; notnull?: number };
 
-function getColumnNames(info: { readonly rows: readonly unknown[] }): Set<string> {
-  return new Set(info.rows.map((r: unknown): string => (r as TableInfoRow).name));
+function tableRows(sql: string): readonly unknown[] {
+  return client.prepare(sql).all();
 }
 
+function runSql(sql: string): void {
+  client.run(sql);
+}
 
+function getColumnNames(rows: readonly unknown[]): Set<string> {
+  return new Set(rows.map((r: unknown): string => (r as TableInfoRow).name));
+}
 
-export const db = drizzle(sqlite, { schema });
-await migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
+export const db = drizzle(client, { schema });
+
+// bun:sqlite's native transaction() rolls back only when its callback throws
+// synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
+// an async callback that throws would silently COMMIT partial writes. Wrap it with
+// explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead.
+const session = (db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> }).session;
+(session as unknown as { transaction: unknown }).transaction = async function (
+  // The callback signature mirrors drizzle's own session.transaction type.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  fn: (tx: SQLiteBunTransaction<Record<string, unknown>, never>) => Promise<unknown>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
+): Promise<unknown> {
+  const sess = this as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
+  const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
+    'sync',
+    sess.dialect,
+    this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
+    sess.schema as never,
+  );
+  const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
+  client.run(`BEGIN${behavior}`);
+  try {
+    const result = await fn(tx);
+    client.run('COMMIT');
+    return result;
+  } catch (err) {
+    client.run('ROLLBACK');
+    throw err;
+  }
+};
+
+migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
 
 // Keep upgrades from pre-RBAC releases safe even when their migration journal is incomplete.
-await sqlite.executeMultiple(`
+runSql(`
   CREATE TABLE IF NOT EXISTS organization_roles (
     id TEXT PRIMARY KEY NOT NULL, org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL, description TEXT, permissions TEXT NOT NULL DEFAULT '{}',
@@ -43,7 +83,7 @@ await sqlite.executeMultiple(`
 `);
 
 // Apply schema additions that may not be in the migration history
-const tableInfo = await sqlite.execute("PRAGMA table_info(runs)");
+const tableInfo = tableRows("PRAGMA table_info(runs)");
 const existingRunsColumns = getColumnNames(tableInfo);
 const runsAdditions: [string, string][] = [
   ["allow_empty_apply", "integer DEFAULT false NOT NULL"],
@@ -62,12 +102,12 @@ const runsAdditions: [string, string][] = [
 ];
 for (const [col, def] of runsAdditions) {
   if (!existingRunsColumns.has(col)) {
-    await sqlite.execute(`ALTER TABLE runs ADD COLUMN ${col} ${def}`);
+    runSql(`ALTER TABLE runs ADD COLUMN ${col} ${def}`);
   }
 }
 
 // Check state_versions for missing columns too
-const svTableInfo = await sqlite.execute("PRAGMA table_info(state_versions)");
+const svTableInfo = tableRows("PRAGMA table_info(state_versions)");
 const existingSvCols = getColumnNames(svTableInfo);
 const svAdditions: [string, string][] = [
   ["status", "text DEFAULT 'finalized'"],
@@ -80,43 +120,43 @@ const svAdditions: [string, string][] = [
 ];
 for (const [col, def] of svAdditions) {
   if (!existingSvCols.has(col)) {
-    await sqlite.execute(`ALTER TABLE state_versions ADD COLUMN ${col} ${def}`);
+    runSql(`ALTER TABLE state_versions ADD COLUMN ${col} ${def}`);
   }
 }
 
 // Check workspaces for created_at column
-const wsTableInfo = await sqlite.execute("PRAGMA table_info(workspaces)");
+const wsTableInfo = tableRows("PRAGMA table_info(workspaces)");
 const existingWsCols = getColumnNames(wsTableInfo);
 if (!existingWsCols.has("created_at")) {
-  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
+  runSql("ALTER TABLE workspaces ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
 }
 if (!existingWsCols.has("updated_at")) {
-  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN updated_at INTEGER");
+  runSql("ALTER TABLE workspaces ADD COLUMN updated_at INTEGER");
 }
 
-const organizationTableInfo = await sqlite.execute("PRAGMA table_info(organizations)");
+const organizationTableInfo = tableRows("PRAGMA table_info(organizations)");
 const existingOrganizationColumns = getColumnNames(organizationTableInfo);
 const organizationAdditions: [string, string][] = [
   ["aggregated_commit_status_enabled", "integer NOT NULL DEFAULT true"],
   ["send_passing_statuses", "integer NOT NULL DEFAULT false"],
 ];
 for (const [col, def] of organizationAdditions) {
-  if (!existingOrganizationColumns.has(col)) await sqlite.execute(`ALTER TABLE organizations ADD COLUMN ${col} ${def}`);
+  if (!existingOrganizationColumns.has(col)) runSql(`ALTER TABLE organizations ADD COLUMN ${col} ${def}`);
 }
 // Check workspaces for source column
 if (!existingWsCols.has("source")) {
-  await sqlite.execute("ALTER TABLE workspaces ADD COLUMN source text DEFAULT 'tfe-api'");
+  runSql("ALTER TABLE workspaces ADD COLUMN source text DEFAULT 'tfe-api'");
 }
 
 // Check state_versions for created_at column
-const svCreatedAtInfo = await sqlite.execute("PRAGMA table_info(state_versions)");
+const svCreatedAtInfo = tableRows("PRAGMA table_info(state_versions)");
 const existingSvCreatedAtCols = getColumnNames(svCreatedAtInfo);
 if (!existingSvCreatedAtCols.has("created_at")) {
-  await sqlite.execute("ALTER TABLE state_versions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
+  runSql("ALTER TABLE state_versions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)");
 }
 
 // Check policy_sets for missing columns
-const psTableInfo = await sqlite.execute("PRAGMA table_info(policy_sets)");
+const psTableInfo = tableRows("PRAGMA table_info(policy_sets)");
 const existingPsCols = getColumnNames(psTableInfo);
 const psAdditions: [string, string][] = [
   ["agent_enabled", "integer DEFAULT false"],
@@ -126,12 +166,12 @@ const psAdditions: [string, string][] = [
 ];
 for (const [col, def] of psAdditions) {
   if (!existingPsCols.has(col)) {
-    await sqlite.execute(`ALTER TABLE policy_sets ADD COLUMN ${col} ${def}`);
+    runSql(`ALTER TABLE policy_sets ADD COLUMN ${col} ${def}`);
   }
 }
 
 // Create admin version tables if they don't exist
-await sqlite.executeMultiple(`
+runSql(`
   CREATE TABLE IF NOT EXISTS admin_terraform_versions (
     id TEXT PRIMARY KEY,
     version TEXT NOT NULL UNIQUE,
@@ -198,7 +238,7 @@ await sqlite.executeMultiple(`
 `);
 
 // Check notification_configurations for missing columns
-const ncTableInfo = await sqlite.execute("PRAGMA table_info(notification_configurations)");
+const ncTableInfo = tableRows("PRAGMA table_info(notification_configurations)");
 const existingNcCols = getColumnNames(ncTableInfo);
 const ncAdditions: [string, string][] = [
   ["team_id", "text REFERENCES teams(id)"],
@@ -206,14 +246,14 @@ const ncAdditions: [string, string][] = [
 ];
 for (const [col, def] of ncAdditions) {
   if (!existingNcCols.has(col)) {
-    await sqlite.execute(`ALTER TABLE notification_configurations ADD COLUMN ${col} ${def}`);
+    runSql(`ALTER TABLE notification_configurations ADD COLUMN ${col} ${def}`);
   }
 }
-const workspaceNotificationColumn = ncTableInfo.rows
+const workspaceNotificationColumn = ncTableInfo
   .map((row: unknown): TableInfoRow => row as TableInfoRow)
   .find((column: Readonly<TableInfoRow>): boolean => column.name === "workspace_id");
 if (workspaceNotificationColumn?.notnull === 1) {
-  await sqlite.executeMultiple(`
+  runSql(`
     PRAGMA foreign_keys = OFF;
     CREATE TABLE __new_notification_configurations (
       id TEXT PRIMARY KEY NOT NULL,
@@ -241,7 +281,7 @@ if (workspaceNotificationColumn?.notnull === 1) {
 }
 
 // Check policy_checks for missing columns
-const pcTableInfo = await sqlite.execute("PRAGMA table_info(policy_checks)");
+const pcTableInfo = tableRows("PRAGMA table_info(policy_checks)");
 const existingPcCols = getColumnNames(pcTableInfo);
 const pcAdditions: [string, string][] = [
   ["policy_id", "text REFERENCES policies(id)"],
@@ -249,7 +289,7 @@ const pcAdditions: [string, string][] = [
 ];
 for (const [col, def] of pcAdditions) {
   if (!existingPcCols.has(col)) {
-    await sqlite.execute(`ALTER TABLE policy_checks ADD COLUMN ${col} ${def}`);
+    runSql(`ALTER TABLE policy_checks ADD COLUMN ${col} ${def}`);
   }
 }
 
@@ -257,32 +297,29 @@ for (const [col, def] of pcAdditions) {
 const storedSshKeys = await db.query.sshKeys.findMany();
 for (const key of storedSshKeys) {
   if (!isEncryptedSecret(key.value)) {
-    await sqlite.execute({
-      sql: "UPDATE ssh_keys SET value = ? WHERE id = ?",
-      args: [await encryptSecret(key.value), key.id],
-    });
+    client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?").run(await encryptSecret(key.value), key.id);
   }
 }
 
 // Check users for missing columns
-const usersTableInfo = await sqlite.execute("PRAGMA table_info(users)");
+const usersTableInfo = tableRows("PRAGMA table_info(users)");
 const existingUsersCols = getColumnNames(usersTableInfo);
-if (!existingUsersCols.has("is_site_auditor")) await sqlite.execute("ALTER TABLE users ADD COLUMN is_site_auditor INTEGER DEFAULT 0");
-if (!existingUsersCols.has("is_suspended")) await sqlite.execute("ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0");
-if (!existingUsersCols.has("theme")) await sqlite.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'original-light'");
+if (!existingUsersCols.has("is_site_auditor")) runSql("ALTER TABLE users ADD COLUMN is_site_auditor INTEGER DEFAULT 0");
+if (!existingUsersCols.has("is_suspended")) runSql("ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0");
+if (!existingUsersCols.has("theme")) runSql("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'original-light'");
 
 // Check teams for missing columns
-const teamsTableInfo = await sqlite.execute("PRAGMA table_info(teams)");
+const teamsTableInfo = tableRows("PRAGMA table_info(teams)");
 const existingTeamsCols = getColumnNames(teamsTableInfo);
-if (!existingTeamsCols.has("allow_member_token_management")) await sqlite.execute("ALTER TABLE teams ADD COLUMN allow_member_token_management INTEGER DEFAULT 0");
+if (!existingTeamsCols.has("allow_member_token_management")) runSql("ALTER TABLE teams ADD COLUMN allow_member_token_management INTEGER DEFAULT 0");
 
 // Check oauth_clients for missing columns
-const oauthTableInfo = await sqlite.execute("PRAGMA table_info(oauth_clients)");
+const oauthTableInfo = tableRows("PRAGMA table_info(oauth_clients)");
 const existingOauthCols = getColumnNames(oauthTableInfo);
-if (!existingOauthCols.has("organization_scoped")) await sqlite.execute("ALTER TABLE oauth_clients ADD COLUMN organization_scoped INTEGER DEFAULT 0");
+if (!existingOauthCols.has("organization_scoped")) runSql("ALTER TABLE oauth_clients ADD COLUMN organization_scoped INTEGER DEFAULT 0");
 
 // Create new tables if not existing
-await sqlite.executeMultiple(`
+runSql(`
   CREATE TABLE IF NOT EXISTS workspace_transfers (
     id TEXT PRIMARY KEY,
     source_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
@@ -452,32 +489,32 @@ await sqlite.executeMultiple(`
 `);
 
 // Check registry_module_versions for missing columns
-const rmvInfo = await sqlite.execute("PRAGMA table_info(registry_module_versions)");
+const rmvInfo = tableRows("PRAGMA table_info(registry_module_versions)");
 const existingRmvCols = getColumnNames(rmvInfo);
-if (!existingRmvCols.has("is_deprecated")) await sqlite.execute("ALTER TABLE registry_module_versions ADD COLUMN is_deprecated INTEGER DEFAULT 0");
-if (!existingRmvCols.has("is_revoked")) await sqlite.execute("ALTER TABLE registry_module_versions ADD COLUMN is_revoked INTEGER DEFAULT 0");
+if (!existingRmvCols.has("is_deprecated")) runSql("ALTER TABLE registry_module_versions ADD COLUMN is_deprecated INTEGER DEFAULT 0");
+if (!existingRmvCols.has("is_revoked")) runSql("ALTER TABLE registry_module_versions ADD COLUMN is_revoked INTEGER DEFAULT 0");
 
 // Check run_tasks for global_configuration
-const rtInfo = await sqlite.execute("PRAGMA table_info(run_tasks)");
+const rtInfo = tableRows("PRAGMA table_info(run_tasks)");
 const existingRtCols = getColumnNames(rtInfo);
-if (!existingRtCols.has("global_configuration")) await sqlite.execute("ALTER TABLE run_tasks ADD COLUMN global_configuration TEXT");
+if (!existingRtCols.has("global_configuration")) runSql("ALTER TABLE run_tasks ADD COLUMN global_configuration TEXT");
 
 // Check configuration_versions for auto_queue_runs
-const cvInfo = await sqlite.execute("PRAGMA table_info(configuration_versions)");
+const cvInfo = tableRows("PRAGMA table_info(configuration_versions)");
 const existingCvCols = getColumnNames(cvInfo);
 if (!existingCvCols.has("auto_queue_runs")) {
-  await sqlite.execute("ALTER TABLE configuration_versions ADD COLUMN auto_queue_runs INTEGER NOT NULL DEFAULT 1");
+  runSql("ALTER TABLE configuration_versions ADD COLUMN auto_queue_runs INTEGER NOT NULL DEFAULT 1");
 }
 
 // Check run_task_results for task_stage_id
-const rtrInfo = await sqlite.execute("PRAGMA table_info(run_task_results)");
+const rtrInfo = tableRows("PRAGMA table_info(run_task_results)");
 const existingRtrCols = getColumnNames(rtrInfo);
-if (!existingRtrCols.has("task_stage_id")) await sqlite.execute("ALTER TABLE run_task_results ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
+if (!existingRtrCols.has("task_stage_id")) runSql("ALTER TABLE run_task_results ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
 
 // Check policy_evaluations for task_stage_id & run_id
-const peInfo = await sqlite.execute("PRAGMA table_info(policy_evaluations)");
+const peInfo = tableRows("PRAGMA table_info(policy_evaluations)");
 const existingPeCols = getColumnNames(peInfo);
-if (!existingPeCols.has("task_stage_id")) await sqlite.execute("ALTER TABLE policy_evaluations ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
-if (!existingPeCols.has("run_id")) await sqlite.execute("ALTER TABLE policy_evaluations ADD COLUMN run_id TEXT REFERENCES runs(id)");
+if (!existingPeCols.has("task_stage_id")) runSql("ALTER TABLE policy_evaluations ADD COLUMN task_stage_id TEXT REFERENCES task_stages(id)");
+if (!existingPeCols.has("run_id")) runSql("ALTER TABLE policy_evaluations ADD COLUMN run_id TEXT REFERENCES runs(id)");
 
-await sqlite.execute('PRAGMA foreign_keys = ON');
+runSql('PRAGMA foreign_keys = ON');
