@@ -3,6 +3,7 @@
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
 import { Client, InvalidCredentialsError, SizeLimitExceededError, type Entry } from "ldapts";
+import { createHash } from "node:crypto";
 import type { LdapSettings } from "./sso";
 
 export type LdapUser = Readonly<{
@@ -146,7 +147,9 @@ export async function authenticateLdap(
   }
 }
 
+type LdapAuthenticationResult = Readonly<{ user: LdapUser | null; unavailable: boolean }>;
 const ldapFailureCache = new Map<string, number>();
+const ldapProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
 
 /** Share the short circuit-breaker window across browser and CLI login paths. */
@@ -154,12 +157,20 @@ export async function authenticateLdapWithCircuitBreaker(
   settings: LdapSettings,
   username: string,
   password: string,
-): Promise<{ user: LdapUser | null; unavailable: boolean }> {
+): Promise<LdapAuthenticationResult> {
   const hostKey = `${settings.encryption}:${settings.host ?? ""}:${settings.port}`;
   const now = Date.now();
   if ((ldapFailureCache.get(hostKey) ?? 0) > now) return { user: null, unavailable: true };
-  const result = await authenticateLdap(settings, username, password);
-  if (result.unavailable) ldapFailureCache.set(hostKey, now + LDAP_FAILURE_EXPIRY_MS);
-  else if (result.user !== null) ldapFailureCache.delete(hostKey);
+  const probeKey = `${hostKey}:${username}:${createHash("sha256").update(password).digest("hex")}`;
+  const pending = ldapProbes.get(probeKey);
+  if (pending !== undefined) return pending;
+  const result = authenticateLdap(settings, username, password)
+    .then((value): LdapAuthenticationResult => {
+      if (value.unavailable) ldapFailureCache.set(hostKey, now + LDAP_FAILURE_EXPIRY_MS);
+      else if (value.user !== null) ldapFailureCache.delete(hostKey);
+      return value;
+    })
+    .finally((): void => { ldapProbes.delete(probeKey); });
+  ldapProbes.set(probeKey, result);
   return result;
 }

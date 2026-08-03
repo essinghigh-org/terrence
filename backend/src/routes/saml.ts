@@ -3,13 +3,13 @@
 // the saml_settings table (admin API + dashboard).
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
-import { createHash, randomBytes, verify as verifySignature } from "node:crypto";
+import { randomBytes, verify as verifySignature } from "node:crypto";
 import { deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
 import { DOMParser } from "@xmldom/xmldom";
 import { SignedXml } from "xml-crypto";
 import { XMLParser } from "fast-xml-parser";
 import { db } from "../db";
-import { apiTokens, samlSettings, users } from "../db/schema";
+import { samlSettings, users } from "../db/schema";
 import { getSettings } from "../lib/settings";
 import { auditLog } from "../lib/utils";
 import {
@@ -22,7 +22,8 @@ import {
   SsoConflictError,
 } from "../lib/sso";
 import { claimSsoChallenge, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
-import { browserSessionUser, issueLoginSession, revokeBrowserSession } from "./accounts";
+import { issueSsoLogin } from "../lib/sso-login";
+import { browserSessionUser, revokeBrowserSession } from "./accounts";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -407,45 +408,6 @@ async function currentSamlSettings(): Promise<SamlRow> {
   return settings;
 }
 
-type LoginContext = Readonly<{
-  set: SetObj;
-  request: RequestInfo | undefined;
-  server?: unknown;
-}>;
-
-/** Browser session or SSO API token (RelayState "api"), shared by SAML + OIDC. */
-export async function issueSsoLogin(
-  user: Readonly<typeof users.$inferSelect>,
-  context: LoginContext,
-  options: Readonly<{ tokenTtlMs?: number; wantsToken?: boolean }> = {},
-): Promise<unknown> {
-  if (!options.wantsToken) {
-    return issueLoginSession(user, true, context.set, context.request, context.server);
-  }
-  const tokenStr = `user-${randomBytes(32).toString("base64url")}`;
-  const tokenId = crypto.randomUUID();
-  const createdAt = Date.now();
-  await db.insert(apiTokens).values({
-    id: tokenId,
-    token: createHash("sha256").update(tokenStr).digest("hex"),
-    userId: user.id,
-    description: "SSO login token",
-    createdAt,
-    expiresAt: options.tokenTtlMs !== undefined ? createdAt + options.tokenTtlMs : null,
-  });
-  return {
-    data: {
-      id: tokenId,
-      type: "tokens",
-      attributes: {
-        token: tokenStr,
-        "must-change-password": user.mustChangePassword,
-        ...(options.tokenTtlMs === undefined ? {} : { "expired-at": new Date(createdAt + options.tokenTtlMs).toISOString() }),
-      },
-    },
-  };
-}
-
 function wantsToken(request: RequestInfo | undefined, relayState: string | null): boolean {
   if (relayState === "api" || relayState === "api-token" || relayState === "terraform-cli") return true;
   const accept = request?.headers.get("accept") ?? "";
@@ -490,7 +452,7 @@ async function handleIdpInitiatedLogout(
     return invalid("Invalid SAML logout request subject");
   }
   await revokeBrowserSession(set, request);
-  await auditLog("sso-logout", "saml", null, null, null, { reason: "IdP-initiated" });
+  await auditLog("sso-logout", "saml", sessionUser.id, sessionUser.id, null, { reason: "IdP-initiated" });
 
   if (settings.sloEndpointUrl === null) {
     const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });

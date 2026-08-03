@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import { getSettings } from "./settings";
 import { apiURL, auditLog } from "./utils";
+import { isUniqueConstraintError } from "./validation";
 
 export type SsoProvider = "saml" | "oidc" | "ldap";
 
@@ -51,13 +52,13 @@ export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
     getSettings("general"),
     db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") }),
     getSettings("oidc"),
-    getSettings("ldap"),
+    ldapSettings(),
   ]);
   return {
     localAuthEnabled: bool(general["local-auth-enabled"], true),
     samlEnabled: saml?.enabled === true,
     oidcEnabled: bool(oidc.enabled),
-    ldapEnabled: bool(ldap.enabled),
+    ldapEnabled: ldap.enabled,
   };
 }
 
@@ -79,12 +80,16 @@ export type LdapSettings = Readonly<{
 
 export async function ldapSettings(): Promise<LdapSettings> {
   const raw = await getSettings("ldap");
-  const port = typeof raw.port === "number" && Number.isInteger(raw.port) ? raw.port : 389;
-  const encryption = ["plain", "starttls", "ldaps"].includes(String(raw.encryption))
-    ? String(raw.encryption) as LdapSettings["encryption"]
+  const encryptionValue = String(raw.encryption);
+  const encryptionConfigured = ["plain", "starttls", "ldaps"].includes(encryptionValue);
+  const encryption = encryptionConfigured
+    ? encryptionValue as LdapSettings["encryption"]
     : "plain";
+  const port = typeof raw.port === "number" && Number.isInteger(raw.port) && raw.port >= 1 && raw.port <= 65535
+    ? raw.port
+    : encryption === "ldaps" ? 636 : 389;
   return {
-    enabled: bool(raw.enabled),
+    enabled: bool(raw.enabled) && encryptionConfigured,
     allowEmailLinking: bool(raw["link-by-email"]),
     host: str(raw.host),
     port,
@@ -172,15 +177,21 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
   });
   if (byIdentity !== undefined) {
-    const updates: Partial<typeof users.$inferInsert> = {};
     if (byIdentity.email === null && email !== null
-      && identity.emailVerified === true && identity.allowEmailLinking === true) updates.email = email;
-    if (updates.email !== undefined) {
-      const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
-      if (emailOwner !== undefined && emailOwner.id !== byIdentity.id) delete updates.email;
-    }
-    if (Object.keys(updates).length > 0) {
-      await db.update(users).set(updates).where(eq(users.id, byIdentity.id));
+      && identity.emailVerified === true && identity.allowEmailLinking === true) {
+      try {
+        await db.update(users).set({ email }).where(and(
+          eq(users.id, byIdentity.id),
+          isNull(users.email),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${users} AS email_owner
+            WHERE email_owner.id <> ${byIdentity.id}
+              AND lower(email_owner.email) = ${email}
+          )`,
+        ));
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
+      }
     }
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, byIdentity.id) });
     if (refreshed === undefined) throw new Error("SSO user is unavailable");
@@ -229,8 +240,9 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   }
 
   const userId = `usr-${crypto.randomUUID()}`;
-  // bcrypt of random bytes: valid hash format, impossible to guess.
-  const unusableHash = await bcrypt.hash(randomBytes(32).toString("base64"), 10);
+  // Deliberately malformed bcrypt value: bcrypt.compare returns false without
+  // spending work deriving a password hash for an account that cannot use one.
+  const unusableHash = `$disabled$${randomBytes(32).toString("base64url")}`;
   // Two parallel first logins can both pass the identity/username lookups and
   // both reach this insert; onConflictDoNothing makes the second one a no-op,
   // and the re-read below returns the winning row.
@@ -278,7 +290,7 @@ type SamlGroupMappingData = Readonly<{
   existingTeamIds: ReadonlySet<string>;
 }>;
 
-type SsoDatabase = Readonly<typeof db>;
+type SsoDatabase = Readonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>;
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
 async function loadSamlGroupMappingData(database: SsoDatabase, userId: string): Promise<SamlGroupMappingData> {
@@ -322,11 +334,12 @@ async function applySamlGroupMapping(
   const teamsByOrg = new Map<string, typeof orgTeams[number][]>();
   for (const team of orgTeams) teamsByOrg.set(team.orgId, [...(teamsByOrg.get(team.orgId) ?? []), team]);
   const teamInserts: (typeof teamMemberships.$inferInsert)[] = [];
+  const membershipInserts: (typeof organizationMemberships.$inferInsert)[] = [];
   for (const org of samlOrgs) {
     const existing = membershipByOrg.get(org.id);
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
     if (existing === undefined) {
-      await database.insert(organizationMemberships).values({
+      membershipInserts.push({
         id: `orgmem-${crypto.randomUUID()}`,
         orgId: org.id,
         userId,
@@ -335,7 +348,7 @@ async function applySamlGroupMapping(
         // Mark the membership as SAML-managed so group pruning can later
         // remove or downgrade it without touching admin-granted rows.
         ssoSource: "saml",
-      }).onConflictDoNothing();
+      });
     } else if (isOwner && existing.role !== "owner" && existing.ssoSource === "saml") {
       // Preserve admin-granted provenance so pruning never removes the row.
       await database.update(organizationMemberships).set({ role: "owner" })
@@ -361,6 +374,7 @@ async function applySamlGroupMapping(
       }));
     teamInserts.push(...inserts);
   }
+  if (membershipInserts.length > 0) await database.insert(organizationMemberships).values(membershipInserts).onConflictDoNothing();
   if (teamInserts.length > 0) await database.insert(teamMemberships).values(teamInserts).onConflictDoNothing();
 }
 
@@ -420,12 +434,22 @@ async function pruneSamlGroupMappings(
 }
 
 export async function syncSamlGroupMappings(userId: string, groups: readonly string[]): Promise<void> {
-  await db.transaction(async (transaction: unknown): Promise<void> => {
-    const database = transaction as SsoDatabase;
+  await db.transaction(async (database): Promise<void> => {
     const mapping = await loadSamlGroupMappingData(database, userId);
     await applySamlGroupMapping(database, userId, groups, mapping);
+    // Pruning uses the single pre-apply mapping snapshot; a redundant role
+    // update is harmless and converges SAML-managed rows in this transaction.
     await pruneSamlGroupMappings(database, userId, groups, mapping);
   });
+}
+
+/** Compare local passwords safely, including intentionally unusable SSO hashes. */
+export async function passwordMatches(password: string, passwordHash: string): Promise<boolean> {
+  try {
+    return await bcrypt.compare(password, passwordHash);
+  } catch {
+    return false;
+  }
 }
 
 /** HTML-escape a value for safe interpolation into rendered SSO pages. */

@@ -1097,6 +1097,7 @@ export const ssoChallenges = sqliteTable("sso_challenges", {
   expiresAt: integer("expires_at").notNull(),
 }, (table) => [
   index("sso_challenges_kind_expires_idx").on(table.kind, table.expiresAt),
+  index("sso_challenges_expires_idx").on(table.expiresAt),
 ]);
 
 export const supportBundleRequests = sqliteTable("support_bundle_requests", {

@@ -1,11 +1,10 @@
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
-import * as bcrypt from "bcryptjs";
 import { db } from "./db";
-import { apiTokens, users } from "./db/schema";
+import { apiTokens, user2FA, users } from "./db/schema";
 import { createHash } from "node:crypto";
 import { authenticateLdapWithCircuitBreaker } from "./lib/ldap";
-import { ldapSettings, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
+import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -263,7 +262,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     if (user === null && sso.localAuthEnabled && username !== "") {
       user = await db.query.users.findFirst({ where: eq(users.username, username) }) ?? null;
-      if (user !== null && (password === "" || !(await bcrypt.compare(password, user.passwordHash)))) user = null;
+      if (user !== null && (password === "" || !(await passwordMatches(password, user.passwordHash)))) user = null;
     }
 
     if (user === null) {
@@ -273,6 +272,16 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
         ? "Invalid username or password."
         : "Local password sign-in is disabled. Use single sign-on.";
       return htmlResponse(loginPage(authorization, message, username, {
+        saml: sso.samlEnabled,
+        oidc: sso.oidcEnabled,
+        ldap: sso.ldapEnabled,
+        localAuthEnabled: sso.localAuthEnabled,
+      }), 401);
+    }
+
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    if (mfa?.enabled === true) {
+      return htmlResponse(loginPage(authorization, "MFA-enabled accounts must sign in through the browser login flow.", username, {
         saml: sso.samlEnabled,
         oidc: sso.oidcEnabled,
         ldap: sso.ldapEnabled,

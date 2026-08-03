@@ -7,7 +7,7 @@
 declare module "ldapjs" {
   export type BindRequest = {
     dn: { toString(): string };
-    credentials: string;
+    credentials?: string;
   };
   export type SearchRequest = {
     dn: { toString(): string };

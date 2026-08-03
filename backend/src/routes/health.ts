@@ -17,16 +17,19 @@ type MetricsCtx = Readonly<{
 const PING_SSO_CACHE_TTL_MS = 1_000;
 type PingSsoSnapshot = Awaited<ReturnType<typeof ssoSettingsSnapshot>>;
 let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | undefined;
+let pingSsoCacheGeneration = 0;
 
 export function invalidatePingSsoCache(): void {
+  pingSsoCacheGeneration += 1;
   pingSsoCache = undefined;
 }
 
 async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   const now = Date.now();
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
+  const generation = pingSsoCacheGeneration;
   const value = await ssoSettingsSnapshot();
-  pingSsoCache = { value, expiresAt: now + PING_SSO_CACHE_TTL_MS };
+  if (generation === pingSsoCacheGeneration) pingSsoCache = { value, expiresAt: now + PING_SSO_CACHE_TTL_MS };
   return value;
 }
 

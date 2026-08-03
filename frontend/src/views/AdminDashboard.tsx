@@ -33,11 +33,15 @@ export type AdminSection =
   | "audit"
   | "auth";
 
-const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string =>
-  typeof attrs[key] === "string" ? attrs[key] : fallback;
+const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string => {
+  const value = attrs[key];
+  return typeof value === "string" ? value : fallback;
+};
 
-const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean =>
-  typeof attrs[key] === "boolean" ? attrs[key] : fallback;
+const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean => {
+  const value = attrs[key];
+  return typeof value === "boolean" ? value : fallback;
+};
 
 async function saveAuthSettings(options: Readonly<{
   setSaving: (saving: boolean) => void;
@@ -166,8 +170,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [persistedLdapEnabled, setPersistedLdapEnabled] = useState<boolean | null>(null);
   const [ldapLinkByEmail, setLdapLinkByEmail] = useState(false);
   const [ldapHost, setLdapHost] = useState("");
-  const [ldapPort, setLdapPort] = useState(389);
-  const [ldapEncryption, setLdapEncryption] = useState("plain");
+  const [ldapPort, setLdapPort] = useState(636);
+  const [ldapEncryption, setLdapEncryption] = useState("ldaps");
   const [ldapBindDn, setLdapBindDn] = useState("");
   const [ldapBindPassword, setLdapBindPassword] = useState("");
   // bind-password is write-only; an empty field must not clear a stored value.
@@ -448,8 +452,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setPersistedLdapEnabled(attrBoolean(attrs, "enabled", false));
       setLdapLinkByEmail(attrBoolean(attrs, "link-by-email", false));
       setLdapHost(attrString(attrs, "host", ""));
-      setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 389);
-      setLdapEncryption(attrString(attrs, "encryption", "plain"));
+      setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 636);
+      setLdapEncryption(attrString(attrs, "encryption", "ldaps"));
       setLdapBindDn(attrString(attrs, "bind-dn", ""));
       setLdapBindPassword("");
       setLdapBindPasswordSet(attrs["bind-password-set"] === true);
@@ -499,7 +503,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("Host and Base DN are required when LDAP is enabled.");
       return;
     }
-    if (ldapEnabled && (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535)) {
+    if (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535) {
       setLdapError("Port must be between 1 and 65535.");
       return;
     }
@@ -618,7 +622,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           "link-by-email": oidcLinkByEmail,
           issuer: oidcIssuer.trim() !== "" ? oidcIssuer.trim() : null,
           "client-id": oidcClientId.trim() !== "" ? oidcClientId.trim() : null,
-          "client-secret": oidcClientSecret.trim() !== "" ? oidcClientSecret.trim() : null,
+          ...(oidcClientSecret.trim() !== "" ? { "client-secret": oidcClientSecret.trim() } : {}),
           scopes: oidcScopes,
           "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
         },
@@ -1261,6 +1265,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                       >
                         {generalSaving ? "Saving..." : "Save sign-in settings"}
                       </Button>
+                      {(persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null) && (
+                        <p className="text-xs text-amber-700">Waiting for all SSO settings to load before saving local authentication.</p>
+                      )}
                     </form>
                   )}
                 </CardContent>
@@ -1375,6 +1382,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={samlAttrEmail}
                               onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
+                              aria-label="SAML email attribute"
                             />
                           </div>
                           <div className="space-y-1">

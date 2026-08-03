@@ -17,7 +17,7 @@ import {
   validEmail,
 } from "../lib/sso";
 import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
-import { issueSsoLogin } from "./saml";
+import { issueSsoLogin } from "../lib/sso-login";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -240,7 +240,7 @@ async function verifyJwtSignature(
   const hash = hashName[alg];
   if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
 
-  const keys = await resolveVerificationKey(alg, header, settings.issuer);
+  const keys = await resolveVerificationKey(alg, header, discoveryConfig.jwksUri);
   if (keys.length === 0) throw new Error("No matching key found in the OIDC provider JWKS");
   for (const key of keys) {
     try {
@@ -269,6 +269,7 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   if (forceRefresh && cached !== undefined && (jwksRefreshes.get(jwksUri) ?? 0) + JWKS_REFRESH_MIN_INTERVAL_MS > now) {
     return cached.keys;
   }
+  if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   const response = await fetch(jwksUri, {
     redirect: "error",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -282,7 +283,6 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
     if (cached !== undefined) return cached.keys;
     throw new Error("The OIDC provider JWKS contains no keys");
   }
-  if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   jwksCache.set(jwksUri, { keys, fetchedAt: now });
   return keys;
 }
@@ -290,11 +290,9 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
 async function resolveVerificationKey(
   alg: string,
   header: Readonly<Record<string, unknown>>,
-  issuer: string | null,
+  jwksUri: string,
 ): Promise<Record<string, unknown>[]> {
-  if (issuer === null) return [];
-  const discoveryConfig = await discovery(issuer);
-  const keys = await fetchJwks(discoveryConfig.jwksUri);
+  const keys = await fetchJwks(jwksUri);
   const kid = typeof header.kid === "string" ? header.kid : undefined;
   const algFamily = alg.startsWith("ES") ? "EC" : "RSA";
   const matches = (candidate: Record<string, unknown>): boolean =>
@@ -309,7 +307,7 @@ async function resolveVerificationKey(
   // A missing kid usually means rotation. Refresh once, but cap forced fetches
   // so attacker-controlled unknown kids cannot turn the JWKS endpoint into a
   // request amplifier.
-  return (await fetchJwks(discoveryConfig.jwksUri, true)).filter((candidate): boolean => candidate.kid === kid && matches(candidate));
+  return (await fetchJwks(jwksUri, true)).filter((candidate): boolean => candidate.kid === kid && matches(candidate));
 }
 
 function verifyClaims(
@@ -342,7 +340,8 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
     try {
       config = await discovery(settings.issuer);
     } catch (error: unknown) {
-      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `OIDC discovery failed: ${error instanceof Error ? error.message : "unknown error"}`), 502);
+      await auditLog("sso-failure", "oidc", null, null, null, { reason: error instanceof Error ? error.message : "discovery failed" });
+      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
     }
 
     let verifier: string | null = null;

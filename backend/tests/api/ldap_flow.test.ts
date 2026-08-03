@@ -13,6 +13,7 @@ import { invalidatePingSsoCache } from "../../src/routes/health";
 
 const SERVICE_DN = "cn=admin,dc=example,dc=com";
 const USER_DN = (username: string): string => `uid=${username},dc=example,dc=com`;
+const SERVICE_PASSWORD = "service-secret";
 const VALID_USER_PASSWORD = "ldap-pass";
 
 function startLdapMock(): Promise<{ server: Server; port: number }> {
@@ -20,7 +21,8 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
     const server = ldap.createServer();
     server.bind("dc=example,dc=com", (req: ldap.BindRequest, res: ldap.Response, next: ldap.NextCallback): void => {
       const dn = req.dn.toString();
-      if (dn === SERVICE_DN || req.credentials === VALID_USER_PASSWORD) {
+      if ((dn === SERVICE_DN && req.credentials === SERVICE_PASSWORD)
+        || (dn !== SERVICE_DN && req.credentials === VALID_USER_PASSWORD)) {
         res.end();
         next();
         return;

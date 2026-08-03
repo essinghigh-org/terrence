@@ -37,7 +37,9 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   // so the GET re-fetches after saving reflect the newly enabled providers.
   let samlServerEnabled = false;
   let oidcServerEnabled = false;
+  let oidcServerSecretSet = true;
   let ldapServerEnabled = false;
+  let oidcPatchAttributes: Record<string, unknown> | null = null;
   let ldapPatchAttributes: Record<string, unknown> | null = null;
   let localAuthServerEnabled = true;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -79,7 +81,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
             enabled: oidcServerEnabled,
             issuer: null,
             "client-id": null,
-            "client-secret-set": false,
+            "client-secret-set": oidcServerSecretSet,
             scopes: "openid profile email",
             "pkce-method": null,
           },
@@ -112,9 +114,13 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
       const body = typeof init.body === "string"
-        ? JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } }
+        ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
         : {};
-      oidcServerEnabled = body.data?.attributes?.enabled === true;
+      const attributes = body.data?.attributes ?? {};
+      oidcPatchAttributes = attributes;
+      oidcServerEnabled = attributes.enabled === true;
+      if (typeof attributes["client-secret"] === "string") oidcServerSecretSet = true;
+      if (attributes["client-secret"] === null) oidcServerSecretSet = false;
       return json({
         data: {
           id: "oidc-settings",
@@ -123,7 +129,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
             enabled: oidcServerEnabled,
             issuer: "https://accounts.example.com",
             "client-id": "my-client-id",
-            "client-secret-set": false,
+            "client-secret-set": oidcServerSecretSet,
             scopes: "openid profile email",
             "pkce-method": "S256",
           },
@@ -251,9 +257,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/oidc-settings" && init?.method === "PATCH")).toBeTrue();
   });
+  expect(oidcPatchAttributes?.["client-secret"]).toBeUndefined();
 
   // --- Local authentication section ---
-  const localAuthCard = view.getByText("Local Authentication").closest('[data-slot="card"]') ?? document.body;
+  const localAuthCard = view.getByText("Local Authentication").closest('[data-slot="card"]');
+  expect(localAuthCard).not.toBeNull();
+  if (localAuthCard === null) throw new Error("Local authentication card is missing");
   const localAuthCheckbox = within(localAuthCard).getByLabelText("Allow local password authentication") as HTMLInputElement;
   expect(localAuthCheckbox.checked).toBeTrue();
   await act(async (): Promise<void> => { fireEvent.click(localAuthCheckbox); });

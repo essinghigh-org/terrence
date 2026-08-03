@@ -3,6 +3,17 @@ import { db } from "../db";
 import { ssoChallenges } from "../db/schema";
 
 const MAX_CHALLENGES_PER_KIND = 10_000;
+const CHALLENGE_PURGE_INTERVAL_MS = 60_000;
+
+/** Remove expired challenges even when no new login flow is being started. */
+export async function purgeExpiredSsoChallenges(now = Date.now()): Promise<void> {
+  await db.delete(ssoChallenges).where(lt(ssoChallenges.expiresAt, now));
+}
+
+const challengePurgeTimer = setInterval((): void => {
+  void purgeExpiredSsoChallenges().catch((): void => undefined);
+}, CHALLENGE_PURGE_INTERVAL_MS);
+(challengePurgeTimer as unknown as { unref?: () => void }).unref?.();
 
 async function trimSsoChallenges(kind: string): Promise<void> {
   const now = Date.now();

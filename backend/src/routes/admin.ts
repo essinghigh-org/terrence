@@ -5,6 +5,7 @@ import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { getSettings, type Settings } from "../lib/settings";
+import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
@@ -891,7 +892,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const authError = await authLockoutResponse(set, {
       saml: input.values.enabled === true,
       oidc: (await getSettings("oidc")).enabled === true,
-      ldap: (await getSettings("ldap")).enabled === true,
+      ldap: (await ldapSettings()).enabled,
     });
     if (authError !== null) return authError;
     await db.transaction(async (tx: unknown): Promise<void> => {
@@ -951,12 +952,12 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const [saml, oidc, ldap] = await Promise.all([
       currentSamlSettings(),
       getSettings("oidc"),
-      getSettings("ldap"),
+      ldapSettings(),
     ]);
     const authError = await authLockoutResponse(set, {
       saml: saml.enabled === true,
       oidc: oidc.enabled === true,
-      ldap: ldap.enabled === true,
+      ldap: ldap.enabled,
     }, localAuthEnabled);
     if (authError !== null) return authError;
     const updated = await updateSettings("general", attrs);
@@ -1089,13 +1090,15 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const authError = await authLockoutResponse(set, {
       saml: (await currentSamlSettings()).enabled,
       oidc: enabled,
-      ldap: (await getSettings("ldap")).enabled === true,
+      ldap: (await ldapSettings()).enabled,
     });
     if (authError !== null) return authError;
 
-    const clientSecret = typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
-      ? attrs["client-secret"]
-      : current["client-secret"];
+    const clientSecret = attrs["client-secret"] === null
+      ? null
+      : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
+        ? attrs["client-secret"]
+        : current["client-secret"];
     const updated = await updateSettings("oidc", {
       ...attrs,
       issuer,

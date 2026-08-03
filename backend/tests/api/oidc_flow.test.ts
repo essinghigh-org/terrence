@@ -3,7 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
-import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../../src/lib/sso-challenges";
+import { clearSsoChallenges, consumeSsoChallenge, purgeExpiredSsoChallenges, storeSsoChallenge } from "../../src/lib/sso-challenges";
 import { resetOidcCaches } from "../../src/routes/oidc";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
@@ -93,8 +93,9 @@ describe("OIDC SSO flow", () => {
     expect(authResponse.status).toBe(302);
     // The auth response sets the state cookie that binds this browser to the
     // flow; the callback must present it (same-origin browser behavior).
-    const cookie = `terrence_oidc_state=${cookieValue(authResponse, "terrence_oidc_state")}`;
-    expect(cookie).toContain("terrence_oidc_state=");
+    const stateCookieValue = cookieValue(authResponse, "terrence_oidc_state");
+    expect(stateCookieValue).not.toBe("");
+    const cookie = `terrence_oidc_state=${stateCookieValue}`;
     const authorizeUrl = authResponse.headers.get("Location") ?? "";
     const idpResponse = await fetch(authorizeUrl, { redirect: "manual" }); // real HTTP to the mock IdP
     expect(idpResponse.status).toBe(302);
@@ -301,6 +302,22 @@ describe("OIDC SSO flow", () => {
     }
   });
 
+  test("backfills a verified email on the existing SSO identity atomically", async () => {
+    mockSubject = `oidc-sub-backfill-${suffix}`;
+    mockEmail = `backfill-${suffix}@example.com`;
+    mockUsername = `backfill-${suffix}`;
+    mockEmailVerified = false;
+    try {
+      expect((await completeFlow()).response.status).toBe(200);
+      mockEmailVerified = true;
+      expect((await completeFlow()).response.status).toBe(200);
+      const created = await db.query.users.findFirst({ where: eq(users.username, mockUsername) });
+      expect(created?.email).toBe(mockEmail);
+    } finally {
+      mockEmailVerified = true;
+    }
+  });
+
   test("blocks provisioning when the username collides with a local account", async () => {
     await db.insert(users).values({
       id: `usr-oidc-other-${suffix}`,
@@ -394,10 +411,22 @@ describe("OIDC SSO flow", () => {
     }
   });
 
+  test("purges expired challenges across flow kinds", async () => {
+    const kind = `expired-kind-${suffix}`;
+    const id = `expired-${suffix}`;
+    await storeSsoChallenge(kind, id, {}, Date.now() - 1);
+    try {
+      await purgeExpiredSsoChallenges();
+      expect(await consumeSsoChallenge(kind, id)).toBeUndefined();
+    } finally {
+      await clearSsoChallenges(kind);
+    }
+  });
+
   test("rejects a callback from the provider with an error parameter", async () => {
     const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
     const state = new URL(authResponse.headers.get("Location") ?? "").searchParams.get("state") ?? "";
-    const stateCookie = (authResponse.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
+    const stateCookie = `terrence_oidc_state=${cookieValue(authResponse, "terrence_oidc_state")}`;
     const response = await app.handle(new Request(
       `http://terrence.test/users/oidc/callback?error=access_denied&error_description=User+cancelled&state=${state}`,
       { headers: { Cookie: stateCookie } },

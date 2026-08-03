@@ -196,16 +196,52 @@ describe("SAML SSO flow", () => {
     const location = new URL(auth.headers.get("Location") ?? "");
     const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
     if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
+    const assertionId = `_replay_${suffix}`;
     const assertion = buildSignedSamlResponse({
       username: `replay-${suffix}`,
       email: `replay-${suffix}@example.com`,
       inResponseTo: requestId,
+      assertionId,
     });
     const first = await app.handle(samlAcsRequest(assertion));
     expect(first.status).toBe(200);
-    const replay = await app.handle(samlAcsRequest(assertion));
+    const secondAuth = await app.handle(new Request("http://terrence.test/users/saml/auth"));
+    const secondRequestId = /\bID="([^"]+)"/.exec(inflateAndDecode(new URL(secondAuth.headers.get("Location") ?? "").searchParams.get("SAMLRequest") ?? ""))?.[1];
+    if (secondRequestId === undefined) throw new Error("SAML AuthnRequest has no second ID");
+    const replayAssertion = buildSignedSamlResponse({
+      username: `replay-${suffix}`,
+      email: `replay-${suffix}@example.com`,
+      inResponseTo: secondRequestId,
+      assertionId,
+    });
+    const replay = await app.handle(samlAcsRequest(replayAssertion));
     expect(replay.status).toBe(400);
-    expect(await replay.text()).toContain("does not match");
+    expect(await replay.text()).toContain("already been used");
+  });
+
+  test("rejects an unsigned second assertion", async () => {
+    const signed = buildSignedSamlResponse({
+      username: `wrapped-${suffix}`,
+      email: `wrapped-${suffix}@example.com`,
+      inResponseTo: "_not-used",
+    });
+    const xml = Buffer.from(signed, "base64").toString("utf8").replace(
+      "</samlp:Response>",
+      '<saml:Assertion ID="_unsigned" Version="2.0"></saml:Assertion></samlp:Response>',
+    );
+    const response = await app.handle(samlAcsRequest(Buffer.from(xml, "utf8").toString("base64")));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("exactly one Assertion");
+  });
+
+  test("rejects a response-level signature instead of accepting an unsigned assertion", async () => {
+    const response = await validAcs({
+      username: `response-signature-${suffix}`,
+      email: `response-signature-${suffix}@example.com`,
+      signatureTarget: "response",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("signature");
   });
 
   test("issues a short-lived API token for the CLI flow via RelayState", async () => {

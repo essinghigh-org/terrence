@@ -119,6 +119,8 @@ const sensitivePaths = new Set([
   "/api/v2/users/login",
   "/oauth/authorization",
   "/oauth/token",
+  "/users/oidc/auth",
+  "/users/oidc/callback",
   "/users/saml/auth",
   "/users/saml/logout",
   "/users/saml/slo",
@@ -184,7 +186,10 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (request.method === "GET" && (path === "/users/saml/auth" || path === "/users/saml/logout" || path === "/users/saml/slo")) return path;
+  if (request.method === "GET" && (
+    path === "/users/oidc/auth" || path === "/users/oidc/callback"
+    || path === "/users/saml/auth" || path === "/users/saml/logout" || path === "/users/saml/slo"
+  )) return path;
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {

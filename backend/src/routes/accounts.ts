@@ -10,7 +10,7 @@ import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
-import { ldapSettings, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
+import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -478,7 +478,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       const found = await db.query.users.findFirst({
         where: or(eq(users.username, username), eq(users.email, username)),
       });
-      if (found === undefined || !(await bcrypt.compare(password, found.passwordHash))) {
+      if (found === undefined || !(await passwordMatches(password, found.passwordHash))) {
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }

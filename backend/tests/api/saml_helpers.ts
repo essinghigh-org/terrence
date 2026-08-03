@@ -31,6 +31,8 @@ export type SamlResponseOptions = Readonly<{
   siteAdmin?: string;
   privateKey?: string;
   publicCert?: string;
+  assertionId?: string;
+  signatureTarget?: "assertion" | "response";
   /** Attribute map merged into the AttributeStatement. */
   attributes?: Record<string, string | string[]>;
 }>;
@@ -73,12 +75,13 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     siteAdmin,
     privateKey = IDP_KEY,
     publicCert = IDP_CERT,
+    assertionId = `_assertion_${crypto.randomUUID().replaceAll("-", "")}`,
+    signatureTarget = "assertion",
     attributes = {},
   } = options;
 
   const now = iso(0);
   const responseId = `_response_${crypto.randomUUID().replaceAll("-", "")}`;
-  const assertionId = `_assertion_${crypto.randomUUID().replaceAll("-", "")}`;
   const attributeXml = [
     serializedAttribute("Username", username),
     serializedAttribute("email", email),
@@ -101,7 +104,7 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
         <saml:SubjectConfirmationData Recipient="${escapeXml(recipient)}" NotOnOrAfter="${escapeXml(notOnOrAfter)}"${inResponseTo === undefined ? "" : ` InResponseTo="${escapeXml(inResponseTo)}"`}/>
       </saml:SubjectConfirmation>
     </saml:Subject>
-    <saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}">
+    <saml:Conditions NotBefore="${escapeXml(notBefore)}" NotOnOrAfter="${escapeXml(notOnOrAfter)}">
       <saml:AudienceRestriction>
         <saml:Audience>${escapeXml(audience)}</saml:Audience>
       </saml:AudienceRestriction>
@@ -119,17 +122,18 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
     canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
   });
+  const signatureXPath = signatureTarget === "response" ? "//*[local-name()='Response']" : "//*[local-name()='Assertion']";
   signed.addReference({
-    xpath: "//*[local-name()='Assertion']",
+    xpath: signatureXPath,
     transforms: [
       "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
       "http://www.w3.org/2001/10/xml-exc-c14n#",
     ],
     digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
-    uri: `#${assertionId}`,
+    uri: `#${signatureTarget === "response" ? responseId : assertionId}`,
   });
   signed.computeSignature(responseXml, {
-    location: { reference: "//*[local-name()='Assertion']", action: "append" },
+    location: { reference: signatureXPath, action: "append" },
   });
   return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
 }
