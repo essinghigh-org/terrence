@@ -84,7 +84,7 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
   <samlp:Status>
     <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:protocol:status:Success"/>
   </samlp:Status>
-  <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}" Destination="${destination}">
+  <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}">
     <saml:Issuer>${issuer}</saml:Issuer>
     <saml:Subject>
       <saml:NameID>${nameId}</saml:NameID>

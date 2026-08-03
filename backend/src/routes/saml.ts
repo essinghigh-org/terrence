@@ -480,11 +480,6 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion Destination does not match the ACS URL."), 400);
     }
-    if (parsedAssertion["@_Destination"] !== acsUrl(request)) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion Destination does not match the ACS URL."), 400);
-    }
-
     const conditions = attr(local(parsedAssertion, "Conditions") as Record<string, unknown> | undefined);
     const notBefore = conditions["@_NotBefore"];
     const notOnOrAfter = conditions["@_NotOnOrAfter"];
