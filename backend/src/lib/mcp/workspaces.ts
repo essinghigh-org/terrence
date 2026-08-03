@@ -178,7 +178,7 @@ export const workspaceTools: readonly McpTool[] = [
         offset,
         columns: { id: true, key: true, value: true, sensitive: true, hcl: true, category: true, description: true },
       });
-      return rows;
+      return rows.map((v): Record<string, unknown> => ({ ...v, value: v.sensitive === true ? null : v.value }));
     },
   },
   {

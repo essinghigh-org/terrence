@@ -182,7 +182,7 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args.run_id);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, null, session.teamId, "discard"))) {
+      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "discard"))) {
         return toolError("Not authorized to discard this run");
       }
       const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
@@ -213,7 +213,7 @@ export const runTools: readonly McpTool[] = [
       const runId = String(args.run_id);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
-      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, null, session.teamId, "cancel"))) {
+      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "cancel"))) {
         return toolError("Not authorized to cancel this run");
       }
       const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();

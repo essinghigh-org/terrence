@@ -807,7 +807,7 @@ describe("fine-grained user tokens", () => {
         version: 1,
         orgs: [s.orgId],
         workspaces: [s.wsA1],
-        permissions: { "workspaces:read": true, "variables:write": true },
+        permissions: { "workspaces:read": true, "variables:read": true, "variables:write": true },
       },
     });
     const lockOnly = await createScopedToken(s.userId, s.adminToken, {
@@ -855,6 +855,21 @@ describe("fine-grained user tokens", () => {
       expect(created.key).toBe("MCP_KEY");
       expect(created.id).toBeTruthy();
       await db.delete(workspaceVariables).where(eq(workspaceVariables.id, created.id));
+
+      // Sensitive variable values are masked (null) on read, matching the REST API.
+      const secretOk = await call(varWrite.secret, "create_workspace_variable", {
+        workspace_id: s.wsA1, key: "MCP_SECRET", value: "top-secret", sensitive: true,
+      });
+      expect(secretOk.status).toBe(200);
+      const secretBody = JSON.parse(secretOk.text) as { result: { content: { text: string }[] } };
+      const secretCreated = JSON.parse(secretBody.result.content[0]?.text ?? "{}") as { id: string };
+      const listVars = await call(varWrite.secret, "get_workspace_vars", { workspace_id: s.wsA1 });
+      const varsList = JSON.parse(listVars.text) as { result: { content: { text: string }[] } };
+      const readRows = JSON.parse(varsList.result.content[0]?.text ?? "[]") as { key: string; value: string | null; sensitive: boolean }[];
+      const secretRow = readRows.find((r): boolean => r.key === "MCP_SECRET");
+      expect(secretRow?.sensitive).toBe(true);
+      expect(secretRow?.value).toBeNull();
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, secretCreated.id));
 
       // Without workspaces:lock, lock is blocked; with it, lock/unlock work.
       expect(await deniedBy(await call(wsOnly.secret, "lock_workspace", { workspace_id: s.wsA1 }))).toBe(true);
@@ -1306,6 +1321,67 @@ describe("fine-grained run action grants", () => {
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, planOnly.id));
       await db.delete(apiTokens).where(eq(apiTokens.id, discard.id));
+    }
+  });
+
+  it("lets org-scoped tokens discard and cancel runs via MCP (orgId forwarded to permission checks)", async () => {
+    // An org-scoped token has userId === null and an orgId; its scopes grant
+    // discard/cancel. Regression test: discard_run/cancel_run must forward the
+    // token's orgId so the org-level permission check does not fail closed.
+    const id = `fg-orgtok-${s.suffix}`;
+    const raw = `fg-org-${s.suffix}`;
+    const scopes = JSON.stringify({
+      version: 1,
+      orgs: [s.orgId],
+      workspaces: [s.wsA1],
+      permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true, "runs:cancel": true },
+    });
+    await db.insert(apiTokens).values({
+      id,
+      token: createHash("sha256").update(raw).digest("hex"),
+      userId: null,
+      orgId: s.orgId,
+      description: "org-scoped-mcp",
+      scopes,
+      createdAt: Date.now(),
+      lastUsedAt: null,
+      expiresAt: null,
+      teamId: null,
+    });
+    const call = async (name: string, args: Record<string, unknown>): Promise<{ status: number; text: string }> => {
+      const res = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(raw), "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+      });
+      return { status: res.status, text: await res.text() };
+    };
+    try {
+      // The scoped org token may discover the tools its grants permit.
+      const listed = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(raw), "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      });
+      const listBody = await listed.json() as { result: { tools: { name: string }[] } };
+      const names = listBody.result.tools.map((t): string => t.name);
+      expect(names).toContain("discard_run");
+      expect(names).toContain("cancel_run");
+
+      const run = await createRunWith(s.adminToken, s.wsA1);
+      expect(run.status).toBe(201);
+
+      const discardRes = await call("discard_run", { run_id: run.id });
+      expect(discardRes.status).toBe(200);
+      expect(discardRes.text).not.toContain('"error"');
+
+      const run2 = await createRunWith(s.adminToken, s.wsA1);
+      const cancelRes = await call("cancel_run", { run_id: run2.id });
+      expect(cancelRes.status).toBe(200);
+      expect(cancelRes.text).not.toContain('"error"');
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, id));
+      await db.delete(runs).where(eq(runs.workspaceId, s.wsA1));
     }
   });
 });
