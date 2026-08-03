@@ -33,6 +33,7 @@ const PROTOCOL = "urn:oasis:names:tc:SAML:2.0:protocol";
 // SAML 2.0 core specifies the bearer confirmation method under the "cm"
 // namespace, NOT under the assertion namespace.
 const BEARER = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
+const SAML_SUCCESS_STATUS = "urn:oasis:names:tc:SAML:2.0:status:Success";
 const TIME_SKEW_MS = 5 * 60 * 1000;
 // Cap the decoded/decodescapped SAML message size so an attacker-supplied
 // compressed payload cannot expand into excessive memory.
@@ -92,20 +93,20 @@ function logoutRequestXml(entityId: string, destination: string, requestId: stri
 }
 
 /** Build the LogoutResponse the SP returns for an IdP-initiated logout. */
-function logoutResponseXml(entityId: string): string {
+function logoutResponseXml(entityId: string, inResponseTo: string): string {
   const now = new Date().toISOString();
   return `<?xml version="1.0" encoding="UTF-8"?>
-<samlp:LogoutResponse xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="_${randomBytes(16).toString("hex")}" Version="2.0" IssueInstant="${now}">
+<samlp:LogoutResponse xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="_${randomBytes(16).toString("hex")}" Version="2.0" IssueInstant="${now}" InResponseTo="${xmlEscape(inResponseTo)}">
   <saml:Issuer>${xmlEscape(entityId)}</saml:Issuer>
   <samlp:Status>
-    <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:protocol:status:Success"/>
+    <samlp:StatusCode Value="${SAML_SUCCESS_STATUS}"/>
   </samlp:Status>
 </samlp:LogoutResponse>
 `;
 }
 
 /** Verify the IdP's LogoutRequest signature against the configured certs. */
-function verifyLogoutSignature(xml: string, certificates: readonly string[]): Readonly<{ valid: boolean; error: string; nameId?: string }> {
+function verifyLogoutSignature(xml: string, certificates: readonly string[]): Readonly<{ valid: boolean; error: string; nameId?: string; requestId?: string }> {
   if (certificates.length === 0) return { valid: false, error: "No IdP certificate configured" };
   let doc: ReturnType<DOMParser["parseFromString"]>;
   try {
@@ -138,7 +139,7 @@ function verifyLogoutSignature(xml: string, certificates: readonly string[]): Re
       if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) continue;
       const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
       if (signedNameId === "") continue;
-      return { valid: true, error: "", nameId: signedNameId };
+      return { valid: true, error: "", nameId: signedNameId, requestId };
     } catch {
       // Try the next certificate (e.g. the old cert during rotation).
     }
@@ -436,7 +437,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     // a failed auth must not be accepted just because it also holds an
     // assertion.
     const statusCode = attr(local(local(responseElement, "Status") as Record<string, unknown> | undefined, "StatusCode") as Record<string, unknown> | undefined)["@_Value"];
-    if (statusCode !== "urn:oasis:names:tc:SAML:2.0:protocol:status:Success") {
+    if (statusCode !== SAML_SUCCESS_STATUS) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response reports a failed authentication."), 400);
@@ -721,7 +722,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return new Response("Invalid SAML logout request", { status: 400 });
     }
     const verifiedLogout = verifyLogoutSignature(xml, certificates);
-    if (!verifiedLogout.valid || verifiedLogout.nameId === undefined) {
+    if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
       (set as { status: number }).status = 400;
       return new Response("Invalid SAML logout request signature", { status: 400 });
@@ -734,7 +735,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     await revokeBrowserSession(set, request);
     await auditLog("sso-logout", "saml", null, null, null, { reason: "IdP-initiated" });
-    const response = new Response(logoutResponseXml(samlSpEntityId(request)), {
+    const response = new Response(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId), {
       status: 200,
       headers: {
         "Cache-Control": "no-store",

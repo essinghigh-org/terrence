@@ -407,7 +407,10 @@ describe("SAML SSO flow", () => {
       body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest(options.username) }).toString(),
     }));
     expect(logoutResponse.status).toBe(200);
-    expect(await logoutResponse.text()).toContain("LogoutResponse");
+    const logoutXml = await logoutResponse.text();
+    expect(logoutXml).toContain("LogoutResponse");
+    expect(logoutXml).toContain('InResponseTo="_logout_');
+    expect(logoutXml).toContain("urn:oasis:names:tc:SAML:2.0:status:Success");
 
     const revokedRefresh = await app.handle(new Request("http://localhost/api/v2/users/refresh", {
       method: "POST",

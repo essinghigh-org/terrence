@@ -2,7 +2,7 @@
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
 import * as bcrypt from "bcryptjs";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
 import {
@@ -179,10 +179,13 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   if (email !== null && identity.emailVerified === true) {
     const byEmail = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (byEmail !== undefined) {
-      const claimed = byEmail.ssoProvider !== null && byEmail.ssoSubject !== null;
+      const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
       if (claimed) throw new SsoConflictError(identity.provider, username);
-      await db.update(users).set({ ssoProvider: identity.provider, ssoSubject: subject })
-        .where(eq(users.id, byEmail.id));
+      const linked = await db.update(users)
+        .set({ ssoProvider: identity.provider, ssoSubject: subject })
+        .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
+        .returning({ id: users.id });
+      if (linked.length === 0) throw new SsoConflictError(identity.provider, username);
       const refreshed = await db.query.users.findFirst({ where: eq(users.id, byEmail.id) });
       if (refreshed === undefined) throw new Error("SSO user is unavailable");
       return { user: refreshed, created: false };

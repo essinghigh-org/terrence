@@ -82,7 +82,7 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
 <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${destination}">
   <saml:Issuer>${issuer}</saml:Issuer>
   <samlp:Status>
-    <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:protocol:status:Success"/>
+  <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
   </samlp:Status>
   <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}">
     <saml:Issuer>${issuer}</saml:Issuer>
