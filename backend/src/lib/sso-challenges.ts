@@ -65,8 +65,9 @@ export async function clearSsoChallenges(kind: string): Promise<void> {
 }
 
 /** Atomically consume a live challenge; replayed or expired IDs return undefined. */
-export async function consumeSsoChallenge(id: string): Promise<Record<string, unknown> | undefined> {
+export async function consumeSsoChallenge(kind: string, id: string): Promise<Record<string, unknown> | undefined> {
   const rows = await db.delete(ssoChallenges).where(and(
+    eq(ssoChallenges.kind, kind),
     eq(ssoChallenges.id, id),
     gt(ssoChallenges.expiresAt, Date.now()),
   )).returning({ payload: ssoChallenges.payload });

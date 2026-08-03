@@ -10,12 +10,12 @@ import { SignedXml } from "xml-crypto";
 import { XMLParser } from "fast-xml-parser";
 import { db } from "../db";
 import { apiTokens, samlSettings, users } from "../db/schema";
+import { getSettings } from "../lib/settings";
 import { auditLog } from "../lib/utils";
 import {
   appendSetCookies,
-  applySamlGroupMapping,
   provisionSsoUser,
-  pruneSamlGroupMappings,
+  syncSamlGroupMappings,
   ssoHtmlPage,
   ssoHtmlResponse,
   ssoBaseUrl,
@@ -43,6 +43,30 @@ const REDIRECT_SIGNATURE_ALGORITHMS: Readonly<Record<string, string>> = {
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384": "RSA-SHA384",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512": "RSA-SHA512",
 };
+const XML_SIGNATURE_ALGORITHMS = new Set([
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512",
+]);
+const XML_DIGEST_ALGORITHMS = new Set([
+  "http://www.w3.org/2001/04/xmlenc#sha256",
+  "http://www.w3.org/2001/04/xmlenc#sha512",
+]);
+const XML_CANONICALIZATION_ALGORITHMS = new Set([
+  "http://www.w3.org/2001/10/xml-exc-c14n#",
+]);
+const XML_TRANSFORM_ALGORITHMS = new Set([
+  "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+  "http://www.w3.org/2001/10/xml-exc-c14n#",
+]);
+
+function supportedXmlSignature(signed: SignedXml): boolean {
+  if (!XML_SIGNATURE_ALGORITHMS.has(signed.signatureAlgorithm ?? "")
+    || !XML_CANONICALIZATION_ALGORITHMS.has(signed.canonicalizationAlgorithm ?? "")) return false;
+  return signed.getReferences().every((reference): boolean => (
+    XML_DIGEST_ALGORITHMS.has(reference.digestAlgorithm)
+    && reference.transforms.every((transform): boolean => XML_TRANSFORM_ALGORITHMS.has(transform))
+  ));
+}
 
 function pemCertificate(certificate: string): string {
   if (certificate.includes("-----BEGIN CERTIFICATE-----")) return certificate;
@@ -203,8 +227,8 @@ function verifyLogoutSignature(
     try {
       const signed = new SignedXml();
       signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      signed.loadSignature(String(signatureElement));
+      signed.loadSignature(signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
+      if (!supportedXmlSignature(signed)) continue;
       if (!signed.checkSignature(xml)) continue;
       const references = signed.getReferences();
       if (references.length !== 1 || (references[0] as { uri?: string }).uri?.replace(/^#/, "") !== requestId) continue;
@@ -350,8 +374,8 @@ function signedAssertionResult(
       try {
         const signed = new SignedXml();
         signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        signed.loadSignature(String(signatureElement));
+        signed.loadSignature(signatureElement as unknown as Parameters<SignedXml["loadSignature"]>[0]);
+        if (!supportedXmlSignature(signed)) continue;
         if (!signed.checkSignature(xml)) continue;
         const references = signed.getReferences();
         // The references type from xml-crypto exposes `uri`; tolerate shaped
@@ -709,7 +733,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion contains no NameID."), 400);
     }
 
-    if (typeof inResponseTo !== "string" || !(await consumeSsoChallenge(inResponseTo))) {
+    if (typeof inResponseTo !== "string" || !(await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo))) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML response does not match an issuance from this instance."), 400);
     }
@@ -759,6 +783,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         // SAML attribute statements are signed with the IdP assertion, so
         // the operator-controlled directory is the verification authority.
         emailVerified: true,
+        allowEmailLinking: (await getSettings("saml"))["link-by-email"] === true,
       });
     } catch (error: unknown) {
       if (error instanceof SsoConflictError) {
@@ -768,11 +793,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       }
       throw error;
     }
-    const user = result.user;
+    let user = result.user;
 
-    await applySamlGroupMapping(user.id, groups);
-    await pruneSamlGroupMappings(user.id, groups);
-// The site-admin attribute is authoritative in both directions: matching
+    await syncSamlGroupMappings(user.id, groups);
+    // The site-admin attribute is authoritative in both directions: matching
     // promotes, and once an account's admin status is SAML-sourced, losing the
     // role demotes it so the IdP can revoke elevated access. If the attribute
     // is misconfigured (empty `attrSiteAdmin`), we never touch the flag.
@@ -786,6 +810,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, { username: user.username, role: settings.siteAdminRole });
       }
     }
+    const refreshedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
+    if (refreshedUser === undefined) {
+      (set as { status: number }).status = 500;
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The signed-in account is unavailable."), 500);
+    }
+    user = refreshedUser;
 
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
       ? settings.ssoApiTokenSessionTimeout * 1000

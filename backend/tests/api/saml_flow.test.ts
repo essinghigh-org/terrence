@@ -6,6 +6,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { clearSsoChallenges } from "../../src/lib/sso-challenges";
 import {
+  adminSettings,
   apiTokens,
   organizationMemberships,
   organizations,
@@ -36,6 +37,8 @@ describe("SAML SSO flow", () => {
   const orgId = `org-samlflow-${suffix}`;
   const orgName = `samlflow-${suffix}`;
   const adminToken = `samlflow-admin-${suffix}`;
+  let originalSaml: typeof samlSettings.$inferSelect | undefined;
+  let originalSamlLink: typeof adminSettings.$inferSelect | undefined;
 
   const request = (method: string, path: string, token?: string, body?: unknown): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -65,6 +68,8 @@ describe("SAML SSO flow", () => {
   };
 
   beforeAll(async () => {
+    originalSaml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
+    originalSamlLink = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "saml") });
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
       // Local account used for conflict/link tests.
@@ -92,6 +97,8 @@ describe("SAML SSO flow", () => {
       ssoApiTokenSessionTimeout: 3600,
       updatedAt: Date.now(),
     });
+    await db.insert(adminSettings).values({ id: "saml", values: { "link-by-email": true }, updatedAt: Date.now() })
+      .onConflictDoUpdate({ target: adminSettings.id, set: { values: { "link-by-email": true }, updatedAt: Date.now() } });
   });
 
   afterAll(async () => {
@@ -102,6 +109,13 @@ describe("SAML SSO flow", () => {
     });
     const ids = [adminId, orgUserId, ...provisioned.map((row): string => row.id)];
     await db.delete(samlSettings).where(eq(samlSettings.id, "saml"));
+    if (originalSaml !== undefined) await db.insert(samlSettings).values(originalSaml);
+    if (originalSamlLink === undefined) {
+      await db.delete(adminSettings).where(eq(adminSettings.id, "saml"));
+    } else {
+      await db.update(adminSettings).set({ values: originalSamlLink.values, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "saml"));
+    }
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
     // Delete team memberships by team, not by user, so group-mapped rows do
     // not remain and trip the FK on teams.

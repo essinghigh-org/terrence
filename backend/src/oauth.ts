@@ -245,6 +245,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
             username: authenticated.user.username,
             email: authenticated.user.email,
             emailVerified: true,
+            allowEmailLinking: ldap.allowEmailLinking,
           })).user;
         } catch (error: unknown) {
           if (error instanceof SsoConflictError) {

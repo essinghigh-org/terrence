@@ -4,11 +4,13 @@ import { users, organizations, workspaces, runs, adminTerraformVersions, adminSe
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
+import { getSettings, type Settings } from "../lib/settings";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import * as bcrypt from "bcryptjs";
 import { createHash } from "node:crypto";
+import { invalidatePingSsoCache } from "./health";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -60,22 +62,6 @@ const SAML_DEFAULTS = {
   updatedAt: 0,
 } satisfies typeof samlSettings.$inferInsert;
 
-// Settings are persisted as JSON so values survive restarts without changing the API shape.
-export type Settings = Record<string, unknown>;
-const settingDefaults: Record<string, Settings> = {
-  general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false },
-  retention: { "delete-older-than-n-days": null },
-  cost: { enabled: false, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
-  smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain" },
-  twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
-  customization: { "support-email-address": null, "login-help": null, footer: null },
-  oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null },
-  ldap: { enabled: false, host: null, port: 389, encryption: "plain", "bind-dn": null, "bind-password": null, "base-dn": null, "user-filter": "(uid={{username}})", "attr-username": "uid", "attr-email": "mail", "attr-display-name": "cn" },
-  // Compatibility aliases for legacy handlers below; the general/site groups use durable storage.
-  site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
-};
-// cost, smtp, twilio, customization, oidc, ldap settings are DB-persisted via admin_settings table.
-
 // ponytail: one Bun process is the deployment model; use a database row lock if horizontal scaling is added.
 let authSettingsQueue = Promise.resolve();
 
@@ -91,13 +77,6 @@ async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> 
   }
 }
 
-export async function getSettings(group: string): Promise<Settings> {
-  const defaults = settingDefaults[group] ?? {};
-  await db.insert(adminSettings).values({ id: group, values: defaults, updatedAt: Date.now() }).onConflictDoNothing();
-  const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
-  return { ...defaults, ...(row?.values ?? {}) };
-}
-
 async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
   const current = await getSettings(group);
   const values = { ...current };
@@ -108,6 +87,16 @@ async function updateSettings(group: string, attrs: Settings): Promise<Settings>
 
 function settingResource(id: string, values: Settings): Record<string, unknown> {
   return { data: { id, type: id === "settings" ? "settings" : id, attributes: values } };
+}
+
+function oidcSettingsResource(values: Settings): Record<string, unknown> {
+  const safe = { ...values };
+  const clientSecret = safe["client-secret"];
+  delete safe["client-secret"];
+  return settingResource("oidc-settings", {
+    ...safe,
+    "client-secret-set": typeof clientSecret === "string" && clientSecret !== "",
+  });
 }
 
 async function currentSamlSettings(): Promise<SamlSettings> {
@@ -136,7 +125,11 @@ async function authLockoutResponse(
   };
 }
 
-function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: string }>): Record<string, unknown> {
+function samlSettingsResource(
+  settings: SamlSettings,
+  request: Readonly<{ url: string }>,
+  linkByEmail = false,
+): Record<string, unknown> {
   return {
     id: SAML_SETTINGS_ID,
     type: "saml-settings",
@@ -154,6 +147,7 @@ function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: s
       "attr-site-admin": settings.attrSiteAdmin,
       "site-admin-role": settings.siteAdminRole,
       "sso-api-token-session-timeout": settings.ssoApiTokenSessionTimeout,
+      "link-by-email": linkByEmail,
       "acs-consumer-url": apiURL(request, "/users/saml/auth"),
       "metadata-url": apiURL(request, "/users/saml/metadata"),
     },
@@ -860,7 +854,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return { data: samlSettingsResource(await currentSamlSettings(), request) };
+    const [settings, linkSettings] = await Promise.all([currentSamlSettings(), getSettings("saml")]);
+    return { data: samlSettingsResource(settings, request, linkSettings["link-by-email"] === true) };
   })
   .patch("/api/v2/admin/saml-settings", async ({ user, body, request, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
@@ -880,6 +875,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
       ? data.attributes as Record<string, unknown>
       : {};
     const current = await currentSamlSettings();
+    const currentLinkSettings = await getSettings("saml");
+    if (attributes["link-by-email"] !== undefined && typeof attributes["link-by-email"] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] };
+    }
+    const linkByEmail = attributes["link-by-email"] === undefined
+      ? currentLinkSettings["link-by-email"] === true
+      : attributes["link-by-email"] === true;
     const input = samlInput(attributes, current);
     if ("error" in input) {
       (set as { status: number }).status = 422;
@@ -898,7 +901,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
         await t.update(organizations).set({ samlEnabled: input.values.enabled });
       }
     });
-    return { data: samlSettingsResource(await currentSamlSettings(), request) };
+    await updateSettings("saml", { "link-by-email": linkByEmail });
+    invalidatePingSsoCache();
+    return { data: samlSettingsResource(await currentSamlSettings(), request, linkByEmail) };
     });
   })
   .post("/api/v2/admin/saml-settings/actions/revoke-old-certificate", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -909,7 +914,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     await currentSamlSettings();
     await db.update(samlSettings).set({ oldIdpCert: null, updatedAt: Date.now() })
       .where(eq(samlSettings.id, SAML_SETTINGS_ID));
-    return { data: samlSettingsResource(await currentSamlSettings(), request) };
+    const [settings, linkSettings] = await Promise.all([currentSamlSettings(), getSettings("saml")]);
+    return { data: samlSettingsResource(settings, request, linkSettings["link-by-email"] === true) };
   })
   // --- Admin Settings ---
   .get("/api/v2/admin/settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -935,6 +941,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const current = await getSettings("general");
+    if (attrs["local-auth-enabled"] !== undefined && typeof attrs["local-auth-enabled"] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-auth-enabled must be a boolean" }] };
+    }
     const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
       ? attrs["local-auth-enabled"]
       : current["local-auth-enabled"] !== false;
@@ -949,7 +959,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
       ldap: ldap.enabled === true,
     }, localAuthEnabled);
     if (authError !== null) return authError;
-    return settingResource("general-settings", await updateSettings("general", attrs));
+    const updated = await updateSettings("general", attrs);
+    invalidatePingSsoCache();
+    return settingResource("general-settings", updated);
     });
   })
   // --- B.2 Data Retention Policy Settings ---
@@ -1026,7 +1038,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
   // --- B.8 OIDC Settings ---
   .get("/api/v2/admin/oidc-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return settingResource("oidc-settings", await getSettings("oidc"));
+    return oidcSettingsResource(await getSettings("oidc"));
   })
   .patch("/api/v2/admin/oidc-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1039,6 +1051,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (attrs.enabled !== undefined && typeof attrs.enabled !== "boolean") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
+    }
+    if (attrs["link-by-email"] !== undefined && typeof attrs["link-by-email"] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] };
     }
     for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method"] as const) {
       if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
@@ -1065,9 +1081,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
       }
     }
     const pkce = attrs["pkce-method"] === undefined ? current["pkce-method"] : attrs["pkce-method"];
-    if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256") {
+    if (pkce !== null && pkce !== undefined && pkce !== "" && pkce !== "S256" && pkce !== "none") {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\" or null" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] };
     }
 
     const authError = await authLockoutResponse(set, {
@@ -1077,12 +1093,18 @@ export const adminRoutes = new Elysia({ name: "admin" })
     });
     if (authError !== null) return authError;
 
-    return settingResource("oidc-settings", await updateSettings("oidc", {
+    const clientSecret = typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
+      ? attrs["client-secret"]
+      : current["client-secret"];
+    const updated = await updateSettings("oidc", {
       ...attrs,
       issuer,
       "client-id": clientId,
+      "client-secret": clientSecret,
       "pkce-method": pkce === "" ? null : pkce,
-    }));
+    });
+    invalidatePingSsoCache();
+    return oidcSettingsResource(updated);
     });
   })
   // --- B.9 LDAP Settings ---
@@ -1104,7 +1126,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
 
     const current = await getSettings("ldap");
-    for (const key of ["enabled"] as const) {
+    for (const key of ["enabled", "link-by-email"] as const) {
       if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
@@ -1181,6 +1203,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       "user-filter": userFilter,
     });
     const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
+    invalidatePingSsoCache();
     return settingResource("ldap-settings", {
       ...safeUpdated,
       "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",

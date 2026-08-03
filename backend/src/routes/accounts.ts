@@ -9,9 +9,8 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
-import { getSettings } from "./admin";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
-import { ldapSettings, provisionSsoUser, SsoConflictError } from "../lib/sso";
+import { ldapSettings, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -440,8 +439,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing credentials" }] };
     }
 
-    const [generalSettings, ldap] = await Promise.all([getSettings("general"), ldapSettings()]);
-    const localAuthEnabled = generalSettings["local-auth-enabled"] !== false;
+    const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
+    const localAuthEnabled = sso.localAuthEnabled;
 
     // LDAP is attempted first when enabled; local password auth remains the
     // fallback unless an administrator has disabled local authentication.
@@ -458,6 +457,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
             // Directory attributes are operator-controlled; the bind against
             // the user DN already authenticated the caller.
             emailVerified: true,
+            allowEmailLinking: ldap.allowEmailLinking,
           });
           user = provisioned.user;
         } catch (error: unknown) {

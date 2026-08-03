@@ -14,6 +14,22 @@ type MetricsCtx = Readonly<{
   set: Readonly<{ headers: Readonly<Record<string, string | number>> }>;
 }>;
 
+const PING_SSO_CACHE_TTL_MS = 1_000;
+type PingSsoSnapshot = Awaited<ReturnType<typeof ssoSettingsSnapshot>>;
+let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | undefined;
+
+export function invalidatePingSsoCache(): void {
+  pingSsoCache = undefined;
+}
+
+async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
+  const now = Date.now();
+  if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
+  const value = await ssoSettingsSnapshot();
+  pingSsoCache = { value, expiresAt: now + PING_SSO_CACHE_TTL_MS };
+  return value;
+}
+
 function metricValue(rows: readonly Readonly<{ value: number }>[] | undefined): number {
   return rows?.[0]?.value ?? 0;
 }
@@ -67,7 +83,7 @@ export const healthRoutes = new Elysia({ name: "health" })
     headers["TFP-AppName"] = "Terraform Enterprise";
     let sso;
     try {
-      sso = await ssoSettingsSnapshot();
+      sso = await pingSsoSnapshot();
     } catch (error: unknown) {
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
       (set as { status: number }).status = 503;

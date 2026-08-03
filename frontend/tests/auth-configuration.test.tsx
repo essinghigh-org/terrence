@@ -79,7 +79,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
             enabled: oidcServerEnabled,
             issuer: null,
             "client-id": null,
-            "client-secret": null,
+            "client-secret-set": false,
             scopes: "openid profile email",
             "pkce-method": null,
           },
@@ -87,13 +87,16 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/saml-settings" && init?.method === "PATCH") {
-      samlServerEnabled = true;
+      const body = typeof init.body === "string"
+        ? JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } }
+        : {};
+      samlServerEnabled = body.data?.attributes?.enabled === true;
       return json({
         data: {
           id: "saml",
           type: "saml-settings",
           attributes: {
-            enabled: true,
+            enabled: samlServerEnabled,
             debug: false,
             "sso-endpoint-url": "https://idp.example.com/sso",
             "slo-endpoint-url": null,
@@ -108,16 +111,19 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
-      oidcServerEnabled = true;
+      const body = typeof init.body === "string"
+        ? JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } }
+        : {};
+      oidcServerEnabled = body.data?.attributes?.enabled === true;
       return json({
         data: {
           id: "oidc-settings",
           type: "oidc-settings",
           attributes: {
-            enabled: true,
+            enabled: oidcServerEnabled,
             issuer: "https://accounts.example.com",
             "client-id": "my-client-id",
-            "client-secret": null,
+            "client-secret-set": false,
             scopes: "openid profile email",
             "pkce-method": "S256",
           },
@@ -158,12 +164,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
         ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
         : {};
       ldapPatchAttributes = body.data?.attributes ?? null;
-      ldapServerEnabled = true;
+      ldapServerEnabled = body.data?.attributes?.enabled === true;
       return json({
         data: {
           id: "ldap-settings",
           type: "ldap-settings",
-          attributes: { enabled: true, host: "ldap.example.com", port: 389, "base-dn": "dc=example,dc=com" },
+          attributes: { enabled: ldapServerEnabled, host: "ldap.example.com", port: 389, "base-dn": "dc=example,dc=com" },
         },
       });
     }

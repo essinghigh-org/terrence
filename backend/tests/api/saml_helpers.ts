@@ -140,7 +140,7 @@ export function buildSignedLogoutRequest(nameId = "slo-user"): string {
   const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
   const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}">
-  <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
+  <saml:Issuer>${IDP_ENTITY_ID}</saml:Issuer>
   <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${nameId}</saml:NameID>
 </samlp:LogoutRequest>
 `;

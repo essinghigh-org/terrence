@@ -9,6 +9,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
 import { oauthPlugin } from "../../src/oauth";
+import { invalidatePingSsoCache } from "../../src/routes/health";
 
 const SERVICE_DN = "cn=admin,dc=example,dc=com";
 const USER_DN = (username: string): string => `uid=${username},dc=example,dc=com`;
@@ -69,8 +70,15 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
       next();
     });
 
-    server.on("error", (): void => undefined);
+    let started = false;
+    server.on("error", (error: unknown): void => {
+      if (started) return;
+      started = true;
+      reject(error instanceof Error ? error : new Error("ldap mock failed to start"));
+    });
     server.listen(0, "127.0.0.1", (): void => {
+      if (started) return;
+      started = true;
       const address = server.address();
       if (address === null || typeof address === "string") {
         reject(new Error("ldap mock failed to bind"));
@@ -126,6 +134,7 @@ describe("LDAP authentication", () => {
     };
     await db.insert(adminSettings).values({ id: "ldap", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+    invalidatePingSsoCache();
   };
 
   const setLocalAuth = async (enabled: boolean): Promise<void> => {
@@ -134,6 +143,7 @@ describe("LDAP authentication", () => {
       : { "local-auth-enabled": false, "limit-user-organization-creation": false };
     await db.insert(adminSettings).values({ id: "general", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+    invalidatePingSsoCache();
   };
 
   beforeAll(async () => {
@@ -363,44 +373,47 @@ describe("LDAP authentication", () => {
   });
 
   test("validates LDAP admin settings and persists them", async () => {
-    const getResponse = await request("GET", "/api/v2/admin/ldap-settings", adminToken);
-    expect(getResponse.status).toBe(200);
-    const attrs = ((await getResponse.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
-    expect(attrs).toMatchObject({ enabled: true, host: "127.0.0.1", port: ldapPort, encryption: "plain" });
+    try {
+      const getResponse = await request("GET", "/api/v2/admin/ldap-settings", adminToken);
+      expect(getResponse.status).toBe(200);
+      const attrs = ((await getResponse.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
+      expect(attrs).toMatchObject({ enabled: true, host: "127.0.0.1", port: ldapPort, encryption: "plain" });
 
-    const badPort = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
-      data: { attributes: { port: "not-a-number" } },
-    });
-    expect(badPort.status).toBe(422);
+      const badPort = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+        data: { attributes: { port: "not-a-number" } },
+      });
+      expect(badPort.status).toBe(422);
 
-    const missingHost = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
-      data: { attributes: { enabled: true, host: null } },
-    });
-    expect(missingHost.status).toBe(422);
+      const missingHost = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+        data: { attributes: { enabled: true, host: null } },
+      });
+      expect(missingHost.status).toBe(422);
 
-    const missingPlaceholder = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
-      data: { attributes: { "user-filter": "(uid=static)" } },
-    });
-    expect(missingPlaceholder.status).toBe(422);
+      const missingPlaceholder = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+        data: { attributes: { "user-filter": "(uid=static)" } },
+      });
+      expect(missingPlaceholder.status).toBe(422);
 
     // A bind DN without a bind password would be an unauthenticated bind;
     // the admin API must reject the configuration up front.
-    const bindDnWithoutPassword = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
-      data: { attributes: { "bind-dn": SERVICE_DN, "bind-password": null } },
-    });
-    expect(bindDnWithoutPassword.status).toBe(422);
+      const bindDnWithoutPassword = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+        data: { attributes: { "bind-dn": SERVICE_DN, "bind-password": null } },
+      });
+      expect(bindDnWithoutPassword.status).toBe(422);
 
-    const saved = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
-      data: { attributes: { "user-filter": "(cn={{username}})", encryption: "starttls" } },
-    });
-    expect(saved.status).toBe(200);
-    const savedAttrs = ((await saved.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
-    expect(savedAttrs).toMatchObject({
-      "user-filter": "(cn={{username}})",
-      encryption: "starttls",
-      host: "127.0.0.1",
-      "base-dn": "dc=example,dc=com",
-    });
-    await setLdapSettings(true);
+      const saved = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
+        data: { attributes: { "user-filter": "(cn={{username}})", encryption: "starttls" } },
+      });
+      expect(saved.status).toBe(200);
+      const savedAttrs = ((await saved.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
+      expect(savedAttrs).toMatchObject({
+        "user-filter": "(cn={{username}})",
+        encryption: "starttls",
+        host: "127.0.0.1",
+        "base-dn": "dc=example,dc=com",
+      });
+    } finally {
+      await setLdapSettings(true);
+    }
   });
 });

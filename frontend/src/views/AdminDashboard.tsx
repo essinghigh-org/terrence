@@ -33,6 +33,33 @@ export type AdminSection =
   | "audit"
   | "auth";
 
+const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string =>
+  typeof attrs[key] === "string" ? attrs[key] : fallback;
+
+const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean =>
+  typeof attrs[key] === "boolean" ? attrs[key] : fallback;
+
+async function saveAuthSettings(options: Readonly<{
+  setSaving: (saving: boolean) => void;
+  setError: (error: string | null) => void;
+  save: () => Promise<void>;
+  reload: () => void;
+  successTitle: string;
+  fallbackError: string;
+}>): Promise<void> {
+  options.setSaving(true);
+  options.setError(null);
+  try {
+    await options.save();
+    options.reload();
+    toast.add({ title: options.successTitle, type: "success" });
+  } catch (err: unknown) {
+    options.setError(err instanceof Error ? err.message : options.fallbackError);
+  } finally {
+    options.setSaving(false);
+  }
+}
+
 export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>): React.JSX.Element {
   const navigate = useNavigate();
   const { accountLoaded, siteAdmin } = useOutletContext<LayoutOutletContext>();
@@ -99,6 +126,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   // Auth config state
   const [samlEnabled, setSamlEnabled] = useState(false);
   const [persistedSamlEnabled, setPersistedSamlEnabled] = useState<boolean | null>(null);
+  const [samlLinkByEmail, setSamlLinkByEmail] = useState(false);
   const [samlDebug, setSamlDebug] = useState(false);
   const [samlSsoUrl, setSamlSsoUrl] = useState("");
   const [samlSloUrl, setSamlSloUrl] = useState("");
@@ -116,9 +144,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [persistedOidcEnabled, setPersistedOidcEnabled] = useState<boolean | null>(null);
+  const [oidcLinkByEmail, setOidcLinkByEmail] = useState(false);
   const [oidcIssuer, setOidcIssuer] = useState("");
   const [oidcClientId, setOidcClientId] = useState("");
   const [oidcClientSecret, setOidcClientSecret] = useState("");
+  const [oidcClientSecretSet, setOidcClientSecretSet] = useState(false);
   const [oidcScopes, setOidcScopes] = useState("openid profile email");
   const [oidcPkceMethod, setOidcPkceMethod] = useState("");
   const [oidcLoading, setOidcLoading] = useState(false);
@@ -134,6 +164,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   // LDAP state
   const [ldapEnabled, setLdapEnabled] = useState(false);
   const [persistedLdapEnabled, setPersistedLdapEnabled] = useState<boolean | null>(null);
+  const [ldapLinkByEmail, setLdapLinkByEmail] = useState(false);
   const [ldapHost, setLdapHost] = useState("");
   const [ldapPort, setLdapPort] = useState(389);
   const [ldapEncryption, setLdapEncryption] = useState("plain");
@@ -367,21 +398,22 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         data: { attributes: Record<string, unknown> };
       };
       const attrs = res.data.attributes;
-      setSamlEnabled(attrs["enabled"] === true);
-      setPersistedSamlEnabled(attrs["enabled"] === true);
-      setSamlDebug(attrs["debug"] === true);
-      setSamlSsoUrl(typeof attrs["sso-endpoint-url"] === "string" ? attrs["sso-endpoint-url"] : "");
-      setSamlSloUrl(typeof attrs["slo-endpoint-url"] === "string" ? attrs["slo-endpoint-url"] : "");
-      setSamlIdpCert(typeof attrs["idp-cert"] === "string" ? attrs["idp-cert"] : "");
-      setSamlIdpEntityId(typeof attrs["idp-entity-id"] === "string" ? attrs["idp-entity-id"] : "");
-      setSamlAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "Username");
-      setSamlAttrEmail(typeof attrs["attr-email"] === "string" ? attrs["attr-email"] : "email");
-      setSamlAttrGroups(typeof attrs["attr-groups"] === "string" ? attrs["attr-groups"] : "MemberOf");
-      setSamlAttrSiteAdmin(typeof attrs["attr-site-admin"] === "string" ? attrs["attr-site-admin"] : "SiteAdmin");
-      setSamlSiteAdminRole(typeof attrs["site-admin-role"] === "string" ? attrs["site-admin-role"] : "site-admins");
+      setSamlEnabled(attrBoolean(attrs, "enabled", false));
+      setPersistedSamlEnabled(attrBoolean(attrs, "enabled", false));
+      setSamlLinkByEmail(attrBoolean(attrs, "link-by-email", false));
+      setSamlDebug(attrBoolean(attrs, "debug", false));
+      setSamlSsoUrl(attrString(attrs, "sso-endpoint-url", ""));
+      setSamlSloUrl(attrString(attrs, "slo-endpoint-url", ""));
+      setSamlIdpCert(attrString(attrs, "idp-cert", ""));
+      setSamlIdpEntityId(attrString(attrs, "idp-entity-id", ""));
+      setSamlAttrUsername(attrString(attrs, "attr-username", "Username"));
+      setSamlAttrEmail(attrString(attrs, "attr-email", "email"));
+      setSamlAttrGroups(attrString(attrs, "attr-groups", "MemberOf"));
+      setSamlAttrSiteAdmin(attrString(attrs, "attr-site-admin", "SiteAdmin"));
+      setSamlSiteAdminRole(attrString(attrs, "site-admin-role", "site-admins"));
       setSamlTimeout(typeof attrs["sso-api-token-session-timeout"] === "number" ? attrs["sso-api-token-session-timeout"] : 1209600);
-      setSamlAcsUrl(typeof attrs["acs-consumer-url"] === "string" ? attrs["acs-consumer-url"] : "");
-      setSamlMetadataUrl(typeof attrs["metadata-url"] === "string" ? attrs["metadata-url"] : "");
+      setSamlAcsUrl(attrString(attrs, "acs-consumer-url", ""));
+      setSamlMetadataUrl(attrString(attrs, "metadata-url", ""));
     } catch (err: unknown) {
       setSamlError(err instanceof Error ? err.message : "Failed to load SAML settings");
     } finally {
@@ -412,19 +444,20 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         data: { attributes: Record<string, unknown> };
       };
       const attrs = res.data.attributes;
-      setLdapEnabled(attrs["enabled"] === true);
-      setPersistedLdapEnabled(attrs["enabled"] === true);
-      setLdapHost(typeof attrs["host"] === "string" ? attrs["host"] : "");
+      setLdapEnabled(attrBoolean(attrs, "enabled", false));
+      setPersistedLdapEnabled(attrBoolean(attrs, "enabled", false));
+      setLdapLinkByEmail(attrBoolean(attrs, "link-by-email", false));
+      setLdapHost(attrString(attrs, "host", ""));
       setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 389);
-      setLdapEncryption(typeof attrs["encryption"] === "string" ? attrs["encryption"] : "plain");
-      setLdapBindDn(typeof attrs["bind-dn"] === "string" ? attrs["bind-dn"] : "");
+      setLdapEncryption(attrString(attrs, "encryption", "plain"));
+      setLdapBindDn(attrString(attrs, "bind-dn", ""));
       setLdapBindPassword("");
       setLdapBindPasswordSet(attrs["bind-password-set"] === true);
-      setLdapBaseDn(typeof attrs["base-dn"] === "string" ? attrs["base-dn"] : "");
-      setLdapUserFilter(typeof attrs["user-filter"] === "string" ? attrs["user-filter"] : "(uid={{username}})");
-      setLdapAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "uid");
-      setLdapAttrEmail(typeof attrs["attr-email"] === "string" ? attrs["attr-email"] : "mail");
-      setLdapAttrDisplayName(typeof attrs["attr-display-name"] === "string" ? attrs["attr-display-name"] : "cn");
+      setLdapBaseDn(attrString(attrs, "base-dn", ""));
+      setLdapUserFilter(attrString(attrs, "user-filter", "(uid={{username}})"));
+      setLdapAttrUsername(attrString(attrs, "attr-username", "uid"));
+      setLdapAttrEmail(attrString(attrs, "attr-email", "mail"));
+      setLdapAttrDisplayName(attrString(attrs, "attr-display-name", "cn"));
     } catch (err: unknown) {
       setLdapError(err instanceof Error ? err.message : "Failed to load LDAP settings");
     } finally {
@@ -438,25 +471,24 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setGeneralError("At least one authentication method must remain enabled.");
       return;
     }
-    setGeneralSaving(true);
-    setGeneralError(null);
-    try {
-      await fetchApi("/api/v2/admin/general-settings", {
-        method: "PATCH",
-        body: JSON.stringify({
-          data: {
-            type: "general-settings",
-            attributes: { "local-auth-enabled": localAuthEnabled },
-          },
-        }),
-      });
-      void loadGeneralSettings();
-      toast.add({ title: "Sign-in settings saved", type: "success" });
-    } catch (err: unknown) {
-      setGeneralError(err instanceof Error ? err.message : "Failed to save sign-in settings");
-    } finally {
-      setGeneralSaving(false);
-    }
+    await saveAuthSettings({
+      setSaving: setGeneralSaving,
+      setError: setGeneralError,
+      save: async (): Promise<void> => {
+        await fetchApi("/api/v2/admin/general-settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            data: {
+              type: "general-settings",
+              attributes: { "local-auth-enabled": localAuthEnabled },
+            },
+          }),
+        });
+      },
+      reload: (): void => { void loadGeneralSettings(); },
+      successTitle: "Sign-in settings saved",
+      fallbackError: "Failed to save sign-in settings",
+    });
   };
 
   const handleSaveLdap = async (event: React.SyntheticEvent): Promise<void> => {
@@ -475,43 +507,43 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("User filter must contain the {{username}} placeholder.");
       return;
     }
-    setLdapSaving(true);
-    setLdapError(null);
-    try {
-      const body: Record<string, unknown> = {
-        data: {
-          type: "ldap-settings",
-          attributes: {
-            enabled: ldapEnabled,
-            host: ldapHost.trim() !== "" ? ldapHost.trim() : null,
-            port: ldapPort,
-            encryption: ldapEncryption,
-            "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
-            // bind-password is write-only after the initial save. An empty
-            // field preserves the stored value; a typed value replaces it.
-            ...(ldapBindPassword !== ""
-              ? { "bind-password": ldapBindPassword }
-              : {}),
-            "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
-            "user-filter": ldapUserFilter,
-            "attr-username": ldapAttrUsername,
-            "attr-email": ldapAttrEmail,
-            "attr-display-name": ldapAttrDisplayName,
-          },
+    const body: Record<string, unknown> = {
+      data: {
+        type: "ldap-settings",
+        attributes: {
+          enabled: ldapEnabled,
+          "link-by-email": ldapLinkByEmail,
+          host: ldapHost.trim() !== "" ? ldapHost.trim() : null,
+          port: ldapPort,
+          encryption: ldapEncryption,
+          "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
+          // bind-password is write-only after the initial save. An empty
+          // field preserves the stored value; a typed value replaces it.
+          ...(ldapBindPassword !== ""
+            ? { "bind-password": ldapBindPassword }
+            : {}),
+          "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
+          "user-filter": ldapUserFilter,
+          "attr-username": ldapAttrUsername,
+          "attr-email": ldapAttrEmail,
+          "attr-display-name": ldapAttrDisplayName,
         },
-      };
-      await fetchApi("/api/v2/admin/ldap-settings", {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setPersistedLdapEnabled(ldapEnabled);
-      void loadLdapSettings();
-      toast.add({ title: "LDAP settings saved", type: "success" });
-    } catch (err: unknown) {
-      setLdapError(err instanceof Error ? err.message : "Failed to save LDAP settings");
-    } finally {
-      setLdapSaving(false);
-    }
+      },
+    };
+    await saveAuthSettings({
+      setSaving: setLdapSaving,
+      setError: setLdapError,
+      save: async (): Promise<void> => {
+        await fetchApi("/api/v2/admin/ldap-settings", {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+        setPersistedLdapEnabled(ldapEnabled);
+      },
+      reload: (): void => { void loadLdapSettings(); },
+      successTitle: "LDAP settings saved",
+      fallbackError: "Failed to save LDAP settings",
+    });
   };
 
   const loadOidcSettings = async (): Promise<void> => {
@@ -522,13 +554,15 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         data: { attributes: Record<string, unknown> };
       };
       const attrs = res.data.attributes;
-      setOidcEnabled(attrs["enabled"] === true);
-      setPersistedOidcEnabled(attrs["enabled"] === true);
-      setOidcIssuer(typeof attrs["issuer"] === "string" ? attrs["issuer"] : "");
-      setOidcClientId(typeof attrs["client-id"] === "string" ? attrs["client-id"] : "");
-      setOidcClientSecret(typeof attrs["client-secret"] === "string" ? attrs["client-secret"] : "");
-      setOidcScopes(typeof attrs["scopes"] === "string" ? attrs["scopes"] : "openid profile email");
-      setOidcPkceMethod(typeof attrs["pkce-method"] === "string" ? attrs["pkce-method"] : "");
+      setOidcEnabled(attrBoolean(attrs, "enabled", false));
+      setPersistedOidcEnabled(attrBoolean(attrs, "enabled", false));
+      setOidcLinkByEmail(attrBoolean(attrs, "link-by-email", false));
+      setOidcIssuer(attrString(attrs, "issuer", ""));
+      setOidcClientId(attrString(attrs, "client-id", ""));
+      setOidcClientSecret("");
+      setOidcClientSecretSet(attrs["client-secret-set"] === true);
+      setOidcScopes(attrString(attrs, "scopes", "openid profile email"));
+      setOidcPkceMethod(attrString(attrs, "pkce-method", ""));
     } catch (err: unknown) {
       setOidcError(err instanceof Error ? err.message : "Failed to load OIDC settings");
     } finally {
@@ -538,72 +572,72 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveSaml = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    setSamlSaving(true);
-    setSamlError(null);
-    try {
-      const body: Record<string, unknown> = {
-        data: {
-          type: "saml-settings",
-          attributes: {
-            enabled: samlEnabled,
-            debug: samlDebug,
-            "sso-endpoint-url": samlSsoUrl.trim() !== "" ? samlSsoUrl.trim() : null,
-            "slo-endpoint-url": samlSloUrl.trim() !== "" ? samlSloUrl.trim() : null,
-            "idp-cert": samlIdpCert.trim() !== "" ? samlIdpCert.trim() : null,
-            "idp-entity-id": samlIdpEntityId.trim() !== "" ? samlIdpEntityId.trim() : null,
-            "attr-username": samlAttrUsername,
-            "attr-email": samlAttrEmail,
-            "attr-groups": samlAttrGroups,
-            "attr-site-admin": samlAttrSiteAdmin,
-            "site-admin-role": samlSiteAdminRole,
-            "sso-api-token-session-timeout": samlTimeout,
-          },
+    const body: Record<string, unknown> = {
+      data: {
+        type: "saml-settings",
+        attributes: {
+          enabled: samlEnabled,
+          "link-by-email": samlLinkByEmail,
+          debug: samlDebug,
+          "sso-endpoint-url": samlSsoUrl.trim() !== "" ? samlSsoUrl.trim() : null,
+          "slo-endpoint-url": samlSloUrl.trim() !== "" ? samlSloUrl.trim() : null,
+          "idp-cert": samlIdpCert.trim() !== "" ? samlIdpCert.trim() : null,
+          "idp-entity-id": samlIdpEntityId.trim() !== "" ? samlIdpEntityId.trim() : null,
+          "attr-username": samlAttrUsername,
+          "attr-email": samlAttrEmail,
+          "attr-groups": samlAttrGroups,
+          "attr-site-admin": samlAttrSiteAdmin,
+          "site-admin-role": samlSiteAdminRole,
+          "sso-api-token-session-timeout": samlTimeout,
         },
-      };
-      await fetchApi("/api/v2/admin/saml-settings", {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setPersistedSamlEnabled(samlEnabled);
-      void loadSamlSettings();
-      toast.add({ title: "SAML settings saved", type: "success" });
-    } catch (err: unknown) {
-      setSamlError(err instanceof Error ? err.message : "Failed to save SAML settings");
-    } finally {
-      setSamlSaving(false);
-    }
+      },
+    };
+    await saveAuthSettings({
+      setSaving: setSamlSaving,
+      setError: setSamlError,
+      save: async (): Promise<void> => {
+        await fetchApi("/api/v2/admin/saml-settings", {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+        setPersistedSamlEnabled(samlEnabled);
+      },
+      reload: (): void => { void loadSamlSettings(); },
+      successTitle: "SAML settings saved",
+      fallbackError: "Failed to save SAML settings",
+    });
   };
 
   const handleSaveOidc = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    setOidcSaving(true);
-    setOidcError(null);
-    try {
-      const body: Record<string, unknown> = {
-        data: {
-          type: "oidc-settings",
-          attributes: {
-            enabled: oidcEnabled,
-            issuer: oidcIssuer.trim() !== "" ? oidcIssuer.trim() : null,
-            "client-id": oidcClientId.trim() !== "" ? oidcClientId.trim() : null,
-            "client-secret": oidcClientSecret.trim() !== "" ? oidcClientSecret.trim() : null,
-            scopes: oidcScopes,
-            "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
-          },
+    const body: Record<string, unknown> = {
+      data: {
+        type: "oidc-settings",
+        attributes: {
+          enabled: oidcEnabled,
+          "link-by-email": oidcLinkByEmail,
+          issuer: oidcIssuer.trim() !== "" ? oidcIssuer.trim() : null,
+          "client-id": oidcClientId.trim() !== "" ? oidcClientId.trim() : null,
+          "client-secret": oidcClientSecret.trim() !== "" ? oidcClientSecret.trim() : null,
+          scopes: oidcScopes,
+          "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
         },
-      };
-      await fetchApi("/api/v2/admin/oidc-settings", {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setPersistedOidcEnabled(oidcEnabled);
-      void loadOidcSettings();
-      toast.add({ title: "OIDC settings saved", type: "success" });
-    } catch (err: unknown) {
-      setOidcError(err instanceof Error ? err.message : "Failed to save OIDC settings");
-    } finally {
-      setOidcSaving(false);
-    }
+      },
+    };
+    await saveAuthSettings({
+      setSaving: setOidcSaving,
+      setError: setOidcError,
+      save: async (): Promise<void> => {
+        await fetchApi("/api/v2/admin/oidc-settings", {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+        setPersistedOidcEnabled(oidcEnabled);
+      },
+      reload: (): void => { void loadOidcSettings(); },
+      successTitle: "OIDC settings saved",
+      fallbackError: "Failed to save OIDC settings",
+    });
   };
 
   if (!accountLoaded) return <p className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
@@ -1220,7 +1254,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                         When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
                         configured). Existing local accounts cannot sign in with a password until this is re-enabled.
                       </p>
-                      <Button type="submit" disabled={generalSaving} aria-label="Save sign-in settings">
+                      <Button
+                        type="submit"
+                        disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
+                        aria-label="Save sign-in settings"
+                      >
                         {generalSaving ? "Saving..." : "Save sign-in settings"}
                       </Button>
                     </form>
@@ -1268,6 +1306,16 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             className="rounded border-gray-300"
                           />
                           Debug mode
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlLinkByEmail}
+                            onChange={(e): void => { setSamlLinkByEmail(e.target.checked); }}
+                            className="rounded border-gray-300"
+                            aria-label="Allow SAML email linking"
+                          />
+                          Link verified email addresses to existing accounts
                         </label>
                       </div>
                       <div className="space-y-1">
@@ -1404,6 +1452,16 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                         />
                         Enable OpenID Connect
                       </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={oidcLinkByEmail}
+                          onChange={(e): void => { setOidcLinkByEmail(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow OIDC email linking"
+                        />
+                        Link verified email addresses to existing accounts
+                      </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">
                           <label className="text-xs font-medium text-gray-700">Issuer URL</label>
@@ -1425,6 +1483,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                           <label className="text-xs font-medium text-gray-700">Client Secret</label>
                           <Input
                             type="password"
+                            placeholder={oidcClientSecretSet ? "····· (leave blank to keep)" : undefined}
                             value={oidcClientSecret}
                             onChange={(e): void => { setOidcClientSecret(e.target.value); }}
                           />
@@ -1479,6 +1538,16 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                           aria-label="Enable LDAP"
                         />
                         Enable LDAP authentication
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ldapLinkByEmail}
+                          onChange={(e): void => { setLdapLinkByEmail(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow LDAP email linking"
+                        />
+                        Link directory email addresses to existing accounts
                       </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">

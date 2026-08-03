@@ -13,7 +13,7 @@ import {
   teams,
   users,
 } from "../db/schema";
-import { getSettings } from "../routes/admin";
+import { getSettings } from "./settings";
 import { apiURL, auditLog } from "./utils";
 
 export type SsoProvider = "saml" | "oidc" | "ldap";
@@ -27,6 +27,8 @@ export type SsoIdentity = Readonly<{
    *  OIDC `email_verified`. SAML and LDAP identities are operator-verified
    *  and treated as verified.) */
   emailVerified?: boolean;
+  /** Provider-level opt-in for attaching a new external identity by email. */
+  allowEmailLinking?: boolean;
   displayName?: string | null;
 }>;
 
@@ -62,6 +64,7 @@ export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
 /** LDAP server configuration as persisted under the admin "ldap" settings group. */
 export type LdapSettings = Readonly<{
   enabled: boolean;
+  allowEmailLinking: boolean;
   host: string | null;
   port: number;
   encryption: "plain" | "starttls" | "ldaps";
@@ -82,6 +85,7 @@ export async function ldapSettings(): Promise<LdapSettings> {
     : "plain";
   return {
     enabled: bool(raw.enabled),
+    allowEmailLinking: bool(raw["link-by-email"]),
     host: str(raw.host),
     port,
     encryption,
@@ -135,7 +139,7 @@ export class SsoConflictError extends Error {
  * Conflict policy (applies to SAML, OIDC, and LDAP alike):
  *  1. Identity match — an account already carrying (provider, subject) wins.
  *  2. Email match — a verified email links the identity to the existing
- *     account (including local accounts; both sign-in methods then work).
+ *     account only when the provider's link-by-email setting is enabled.
  *  3. Username match — if the username belongs to a DIFFERENT account,
  *     provisioning is refused with SsoConflictError. No silent takeover.
  *  4. Otherwise a new account is created with an unusable password hash, so
@@ -169,7 +173,8 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   });
   if (byIdentity !== undefined) {
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (byIdentity.email === null && email !== null && identity.emailVerified === true) updates.email = email;
+    if (byIdentity.email === null && email !== null
+      && identity.emailVerified === true && identity.allowEmailLinking === true) updates.email = email;
     if (updates.email !== undefined) {
       const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
       if (emailOwner !== undefined && emailOwner.id !== byIdentity.id) delete updates.email;
@@ -182,12 +187,13 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     return { user: refreshed, created: false };
   }
 
-  // Only link by email when the provider asserts the address is verified.
+  // Only link by email when the provider asserts the address is verified and
+  // the site administrator explicitly enabled linking for that provider.
   // Attaching an external identity to an unverified-email account would let
   // an attacker take over a local account (including site admins) by signing
   // in with an address they can control. SAML and LDAP callers pass
   // emailVerified = true; OIDC derives it from the email_verified claim.
-  if (email !== null && identity.emailVerified === true) {
+  if (email !== null && identity.emailVerified === true && identity.allowEmailLinking === true) {
     const byEmail = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (byEmail !== undefined) {
       const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
@@ -217,7 +223,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   }
 
   let insertEmail = email;
-  if (email !== null && identity.emailVerified !== true) {
+  if (email !== null && (identity.emailVerified !== true || identity.allowEmailLinking !== true)) {
     const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (emailOwner !== undefined) insertEmail = null;
   }
@@ -272,22 +278,25 @@ type SamlGroupMappingData = Readonly<{
   existingTeamIds: ReadonlySet<string>;
 }>;
 
-async function loadSamlGroupMappingData(userId: string): Promise<SamlGroupMappingData> {
-  const samlOrgs = await db.query.organizations.findMany({
+type SsoDatabase = Readonly<typeof db>;
+
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
+async function loadSamlGroupMappingData(database: SsoDatabase, userId: string): Promise<SamlGroupMappingData> {
+  const samlOrgs = await database.query.organizations.findMany({
     where: eq(organizations.samlEnabled, true),
   });
   const orgIds = samlOrgs.map((org): string => org.id);
   if (orgIds.length === 0) return { samlOrgs, memberships: [], orgTeams: [], existingTeamIds: new Set() };
   const [memberships, orgTeams] = await Promise.all([
-    db.query.organizationMemberships.findMany({
+    database.query.organizationMemberships.findMany({
       where: and(inArray(organizationMemberships.orgId, orgIds), eq(organizationMemberships.userId, userId)),
     }),
-    db.query.teams.findMany({ where: inArray(teams.orgId, orgIds) }),
+    database.query.teams.findMany({ where: inArray(teams.orgId, orgIds) }),
   ]);
   const teamIds = orgTeams.map((team): string => team.id);
   const existingTeamMemberships = teamIds.length === 0
     ? []
-    : await db.query.teamMemberships.findMany({
+    : await database.query.teamMemberships.findMany({
       where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)),
       columns: { teamId: true },
     });
@@ -299,9 +308,16 @@ async function loadSamlGroupMappingData(userId: string): Promise<SamlGroupMappin
   };
 }
 
-export async function applySamlGroupMapping(userId: string, groups: readonly string[]): Promise<void> {
+async function applySamlGroupMapping(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
+  database: SsoDatabase,
+  userId: string,
+  groups: readonly string[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mapping rows are readonly at the aggregate boundary
+  mapping: SamlGroupMappingData,
+): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
-  const { samlOrgs, memberships, orgTeams, existingTeamIds } = await loadSamlGroupMappingData(userId);
+  const { samlOrgs, memberships, orgTeams, existingTeamIds } = mapping;
   const membershipByOrg = new Map(memberships.map((membership) => [membership.orgId, membership]));
   const teamsByOrg = new Map<string, typeof orgTeams[number][]>();
   for (const team of orgTeams) teamsByOrg.set(team.orgId, [...(teamsByOrg.get(team.orgId) ?? []), team]);
@@ -310,7 +326,7 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
     const existing = membershipByOrg.get(org.id);
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
     if (existing === undefined) {
-      await db.insert(organizationMemberships).values({
+      await database.insert(organizationMemberships).values({
         id: `orgmem-${crypto.randomUUID()}`,
         orgId: org.id,
         userId,
@@ -322,7 +338,7 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
       }).onConflictDoNothing();
     } else if (isOwner && existing.role !== "owner" && existing.ssoSource === "saml") {
       // Preserve admin-granted provenance so pruning never removes the row.
-      await db.update(organizationMemberships).set({ role: "owner" })
+      await database.update(organizationMemberships).set({ role: "owner" })
         .where(and(
           eq(organizationMemberships.orgId, org.id),
           eq(organizationMemberships.userId, userId),
@@ -345,7 +361,7 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
       }));
     teamInserts.push(...inserts);
   }
-  if (teamInserts.length > 0) await db.insert(teamMemberships).values(teamInserts).onConflictDoNothing();
+  if (teamInserts.length > 0) await database.insert(teamMemberships).values(teamInserts).onConflictDoNothing();
 }
 
 /**
@@ -354,9 +370,16 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
  * downgraded; admin-granted memberships are left untouched. Called when the
  * same identity logs in with fewer groups.
  */
-export async function pruneSamlGroupMappings(userId: string, groups: readonly string[]): Promise<void> {
+async function pruneSamlGroupMappings(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
+  database: SsoDatabase,
+  userId: string,
+  groups: readonly string[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mapping rows are readonly at the aggregate boundary
+  mapping: SamlGroupMappingData,
+): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
-  const { samlOrgs, memberships, orgTeams } = await loadSamlGroupMappingData(userId);
+  const { samlOrgs, memberships, orgTeams } = mapping;
   const teamByOrg = new Map<string, typeof orgTeams[number][]>();
   for (const team of orgTeams) {
     const list = teamByOrg.get(team.orgId) ?? [];
@@ -370,7 +393,7 @@ export async function pruneSamlGroupMappings(userId: string, groups: readonly st
       team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name);
     const staleTeamIds = teamsForOrg.filter((team): boolean => !matches(team)).map((team): string => team.id);
     if (staleTeamIds.length > 0) {
-      await db.delete(teamMemberships).where(and(
+      await database.delete(teamMemberships).where(and(
         eq(teamMemberships.userId, userId),
         inArray(teamMemberships.teamId, staleTeamIds),
         eq(teamMemberships.ssoSource, "saml"),
@@ -384,17 +407,25 @@ export async function pruneSamlGroupMappings(userId: string, groups: readonly st
     if (isOwner || matchedTeam) {
       const role: "owner" | "member" = isOwner ? "owner" : "member";
       if (membership.role !== role) {
-        await db.update(organizationMemberships).set({ role })
+        await database.update(organizationMemberships).set({ role })
           .where(eq(organizationMemberships.id, membership.id));
       }
       continue;
     }
-    await db.delete(organizationMemberships).where(and(
-      eq(organizationMemberships.orgId, org.id),
-      eq(organizationMemberships.userId, userId),
-      eq(organizationMemberships.ssoSource, "saml"),
-    ));
+    if (membership.role !== "member") {
+      await database.update(organizationMemberships).set({ role: "member" })
+        .where(eq(organizationMemberships.id, membership.id));
+    }
   }
+}
+
+export async function syncSamlGroupMappings(userId: string, groups: readonly string[]): Promise<void> {
+  await db.transaction(async (transaction: unknown): Promise<void> => {
+    const database = transaction as SsoDatabase;
+    const mapping = await loadSamlGroupMappingData(database, userId);
+    await applySamlGroupMapping(database, userId, groups, mapping);
+    await pruneSamlGroupMappings(database, userId, groups, mapping);
+  });
 }
 
 /** HTML-escape a value for safe interpolation into rendered SSO pages. */

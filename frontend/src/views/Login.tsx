@@ -130,7 +130,9 @@ export function Login(): React.JSX.Element {
           <CardFooter className="flex flex-col gap-2">
             {mfaChallengeToken === null && ssoEnabled && (
               <div className="flex w-full flex-col gap-2 border-t pt-3">
-                <p className="text-xs text-muted-foreground">Or sign in with single sign-on</p>
+                <p className="text-xs text-muted-foreground">
+                  {showLocalForm ? "Or sign in with single sign-on" : "Sign in with single sign-on"}
+                </p>
                 {samlEnabled && (
                   <Button type="button" variant="outline" className="w-full" onClick={(): void => { window.location.href = "/users/saml/auth"; }}>
                     Sign in with SAML SSO

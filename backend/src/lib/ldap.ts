@@ -2,7 +2,7 @@
 // locates the user with the configured filter, then validates the presented
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
-import { Client, InvalidCredentialsError, type Entry } from "ldapts";
+import { Client, InvalidCredentialsError, SizeLimitExceededError, type Entry } from "ldapts";
 import type { LdapSettings } from "./sso";
 
 export type LdapUser = Readonly<{
@@ -74,11 +74,12 @@ export async function authenticateLdap(
   }
 
   const scheme = settings.encryption === "ldaps" ? "ldaps" : "ldap";
+  const tlsOptions = { minVersion: "TLSv1.2" as const };
   const clientOptions = {
     url: `${scheme}://${settings.host}:${settings.port}`,
     timeout: 10_000,
     connectTimeout: 10_000,
-    ...(settings.encryption === "plain" ? {} : { tlsOptions: { minVersion: "TLSv1.2" as const } }),
+    ...(settings.encryption === "plain" ? {} : { tlsOptions }),
   };
   const client = new Client({
     ...clientOptions,
@@ -87,7 +88,7 @@ export async function authenticateLdap(
 
   try {
     if (settings.encryption === "starttls") {
-      await client.startTLS();
+      await client.startTLS(tlsOptions);
     }
     if (settings.bindDn !== null) {
       activeBind = "service";
@@ -135,10 +136,11 @@ export async function authenticateLdap(
     // unavailable. Never log the password or bind password.
     const message = error instanceof Error ? error.message : String(error);
     const credentialRejection = activeBind === "user" && error instanceof InvalidCredentialsError;
-    if (!credentialRejection) {
+    const ambiguousSearch = error instanceof SizeLimitExceededError;
+    if (!credentialRejection && !ambiguousSearch) {
       console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
     }
-    return { user: null, unavailable: !credentialRejection };
+    return { user: null, unavailable: !credentialRejection && !ambiguousSearch };
   } finally {
     await client.unbind().catch((): void => undefined);
   }

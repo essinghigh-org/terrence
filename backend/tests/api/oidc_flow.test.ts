@@ -3,6 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
+import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../../src/lib/sso-challenges";
 import { resetOidcCaches } from "../../src/routes/oidc";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
@@ -216,6 +217,7 @@ describe("OIDC SSO flow", () => {
       "client-secret": "test-secret",
       scopes: "openid profile email",
       "pkce-method": "S256",
+      "link-by-email": true,
     };
     await db.insert(adminSettings).values({ id: "oidc", values: oidcValues, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values: oidcValues, updatedAt: Date.now() } });
@@ -331,7 +333,9 @@ describe("OIDC SSO flow", () => {
   test("accepts a cross-site form_post callback and clears the state cookie", async () => {
     const { response } = await completeFlow("POST");
     expect(response.status).toBe(200);
-    expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+    const stateCookie = response.headers.getSetCookie()
+      .find((value): boolean => value.startsWith("terrence_oidc_state="));
+    expect(stateCookie).toContain("Max-Age=0");
   });
 
   test("requires azp when the ID token has multiple audiences", async () => {
@@ -376,6 +380,18 @@ describe("OIDC SSO flow", () => {
     const response = await app.handle(new Request("http://terrence.test/users/oidc/callback?code=whatever&state=definitely-not-real"));
     expect(response.status).toBe(400);
     expect(await response.text()).toMatch(/invalid|expired/);
+  });
+
+  test("does not consume a challenge through a different flow kind", async () => {
+    const kind = `oidc-kind-test-${suffix}`;
+    const id = `challenge-${suffix}`;
+    await storeSsoChallenge(kind, id, { nonce: "test" }, Date.now() + 60_000);
+    try {
+      expect(await consumeSsoChallenge("saml-authn", id)).toBeUndefined();
+      expect(await consumeSsoChallenge(kind, id)).toEqual({ nonce: "test" });
+    } finally {
+      await clearSsoChallenges(kind);
+    }
   });
 
   test("rejects a callback from the provider with an error parameter", async () => {

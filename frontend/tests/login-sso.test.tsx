@@ -106,6 +106,9 @@ test("reports when every authentication method is disabled", async (): Promise<v
     expect(view.getByText("No authentication methods are configured. Contact an administrator.")).toBeTruthy();
   });
   expect(view.queryByLabelText(/Username/i)).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in with SAML SSO" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in with OpenID Connect" })).toBeNull();
+  expect(view.queryByText("Or sign in with single sign-on")).toBeNull();
   expect(view.queryByRole("button", { name: "Sign in", exact: true })).toBeNull();
 });
 
