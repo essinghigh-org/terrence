@@ -63,6 +63,8 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
   } = options;
 
   const now = iso(0);
+  const responseId = `_response_${crypto.randomUUID().replaceAll("-", "")}`;
+  const assertionId = `_assertion_${crypto.randomUUID().replaceAll("-", "")}`;
   const attributeXml = [
     serializedAttribute("Username", username),
     serializedAttribute("email", email),
@@ -72,16 +74,16 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
   ].join("");
 
   const responseXml = `<?xml version="1.0" encoding="UTF-8"?>
-<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="_test_response" Version="2.0" IssueInstant="${now}" Destination="${destination}">
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${destination}">
   <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
   <samlp:Status>
     <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:protocol:status:Success"/>
   </samlp:Status>
-  <saml:Assertion Version="2.0" ID="_test_assertion" IssueInstant="${now}" Destination="${destination}">
+  <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}" Destination="${destination}">
     <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
     <saml:Subject>
       <saml:NameID>${nameId}</saml:NameID>
-      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:assertion:confirmation:bearer">
+      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
         <saml:SubjectConfirmationData Recipient="${recipient}" NotOnOrAfter="${notOnOrAfter}"/>
       </saml:SubjectConfirmation>
     </saml:Subject>
@@ -110,10 +112,41 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
       "http://www.w3.org/2001/10/xml-exc-c14n#",
     ],
     digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
-    uri: "#_test_assertion",
+    uri: `#${assertionId}`,
   });
   signed.computeSignature(responseXml, {
     location: { reference: "//*[local-name()='AttributeStatement']", action: "append" },
+  });
+  return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
+}
+
+/** Build a signed IdP-initiated LogoutRequest as base64. */
+export function buildSignedLogoutRequest(): string {
+  const now = new Date().toISOString();
+  const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
+  const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
+<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}">
+  <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
+  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">slo-user</saml:NameID>
+</samlp:LogoutRequest>
+`;
+  const signed = new SignedXml({
+    privateKey: IDP_KEY,
+    publicCert: IDP_CERT,
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  signed.addReference({
+    xpath: "//*[local-name()='LogoutRequest']",
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+    uri: `#${requestId}`,
+  });
+  signed.computeSignature(logoutXml, {
+    location: { reference: "//*[local-name()='LogoutRequest']", action: "append" },
   });
   return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
 }

@@ -966,12 +966,23 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\" or null" }] };
     }
 
-    return settingResource("oidc-settings", await updateSettings("oidc", { ...attrs, "pkce-method": pkce === "" ? null : pkce }));
+    return settingResource("oidc-settings", await updateSettings("oidc", {
+      ...attrs,
+      ...(typeof attrs.issuer === "string" ? { issuer } : {}),
+      ...(typeof attrs["client-id"] === "string" ? { "client-id": clientId } : {}),
+      "pkce-method": pkce === "" ? null : pkce,
+    }));
   })
   // --- B.9 LDAP Settings ---
   .get("/api/v2/admin/ldap-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return settingResource("ldap-settings", await getSettings("ldap"));
+    // bind-password is write-only: never return its value to the dashboard.
+    const values = await getSettings("ldap");
+    const { "bind-password": bindPassword, ...safe } = values;
+    return settingResource("ldap-settings", {
+      ...safe,
+      "bind-password-set": typeof bindPassword === "string" && bindPassword !== "",
+    });
   })
   .patch("/api/v2/admin/ldap-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1012,10 +1023,12 @@ export const adminRoutes = new Elysia({ name: "admin" })
     // A bind DN without a password performs an unauthenticated (anonymous)
     // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
     // than silently downgrading at login time.
-    const bindDn = attrs["bind-dn"] === null && attrs["bind-dn"] !== undefined ? null
-      : typeof attrs["bind-dn"] === "string" && attrs["bind-dn"] !== ""
-        ? attrs["bind-dn"].trim()
-        : current["bind-dn"];
+    // A blank or whitespace-only bind DN means "no service account"; storing
+    // it as a string would make authenticateLdap require a bind password
+    // forever, and a padded one would be validated trimmed but persisted raw.
+    const bindDn = typeof attrs["bind-dn"] === "string"
+      ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
+      : attrs["bind-dn"] === null ? null : current["bind-dn"];
     const bindPassword = attrs["bind-password"] === undefined ? current["bind-password"] : attrs["bind-password"];
     if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
       (set as { status: number }).status = 422;
@@ -1035,6 +1048,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       ...attrs,
       host: typeof attrs.host === "string" ? host : attrs.host,
       "base-dn": typeof attrs["base-dn"] === "string" ? baseDn : attrs["base-dn"],
+      ...(attrs["bind-dn"] === undefined ? {} : { "bind-dn": bindDn }),
       "user-filter": userFilter,
     }));
   });

@@ -249,7 +249,14 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       : null;
 
     if (user === null || user === undefined || password === "" || !(await bcrypt.compare(password, user.passwordHash))) {
-      return htmlResponse(loginPage(authorization, "Invalid username or password.", username), 401);
+      // Preserve the SSO state so a user who mistypes a local password can
+      // still reach the identity-provider links without restarting.
+      return htmlResponse(loginPage(authorization, "Invalid username or password.", username, {
+        saml: sso.samlEnabled,
+        oidc: sso.oidcEnabled,
+        ldap: sso.ldapEnabled,
+        localAuthEnabled: sso.localAuthEnabled,
+      }), 401);
     }
 
     const now = Date.now();

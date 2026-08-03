@@ -38,9 +38,39 @@ type OidcDiscovery = Readonly<{
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const CLOCK_SKEW_S = 120;
+const FETCH_TIMEOUT_MS = 5_000;
+const JWKS_TTL_MS = 10 * 60 * 1000;
+// Accept only well-known algorithms, each bound to its signing-key family.
+// A provider that unexpectedly signs with a different alg is a sign of a
+// rolled key set, not something to silently accept.
+const ALLOWED_ALGS: ReadonlySet<string> = new Set([
+  "HS256", "HS384", "HS512",
+  "RS256", "RS384", "RS512",
+  "ES256", "ES384", "ES512",
+]);
 
 const discoveryCache = new Map<string, { config: OidcDiscovery; fetchedAt: number }>();
+const jwksCache = new Map<string, { keys: Record<string, unknown>[]; fetchedAt: number }>();
 const pendingLogins = new Map<string, { nonce: string; verifier: string | null; expiresAt: number }>();
+const OIDC_STATE_COOKIE = "terrence_oidc_state";
+
+/** Test hook: clear the discovery/JWKS caches between scenarios. */
+export function resetOidcCaches(): void {
+  discoveryCache.clear();
+  jwksCache.clear();
+}
+
+/** Read a same-site cookie value from a request. */
+function cookieValue(request: RequestInfo, name: string): string | undefined {
+  const raw = request.headers.get("cookie") ?? "";
+  for (const part of raw.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator !== -1 && part.slice(0, separator).trim() === name) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return undefined;
+}
 
 async function oidcSettings(): Promise<OidcSettings> {
   const raw = await getSettings("oidc");
@@ -63,18 +93,30 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   const cached = discoveryCache.get(providerIssuer);
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
   const endpoint = `${providerIssuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
-  const response = await fetch(endpoint, { redirect: "follow" });
+  const response = await fetch(endpoint, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
   const config = await response.json() as Partial<Record<string, unknown>>;
   const discoveredIssuer = typeof config.issuer === "string" && config.issuer !== "" ? config.issuer : null;
+  if (discoveredIssuer === null || discoveredIssuer !== providerIssuer) {
+    // RFC 8414: the document issuer must equal the configured issuer.
+    throw new Error("OIDC discovery issuer does not match the configured issuer");
+  }
   const authorizationEndpoint = typeof config.authorization_endpoint === "string" && config.authorization_endpoint !== "" ? config.authorization_endpoint : null;
   const tokenEndpoint = typeof config.token_endpoint === "string" && config.token_endpoint !== "" ? config.token_endpoint : null;
   const jwksUri = typeof config.jwks_uri === "string" && config.jwks_uri !== "" ? config.jwks_uri : null;
-  if (discoveredIssuer === null || authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null) {
+  if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null) {
     throw new Error("OIDC discovery document is missing required endpoints");
   }
-  const discovered: OidcDiscovery = { issuer: discoveredIssuer, authorizationEndpoint, tokenEndpoint, jwksUri };
-  discoveryCache.set(discoveredIssuer, { config: discovered, fetchedAt: Date.now() });
+  const discovered: OidcDiscovery = {
+    issuer: discoveredIssuer,
+    authorizationEndpoint,
+    tokenEndpoint,
+    jwksUri,
+  };
+  discoveryCache.set(providerIssuer, { config: discovered, fetchedAt: Date.now() });
   return discovered;
 }
 
@@ -109,7 +151,14 @@ function derEncodeEsSignature(signature: Buffer): Buffer {
   };
   const rEncoded = encodeInt(r);
   const sEncoded = encodeInt(s);
-  return Buffer.concat([Buffer.from([0x30, rEncoded.length + sEncoded.length]), rEncoded, sEncoded]);
+  // DER length can use short form only for lengths <= 127; ES512's raw
+  // signature is larger, so emit the long-form length byte when needed or
+  // every valid ES512 token fails verification.
+  const bodyLength = rEncoded.length + sEncoded.length;
+  const lengthBytes = bodyLength < 0x80
+    ? Buffer.from([bodyLength])
+    : Buffer.from([0x81, bodyLength]);
+  return Buffer.concat([Buffer.from([0x30]), lengthBytes, rEncoded, sEncoded]);
 }
 
 async function verifyJwtSignature(
@@ -119,6 +168,9 @@ async function verifyJwtSignature(
   settings: OidcSettings,
 ): Promise<void> {
   const alg = String(header.alg);
+  if (!ALLOWED_ALGS.has(alg)) {
+    throw new Error("Unsupported ID token algorithm.");
+  }
   const signatureBuffer = Buffer.from(signature, "base64url");
   const data = Buffer.from(signingInput, "utf8");
 
@@ -140,21 +192,7 @@ async function verifyJwtSignature(
   const hash = hashName[alg];
   if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
 
-  const discoveryConfig = await discovery(String(settings.issuer));
-  const jwksResponse = await fetch(discoveryConfig.jwksUri, { redirect: "follow" });
-  if (!jwksResponse.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
-  const jwks = await jwksResponse.json() as { keys?: Record<string, unknown>[] };
-  const keys = jwks.keys ?? [];
-  const kid = typeof header.kid === "string" ? header.kid : undefined;
-  // Prefer a key whose kty matches the token's algorithm family; JWKs that
-  // explicitly declare `use: "sig"` win over encryption-only keys.
-  const algFamily = alg.startsWith("ES") ? "EC" : "RSA";
-  const key = kid === undefined
-    ? keys.find((candidate): boolean =>
-        candidate.kty === algFamily && (candidate.use === undefined || candidate.use === "sig"))
-      ?? keys.find((candidate): boolean =>
-        candidate.kty === "RSA" || candidate.kty === "EC")
-    : keys.find((candidate): boolean => candidate.kid === kid);
+  const key = await resolveVerificationKey(alg, header, settings.issuer);
   if (key === undefined) throw new Error("No matching key found in the OIDC provider JWKS");
 
   const publicKey = createPublicKey({ key, format: "jwk" });
@@ -163,6 +201,42 @@ async function verifyJwtSignature(
     : signatureBuffer;
   const valid = verifySignature(hash, data, publicKey, verifiable);
   if (!valid) throw new Error("ID token signature is invalid");
+}
+
+async function fetchJwks(jwksUri: string): Promise<Record<string, unknown>[]> {
+  const cached = jwksCache.get(jwksUri);
+  if (cached !== undefined && cached.fetchedAt + JWKS_TTL_MS > Date.now()) return cached.keys;
+  const response = await fetch(jwksUri, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
+  const jwks = await response.json() as { keys?: Record<string, unknown>[] };
+  const keys = jwks.keys ?? [];
+  jwksCache.set(jwksUri, { keys, fetchedAt: Date.now() });
+  return keys;
+}
+
+async function resolveVerificationKey(
+  alg: string,
+  header: Readonly<Record<string, unknown>>,
+  issuer: string | null,
+): Promise<Record<string, unknown> | undefined> {
+  if (issuer === null) return undefined;
+  const discoveryConfig = await discovery(issuer);
+  const keys = await fetchJwks(discoveryConfig.jwksUri);
+  const kid = typeof header.kid === "string" ? header.kid : undefined;
+  const algFamily = alg.startsWith("ES") ? "EC" : "RSA";
+  if (kid === undefined) {
+    // Prefer a key whose kty matches the algorithm family; fall back to any
+    // RSA/EC key only as a last resort (e.g. providers that omit kty sets).
+    return keys.find((candidate): boolean =>
+      candidate.kty === algFamily && (candidate.use === undefined || candidate.use === "sig"))
+      ?? keys.find((candidate): boolean => candidate.kty === algFamily)
+      ?? keys.find((candidate): boolean => candidate.kty === "RSA" || candidate.kty === "EC");
+  }
+  return keys.find((candidate): boolean =>
+    candidate.kid === kid && (candidate.kty === undefined || candidate.kty === algFamily));
 }
 
 function verifyClaims(
@@ -217,9 +291,15 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
       authorize.searchParams.set("code_challenge", challenge);
       authorize.searchParams.set("code_challenge_method", "S256");
     }
+    // Bind the flow to the browser that started it: the callback will only
+    // be honored when the same cookie comes back with the state.
     return new Response(null, {
       status: 302,
-      headers: { "Cache-Control": "no-store", Location: authorize.toString() },
+      headers: {
+        "Cache-Control": "no-store",
+        Location: authorize.toString(),
+        "Set-Cookie": `${OIDC_STATE_COOKIE}=${state}; Path=/users/oidc; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(PENDING_TTL_MS / 1000)}`,
+      },
     });
   })
   .get("/users/oidc/callback", async ({ query, request, set, server }: {
@@ -254,6 +334,13 @@ async function handleCallback(
   }
 
   const state = typeof params.state === "string" ? params.state : "";
+  // The flow started in a specific browser; only accept the callback if the
+  // same cookie accompanies it. This prevents an attacker who obtains a
+  // valid code+state from delivering it to a victim's browser.
+  if (state === "" || cookieValue(request, OIDC_STATE_COOKIE) !== state) {
+    (set as { status: number }).status = 400;
+    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400);
+  }
   const pending = pendingLogins.get(state);
   pendingLogins.delete(state);
   if (pending === undefined || pending.expiresAt <= Date.now()) {
@@ -265,7 +352,8 @@ async function handleCallback(
   if (error !== "") {
     const description = typeof params.error_description === "string" ? params.error_description : error;
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description.replaceAll("<", "&lt;")}`), 400);
+    // ssoHtmlPage escapes the message, so no ad-hoc escaping is needed here.
+    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
   }
 
   const code = typeof params.code === "string" ? params.code : "";
@@ -300,6 +388,7 @@ async function handleCallback(
       headers: tokenHeaders,
       body: tokenBody.toString(),
       redirect: "follow",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (error: unknown) {
     (set as { status: number }).status = 502;
@@ -313,7 +402,7 @@ async function handleCallback(
         ? tokenData.error
         : String(tokenResponse.status);
     (set as { status: number }).status = 502;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `Token exchange failed: ${detail.replaceAll("<", "&lt;")}`), 502);
+    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `Token exchange failed: ${detail}`), 502);
   }
 
   // Validate the ID token.
@@ -355,6 +444,9 @@ async function handleCallback(
       subject,
       username,
       email,
+      // Only link to an existing account when the IdP issued an explicitly
+      // verified email claim; otherwise the account is auto-provisioned.
+      emailVerified: payload.email_verified === true && typeof payload.email === "string",
     });
   } catch (error: unknown) {
     if (error instanceof SsoConflictError) {

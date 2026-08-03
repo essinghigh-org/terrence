@@ -27,11 +27,28 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
     server.bind("cn=admin", (_req, res, next): void => { res.end(); next(); });
 
     // The mock directory knows exactly two users.
+    // The mock directory knows exactly two users, plus an ambiguous multi-entry
+    // case used to exercise the unique-match rule: "dupe" has two entries.
     server.search("dc=example,dc=com", (req, res, next): void => {
       const value = req.filter.value ?? req.filter.attributeValue;
       const username = typeof value === "string" && value !== "" ? value : "alice";
       const dn = USER_DN(username);
       if (username === "carol") {
+        res.end();
+        next();
+        return;
+      }
+      if (username === "duplicate") {
+        // Two distinct entries share the same uid: the search filter matches
+        // both, so no single entry may be bound.
+        res.send({
+          dn: USER_DN("duplicate"),
+          attributes: { uid: "duplicate", mail: "duplicate@example.com", cn: "Duplicate" },
+        });
+        res.send({
+          dn: USER_DN("duplicate2"),
+          attributes: { uid: "duplicate", mail: "duplicate-2@example.com", cn: "Duplicate 2" },
+        });
         res.end();
         next();
         return;
@@ -130,8 +147,10 @@ describe("LDAP authentication", () => {
   afterAll(async () => {
     ldapServer?.close();
     await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
-    await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, localId]));
-    await db.delete(users).where(inArray(users.id, [adminId, localId]));
+    const provisioned = await db.query.users.findFirst({ where: eq(users.username, "alice") });
+    const ids = [adminId, localId, ...(provisioned === undefined ? [] : [provisioned.id])];
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
+    await db.delete(users).where(inArray(users.id, ids));
   });
 
   test("provisions a new user on successful directory credentials", async () => {
@@ -149,6 +168,13 @@ describe("LDAP authentication", () => {
 
   test("rejects wrong directory credentials", async () => {
     const response = await login("alice", "wrong-password", true);
+    expect(response.status).toBe(401);
+  });
+
+  test("refuses to authenticate when the directory match is ambiguous", async () => {
+    // The mock returns two entries whose uid equals the presented username;
+    // binding an arbitrary one would sign the caller in as the wrong identity.
+    const response = await login("duplicate", VALID_USER_PASSWORD, true);
     expect(response.status).toBe(401);
   });
 

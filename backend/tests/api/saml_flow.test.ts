@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -18,6 +18,7 @@ import {
   IDP_CERT,
   IDP_OLD_CERT,
   IDP_OLD_KEY,
+  buildSignedLogoutRequest,
   buildSignedSamlResponse,
   inflateAndDecode,
   samlAcsRequest,
@@ -71,13 +72,19 @@ describe("SAML SSO flow", () => {
   });
 
   afterAll(async () => {
+    const provisioned = await db.query.users.findMany({
+      where: like(users.username, `%-${suffix}`),
+    });
+    const ids = [adminId, orgUserId, ...provisioned.map((row): string => row.id)];
     await db.delete(samlSettings).where(eq(samlSettings.id, "saml"));
-    await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, orgUserId]));
-    await db.delete(teamMemberships).where(inArray(teamMemberships.userId, [orgUserId]));
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
+    // Delete team memberships by team, not by user, so group-mapped rows do
+    // not remain and trip the FK on teams.
+    await db.delete(teamMemberships).where(eq(teamMemberships.teamId, `team-dev-${suffix}`));
     await db.delete(teams).where(eq(teams.id, `team-dev-${suffix}`));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
-    await db.delete(users).where(inArray(users.id, [adminId, orgUserId]));
+    await db.delete(users).where(inArray(users.id, ids));
   });
 
   test("exposes SP metadata with the ACS URL and entity ID", async () => {
@@ -90,7 +97,7 @@ describe("SAML SSO flow", () => {
     expect(body).toContain("SingleLogoutService");
   });
 
-  test("redirects SP-initiated auth to the IdP with a signed-in-request binding", async () => {
+  test("redirects SP-initiated auth to the IdP over the HTTP-Redirect binding", async () => {
     const response = await app.handle(new Request("http://terrence.test/users/saml/auth?RelayState=api"));
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
@@ -213,13 +220,13 @@ describe("SAML SSO flow", () => {
   });
 
   test("rejects an invalid signature", async () => {
-    const params = new URLSearchParams({ SAMLResponse: buildSignedSamlResponse({
+    const samlResponse = buildSignedSamlResponse({
       username: `bad-sig-${suffix}`,
       email: `bad-sig-${suffix}@example.com`,
       privateKey: IDP_OLD_KEY,
       publicCert: IDP_OLD_CERT,
-    }) });
-    const response = await app.handle(samlAcsRequest(params.get("SAMLResponse")!));
+    });
+    const response = await app.handle(samlAcsRequest(samlResponse));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("signature");
   });
@@ -229,13 +236,19 @@ describe("SAML SSO flow", () => {
     // still verify because the old cert is retained during rotation.
     await db.update(samlSettings).set({ idpCert: IDP_CERT, oldIdpCert: IDP_OLD_CERT, updatedAt: Date.now() })
       .where(eq(samlSettings.id, "saml"));
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
-      username: `rotate-${suffix}`,
-      email: `rotate-${suffix}@example.com`,
-      privateKey: IDP_OLD_KEY,
-      publicCert: IDP_OLD_CERT,
-    })));
-    expect(response.status).toBe(200);
+    try {
+      const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+        username: `rotate-${suffix}`,
+        email: `rotate-${suffix}@example.com`,
+        privateKey: IDP_OLD_KEY,
+        publicCert: IDP_OLD_CERT,
+      })));
+      expect(response.status).toBe(200);
+    } finally {
+      // Restore so later tests that sign with the old key still reject.
+      await db.update(samlSettings).set({ oldIdpCert: null, updatedAt: Date.now() })
+        .where(eq(samlSettings.id, "saml"));
+    }
   });
 
   test("rejects an expired assertion", async () => {
@@ -339,6 +352,39 @@ describe("SAML SSO flow", () => {
   test("routes SLO to the IdP single logout endpoint", async () => {
     const response = await app.handle(new Request("http://terrence.test/users/saml/slo"));
     expect(response.status).toBe(302);
-    expect(response.headers.get("Location")).toBe("https://idp.example.test/slo");
+    const location = new URL(response.headers.get("Location") ?? "");
+    expect(location.origin + location.pathname).toBe("https://idp.example.test/slo");
+    expect(location.searchParams.has("SAMLRequest")).toBeTrue();
+  });
+
+  test("revokes the local session on IdP-initiated logout", async () => {
+    // Sign in first to get a browser refresh session.
+    const options = { username: `slo-${suffix}`, email: `slo-${suffix}@example.com` };
+    const login = await app.handle(samlAcsRequest(buildSignedSamlResponse(options)));
+    expect(login.status).toBe(200);
+    const setCookie = login.headers.get("Set-Cookie") ?? "";
+    expect(setCookie).toContain("terrence_refresh=");
+    const refreshToken = setCookie.split(";")[0]?.split("=")[1] ?? "";
+
+    const refresh = await app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
+      method: "POST",
+      headers: { Cookie: `terrence_refresh=${refreshToken}` },
+    }));
+    expect(refresh.status).toBe(200);
+
+    // An IdP-initiated LogoutRequest (signed) clears the session.
+    const logoutResponse = await app.handle(new Request("http://terrence.test/users/saml/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest() }).toString(),
+    }));
+    expect(logoutResponse.status).toBe(200);
+    expect(await logoutResponse.text()).toContain("LogoutResponse");
+
+    const revokedRefresh = await app.handle(new Request("http://localhost/api/v2/users/refresh", {
+      method: "POST",
+      headers: { Cookie: `terrence_refresh=${refreshToken}` },
+    }));
+    expect(revokedRefresh.status).toBe(401);
   });
 });

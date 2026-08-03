@@ -10,6 +10,20 @@ const json = (data: unknown): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
+
+/**
+ * React-DOM records the last value on each controlled input in an internal
+ * tracker; bun's testing DOM does not sync it before dispatching, so a plain
+ * fireEvent is ignored by React's onChange. Reset the tracker first — the same
+ * workaround flows.test.tsx uses.
+ */
+const typeInput = (element: HTMLInputElement, value: string): void => {
+  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (v: string) => void } | undefined;
+  if (tracker !== undefined) tracker.setValue("");
+  Reflect.set(element, "value", value);
+  fireEvent.input(element, { target: { value } });
+  fireEvent.change(element, { target: { value } });
+};
 const urlOf = (input: string | URL | Request): string =>
   typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
@@ -19,6 +33,11 @@ afterEach((): void => {
 });
 
 test("shows SAML and OIDC auth configuration in the admin dashboard", async (): Promise<void> => {
+  // Track the configuration as the mock IdP "server" sees it after each PATCH,
+  // so the GET re-fetches after saving reflect the newly enabled providers.
+  let samlServerEnabled = false;
+  let oidcServerEnabled = false;
+  let ldapServerEnabled = false;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
@@ -32,7 +51,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
           id: "saml",
           type: "saml-settings",
           attributes: {
-            enabled: false,
+            enabled: samlServerEnabled,
             debug: false,
             "idp-cert": null,
             "old-idp-cert": null,
@@ -55,7 +74,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
           id: "oidc-settings",
           type: "oidc-settings",
           attributes: {
-            enabled: false,
+            enabled: oidcServerEnabled,
             issuer: null,
             "client-id": null,
             "client-secret": null,
@@ -66,6 +85,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/saml-settings" && init?.method === "PATCH") {
+      samlServerEnabled = true;
       return json({
         data: {
           id: "saml",
@@ -86,6 +106,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
+      oidcServerEnabled = true;
       return json({
         data: {
           id: "oidc-settings",
@@ -113,12 +134,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
           id: "ldap-settings",
           type: "ldap-settings",
           attributes: {
-            enabled: false,
+            enabled: ldapServerEnabled,
             host: null,
             port: 389,
             encryption: "plain",
             "bind-dn": null,
-            "bind-password": null,
+            "bind-password-set": false,
             "base-dn": null,
             "user-filter": "(uid={{username}})",
             "attr-username": "uid",
@@ -129,6 +150,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
+      ldapServerEnabled = true;
       return json({
         data: {
           id: "ldap-settings",
@@ -188,9 +210,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
 
   // Fill in SSO endpoint
   const ssoInput = within(samlSection).getByLabelText("SSO Endpoint URL") as HTMLInputElement;
-  await act(async (): Promise<void> => {
-    fireEvent.input(ssoInput, { target: { value: "https://idp.example.com/sso" } });
-  });
+  await act(async (): Promise<void> => { typeInput(ssoInput, "https://idp.example.com/sso"); });
   expect(ssoInput.value).toBe("https://idp.example.com/sso");
 
   // Save SAML settings
@@ -207,9 +227,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
 
   // Fill in OIDC issuer URL
   const issuerInput = within(oidcSection).getByLabelText("Issuer URL") as HTMLInputElement;
-  await act(async (): Promise<void> => {
-    fireEvent.input(issuerInput, { target: { value: "https://accounts.example.com" } });
-  });
+  await act(async (): Promise<void> => { typeInput(issuerInput, "https://accounts.example.com"); });
   expect(issuerInput.value).toBe("https://accounts.example.com");
 
   // Save OIDC settings
@@ -238,17 +256,19 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   const ldapEnabledCheckbox = within(ldapSection).getByLabelText("Enable LDAP") as HTMLInputElement;
   expect(ldapEnabledCheckbox.checked).toBeFalse();
 
-  // Fill in a host and base DN, then save.
-  const ldapHost = within(ldapSection).getByLabelText("LDAP host") as HTMLInputElement;
-  await act(async (): Promise<void> => { fireEvent.input(ldapHost, { target: { value: "ldap.example.com" } }); });
-  expect(ldapHost.value).toBe("ldap.example.com");
+  // Enabling LDAP without a host must be blocked client-side (the save would
+  // otherwise fail the API's host/base-dn requirement).
   await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
   const saveLdap = within(ldapSection).getByRole("button", { name: "Save LDAP settings" });
   await act(async (): Promise<void> => { fireEvent.click(saveLdap); });
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
+    expect(within(ldapSection).getByText("Host and Base DN are required when LDAP is enabled.")).toBeTruthy();
   });
+  // No request should have been sent for the unusable configuration.
+  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+    urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeFalse();
+  // Disable again to leave the auth-tab state consistent.
+  await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
 });
 
 test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {

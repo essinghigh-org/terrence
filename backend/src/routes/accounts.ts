@@ -25,6 +25,13 @@ let refreshRotationQueue = Promise.resolve();
 // Single-process deployment; challenges expire after 5 minutes.
 const mfaChallenges = new Map<string, { userId: string; expiresAt: number }>();
 
+// Consecutive LDAP connection failures per directory host. After a few
+// failures, login skips the directory entirely for a short window so a
+// blackholed host cannot stall every request with the TCP timeout.
+// Single-process deployment; values expire after 30 s.
+const ldapFailureCache = new Map<string, number>();
+const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
+
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = refreshRotationQueue;
   let release!: () => void;
@@ -132,6 +139,26 @@ function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void
   const secure = secureRequest(request) ? "; Secure" : "";
   (set.headers as Record<string, string | number>)["Set-Cookie"] =
     `${REFRESH_COOKIE}=; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+/**
+ * Revoke the refresh-session family attached to the browser cookie and clear
+ * it. Used by SAML SLO to terminate the local session when the IdP logs the
+ * user out.
+ */
+export async function revokeBrowserSession(
+  set: SetObj,
+  request: RequestInfo | undefined,
+): Promise<boolean> {
+  const token = refreshCookie(request);
+  if (token === undefined || token === "") return false;
+  const current = await db.query.refreshSessions.findFirst({
+    where: eq(refreshSessions.tokenHash, tokenHash(token)),
+  });
+  if (current === undefined) return false;
+  const revoked = await revokeRefreshFamily(current.familyId, current.userId);
+  clearRefreshCookie(set, request);
+  return revoked;
 }
 
 export function accessTokenDocument(
@@ -410,24 +437,39 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     // LDAP is attempted first when enabled; local password auth remains the
     // fallback unless an administrator has disabled local authentication.
+    // A short-lived circuit breaker prevents a dead or blackholed directory
+    // from stalling every login for up to the TCP timeout (10s).
     let user: typeof users.$inferSelect | null = null;
     if (ldap.enabled) {
-      const ldapUser = await authenticateLdap(ldap, username, password);
-      if (ldapUser !== null) {
-        try {
-          const provisioned = await provisionSsoUser({
-            provider: "ldap",
-            subject: ldapUser.dn,
-            username: ldapUser.username,
-            email: ldapUser.email,
-          });
-          user = provisioned.user;
-        } catch (error: unknown) {
-          if (error instanceof SsoConflictError) {
-            (set as { status: number }).status = 401;
-            return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
+      // stores the time until a tripped breaker reopens; the first failure
+      // trips it for LDAP_FAILURE_EXPIRY_MS.
+      const hostKey = ldap.host ?? "";
+      const breakerUntil = ldapFailureCache.get(hostKey) ?? 0;
+      if (breakerUntil < Date.now()) {
+        const { user: ldapUser, unavailable } = await authenticateLdap(ldap, username, password);
+        // Only connection-level failures trip the breaker; a plain credential
+        // rejection is a normal outcome that must not block the next attempt.
+        if (unavailable) ldapFailureCache.set(hostKey, Date.now() + LDAP_FAILURE_EXPIRY_MS);
+        if (ldapUser !== null) {
+          ldapFailureCache.delete(hostKey);
+          try {
+            const provisioned = await provisionSsoUser({
+              provider: "ldap",
+              subject: ldapUser.dn,
+              username: ldapUser.username,
+              email: ldapUser.email,
+              // Directory attributes are operator-controlled; the bind against
+              // the user DN already authenticated the caller.
+              emailVerified: true,
+            });
+            user = provisioned.user;
+          } catch (error: unknown) {
+            if (error instanceof SsoConflictError) {
+              (set as { status: number }).status = 401;
+              return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
+            }
+            throw error;
           }
-          throw error;
         }
       }
     }

@@ -133,6 +133,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [ldapEncryption, setLdapEncryption] = useState("plain");
   const [ldapBindDn, setLdapBindDn] = useState("");
   const [ldapBindPassword, setLdapBindPassword] = useState("");
+  // bind-password is write-only; an empty field must not clear a stored value.
+  const [ldapBindPasswordSet, setLdapBindPasswordSet] = useState(false);
   const [ldapBaseDn, setLdapBaseDn] = useState("");
   const [ldapUserFilter, setLdapUserFilter] = useState("(uid={{username}})");
   const [ldapAttrUsername, setLdapAttrUsername] = useState("uid");
@@ -399,7 +401,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 389);
       setLdapEncryption(typeof attrs["encryption"] === "string" ? attrs["encryption"] : "plain");
       setLdapBindDn(typeof attrs["bind-dn"] === "string" ? attrs["bind-dn"] : "");
-      setLdapBindPassword(typeof attrs["bind-password"] === "string" ? attrs["bind-password"] : "");
+      setLdapBindPassword("");
+      setLdapBindPasswordSet(attrs["bind-password-set"] === true);
       setLdapBaseDn(typeof attrs["base-dn"] === "string" ? attrs["base-dn"] : "");
       setLdapUserFilter(typeof attrs["user-filter"] === "string" ? attrs["user-filter"] : "(uid={{username}})");
       setLdapAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "uid");
@@ -414,6 +417,14 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    // Refuse to create a lockout: local authentication cannot be disabled
+    // while no single sign-on provider is enabled.
+    if (!localAuthEnabled && !samlEnabled && !oidcEnabled && !ldapEnabled) {
+      setGeneralError(
+        "Enable at least one single sign-on provider (SAML, OIDC, or LDAP) before disabling local authentication.",
+      );
+      return;
+    }
     setGeneralSaving(true);
     setGeneralError(null);
     try {
@@ -437,6 +448,20 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveLdap = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    // Client-side mirror of the API validation so the admin sees the error
+    // before submitting an unusable configuration.
+    if (ldapEnabled && (ldapHost.trim() === "" || ldapBaseDn.trim() === "")) {
+      setLdapError("Host and Base DN are required when LDAP is enabled.");
+      return;
+    }
+    if (ldapEnabled && (ldapPort < 1 || ldapPort > 65535)) {
+      setLdapError("Port must be between 1 and 65535.");
+      return;
+    }
+    if (ldapEnabled && !ldapUserFilter.includes("{{username}}")) {
+      setLdapError("User filter must contain the {{username}} placeholder.");
+      return;
+    }
     setLdapSaving(true);
     setLdapError(null);
     try {
@@ -449,7 +474,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             port: ldapPort,
             encryption: ldapEncryption,
             "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
-            "bind-password": ldapBindPassword.trim() !== "" ? ldapBindPassword.trim() : null,
+            // bind-password is write-only after the initial save. An empty
+            // field preserves the stored value; a typed value replaces it.
+            ...(ldapBindPassword.trim() !== ""
+              ? { "bind-password": ldapBindPassword.trim() }
+              : {}),
             "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
             "user-filter": ldapUserFilter,
             "attr-username": ldapAttrUsername,
@@ -1459,14 +1488,17 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             placeholder="cn=service,dc=example,dc=com"
                             value={ldapBindDn}
                             onChange={(e): void => { setLdapBindDn(e.target.value); }}
+                            aria-label="LDAP bind DN"
                           />
                         </div>
                         <div className="space-y-1">
                           <label className="text-xs font-medium text-gray-700">Bind password</label>
                           <Input
                             type="password"
+                            placeholder={ldapBindPasswordSet ? "····· (leave blank to keep)" : undefined}
                             value={ldapBindPassword}
                             onChange={(e): void => { setLdapBindPassword(e.target.value); }}
+                            aria-label="LDAP bind password"
                           />
                         </div>
                       </div>

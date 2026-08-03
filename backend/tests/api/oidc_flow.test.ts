@@ -1,8 +1,9 @@
 import { createHash, createHmac, generateKeyPairSync, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
+import { resetOidcCaches } from "../../src/routes/oidc";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
 
@@ -54,16 +55,24 @@ describe("OIDC SSO flow", () => {
   async function completeFlow(): Promise<{ response: Response; state: string }> {
     const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
     expect(authResponse.status).toBe(302);
+    // The auth response sets the state cookie that binds this browser to the
+    // flow; the callback must present it (same-origin browser behavior).
+    const stateCookie = authResponse.headers.get("Set-Cookie") ?? "";
+    const cookie = stateCookie.split(";")[0] ?? "";
+    expect(cookie).toContain("terrence_oidc_state=");
     const authorizeUrl = authResponse.headers.get("Location") ?? "";
     const idpResponse = await fetch(authorizeUrl, { redirect: "manual" }); // real HTTP to the mock IdP
     expect(idpResponse.status).toBe(302);
     const callbackUrl = idpResponse.headers.get("Location") ?? "";
     const callback = new URL(callbackUrl);
-    const response = await app.handle(new Request(callback.toString()));
+    const response = await app.handle(new Request(callback.toString(), {
+      headers: { Cookie: cookie },
+    }));
     return { response, state: callback.searchParams.get("state") ?? "" };
   }
 
   beforeAll(async () => {
+    resetOidcCaches();
     server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -151,10 +160,15 @@ describe("OIDC SSO flow", () => {
   });
 
   afterAll(async () => {
-    void server?.stop(true);
+    await server?.stop(true);
+    // The suite provisions users through the flow (oidc-alice-, hs384-,
+    // es256-, etc.) as well as inserting usr-oidc-other- directly; delete
+    // every row whose id carries this suite's suffix.
+    const provisioned = await db.query.users.findMany({ where: like(users.username, `%-${suffix}`) });
+    const ids = [adminId, localUserId, ...provisioned.map((row): string => row.id)];
     await db.delete(adminSettings).where(eq(adminSettings.id, "oidc"));
-    await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, localUserId]));
-    await db.delete(users).where(inArray(users.id, [adminId, localUserId]));
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
+    await db.delete(users).where(inArray(users.id, ids));
   });
 
   test("redirects to the provider authorization endpoint with PKCE parameters", async () => {
@@ -232,20 +246,23 @@ describe("OIDC SSO flow", () => {
   test("rejects a callback with an unknown state", async () => {
     const response = await app.handle(new Request("http://terrence.test/users/oidc/callback?code=whatever&state=definitely-not-real"));
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("expired");
+    expect(await response.text()).toMatch(/invalid|expired/);
   });
 
   test("rejects a callback from the provider with an error parameter", async () => {
     const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
     const state = new URL(authResponse.headers.get("Location") ?? "").searchParams.get("state") ?? "";
+    const stateCookie = (authResponse.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
     const response = await app.handle(new Request(
       `http://terrence.test/users/oidc/callback?error=access_denied&error_description=User+cancelled&state=${state}`,
+      { headers: { Cookie: stateCookie } },
     ));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("refused");
   });
 
   test("verifies HS384 ID tokens with the matching digest algorithm", async () => {
+    resetOidcCaches();
     mockSubject = `oidc-sub-hs384-${suffix}`;
     mockUsername = `hs384-${suffix}`;
     mockEmail = `hs384-${suffix}@example.com`;
@@ -259,6 +276,7 @@ describe("OIDC SSO flow", () => {
   });
 
   test("verifies ES256 ID tokens when the JWKS omits kid", async () => {
+    resetOidcCaches();
     mockSubject = `oidc-sub-es256-${suffix}`;
     mockUsername = `es256-${suffix}`;
     mockEmail = `es256-${suffix}@example.com`;

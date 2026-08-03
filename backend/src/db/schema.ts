@@ -134,6 +134,9 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   role: text("role").notNull().default("member"), // 'owner' or 'member'
   status: text("status").notNull().default("active"), // 'active' or 'invited'
+  // Provenance for SAML-managed memberships. NULL for memberships granted by
+  // admins directly; 'saml' for memberships created by the SAML group mapper.
+  ssoSource: text("sso_source"),
 });
 
 export const organizationRoles = sqliteTable("organization_roles", {
@@ -173,6 +176,9 @@ export const teamMemberships = sqliteTable("team_memberships", {
   teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  // Provenance for SAML-managed memberships. NULL for memberships granted by
+  // admins directly; 'saml' for memberships created by the SAML group mapper.
+  ssoSource: text("sso_source"),
 }, (table) => [
   uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
 ]);

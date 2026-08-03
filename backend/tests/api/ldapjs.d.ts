@@ -15,7 +15,9 @@ declare module "ldapjs" {
   };
   export type Response = {
     end(): void;
-    send(entry: { dn: string; attributes: Record<string, string> }): void;
+    // Real LDAP attributes may hold multiple string/Buffer values; the mock
+    // uses a wide record so tests can exercise such entries.
+    send(entry: { dn: string; attributes: Record<string, string | string[] | Buffer> }): void;
   };
   export type NextCallback = (err?: Error) => void;
   export type Server = {

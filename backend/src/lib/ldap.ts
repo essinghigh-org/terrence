@@ -22,14 +22,18 @@ function escapeFilterValue(value: string): string {
     .replaceAll("\0", "\\00");
 }
 
-/** Shallow-readonly view of an ldapts search entry (attribute name -> values). */
+/**
+ * Shallow-readonly view of an ldapts search entry (attribute name -> values).
+ * ldapts's Entry is mutable by contract, so a simple intersection turns the
+ * row read-only for the duration of attribute access.
+ */
 type LdapEntry = Readonly<{
   dn: string;
   [attribute: string]: string | readonly string[] | Buffer | readonly Buffer[] | undefined;
 }>;
 
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts Entry buffers are mutable by contract
-  function attributeValue(entry: LdapEntry, name: string): string | null {
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts Entry buffers are mutable by contract
+function attributeValue(entry: LdapEntry, name: string): string | null {
   const raw: unknown = entry[name];
   if (typeof raw === "string") return raw;
   if (Array.isArray(raw)) {
@@ -44,16 +48,29 @@ type LdapEntry = Readonly<{
 
 /**
  * Verify credentials against the configured LDAP directory.
- * Returns the directory entry for the authenticated user, or null when the
- * credentials are rejected or the directory is unreachable/misconfigured.
+ *
+ * The result distinguishes an *unavailable* directory (connect/TLS/startTLS
+ * failure — worth circuit-breaking so login latency stays bounded) from a
+ * *rejected login* (wrong credentials, missing user, misconfigured filter —
+ * a normal authz outcome). Both return null for the user to let the login
+ * route fall back to local authentication; only `unavailable` should poison
+ * a failure cache.
  */
 export async function authenticateLdap(
   settings: LdapSettings,
   username: string,
   password: string,
-): Promise<LdapUser | null> {
-  if (!settings.enabled || settings.host === null || settings.baseDn === null) return null;
-  if (username === "" || password === "") return null;
+): Promise<{ user: LdapUser | null; unavailable: boolean }> {
+  if (!settings.enabled || settings.host === null || settings.baseDn === null) {
+    return { user: null, unavailable: false };
+  }
+  if (username === "" || password === "") return { user: null, unavailable: false };
+  if (settings.bindDn !== null && (settings.bindPassword === null || settings.bindPassword === "")) {
+    // A zero-length password performs an *unauthenticated bind* per
+    // RFC 4511 §4.2 — fail closed, and flag it as a config problem that
+    // should degrade to local auth immediately rather than retry the wire.
+    return { user: null, unavailable: false };
+  }
 
   const scheme = settings.encryption === "ldaps" ? "ldaps" : "ldap";
   const client = new Client({
@@ -67,13 +84,7 @@ export async function authenticateLdap(
       await client.startTLS();
     }
     if (settings.bindDn !== null) {
-      // A zero-length password performs an *unauthenticated bind* per
-      // RFC 4511 §4.2 — on permissive servers this silently succeeds with
-      // anonymous permissions. Fail closed instead of downgrading.
-      if (settings.bindPassword === null || settings.bindPassword === "") {
-        return null;
-      }
-      await client.bind(settings.bindDn, settings.bindPassword);
+      await client.bind(settings.bindDn, settings.bindPassword ?? "");
     }
 
     const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
@@ -84,27 +95,40 @@ export async function authenticateLdap(
       sizeLimit: 10,
     });
 
-    let entry: Entry | undefined;
-    for (const candidate of result.searchEntries) {
-      if (attributeValue(candidate, settings.attrUsername) === username) {
-        entry = candidate;
-        break;
-      }
-    }
-    entry ??= result.searchEntries[0];
-    if (entry === undefined) return null;
+    const byAttr = result.searchEntries.filter(
+      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts rows are mutable
+      (candidate: Entry): boolean => attributeValue(candidate as LdapEntry, settings.attrUsername) === username,
+    );
+    // Require a unique match: binding an arbitrary entry would authenticate a
+    // different identity than the one presented. Extra entries mean the filter
+    // was ambiguous; refuse rather than guess.
+    const entry: Entry | undefined = byAttr.length === 1 ? byAttr[0] : undefined;
+    if (entry === undefined) return { user: null, unavailable: false };
 
     // Validate the presented password by binding as the found user.
     await client.bind(entry.dn, password);
 
     return {
-      dn: entry.dn,
-      username: attributeValue(entry, settings.attrUsername) ?? username,
-      email: attributeValue(entry, settings.attrEmail),
-      displayName: attributeValue(entry, settings.attrDisplayName),
+      user: {
+        dn: entry.dn,
+        username: attributeValue(entry, settings.attrUsername) ?? username,
+        email: attributeValue(entry, settings.attrEmail),
+        displayName: attributeValue(entry, settings.attrDisplayName),
+      },
+      unavailable: false,
     };
-  } catch {
-    return null;
+  } catch (error: unknown) {
+    // A rejected bind (result code 49 / InvalidCredentialsError) is a normal
+    // auth outcome — the directory is fine, the credentials are not. Anything
+    // else (connect, TLS, startTLS, timeout) means the directory is
+    // unavailable. Never log the password or bind password.
+    const name = error instanceof Error ? error.constructor.name : "";
+    const message = error instanceof Error ? error.message : String(error);
+    const credentialRejection = name === "InvalidCredentialsError" || message.includes("InvalidCredentials");
+    if (!credentialRejection) {
+      console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
+    }
+    return { user: null, unavailable: !credentialRejection };
   } finally {
     await client.unbind().catch((): void => undefined);
   }

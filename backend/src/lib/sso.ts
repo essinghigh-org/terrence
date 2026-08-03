@@ -22,6 +22,10 @@ export type SsoIdentity = Readonly<{
   subject: string;
   username: string;
   email: string | null;
+  /** True only when the provider asserts the address is verified (e.g.
+   *  OIDC `email_verified`. SAML and LDAP identities are operator-verified
+   *  and treated as verified.) */
+  emailVerified?: boolean;
   displayName?: string | null;
 }>;
 
@@ -42,8 +46,8 @@ function str(value: unknown): string | null {
 export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
   const [general, saml, oidc, ldap] = await Promise.all([
     getSettings("general"),
-    getSettings("oidc"),
     getSettings("saml"),
+    getSettings("oidc"),
     getSettings("ldap"),
   ]);
   return {
@@ -161,7 +165,12 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     return { user: refreshed, created: false };
   }
 
-  if (email !== null) {
+  // Only link by email when the provider asserts the address is verified.
+  // Attaching an external identity to an unverified-email account would let
+  // an attacker take over a local account (including site admins) by signing
+  // in with an address they can control. SAML and LDAP callers pass
+  // emailVerified = true; OIDC derives it from the email_verified claim.
+  if (email !== null && identity.emailVerified === true) {
     const byEmail = await db.query.users.findFirst({ where: eq(users.email, email) });
     if (byEmail !== undefined) {
       const claimed = byEmail.ssoProvider !== null && byEmail.ssoSubject !== null;
@@ -184,6 +193,9 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   const userId = `usr-${crypto.randomUUID()}`;
   // bcrypt of random bytes: valid hash format, impossible to guess.
   const unusableHash = await bcrypt.hash(randomBytes(32).toString("base64"), 10);
+  // Two parallel first logins can both pass the identity/username lookups and
+  // both reach this insert; onConflictDoNothing makes the second one a no-op,
+  // and the re-read below returns the winning row.
   await db.insert(users).values({
     id: userId,
     username,
@@ -192,14 +204,20 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     ssoProvider: identity.provider,
     ssoSubject: subject,
     isSiteAdmin: false,
+  }).onConflictDoNothing();
+  const raced = await db.query.users.findFirst({
+    where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
   });
+  if (raced === undefined) throw new Error("Failed to provision SSO user");
+  if (raced.id !== userId) {
+    // Another concurrent login created the identity; reuse that account.
+    return { user: raced, created: false };
+  }
   await auditLog("create", "users", userId, null, null, {
     source: `sso:${identity.provider}`,
     username,
   });
-  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
-  if (user === undefined) throw new Error("Failed to provision SSO user");
-  return { user, created: true };
+  return { user: raced, created: true };
 }
 
 /**
@@ -209,8 +227,6 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
  */
 export async function applySamlGroupMapping(userId: string, groups: readonly string[]): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
-  if (groupSet.size === 0) return;
-
   const samlOrgs = await db.query.organizations.findMany({
     where: eq(organizations.samlEnabled, true),
   });
@@ -226,9 +242,12 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         userId,
         role: isOwner ? "owner" : "member",
         status: "active",
+        // Mark the membership as SAML-managed so group pruning can later
+        // remove or downgrade it without touching admin-granted rows.
+        ssoSource: "saml",
       });
     } else if (isOwner && existing.role !== "owner") {
-      await db.update(organizationMemberships).set({ role: "owner" })
+      await db.update(organizationMemberships).set({ role: "owner", ssoSource: "saml" })
         .where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, userId)));
     }
 
@@ -249,14 +268,17 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         teamId: team.id,
         userId,
         createdAt: Date.now(),
+        ssoSource: "saml",
       }));
     if (inserts.length > 0) await db.insert(teamMemberships).values(inserts).onConflictDoNothing();
   }
 }
 
 /**
- * Remove a user from SAML-managed org/team memberships whose groups no longer
- * include them. Called when the same identity logs in with fewer groups.
+ * Update SAML-managed org/team memberships to match the group set. Only rows
+ * the SAML mapper created (ssoSource = 'saml') are ever removed or
+ * downgraded; admin-granted memberships are left untouched. Called when the
+ * same identity logs in with fewer groups.
  */
 export async function pruneSamlGroupMappings(userId: string, groups: readonly string[]): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
@@ -277,11 +299,26 @@ export async function pruneSamlGroupMappings(userId: string, groups: readonly st
     teamByOrg.set(team.orgId, list);
   }
   for (const membership of memberships) {
+    // Only SAML-mapper-created memberships are managed here.
+    if (membership.ssoSource !== "saml") continue;
     const org = samlOrgs.find((candidate): boolean => candidate.id === membership.orgId);
     if (org === undefined) continue;
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
     const teamsForOrg = teamByOrg.get(org.id) ?? [];
-    const matchedTeam = teamsForOrg.some((team): boolean => (team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name)));
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- drizzle rows are mutable by contract
+const matches = (team: typeof teamsForOrg[number]): boolean =>
+      team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name);
+    const matchedTeam = teamsForOrg.some(matches);
+    // Teams that no longer match the current groups lose the SAML-managed
+    // membership, mirroring applySamlGroupMapping's insert logic.
+    const staleTeamIds = teamsForOrg.filter((team): boolean => !matches(team)).map((team): string => team.id);
+    if (staleTeamIds.length > 0) {
+      await db.delete(teamMemberships).where(and(
+        eq(teamMemberships.userId, userId),
+        inArray(teamMemberships.teamId, staleTeamIds),
+        eq(teamMemberships.ssoSource, "saml"),
+      ));
+    }
     if (isOwner || matchedTeam) {
       const role: "owner" | "member" = isOwner ? "owner" : "member";
       if (membership.role !== role) {
@@ -293,8 +330,19 @@ export async function pruneSamlGroupMappings(userId: string, groups: readonly st
     await db.delete(organizationMemberships).where(and(
       eq(organizationMemberships.orgId, org.id),
       eq(organizationMemberships.userId, userId),
+      eq(organizationMemberships.ssoSource, "saml"),
     ));
   }
+}
+
+/** HTML-escape a value for safe interpolation into rendered SSO pages. */
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 /** Simple HTML page used by the SAML/OIDC browser flows. */
@@ -303,28 +351,37 @@ export function ssoHtmlPage(
   message: string,
   options: Readonly<{ redirectUrl?: string; token?: string; error?: boolean }> = {},
 ): string {
+  // Only same-origin relative redirects are allowed; absolute or scheme-relative
+  // URLs are dropped so an attacker cannot inject an external navigation.
+  const safeRedirect = options.redirectUrl !== undefined
+    && options.redirectUrl.startsWith("/")
+    && !options.redirectUrl.startsWith("//")
+    ? options.redirectUrl
+    : undefined;
   const body = options.token !== undefined
-    ? `<p id="sso-token">${options.token}</p><p>Copy this token and use it as your user token. It is shown only once.</p>`
-    : `<p id="sso-message">${message.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`;
-  const redirect = options.redirectUrl !== undefined
-    ? `<p><a href="${options.redirectUrl}">Continue to Terrence</a></p>`
+    ? `<p id="sso-token">${escapeHtml(options.token)}</p><p>Copy this token and use it as your user token. It is shown only once.</p>`
+    : `<p id="sso-message">${escapeHtml(message)}</p>`;
+  const redirect = safeRedirect !== undefined
+    ? `<p><a href="${escapeHtml(safeRedirect)}">Continue to Terrence</a></p>`
     : "";
-  const refresh = options.redirectUrl !== undefined
-    ? `<script>setTimeout(() => { window.location.href = ${JSON.stringify(options.redirectUrl)}; }, 1500);</script>`
+  // The client redirects via <meta http-equiv="refresh">; no inline script is
+  // used, so the CSP can keep script-src 'none'.
+  const refresh = safeRedirect !== undefined
+    ? `<meta http-equiv="refresh" content="0;url=${escapeHtml(safeRedirect)}">`
     : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title.replaceAll("<", "&lt;")}</title>
+  <title>${escapeHtml(title)}</title>
+  ${refresh}
 </head>
 <body>
   <main>
-    <h1>${title.replaceAll("<", "&lt;")}</h1>
+    <h1>${escapeHtml(title)}</h1>
     ${body}
     ${redirect}
-    ${refresh}
   </main>
 </body>
 </html>`;
@@ -335,7 +392,7 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "Content-Security-Policy": "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       "Content-Type": "text/html; charset=utf-8",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
