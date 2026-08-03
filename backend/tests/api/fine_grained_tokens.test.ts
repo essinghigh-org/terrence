@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaces, workspaceTags } from "../../src/db/schema";
+import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaceVariables, workspaces, workspaceTags } from "../../src/db/schema";
 import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
 
 const AUTH_PREFIX = "Bea" + "rer ";
@@ -614,6 +614,85 @@ describe("fine-grained user tokens", () => {
     }
   });
 
+  it("MCP tools/list only exposes tools the token's grants permit", async () => {
+    // Only workspaces:read granted.
+    const readOnly = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true },
+      },
+    });
+    // grants settings + state + runs + variables on top.
+    const broad = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: {
+          "workspaces:read": true,
+          "settings:read": true,
+          "state:read": true,
+          "runs:read": true,
+          "variables:read": true,
+        },
+      },
+    });
+    const listTools = async (secret: string): Promise<{ name: string }[]> => {
+      const res = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(secret), "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { result: { tools: { name: string }[] } };
+      return body.result.tools;
+    };
+    try {
+      // A fine-grained token exposing only reads that its grants permit.
+      const names = (await listTools(readOnly.secret)).map((t): string => t.name);
+      // Membership-scoped tools (no grant required) are always present:
+      expect(names).toContain("list_organizations");
+      // Workspaces:read unlocks workspace reads:
+      expect(names).toContain("get_workspace");
+      // Workspaces:lock, variables, state, runs, settings are NOT for this token:
+      expect(names).not.toContain("lock_workspace");
+      expect(names).not.toContain("unlock_workspace");
+      expect(names).not.toContain("get_workspace_vars");
+      expect(names).not.toContain("create_workspace_variable");
+      expect(names).not.toContain("get_workspace_state");
+      expect(names).not.toContain("get_run");
+      expect(names).not.toContain("get_org_settings");
+
+      // Broad token sees state/runs/variables/settings reads:
+      const broadNames = (await listTools(broad.secret)).map((t): string => t.name);
+      expect(broadNames).toContain("get_workspace_state");
+      expect(broadNames).toContain("get_run");
+      expect(broadNames).toContain("get_workspace_vars");
+      expect(broadNames).toContain("get_org_settings");
+      // But still NO write mutations:
+      expect(broadNames).not.toContain("create_workspace_variable");
+      expect(broadNames).not.toContain("lock_workspace");
+      expect(broadNames).not.toContain("create_project");
+
+      // A denied tool is rejected even if called directly (defense in depth).
+      const call = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(readOnly.secret), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 2, method: "tools/call",
+          params: { name: "get_workspace_state", arguments: { workspace_id: s.wsA1 } },
+        }),
+      });
+      const callBody = await call.json() as { error?: { code: number } };
+      expect(callBody.error?.code).toBe(-32001);
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, readOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, broad.id));
+    }
+  });
+
   it("creates a scoped token via the /api/v2/tokens endpoint (frontend path)", async () => {
     const res = await request("/api/v2/tokens", {
       method: "POST",
@@ -711,6 +790,94 @@ describe("fine-grained user tokens", () => {
       expect(denied?.code).toBe(-32001);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
+    }
+  });
+
+  it("MCP variable, lock, and workspace-creation tools enforce their grants", async () => {
+    const wsOnly = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true },
+      },
+    });
+    const varWrite = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "variables:write": true },
+      },
+    });
+    const lockOnly = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "workspaces:lock": true },
+      },
+    });
+    const wsWrite = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        permissions: { "workspaces:write": true },
+      },
+    });
+    const call = async (secret: string, name: string, args: Record<string, unknown>): Promise<{ status: number; text: string }> => {
+      const res = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(secret), "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+      });
+      return { status: res.status, text: await res.text() };
+    };
+    const deniedBy = async (res: { text: string }): Promise<boolean> => {
+      const body = JSON.parse(res.text) as { error?: { code: number }; result?: unknown };
+      return body.error?.code === -32001;
+    };
+    try {
+      // Without variables:write, variable writes are blocked at discovery
+      // AND at call time (defense in depth).
+      const varDenied = await call(wsOnly.secret, "create_workspace_variable", {
+        workspace_id: s.wsA1, key: "K", value: "v",
+      });
+      expect(await deniedBy(varDenied)).toBe(true);
+
+      // With variables:write, the tool works on a scoped workspace.
+      const varOk = await call(varWrite.secret, "create_workspace_variable", {
+        workspace_id: s.wsA1, key: "MCP_KEY", value: "mcp-value",
+      });
+      expect(varOk.status).toBe(200);
+      const varBody = JSON.parse(varOk.text) as { result: { content: { text: string }[] } };
+      const created = JSON.parse(varBody.result.content[0]?.text ?? "{}") as { id: string; key: string };
+      expect(created.key).toBe("MCP_KEY");
+      expect(created.id).toBeTruthy();
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, created.id));
+
+      // Without workspaces:lock, lock is blocked; with it, lock/unlock work.
+      expect(await deniedBy(await call(wsOnly.secret, "lock_workspace", { workspace_id: s.wsA1 }))).toBe(true);
+      const lockOk = await call(lockOnly.secret, "lock_workspace", { workspace_id: s.wsA1, reason: "mcp" });
+      expect(lockOk.status).toBe(200);
+      const lockBody = JSON.parse(lockOk.text) as { result: { content: { text: string }[] } };
+      expect(JSON.parse(lockBody.result.content[0]?.text ?? "{}").locked).toBe(true);
+      const unlockOk = await call(lockOnly.secret, "unlock_workspace", { workspace_id: s.wsA1 });
+      expect(unlockOk.status).toBe(200);
+
+      // create_workspace requires workspaces:write; wsOnly lacks it.
+      expect(await deniedBy(await call(wsOnly.secret, "create_workspace", { org: s.orgName, name: "nope" }))).toBe(true);
+      const createdWs = await call(wsWrite.secret, "create_workspace", { org: s.orgName, name: `fg-mcp-ws-${s.suffix}` });
+      expect(createdWs.status).toBe(200);
+      const wsBody = JSON.parse(createdWs.text) as { result: { content: { text: string }[] } };
+      const wsCreated = JSON.parse(wsBody.result.content[0]?.text ?? "{}") as { id: string };
+      expect(wsCreated.id).toBeTruthy();
+      await db.delete(workspaces).where(eq(workspaces.id, wsCreated.id));
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, wsOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, varWrite.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, lockOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, wsWrite.id));
     }
   });
 });
@@ -1073,6 +1240,72 @@ describe("fine-grained run action grants", () => {
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, discardOnly.id));
       await db.delete(apiTokens).where(eq(apiTokens.id, cancelOnly.id));
+    }
+  });
+
+  it("MCP run action tools are exposed and enforced by their grants", async () => {
+    const planOnly = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true } },
+    });
+    const discard = await createScopedToken(s.userId, s.adminToken, {
+      description: "run-actions",
+      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true } },
+    });
+    const listTools = async (secret: string): Promise<{ name: string }[]> => {
+      const res = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(secret), "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { result: { tools: { name: string }[] } };
+      return body.result.tools;
+    };
+    try {
+      // runs:plan exposes create_run but not apply/discard/cancel.
+      const planNames = (await listTools(planOnly.secret)).map((t): string => t.name);
+      expect(planNames).toContain("create_run");
+      expect(planNames).not.toContain("apply_run");
+      expect(planNames).not.toContain("discard_run");
+      expect(planNames).not.toContain("cancel_run");
+
+      // runs:discard exposes discard_run and get_run (runs:read), but not apply.
+      const discardNames = (await listTools(discard.secret)).map((t): string => t.name);
+      expect(discardNames).toContain("discard_run");
+      expect(discardNames).toContain("get_run");
+      expect(discardNames).not.toContain("apply_run");
+      expect(discardNames).not.toContain("create_run");
+
+      // A plan-only token cannot discard a run via MCP even if it fabricates the call.
+      const run = await createRunWith(s.adminToken, s.wsA1);
+      expect(run.status).toBe(201);
+      const denied = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(planOnly.secret), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 2, method: "tools/call",
+          params: { name: "discard_run", arguments: { run_id: run.id } },
+        }),
+      });
+      const deniedBody = await denied.json() as { error?: { code: number } };
+      expect(deniedBody.error?.code).toBe(-32001);
+
+      // A runs:discard token CAN discard the run via MCP.
+      const allowed = await request("/mcp", {
+        method: "POST",
+        headers: { ...headers(discard.secret), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 3, method: "tools/call",
+          params: { name: "discard_run", arguments: { run_id: run.id } },
+        }),
+      });
+      expect(allowed.status).toBe(200);
+      const allowedText = await allowed.text();
+      expect(allowedText).not.toContain('"error"');
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, planOnly.id));
+      await db.delete(apiTokens).where(eq(apiTokens.id, discard.id));
     }
   });
 });

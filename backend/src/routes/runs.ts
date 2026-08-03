@@ -152,7 +152,7 @@ async function authorizedOrgWorkspaces(
 }
 
 
-async function createRun(
+export async function createRun(
   workspaceId: string,
   attributes: Readonly<Record<string, unknown>>,
   cvId: string | undefined,
