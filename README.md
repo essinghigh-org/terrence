@@ -128,9 +128,9 @@ settings endpoints), and only take effect once enabled there.
   configurable bind DN, base DN, user filter with the `{{username}}`
   placeholder, and attribute mapping for username/email/display name.
 - **Local authentication** — Can be disabled entirely via the **"Allow local
-  password authentication"** toggle in the same settings. When disabled, only
-  enabled SSO providers can sign in. The login page, the CLI (`terraform
-  login`) authorizer, and the login API all honor this setting.
+  password authentication"** toggle in the same settings. When disabled,
+  enabled SAML, OIDC, and LDAP providers can still sign in. The login page, the
+  CLI (`terraform login`) authorizer, and the login API all honor this setting.
 - **Provisioning conflicts** — External identities are mapped by
   (provider, subject). A verified email links to an existing account; a
   username that belongs to a different local account blocks sign-in with a

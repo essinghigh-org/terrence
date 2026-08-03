@@ -123,6 +123,9 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
   });
   const signatureXPath = signatureTarget === "response" ? "//*[local-name()='Response']" : "//*[local-name()='Assertion']";
+  const signatureLocationXPath = signatureTarget === "response"
+    ? "//*[local-name()='Response']/*[local-name()='Issuer']"
+    : "//*[local-name()='Assertion']/*[local-name()='Issuer']";
   signed.addReference({
     xpath: signatureXPath,
     transforms: [
@@ -133,7 +136,7 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     uri: `#${signatureTarget === "response" ? responseId : assertionId}`,
   });
   signed.computeSignature(responseXml, {
-    location: { reference: signatureXPath, action: "append" },
+    location: { reference: signatureLocationXPath, action: "after" },
   });
   return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
 }

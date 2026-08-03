@@ -382,7 +382,9 @@ async function applySamlGroupMapping(
  * Update SAML-managed org/team memberships to match the group set. Only rows
  * the SAML mapper created (ssoSource = 'saml') are ever removed or
  * downgraded; admin-granted memberships are left untouched. Called when the
- * same identity logs in with fewer groups.
+ * same identity logs in with fewer groups. Managed organization memberships
+ * are retained as members when their group disappears; only team memberships
+ * are removed. Admin-granted memberships remain untouched.
  */
 async function pruneSamlGroupMappings(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
@@ -443,8 +445,10 @@ export async function syncSamlGroupMappings(userId: string, groups: readonly str
   });
 }
 
-/** Compare local passwords safely, including intentionally unusable SSO hashes. */
-export async function passwordMatches(password: string, passwordHash: string): Promise<boolean> {
+const DUMMY_PASSWORD_HASH = "$2b$10$./PtU.lbOie2J8A136xCHebbWWXw66h5mpFJQiXmWzmuMNqYJVzgq";
+
+/** Compare local passwords safely, including nonexistent and unusable accounts. */
+export async function passwordMatches(password: string, passwordHash = DUMMY_PASSWORD_HASH): Promise<boolean> {
   try {
     return await bcrypt.compare(password, passwordHash);
   } catch {

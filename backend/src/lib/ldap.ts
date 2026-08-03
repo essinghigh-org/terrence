@@ -150,6 +150,7 @@ export async function authenticateLdap(
 type LdapAuthenticationResult = Readonly<{ user: LdapUser | null; unavailable: boolean }>;
 const ldapFailureCache = new Map<string, number>();
 const ldapProbes = new Map<string, Promise<LdapAuthenticationResult>>();
+const ldapHostProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
 
 /** Share the short circuit-breaker window across browser and CLI login paths. */
@@ -164,6 +165,11 @@ export async function authenticateLdapWithCircuitBreaker(
   const probeKey = `${hostKey}:${username}:${createHash("sha256").update(password).digest("hex")}`;
   const pending = ldapProbes.get(probeKey);
   if (pending !== undefined) return pending;
+  const hostPending = ldapHostProbes.get(hostKey);
+  if (hostPending !== undefined) {
+    const hostResult = await hostPending;
+    if (hostResult.unavailable) return hostResult;
+  }
   const result = authenticateLdap(settings, username, password)
     .then((value): LdapAuthenticationResult => {
       if (value.unavailable) ldapFailureCache.set(hostKey, now + LDAP_FAILURE_EXPIRY_MS);
@@ -172,5 +178,12 @@ export async function authenticateLdapWithCircuitBreaker(
     })
     .finally((): void => { ldapProbes.delete(probeKey); });
   ldapProbes.set(probeKey, result);
+  if (!ldapHostProbes.has(hostKey)) {
+    ldapHostProbes.set(hostKey, result);
+    void result.then(
+      (): void => { if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey); },
+      (): void => { if (ldapHostProbes.get(hostKey) === result) ldapHostProbes.delete(hostKey); },
+    );
+  }
   return result;
 }

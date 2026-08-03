@@ -45,6 +45,12 @@ type VerItem = Readonly<{
 type SamlSettings = Readonly<typeof samlSettings.$inferSelect>;
 
 const SAML_SETTINGS_ID = "saml";
+const OIDC_SIGNING_ALGORITHMS = new Set([
+  "HS256", "HS384", "HS512",
+  "RS256", "RS384", "RS512",
+  "ES256", "ES384", "ES512",
+  "PS256", "PS384", "PS512",
+]);
 const SAML_DEFAULTS = {
   id: SAML_SETTINGS_ID,
   enabled: false,
@@ -178,7 +184,7 @@ function validOidcIssuer(value: string): boolean {
 
 function normalizeIssuer(value: string): string {
   try {
-    return new URL(value).toString().replace(/\/+$/, "");
+    return new URL(value).toString();
   } catch {
     return value.trim();
   }
@@ -1057,7 +1063,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "link-by-email must be a boolean" }] };
     }
-    for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method"] as const) {
+    for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method", "signing-alg"] as const) {
       if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
@@ -1087,6 +1093,15 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\", \"none\", or null" }] };
     }
 
+    const signingAlgInput = attrs["signing-alg"] === undefined ? current["signing-alg"] : attrs["signing-alg"];
+    const signingAlg = signingAlgInput === null || signingAlgInput === undefined
+      ? null
+      : typeof signingAlgInput === "string" && signingAlgInput.trim() !== "" ? signingAlgInput.trim() : null;
+    if (signingAlg !== null && !OIDC_SIGNING_ALGORITHMS.has(signingAlg)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] };
+    }
+
     const authError = await authLockoutResponse(set, {
       saml: (await currentSamlSettings()).enabled,
       oidc: enabled,
@@ -1099,12 +1114,17 @@ export const adminRoutes = new Elysia({ name: "admin" })
       : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
         ? attrs["client-secret"]
         : current["client-secret"];
+    if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] };
+    }
     const updated = await updateSettings("oidc", {
       ...attrs,
       issuer,
       "client-id": clientId,
       "client-secret": clientSecret,
       "pkce-method": pkce === "" ? null : pkce,
+      "signing-alg": signingAlg,
     });
     invalidatePingSsoCache();
     return oidcSettingsResource(updated);

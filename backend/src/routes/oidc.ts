@@ -31,6 +31,7 @@ type OidcSettings = Readonly<{
   clientSecret: string | null;
   scopes: string;
   pkceMethod: "S256" | null;
+  configuredAlg: string | null;
 }>;
 
 type OidcDiscovery = Readonly<{
@@ -85,15 +86,7 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
 
 function secureRequest(request: RequestInfo): boolean {
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return (forwarded === "https" || forwarded === "https:")
-    || new URL(request.url).protocol === "https:"
-    || (() => {
-      try {
-        return new URL(ssoBaseUrl(request)).protocol === "https:";
-      } catch {
-        return false;
-      }
-    })();
+  return (forwarded === "https" || forwarded === "https:") || new URL(request.url).protocol === "https:";
 }
 
 function stateCookie(request: RequestInfo, state: string, maxAge: number): string {
@@ -112,6 +105,7 @@ async function oidcSettings(): Promise<OidcSettings> {
   const raw = await getSettings("oidc");
   const configuredIssuer = typeof raw.issuer === "string" && raw.issuer !== "" ? raw.issuer : null;
   const clientSecret = typeof raw["client-secret"] === "string" && raw["client-secret"] !== "" ? raw["client-secret"] : null;
+  const signingAlg = typeof raw["signing-alg"] === "string" ? raw["signing-alg"].trim() : "";
   const pkce = raw["pkce-method"] === "none" && clientSecret !== null ? null : "S256";
   return {
     enabled: raw.enabled === true,
@@ -121,6 +115,7 @@ async function oidcSettings(): Promise<OidcSettings> {
     clientSecret,
     scopes: typeof raw.scopes === "string" && raw.scopes !== "" ? raw.scopes : "openid profile email",
     pkceMethod: pkce,
+    configuredAlg: ALLOWED_ALGS.has(signingAlg) ? signingAlg : null,
   };
 }
 
@@ -133,7 +128,7 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   if (!secureOidcEndpoint(issuer)) throw new Error("OIDC issuer must be an https URL without embedded credentials");
   const cached = discoveryCache.get(issuer);
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
-  const endpoint = `${issuer}/.well-known/openid-configuration`;
+  const endpoint = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
   const response = await fetch(endpoint, {
     redirect: "error",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -169,9 +164,9 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
 
 function normalizeIssuer(value: string): string {
   try {
-    return new URL(value.trim()).toString().replace(/\/+$/, "");
+    return new URL(value.trim()).toString();
   } catch {
-    return value.trim().replace(/\/+$/, "");
+    return value.trim();
   }
 }
 
@@ -212,10 +207,13 @@ async function verifyJwtSignature(
   if (!ALLOWED_ALGS.has(alg)) {
     throw new Error("Unsupported ID token algorithm.");
   }
-  if (discoveryConfig.signingAlgorithms !== undefined && !discoveryConfig.signingAlgorithms.includes(alg)) {
-    throw new Error("ID token algorithm is not allowed by the provider configuration.");
+  if (settings.configuredAlg !== null && settings.configuredAlg !== alg) {
+    throw new Error("ID token algorithm does not match the configured provider algorithm.");
   }
-  if (discoveryConfig.signingAlgorithms === undefined && alg.startsWith("HS")) {
+  if (settings.configuredAlg === null && alg.startsWith("HS")) {
+    throw new Error("ID token symmetric algorithms require an explicit configuration.");
+  }
+  if (discoveryConfig.signingAlgorithms !== undefined && !discoveryConfig.signingAlgorithms.includes(alg)) {
     throw new Error("ID token algorithm is not allowed by the provider configuration.");
   }
   const signatureBuffer = Buffer.from(signature, "base64url");

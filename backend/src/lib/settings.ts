@@ -12,7 +12,7 @@ const settingDefaults: Record<string, Settings> = {
   twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
   customization: { "support-email-address": null, "login-help": null, footer: null },
   saml: { "link-by-email": false },
-  oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null, "link-by-email": false },
+  oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null, "signing-alg": null, "link-by-email": false },
   ldap: { enabled: false, host: null, port: 636, encryption: "ldaps", "bind-dn": null, "bind-password": null, "base-dn": null, "user-filter": "(uid={{username}})", "attr-username": "uid", "attr-email": "mail", "attr-display-name": "cn", "link-by-email": false },
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
 };

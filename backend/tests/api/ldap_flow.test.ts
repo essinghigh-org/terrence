@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import { eq, inArray } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
-import ldap from "ldapjs";
+import * as ldap from "ldapjs";
 import type { Server } from "ldapjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -126,7 +126,7 @@ describe("LDAP authentication", () => {
       port: ldapPort,
       encryption: "plain",
       "bind-dn": SERVICE_DN,
-      "bind-password": "service-secret",
+      "bind-password": SERVICE_PASSWORD,
       "base-dn": "dc=example,dc=com",
       "user-filter": "(uid={{username}})",
       "attr-username": "uid",

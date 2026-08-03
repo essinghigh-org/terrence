@@ -1,6 +1,7 @@
 import { and, asc, count, eq, gt, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { ssoChallenges } from "../db/schema";
+import { log } from "./log";
 
 const MAX_CHALLENGES_PER_KIND = 10_000;
 const CHALLENGE_PURGE_INTERVAL_MS = 60_000;
@@ -11,7 +12,9 @@ export async function purgeExpiredSsoChallenges(now = Date.now()): Promise<void>
 }
 
 const challengePurgeTimer = setInterval((): void => {
-  void purgeExpiredSsoChallenges().catch((): void => undefined);
+  void purgeExpiredSsoChallenges().catch((error: unknown): void => {
+    log.warn("Failed to purge expired SSO challenges", { error: error instanceof Error ? error.message : String(error) });
+  });
 }, CHALLENGE_PURGE_INTERVAL_MS);
 (challengePurgeTimer as unknown as { unref?: () => void }).unref?.();
 
@@ -48,7 +51,8 @@ export async function storeSsoChallenge(
   await db.insert(ssoChallenges).values({ id, kind, payload, expiresAt })
     .onConflictDoUpdate({
       target: ssoChallenges.id,
-      set: { kind, payload, expiresAt },
+      set: { payload, expiresAt },
+      where: eq(ssoChallenges.kind, kind),
     });
   await trimSsoChallenges(kind);
 }

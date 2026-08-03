@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex, check } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const users = sqliteTable("users", {
@@ -20,6 +20,10 @@ export const users = sqliteTable("users", {
   // attribute; such grants are revoked when the attribute stops matching.
   ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
+  check("users_sso_identity_pair_check", sql`(
+    (${table.ssoProvider} IS NULL AND ${table.ssoSubject} IS NULL)
+    OR (${table.ssoProvider} IS NOT NULL AND ${table.ssoSubject} IS NOT NULL)
+  )`),
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);
 

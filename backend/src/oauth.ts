@@ -260,9 +260,10 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       }
     }
 
-    if (user === null && sso.localAuthEnabled && username !== "") {
-      user = await db.query.users.findFirst({ where: eq(users.username, username) }) ?? null;
-      if (user !== null && (password === "" || !(await passwordMatches(password, user.passwordHash)))) user = null;
+    if (user === null && sso.localAuthEnabled) {
+      const found = username === "" ? undefined : await db.query.users.findFirst({ where: eq(users.username, username) });
+      const passwordValid = await passwordMatches(password, found?.passwordHash);
+      user = found !== undefined && passwordValid ? found : null;
     }
 
     if (user === null) {

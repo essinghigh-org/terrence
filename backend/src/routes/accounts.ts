@@ -478,7 +478,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       const found = await db.query.users.findFirst({
         where: or(eq(users.username, username), eq(users.email, username)),
       });
-      if (found === undefined || !(await passwordMatches(password, found.passwordHash))) {
+      const passwordValid = await passwordMatches(password, found?.passwordHash);
+      if (found === undefined || !passwordValid) {
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }

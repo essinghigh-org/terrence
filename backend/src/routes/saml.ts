@@ -447,12 +447,13 @@ async function handleIdpInitiatedLogout(
   }
 
   const sessionUser = await browserSessionUser(request);
-  if (sessionUser?.ssoProvider !== "saml" || sessionUser.ssoSubject !== verifiedLogout.nameId) {
+  const subjectMatches = sessionUser?.ssoProvider === "saml" && sessionUser.ssoSubject === verifiedLogout.nameId;
+  if (!subjectMatches) {
     await auditLog("sso-failure", "saml", null, sessionUser?.id ?? null, null, { reason: "logout NameID does not match session" });
-    return invalid("Invalid SAML logout request subject");
+  } else if (sessionUser !== null) {
+    await revokeBrowserSession(set, request);
+    await auditLog("sso-logout", "saml", sessionUser.id, sessionUser.id, null, { reason: "IdP-initiated" });
   }
-  await revokeBrowserSession(set, request);
-  await auditLog("sso-logout", "saml", sessionUser.id, sessionUser.id, null, { reason: "IdP-initiated" });
 
   if (settings.sloEndpointUrl === null) {
     const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
@@ -508,18 +509,18 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     if (!settings.enabled || settings.ssoEndpointUrl === null || settings.idpEntityId === null) {
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML single sign-on is not enabled."), 404);
     }
-    const requestId = `_${randomBytes(16).toString("hex")}`;
-    // Record the issued AuthnRequest so the ACS can match InResponseTo and
-    // reject replayed or unsolicited assertions.
-    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, {}, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
-    const relayState = typeof query.RelayState === "string" ? query.RelayState : null;
-    const authnRequest = encodeRedirect(authnRequestXml(samlSpEntityId(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
     let target: URL;
     try {
       target = new URL(settings.ssoEndpointUrl);
     } catch {
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO is misconfigured."), 502);
     }
+    const requestId = `_${randomBytes(16).toString("hex")}`;
+    // Record the issued AuthnRequest so the ACS can match InResponseTo and
+    // reject replayed or unsolicited assertions.
+    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, {}, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
+    const relayState = typeof query.RelayState === "string" ? query.RelayState : null;
+    const authnRequest = encodeRedirect(authnRequestXml(samlSpEntityId(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
     target.searchParams.set("SAMLRequest", authnRequest);
     if (relayState !== null) target.searchParams.set("RelayState", relayState);
     return new Response(null, {
@@ -796,11 +797,24 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return response;
     };
 
+    const sessionToken = typeof session === "object" && session !== null
+      && typeof (session as { data?: unknown }).data === "object"
+      && (session as { data: { attributes?: unknown } }).data !== null
+      && typeof (session as { data: { attributes?: unknown } }).data.attributes === "object"
+      && (session as { data: { attributes: { token?: unknown } } }).data.attributes !== null
+      && typeof (session as { data: { attributes: { token?: unknown } } }).data.attributes.token === "string"
+      ? (session as { data: { attributes: { token: string } } }).data.attributes.token
+      : null;
+    const wantsTokenResponse = wantsToken(request, relayState);
     const wantsJson = request?.headers.get("accept")?.includes("application/json") === true;
-    if (wantsJson && wantsToken(request, relayState)) return session;
-    if (wantsToken(request, relayState)) {
-      const token = (session as { data: { attributes: { token: string } } }).data.attributes.token;
-      return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { token }));
+    if (wantsTokenResponse) {
+      if (sessionToken === null) {
+        await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "SSO token response was malformed" });
+        (set as { status: number }).status = 500;
+        return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }));
+      }
+      if (wantsJson) return session;
+      return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { token: sessionToken }));
     }
     return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
   })
@@ -828,10 +842,11 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
     });
     const sessionUser = await browserSessionUser(request);
-    const nameId = sessionUser?.ssoProvider === "saml" ? sessionUser.ssoSubject : null;
+    const samlSessionUser = sessionUser?.ssoProvider === "saml" ? sessionUser : null;
+    const nameId = samlSessionUser?.ssoSubject ?? null;
     // Terminate the local session regardless of the IdP's availability.
     await revokeBrowserSession(set, request);
-    if (settings.enabled && settings.sloEndpointUrl !== null && nameId !== null && nameId !== "") {
+    if (settings.enabled && settings.sloEndpointUrl !== null && samlSessionUser !== null && nameId !== null && nameId !== "") {
       // Send SP-initiated logout to the IdP so the session is ended on both
       // sides. The IdP acknowledges via its own LogoutResponse; we do not
       // block the local redirect on it.
@@ -848,6 +863,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         appendSetCookies(response, set.headers["Set-Cookie"]);
         return response;
       }
+      await auditLog("sso-logout", "saml", samlSessionUser.id, samlSessionUser.id, null, {
+        reason: "SP-initiated",
+        signed: false,
+      });
       target.searchParams.set("SAMLRequest", encodeRedirect(logoutRequest));
       const response = new Response(null, {
         status: 302,

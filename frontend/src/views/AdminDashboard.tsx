@@ -155,6 +155,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [oidcClientSecretSet, setOidcClientSecretSet] = useState(false);
   const [oidcScopes, setOidcScopes] = useState("openid profile email");
   const [oidcPkceMethod, setOidcPkceMethod] = useState("");
+  const [oidcSigningAlg, setOidcSigningAlg] = useState("");
   const [oidcLoading, setOidcLoading] = useState(false);
   const [oidcSaving, setOidcSaving] = useState(false);
   const [oidcError, setOidcError] = useState<string | null>(null);
@@ -567,6 +568,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setOidcClientSecretSet(attrs["client-secret-set"] === true);
       setOidcScopes(attrString(attrs, "scopes", "openid profile email"));
       setOidcPkceMethod(attrString(attrs, "pkce-method", ""));
+      setOidcSigningAlg(attrString(attrs, "signing-alg", ""));
     } catch (err: unknown) {
       setOidcError(err instanceof Error ? err.message : "Failed to load OIDC settings");
     } finally {
@@ -625,6 +627,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           ...(oidcClientSecret.trim() !== "" ? { "client-secret": oidcClientSecret.trim() } : {}),
           scopes: oidcScopes,
           "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
+          "signing-alg": oidcSigningAlg.trim() !== "" ? oidcSigningAlg.trim() : null,
         },
       },
     };
@@ -1510,6 +1513,21 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             value={oidcPkceMethod}
                             onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
                           />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
+                          <select
+                            value={oidcSigningAlg}
+                            onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
+                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            aria-label="OIDC signing algorithm"
+                          >
+                            <option value="">Provider-advertised asymmetric algorithm</option>
+                            {[
+                              "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512",
+                              "HS256", "HS384", "HS512",
+                            ].map((algorithm): React.JSX.Element => <option key={algorithm} value={algorithm}>{algorithm}</option>)}
+                          </select>
                         </div>
                       </div>
                       <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">

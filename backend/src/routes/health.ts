@@ -29,7 +29,7 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
   const generation = pingSsoCacheGeneration;
   const value = await ssoSettingsSnapshot();
-  if (generation === pingSsoCacheGeneration) pingSsoCache = { value, expiresAt: now + PING_SSO_CACHE_TTL_MS };
+  if (generation === pingSsoCacheGeneration) pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
   return value;
 }
 

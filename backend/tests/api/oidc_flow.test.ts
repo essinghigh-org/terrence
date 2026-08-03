@@ -218,6 +218,7 @@ describe("OIDC SSO flow", () => {
       "client-secret": "test-secret",
       scopes: "openid profile email",
       "pkce-method": "S256",
+      "signing-alg": null,
       "link-by-email": true,
     };
     await db.insert(adminSettings).values({ id: "oidc", values: oidcValues, updatedAt: Date.now() })
@@ -369,11 +370,13 @@ describe("OIDC SSO flow", () => {
 
   test("rejects alg none", async () => {
     mockAlg = "none";
+    mockSupportedAlgorithms = ["RS256", "none"];
     try {
       const { response } = await completeFlow();
       expect(response.status).toBe(400);
     } finally {
       mockAlg = "RS256";
+      mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
     }
   });
 
@@ -411,6 +414,19 @@ describe("OIDC SSO flow", () => {
     }
   });
 
+  test("does not overwrite a challenge when an ID collides across kinds", async () => {
+    const id = `cross-kind-${suffix}`;
+    await storeSsoChallenge("first-kind", id, { value: "first" }, Date.now() + 60_000);
+    try {
+      await storeSsoChallenge("second-kind", id, { value: "second" }, Date.now() + 60_000);
+      expect(await consumeSsoChallenge("first-kind", id)).toEqual({ value: "first" });
+      expect(await consumeSsoChallenge("second-kind", id)).toBeUndefined();
+    } finally {
+      await clearSsoChallenges("first-kind");
+      await clearSsoChallenges("second-kind");
+    }
+  });
+
   test("purges expired challenges across flow kinds", async () => {
     const kind = `expired-kind-${suffix}`;
     const id = `expired-${suffix}`;
@@ -440,11 +456,17 @@ describe("OIDC SSO flow", () => {
     mockUsername = `hs384-${suffix}`;
     mockEmail = `hs384-${suffix}@example.com`;
     mockAlg = "HS384";
+    const current = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "oidc") });
+    const originalValues = current?.values ?? {};
+    await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS384" }, updatedAt: Date.now() })
+      .where(eq(adminSettings.id, "oidc"));
     try {
       const { response } = await completeFlow();
       expect(response.status).toBe(200);
     } finally {
       mockAlg = "RS256";
+      await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "oidc"));
     }
   });
 
