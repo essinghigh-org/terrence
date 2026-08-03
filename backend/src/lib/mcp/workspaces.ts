@@ -217,7 +217,7 @@ export const workspaceTools: readonly McpTool[] = [
       if (existing !== undefined) return toolBadRequest(`Variable "${key}" already exists in this workspace`);
       const id = `wsvar-${crypto.randomUUID()}`;
       await db.insert(workspaceVariables).values({ id, workspaceId: wsId, key, value, category, sensitive, hcl, description });
-      return { id, workspaceId: wsId, key, value, category, sensitive, hcl, description };
+      return { id, workspaceId: wsId, key, value: sensitive === true ? null : value, category, sensitive, hcl, description };
     },
   },
   {
@@ -267,7 +267,7 @@ export const workspaceTools: readonly McpTool[] = [
         }
         throw error;
       }
-      return { ...variable, ...updated };
+      return { ...variable, ...updated, value: sensitive === true ? null : value };
     },
   },
   {

@@ -862,7 +862,8 @@ describe("fine-grained user tokens", () => {
       });
       expect(secretOk.status).toBe(200);
       const secretBody = JSON.parse(secretOk.text) as { result: { content: { text: string }[] } };
-      const secretCreated = JSON.parse(secretBody.result.content[0]?.text ?? "{}") as { id: string };
+      const secretCreated = JSON.parse(secretBody.result.content[0]?.text ?? "{}") as { id: string; value: string | null };
+      expect(secretCreated.value).toBeNull();
       const listVars = await call(varWrite.secret, "get_workspace_vars", { workspace_id: s.wsA1 });
       const varsList = JSON.parse(listVars.text) as { result: { content: { text: string }[] } };
       const readRows = JSON.parse(varsList.result.content[0]?.text ?? "[]") as { key: string; value: string | null; sensitive: boolean }[];
