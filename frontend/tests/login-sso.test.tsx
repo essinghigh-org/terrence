@@ -38,7 +38,7 @@ test("renders SAML and OIDC single sign-on buttons when the providers are enable
   expect(view.getByLabelText(/Username/i)).toBeTruthy();
 });
 
-test("hides the local password form when local authentication is disabled", async (): Promise<void> => {
+test("shows the credential form for LDAP when local authentication is disabled", async (): Promise<void> => {
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,
     "local-auth-enabled": false,
@@ -56,10 +56,10 @@ test("hides the local password form when local authentication is disabled", asyn
 
   await waitFor((): void => {
     expect(view.getByRole("button", { name: "Sign in with SAML SSO" })).toBeTruthy();
-    expect(view.getByText(/Local password sign-in is disabled/)).toBeTruthy();
+    expect(view.getByLabelText(/Username/i)).toBeTruthy();
   });
-  expect(view.queryByLabelText(/Username/i)).toBeNull();
-  expect(view.queryByRole("button", { name: "Sign in" })).toBeNull();
+  expect(view.getByRole("button", { name: "Sign in" })).toBeTruthy();
+  expect(view.queryByText(/Local password sign-in is disabled/)).toBeNull();
 });
 
 test("renders the password form when no SSO provider is enabled", async (): Promise<void> => {

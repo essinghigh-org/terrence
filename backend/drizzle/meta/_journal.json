@@ -379,6 +379,13 @@
       "when": 1787020000000,
       "tag": "0054_sso_membership_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1787050000000,
+      "tag": "0055_sso_challenges",
+      "breakpoints": true
     }
   ]
 }

@@ -13,12 +13,15 @@ export const IDP_OLD_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-o
 
 export const ACS_URL = "http://terrence.test/users/saml/auth";
 export const ENTITY_ID = "http://terrence.test/users/saml/metadata";
+export const IDP_ENTITY_ID = "http://idp.example.test/metadata";
 
 export type SamlResponseOptions = Readonly<{
   /** Destination attribute on the Response/Assertion. */
   destination?: string;
   recipient?: string;
   audience?: string;
+  inResponseTo?: string;
+  issuer?: string;
   nameId?: string;
   username?: string;
   email?: string;
@@ -50,6 +53,8 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     destination = ACS_URL,
     recipient = ACS_URL,
     audience = ENTITY_ID,
+    inResponseTo,
+    issuer = IDP_ENTITY_ID,
     nameId = options.username ?? "alice",
     username = "alice",
     email = "alice@example.com",
@@ -75,16 +80,16 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
 
   const responseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${destination}">
-  <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
+  <saml:Issuer>${issuer}</saml:Issuer>
   <samlp:Status>
     <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:protocol:status:Success"/>
   </samlp:Status>
   <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}" Destination="${destination}">
-    <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
+    <saml:Issuer>${issuer}</saml:Issuer>
     <saml:Subject>
       <saml:NameID>${nameId}</saml:NameID>
       <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
-        <saml:SubjectConfirmationData Recipient="${recipient}" NotOnOrAfter="${notOnOrAfter}"/>
+        <saml:SubjectConfirmationData Recipient="${recipient}" NotOnOrAfter="${notOnOrAfter}"${inResponseTo === undefined ? "" : ` InResponseTo="${inResponseTo}"`}/>
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}">
@@ -121,13 +126,13 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
 }
 
 /** Build a signed IdP-initiated LogoutRequest as base64. */
-export function buildSignedLogoutRequest(): string {
+export function buildSignedLogoutRequest(nameId = "slo-user"): string {
   const now = new Date().toISOString();
   const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
   const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}">
   <saml:Issuer>http://idp.example.test/metadata</saml:Issuer>
-  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">slo-user</saml:NameID>
+  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${nameId}</saml:NameID>
 </samlp:LogoutRequest>
 `;
   const signed = new SignedXml({

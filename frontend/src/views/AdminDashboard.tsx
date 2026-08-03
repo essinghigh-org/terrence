@@ -102,6 +102,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [samlSsoUrl, setSamlSsoUrl] = useState("");
   const [samlSloUrl, setSamlSloUrl] = useState("");
   const [samlIdpCert, setSamlIdpCert] = useState("");
+  const [samlIdpEntityId, setSamlIdpEntityId] = useState("");
   const [samlAttrUsername, setSamlAttrUsername] = useState("Username");
   const [samlAttrGroups, setSamlAttrGroups] = useState("MemberOf");
   const [samlAttrSiteAdmin, setSamlAttrSiteAdmin] = useState("SiteAdmin");
@@ -123,6 +124,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   // Local authentication state
   const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
+  const [generalLoading, setGeneralLoading] = useState(false);
   const [generalSaving, setGeneralSaving] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
 
@@ -362,6 +364,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlSsoUrl(typeof attrs["sso-endpoint-url"] === "string" ? attrs["sso-endpoint-url"] : "");
       setSamlSloUrl(typeof attrs["slo-endpoint-url"] === "string" ? attrs["slo-endpoint-url"] : "");
       setSamlIdpCert(typeof attrs["idp-cert"] === "string" ? attrs["idp-cert"] : "");
+      setSamlIdpEntityId(typeof attrs["idp-entity-id"] === "string" ? attrs["idp-entity-id"] : "");
       setSamlAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "Username");
       setSamlAttrGroups(typeof attrs["attr-groups"] === "string" ? attrs["attr-groups"] : "MemberOf");
       setSamlAttrSiteAdmin(typeof attrs["attr-site-admin"] === "string" ? attrs["attr-site-admin"] : "SiteAdmin");
@@ -377,6 +380,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   };
 
   const loadGeneralSettings = async (): Promise<void> => {
+    setGeneralLoading(true);
     setGeneralError(null);
     try {
       const res = await fetchApi("/api/v2/admin/general-settings") as {
@@ -385,6 +389,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
     } catch (err: unknown) {
       setGeneralError(err instanceof Error ? err.message : "Failed to load general settings");
+    } finally {
+      setGeneralLoading(false);
     }
   };
 
@@ -417,14 +423,6 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    // Refuse to create a lockout: local authentication cannot be disabled
-    // while no single sign-on provider is enabled.
-    if (!localAuthEnabled && !samlEnabled && !oidcEnabled && !ldapEnabled) {
-      setGeneralError(
-        "Enable at least one single sign-on provider (SAML, OIDC, or LDAP) before disabling local authentication.",
-      );
-      return;
-    }
     setGeneralSaving(true);
     setGeneralError(null);
     try {
@@ -476,8 +474,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
             // bind-password is write-only after the initial save. An empty
             // field preserves the stored value; a typed value replaces it.
-            ...(ldapBindPassword.trim() !== ""
-              ? { "bind-password": ldapBindPassword.trim() }
+            ...(ldapBindPassword !== ""
+              ? { "bind-password": ldapBindPassword }
               : {}),
             "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
             "user-filter": ldapUserFilter,
@@ -535,6 +533,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             "sso-endpoint-url": samlSsoUrl.trim() !== "" ? samlSsoUrl.trim() : null,
             "slo-endpoint-url": samlSloUrl.trim() !== "" ? samlSloUrl.trim() : null,
             "idp-cert": samlIdpCert.trim() !== "" ? samlIdpCert.trim() : null,
+            "idp-entity-id": samlIdpEntityId.trim() !== "" ? samlIdpEntityId.trim() : null,
             "attr-username": samlAttrUsername,
             "attr-groups": samlAttrGroups,
             "attr-site-admin": samlAttrSiteAdmin,
@@ -1177,31 +1176,35 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                   <CardDescription>Username and password sign-in for this instance</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <form onSubmit={handleSaveGeneral} className="space-y-5">
-                    {generalError !== null && (
-                      <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-                        <AlertCircle className="h-4 w-4 shrink-0" />
-                        <span>{generalError}</span>
-                      </div>
-                    )}
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={localAuthEnabled}
-                        onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
-                        className="rounded border-gray-300"
-                        aria-label="Allow local password authentication"
-                      />
-                      Allow local password authentication
-                    </label>
-                    <p className="text-xs text-gray-500">
-                      When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
-                      configured). Existing local accounts cannot sign in with a password until this is re-enabled.
-                    </p>
-                    <Button type="submit" disabled={generalSaving} aria-label="Save sign-in settings">
-                      {generalSaving ? "Saving..." : "Save sign-in settings"}
-                    </Button>
-                  </form>
+                  {generalLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading sign-in settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveGeneral} className="space-y-5">
+                      {generalError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{generalError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={localAuthEnabled}
+                          onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow local password authentication"
+                        />
+                        Allow local password authentication
+                      </label>
+                      <p className="text-xs text-gray-500">
+                        When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
+                        configured). Existing local accounts cannot sign in with a password until this is re-enabled.
+                      </p>
+                      <Button type="submit" disabled={generalSaving} aria-label="Save sign-in settings">
+                        {generalSaving ? "Saving..." : "Save sign-in settings"}
+                      </Button>
+                    </form>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1254,6 +1257,15 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                           value={samlSsoUrl}
                           onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
                           aria-label="SSO Endpoint URL"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">IdP Entity ID</label>
+                        <Input
+                          placeholder="https://idp.example.com/metadata"
+                          value={samlIdpEntityId}
+                          onChange={(e): void => { setSamlIdpEntityId(e.target.value); }}
+                          aria-label="IdP Entity ID"
                         />
                       </div>
                       <div className="space-y-1">

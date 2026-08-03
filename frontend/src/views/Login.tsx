@@ -17,6 +17,7 @@ export function Login(): React.JSX.Element {
   const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
   const [samlEnabled, setSamlEnabled] = useState(false);
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [ldapEnabled, setLdapEnabled] = useState(false);
   const [mfaChallengeToken, setMfaChallengeToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const navigate = useNavigate();
@@ -29,12 +30,13 @@ export function Login(): React.JSX.Element {
         setLocalAuthEnabled(resp["local-auth-enabled"] !== false);
         setSamlEnabled(resp.sso?.saml === true);
         setOidcEnabled(resp.sso?.oidc === true);
+        setLdapEnabled(resp.sso?.ldap === true);
       })
       .catch((): void => { setSignupEnabled(true); setLocalAuthEnabled(true); });
   }, []);
 
   const ssoEnabled = samlEnabled || oidcEnabled;
-  const showLocalForm = localAuthEnabled;
+  const showLocalForm = localAuthEnabled || ldapEnabled;
 
   const handleLogin = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -96,7 +98,7 @@ export function Login(): React.JSX.Element {
             <FieldGroup>
               {mfaChallengeToken === null ? (
                 <>
-                  {!localAuthEnabled && (
+                  {!localAuthEnabled && !ldapEnabled && (
                     <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                       Local password sign-in is disabled. Use single sign-on below.
                     </div>
@@ -150,7 +152,7 @@ export function Login(): React.JSX.Element {
                 Use a different account
               </Button>
             )}
-            {mfaChallengeToken === null && showLocalForm && signupEnabled && (
+            {mfaChallengeToken === null && localAuthEnabled && signupEnabled && (
               <Link to="/register" className={buttonVariants({ variant: "link" })}>
                 Create account
               </Link>

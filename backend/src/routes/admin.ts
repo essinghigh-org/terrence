@@ -48,6 +48,7 @@ const SAML_DEFAULTS = {
   debug: false,
   oldIdpCert: null,
   idpCert: null,
+  idpEntityId: null,
   sloEndpointUrl: null,
   ssoEndpointUrl: null,
   attrUsername: "Username",
@@ -94,6 +95,8 @@ function settingResource(id: string, values: Settings): Record<string, unknown> 
 }
 
 async function currentSamlSettings(): Promise<SamlSettings> {
+  const existing = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, SAML_SETTINGS_ID) });
+  if (existing !== undefined) return existing;
   await db.insert(samlSettings).values(SAML_DEFAULTS).onConflictDoNothing();
   const settings = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, SAML_SETTINGS_ID) });
   if (settings === undefined) throw new Error("SAML settings are unavailable");
@@ -109,6 +112,7 @@ function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: s
       debug: settings.debug,
       "old-idp-cert": settings.oldIdpCert,
       "idp-cert": settings.idpCert,
+      "idp-entity-id": settings.idpEntityId,
       "slo-endpoint-url": settings.sloEndpointUrl,
       "sso-endpoint-url": settings.ssoEndpointUrl,
       "attr-username": settings.attrUsername,
@@ -131,6 +135,26 @@ function validHttpsUrl(value: string): boolean {
   }
 }
 
+function validOidcIssuer(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return (url.protocol === "https:" || (url.protocol === "http:" && loopback))
+      && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeIssuer(value: string): string {
+  try {
+    return new URL(value).toString().replace(/\/+$/, "");
+  } catch {
+    return value.trim();
+  }
+}
+
 function samlInput(
   attributes: Readonly<Record<string, unknown>>,
   current: SamlSettings,
@@ -142,6 +166,7 @@ function samlInput(
   }
   for (const key of [
     "idp-cert",
+    "idp-entity-id",
     "slo-endpoint-url",
     "sso-endpoint-url",
     "attr-username",
@@ -154,11 +179,11 @@ function samlInput(
     }
   }
   const timeout = attributes["sso-api-token-session-timeout"];
-  if (timeout !== undefined && !(typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout > 0)) {
-    return { error: "sso-api-token-session-timeout must be a positive integer" };
+  if (timeout !== undefined && !(typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout >= 0)) {
+    return { error: "sso-api-token-session-timeout must be a non-negative integer" };
   }
 
-  const nullableString = (key: "idp-cert" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
+  const nullableString = (key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
     attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
   const requiredString = (
     key: "attr-username" | "attr-groups" | "attr-site-admin" | "site-admin-role",
@@ -166,6 +191,7 @@ function samlInput(
   ): string => attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
 
   const idpCert = nullableString("idp-cert", current.idpCert);
+  const idpEntityId = nullableString("idp-entity-id", current.idpEntityId);
   const sloEndpointUrl = nullableString("slo-endpoint-url", current.sloEndpointUrl);
   const ssoEndpointUrl = nullableString("sso-endpoint-url", current.ssoEndpointUrl);
   const attrUsername = requiredString("attr-username", current.attrUsername);
@@ -181,8 +207,8 @@ function samlInput(
   if (sloEndpointUrl !== null && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
   if (ssoEndpointUrl !== null && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
   if (attrUsername === "" || attrGroups === "") return { error: "attr-username and attr-groups must not be empty" };
-  if (enabled && (idpCert === null || ssoEndpointUrl === null)) {
-    return { error: "idp-cert and sso-endpoint-url are required when SAML is enabled" };
+  if (enabled && (idpCert === null || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null)) {
+    return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
 
   return {
@@ -194,6 +220,7 @@ function samlInput(
         ? current.idpCert
         : current.oldIdpCert,
       idpCert,
+      idpEntityId,
       sloEndpointUrl,
       ssoEndpointUrl,
       attrUsername,
@@ -859,6 +886,21 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const current = await getSettings("general");
+    const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
+      ? attrs["local-auth-enabled"]
+      : current["local-auth-enabled"] !== false;
+    if (!localAuthEnabled) {
+      const [saml, oidc, ldap] = await Promise.all([
+        currentSamlSettings(),
+        getSettings("oidc"),
+        getSettings("ldap"),
+      ]);
+      if (saml.enabled !== true && oidc.enabled !== true && ldap.enabled !== true) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "At least one SSO provider must be enabled before local authentication is disabled" }] };
+      }
+    }
     return settingResource("general-settings", await updateSettings("general", attrs));
   })
   // --- B.2 Data Retention Policy Settings ---
@@ -945,16 +987,20 @@ export const adminRoutes = new Elysia({ name: "admin" })
 
     const current = await getSettings("oidc");
     const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled;
-    const issuer = typeof attrs.issuer === "string" ? attrs.issuer.trim() : current.issuer;
-    const clientId = typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : current["client-id"];
+    const issuerValue = attrs.issuer === undefined
+      ? current.issuer
+      : typeof attrs.issuer === "string" ? attrs.issuer.trim() : null;
+    const clientId = attrs["client-id"] === undefined
+      ? current["client-id"]
+      : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
+    const issuer = typeof issuerValue === "string" && issuerValue !== "" ? normalizeIssuer(issuerValue) : issuerValue;
     if (enabled && (typeof issuer !== "string" || issuer === "" || typeof clientId !== "string" || clientId === "")) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] };
     }
     if (typeof issuer === "string" && issuer !== "") {
       try {
-        const parsed = new URL(issuer);
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
+        if (!validOidcIssuer(issuer)) throw new Error();
       } catch {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] };
@@ -968,8 +1014,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
 
     return settingResource("oidc-settings", await updateSettings("oidc", {
       ...attrs,
-      ...(typeof attrs.issuer === "string" ? { issuer } : {}),
-      ...(typeof attrs["client-id"] === "string" ? { "client-id": clientId } : {}),
+      issuer,
+      "client-id": clientId,
       "pkce-method": pkce === "" ? null : pkce,
     }));
   })
@@ -1046,8 +1092,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
 
     return settingResource("ldap-settings", await updateSettings("ldap", {
       ...attrs,
-      host: typeof attrs.host === "string" ? host : attrs.host,
-      "base-dn": typeof attrs["base-dn"] === "string" ? baseDn : attrs["base-dn"],
+      ...(attrs.host === undefined ? {} : { host }),
+      ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
       ...(attrs["bind-dn"] === undefined ? {} : { "bind-dn": bindDn }),
       "user-filter": userFilter,
     }));

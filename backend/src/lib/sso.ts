@@ -8,6 +8,7 @@ import { db } from "../db";
 import {
   organizationMemberships,
   organizations,
+  samlSettings,
   teamMemberships,
   teams,
   users,
@@ -46,13 +47,13 @@ function str(value: unknown): string | null {
 export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
   const [general, saml, oidc, ldap] = await Promise.all([
     getSettings("general"),
-    getSettings("saml"),
+    db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") }),
     getSettings("oidc"),
     getSettings("ldap"),
   ]);
   return {
     localAuthEnabled: bool(general["local-auth-enabled"], true),
-    samlEnabled: bool(saml.enabled),
+    samlEnabled: saml?.enabled === true,
     oidcEnabled: bool(oidc.enabled),
     ldapEnabled: bool(ldap.enabled),
   };
@@ -118,11 +119,11 @@ export class SsoConflictError extends Error {
   public readonly provider: SsoProvider;
   public readonly username: string;
 
-  constructor(provider: SsoProvider, username: string) {
-    super(
+  constructor(provider: SsoProvider, username: string, message?: string) {
+    super(message ?? (
       `Sign-in blocked: username "${username}" is already in use by a local account. `
-      + "Rename the local account or change the identity provider username, then retry.",
-    );
+      + "Rename the local account or change the identity provider username, then retry."
+    ));
     this.provider = provider;
     this.username = username;
   }
@@ -147,7 +148,12 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   const subject = identity.subject.trim();
   const username = sanitizeUsername(identity.username);
   if (username === null) {
-    throw new SsoConflictError(identity.provider, identity.username);
+    throw new SsoConflictError(
+      identity.provider,
+      identity.username,
+      `Sign-in blocked: username "${identity.username}" does not contain any usable characters. `
+      + "Change the identity provider username, then retry.",
+    );
   }
   const email = validEmail(identity.email);
 
@@ -156,7 +162,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   });
   if (byIdentity !== undefined) {
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (byIdentity.email === null && email !== null) updates.email = email;
+    if (byIdentity.email === null && email !== null && identity.emailVerified === true) updates.email = email;
     if (Object.keys(updates).length > 0) {
       await db.update(users).set(updates).where(eq(users.id, byIdentity.id));
     }
@@ -190,6 +196,12 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     throw new SsoConflictError(identity.provider, username);
   }
 
+  let insertEmail = email;
+  if (email !== null && identity.emailVerified !== true) {
+    const emailOwner = await db.query.users.findFirst({ where: eq(users.email, email) });
+    if (emailOwner !== undefined) insertEmail = null;
+  }
+
   const userId = `usr-${crypto.randomUUID()}`;
   // bcrypt of random bytes: valid hash format, impossible to guess.
   const unusableHash = await bcrypt.hash(randomBytes(32).toString("base64"), 10);
@@ -199,7 +211,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   await db.insert(users).values({
     id: userId,
     username,
-    email,
+    email: insertEmail,
     passwordHash: unusableHash,
     ssoProvider: identity.provider,
     ssoSubject: subject,
@@ -298,19 +310,11 @@ export async function pruneSamlGroupMappings(userId: string, groups: readonly st
     list.push(team);
     teamByOrg.set(team.orgId, list);
   }
-  for (const membership of memberships) {
-    // Only SAML-mapper-created memberships are managed here.
-    if (membership.ssoSource !== "saml") continue;
-    const org = samlOrgs.find((candidate): boolean => candidate.id === membership.orgId);
-    if (org === undefined) continue;
-    const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
+  for (const org of samlOrgs) {
     const teamsForOrg = teamByOrg.get(org.id) ?? [];
-    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- drizzle rows are mutable by contract
-const matches = (team: typeof teamsForOrg[number]): boolean =>
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle rows are mutable by contract
+    const matches = (team: Readonly<typeof teamsForOrg[number]>): boolean =>
       team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name);
-    const matchedTeam = teamsForOrg.some(matches);
-    // Teams that no longer match the current groups lose the SAML-managed
-    // membership, mirroring applySamlGroupMapping's insert logic.
     const staleTeamIds = teamsForOrg.filter((team): boolean => !matches(team)).map((team): string => team.id);
     if (staleTeamIds.length > 0) {
       await db.delete(teamMemberships).where(and(
@@ -319,6 +323,11 @@ const matches = (team: typeof teamsForOrg[number]): boolean =>
         eq(teamMemberships.ssoSource, "saml"),
       ));
     }
+    // Only SAML-mapper-created organization memberships are managed here.
+    const membership = memberships.find((candidate): boolean => candidate.orgId === org.id);
+    if (membership === undefined || membership.ssoSource !== "saml") continue;
+    const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
+    const matchedTeam = teamsForOrg.some(matches);
     if (isOwner || matchedTeam) {
       const role: "owner" | "member" = isOwner ? "owner" : "member";
       if (membership.role !== role) {
@@ -398,6 +407,15 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
       "X-Content-Type-Options": "nosniff",
     },
   });
+}
+
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- primitive/header union has no mutable state
+export function appendSetCookies(response: Readonly<Response>, value: string | number | readonly string[] | undefined): void {
+  if (Array.isArray(value)) {
+    for (const cookie of value as readonly string[]) response.headers.append("Set-Cookie", cookie);
+  } else if (value !== undefined) {
+    response.headers.append("Set-Cookie", String(value));
+  }
 }
 
 /** Base URL for the instance, used to derive ACS / callback / metadata URLs. */

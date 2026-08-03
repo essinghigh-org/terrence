@@ -3,20 +3,24 @@
 // provider's JWKS, and account provisioning. Configuration lives in the admin
 // "oidc" settings group.
 import { Elysia } from "elysia";
-import { createHash, createHmac, createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
+import { constants, createHash, createHmac, createPublicKey, randomBytes, timingSafeEqual, verify as verifySignature } from "node:crypto";
 import { getSettings } from "./admin";
 import { auditLog } from "../lib/utils";
 import {
+  appendSetCookies,
   provisionSsoUser,
   sanitizeUsername,
   ssoHtmlPage,
   ssoHtmlResponse,
+  ssoBaseUrl,
   SsoConflictError,
   validEmail,
 } from "../lib/sso";
+import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "./saml";
 
-type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+type HeaderValue = string | number | readonly string[];
+type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
 type RequestInfo = Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
 
 type OidcSettings = Readonly<{
@@ -33,6 +37,7 @@ type OidcDiscovery = Readonly<{
   authorizationEndpoint: string;
   tokenEndpoint: string;
   jwksUri: string;
+  signingAlgorithms?: readonly string[];
 }>;
 
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
@@ -47,17 +52,22 @@ const ALLOWED_ALGS: ReadonlySet<string> = new Set([
   "HS256", "HS384", "HS512",
   "RS256", "RS384", "RS512",
   "ES256", "ES384", "ES512",
+  "PS256", "PS384", "PS512",
 ]);
 
 const discoveryCache = new Map<string, { config: OidcDiscovery; fetchedAt: number }>();
 const jwksCache = new Map<string, { keys: Record<string, unknown>[]; fetchedAt: number }>();
-const pendingLogins = new Map<string, { nonce: string; verifier: string | null; expiresAt: number }>();
+const jwksRefreshes = new Map<string, number>();
 const OIDC_STATE_COOKIE = "terrence_oidc_state";
+const JWKS_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
+const OIDC_CHALLENGE_KIND = "oidc-login";
 
 /** Test hook: clear the discovery/JWKS caches between scenarios. */
-export function resetOidcCaches(): void {
+export async function resetOidcCaches(): Promise<void> {
   discoveryCache.clear();
   jwksCache.clear();
+  jwksRefreshes.clear();
+  await clearSsoChallenges(OIDC_CHALLENGE_KIND);
 }
 
 /** Read a same-site cookie value from a request. */
@@ -72,12 +82,31 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
   return undefined;
 }
 
+function secureRequest(request: RequestInfo): boolean {
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return (forwarded === "https" || forwarded === "https:")
+    || new URL(request.url).protocol === "https:";
+}
+
+function stateCookie(request: RequestInfo, state: string, maxAge: number): string {
+  const secure = secureRequest(request);
+  return `${OIDC_STATE_COOKIE}=${state}; Path=/users/oidc; HttpOnly; ${secure ? "SameSite=None; Secure" : "SameSite=Lax"}; Max-Age=${maxAge}`;
+}
+
+function callbackResponse(request: RequestInfo, set: SetObj, body: string, status: number): Response {
+  const response = ssoHtmlResponse(body, status);
+  appendSetCookies(response, set.headers["Set-Cookie"]);
+  response.headers.append("Set-Cookie", stateCookie(request, "", 0));
+  return response;
+}
+
 async function oidcSettings(): Promise<OidcSettings> {
   const raw = await getSettings("oidc");
   const pkce = raw["pkce-method"] === "S256" ? "S256" : null;
+  const configuredIssuer = typeof raw.issuer === "string" && raw.issuer !== "" ? raw.issuer : null;
   return {
     enabled: raw.enabled === true,
-    issuer: typeof raw.issuer === "string" && raw.issuer !== "" ? raw.issuer : null,
+    issuer: configuredIssuer === null ? null : normalizeIssuer(configuredIssuer),
     clientId: typeof raw["client-id"] === "string" && raw["client-id"] !== "" ? raw["client-id"] : null,
     clientSecret: typeof raw["client-secret"] === "string" && raw["client-secret"] !== "" ? raw["client-secret"] : null,
     scopes: typeof raw.scopes === "string" && raw.scopes !== "" ? raw.scopes : "openid profile email",
@@ -86,21 +115,22 @@ async function oidcSettings(): Promise<OidcSettings> {
 }
 
 function callbackUrl(request: RequestInfo): string {
-  return new URL("/users/oidc/callback", request.url).toString();
+  return new URL("/users/oidc/callback", ssoBaseUrl(request)).toString();
 }
 
 async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
-  const cached = discoveryCache.get(providerIssuer);
+  const issuer = normalizeIssuer(providerIssuer);
+  const cached = discoveryCache.get(issuer);
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
-  const endpoint = `${providerIssuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
+  const endpoint = `${issuer}/.well-known/openid-configuration`;
   const response = await fetch(endpoint, {
     redirect: "follow",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
   const config = await response.json() as Partial<Record<string, unknown>>;
-  const discoveredIssuer = typeof config.issuer === "string" && config.issuer !== "" ? config.issuer : null;
-  if (discoveredIssuer === null || discoveredIssuer !== providerIssuer) {
+  const discoveredIssuer = typeof config.issuer === "string" && config.issuer !== "" ? normalizeIssuer(config.issuer) : null;
+  if (discoveredIssuer === null || discoveredIssuer !== issuer) {
     // RFC 8414: the document issuer must equal the configured issuer.
     throw new Error("OIDC discovery issuer does not match the configured issuer");
   }
@@ -115,13 +145,20 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
     authorizationEndpoint,
     tokenEndpoint,
     jwksUri,
+    ...(Array.isArray(config.id_token_signing_alg_values_supported)
+      ? { signingAlgorithms: config.id_token_signing_alg_values_supported.filter((value): value is string => typeof value === "string") }
+      : {}),
   };
-  discoveryCache.set(providerIssuer, { config: discovered, fetchedAt: Date.now() });
+  discoveryCache.set(issuer, { config: discovered, fetchedAt: Date.now() });
   return discovered;
 }
 
-function base64Url(value: string): string {
-  return Buffer.from(value).toString("base64url");
+function normalizeIssuer(value: string): string {
+  try {
+    return new URL(value.trim()).toString().replace(/\/+$/, "");
+  } catch {
+    return value.trim().replace(/\/+$/, "");
+  }
 }
 
 function base64UrlDecode(value: string): string {
@@ -138,7 +175,9 @@ function parseJwt(token: string): { header: Record<string, unknown>; payload: Re
   return { header, payload, signature: signature ?? "", signingInput: `${headerPart}.${payloadPart}` };
 }
 
-function derEncodeEsSignature(signature: Buffer): Buffer {
+function derEncodeEsSignature(signature: Buffer, alg: string): Buffer {
+  const expectedLength: Record<string, number> = { ES256: 64, ES384: 96, ES512: 132 };
+  if (signature.length !== expectedLength[alg]) throw new Error("ID token ECDSA signature is invalid");
   const half = signature.length / 2;
   const r = signature.subarray(0, half);
   const s = signature.subarray(half);
@@ -166,10 +205,14 @@ async function verifyJwtSignature(
   signingInput: string,
   signature: string,
   settings: OidcSettings,
+  discoveryConfig: OidcDiscovery,
 ): Promise<void> {
   const alg = String(header.alg);
   if (!ALLOWED_ALGS.has(alg)) {
     throw new Error("Unsupported ID token algorithm.");
+  }
+  if (discoveryConfig.signingAlgorithms !== undefined && !discoveryConfig.signingAlgorithms.includes(alg)) {
+    throw new Error("ID token algorithm is not allowed by the provider configuration.");
   }
   const signatureBuffer = Buffer.from(signature, "base64url");
   const data = Buffer.from(signingInput, "utf8");
@@ -181,13 +224,14 @@ async function verifyJwtSignature(
     if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
     const expected = createHmac(hash, settings.clientSecret).update(data).digest();
     if (expected.length !== signatureBuffer.length) throw new Error("ID token signature is invalid");
-    if (!expected.equals(signatureBuffer)) throw new Error("ID token signature is invalid");
+    if (!timingSafeEqual(expected, signatureBuffer)) throw new Error("ID token signature is invalid");
     return;
   }
 
   const hashName: Record<string, string> = {
     RS256: "sha256", RS384: "sha384", RS512: "sha512",
     ES256: "sha256", ES384: "sha384", ES512: "sha512",
+    PS256: "sha256", PS384: "sha384", PS512: "sha512",
   };
   const hash = hashName[alg];
   if (hash === undefined) throw new Error(`Unsupported ID token algorithm: ${alg}`);
@@ -197,15 +241,25 @@ async function verifyJwtSignature(
 
   const publicKey = createPublicKey({ key, format: "jwk" });
   const verifiable = alg.startsWith("ES")
-    ? derEncodeEsSignature(signatureBuffer)
+    ? derEncodeEsSignature(signatureBuffer, alg)
     : signatureBuffer;
-  const valid = verifySignature(hash, data, publicKey, verifiable);
+  const valid = alg.startsWith("PS")
+    ? verifySignature(hash, data, {
+      key: publicKey,
+      padding: constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: Number(alg.slice(2, 5)) / 8,
+    }, verifiable)
+    : verifySignature(hash, data, publicKey, verifiable);
   if (!valid) throw new Error("ID token signature is invalid");
 }
 
-async function fetchJwks(jwksUri: string): Promise<Record<string, unknown>[]> {
+async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<string, unknown>[]> {
   const cached = jwksCache.get(jwksUri);
-  if (cached !== undefined && cached.fetchedAt + JWKS_TTL_MS > Date.now()) return cached.keys;
+  const now = Date.now();
+  if (!forceRefresh && cached !== undefined && cached.fetchedAt + JWKS_TTL_MS > now) return cached.keys;
+  if (forceRefresh && cached !== undefined && (jwksRefreshes.get(jwksUri) ?? 0) + JWKS_REFRESH_MIN_INTERVAL_MS > now) {
+    return cached.keys;
+  }
   const response = await fetch(jwksUri, {
     redirect: "follow",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -213,7 +267,8 @@ async function fetchJwks(jwksUri: string): Promise<Record<string, unknown>[]> {
   if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
   const jwks = await response.json() as { keys?: Record<string, unknown>[] };
   const keys = jwks.keys ?? [];
-  jwksCache.set(jwksUri, { keys, fetchedAt: Date.now() });
+  jwksCache.set(jwksUri, { keys, fetchedAt: now });
+  if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   return keys;
 }
 
@@ -227,16 +282,23 @@ async function resolveVerificationKey(
   const keys = await fetchJwks(discoveryConfig.jwksUri);
   const kid = typeof header.kid === "string" ? header.kid : undefined;
   const algFamily = alg.startsWith("ES") ? "EC" : "RSA";
+  const matches = (candidate: Record<string, unknown>): boolean =>
+    (candidate.kty === undefined || candidate.kty === algFamily)
+    && (candidate.use === undefined || candidate.use === "sig")
+    && (candidate.alg === undefined || candidate.alg === alg);
   if (kid === undefined) {
     // Prefer a key whose kty matches the algorithm family; fall back to any
     // RSA/EC key only as a last resort (e.g. providers that omit kty sets).
     return keys.find((candidate): boolean =>
-      candidate.kty === algFamily && (candidate.use === undefined || candidate.use === "sig"))
-      ?? keys.find((candidate): boolean => candidate.kty === algFamily)
-      ?? keys.find((candidate): boolean => candidate.kty === "RSA" || candidate.kty === "EC");
+      candidate.kty === algFamily && matches(candidate))
+      ?? keys.find(matches);
   }
-  return keys.find((candidate): boolean =>
-    candidate.kid === kid && (candidate.kty === undefined || candidate.kty === algFamily));
+  const match = keys.find((candidate): boolean => candidate.kid === kid && matches(candidate));
+  if (match !== undefined) return match;
+  // A missing kid usually means rotation. Refresh once, but cap forced fetches
+  // so attacker-controlled unknown kids cannot turn the JWKS endpoint into a
+  // request amplifier.
+  return (await fetchJwks(discoveryConfig.jwksUri, true)).find((candidate): boolean => candidate.kid === kid && matches(candidate));
 }
 
 function verifyClaims(
@@ -249,7 +311,11 @@ function verifyClaims(
   if (typeof payload.iat !== "number" || payload.iat > now + CLOCK_SKEW_S) throw new Error("ID token was issued in the future");
   if (payload.iss !== settings.issuer) throw new Error("ID token issuer does not match");
   const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (settings.clientId === null || !audience.includes(settings.clientId)) throw new Error("ID token audience does not match");
+  if (settings.clientId === null || !audience.includes(settings.clientId) || audience.some((value): boolean => typeof value !== "string")) {
+    throw new Error("ID token audience does not match");
+  }
+  if (audience.length > 1 && payload.azp !== settings.clientId) throw new Error("ID token authorized party does not match");
+  if (payload.azp !== undefined && payload.azp !== settings.clientId) throw new Error("ID token authorized party does not match");
   if (typeof payload.nonce !== "string" || payload.nonce !== nonce) throw new Error("ID token nonce does not match");
 }
 
@@ -269,16 +335,13 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
     let verifier: string | null = null;
     let challenge: string | null = null;
     if (settings.pkceMethod === "S256") {
-      verifier = base64Url(randomBytes(32).toString("base64")).slice(0, 128);
+      verifier = randomBytes(32).toString("base64url");
       challenge = createHash("sha256").update(verifier).digest("base64url");
     }
 
-    const state = base64Url(randomBytes(24).toString("base64"));
-    const nonce = base64Url(randomBytes(24).toString("base64"));
-    pendingLogins.set(state, { nonce, verifier, expiresAt: Date.now() + PENDING_TTL_MS });
-    for (const [key, entry] of pendingLogins) {
-      if (entry.expiresAt <= Date.now()) pendingLogins.delete(key);
-    }
+    const state = randomBytes(24).toString("base64url");
+    const nonce = randomBytes(24).toString("base64url");
+    await storeSsoChallenge(OIDC_CHALLENGE_KIND, state, { nonce, verifier }, Date.now() + PENDING_TTL_MS);
 
     const authorize = new URL(config.authorizationEndpoint);
     authorize.searchParams.set("response_type", "code");
@@ -298,7 +361,7 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
       headers: {
         "Cache-Control": "no-store",
         Location: authorize.toString(),
-        "Set-Cookie": `${OIDC_STATE_COOKIE}=${state}; Path=/users/oidc; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(PENDING_TTL_MS / 1000)}`,
+        "Set-Cookie": stateCookie(request, state, Math.ceil(PENDING_TTL_MS / 1000)),
       },
     });
   })
@@ -330,7 +393,7 @@ async function handleCallback(
   const settings = await oidcSettings();
   if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
     (set as { status: number }).status = 404;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
   }
 
   const state = typeof params.state === "string" ? params.state : "";
@@ -339,13 +402,17 @@ async function handleCallback(
   // valid code+state from delivering it to a victim's browser.
   if (state === "" || cookieValue(request, OIDC_STATE_COOKIE) !== state) {
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400);
   }
-  const pending = pendingLogins.get(state);
-  pendingLogins.delete(state);
-  if (pending === undefined || pending.expiresAt <= Date.now()) {
+  const pendingPayload = await consumeSsoChallenge(OIDC_CHALLENGE_KIND, state);
+  const pending = pendingPayload !== undefined
+    && typeof pendingPayload.nonce === "string"
+    && (pendingPayload.verifier === null || typeof pendingPayload.verifier === "string")
+    ? { nonce: pendingPayload.nonce, verifier: pendingPayload.verifier }
+    : undefined;
+  if (pending === undefined) {
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The sign-in request has expired or is invalid. Please try again."), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request has expired or is invalid. Please try again."), 400);
   }
 
   const error = typeof params.error === "string" ? params.error : "";
@@ -353,13 +420,13 @@ async function handleCallback(
     const description = typeof params.error_description === "string" ? params.error_description : error;
     (set as { status: number }).status = 400;
     // ssoHtmlPage escapes the message, so no ad-hoc escaping is needed here.
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
   }
 
   const code = typeof params.code === "string" ? params.code : "";
   if (code === "") {
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The identity provider did not return an authorization code."), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider did not return an authorization code."), 400);
   }
 
   let config: OidcDiscovery;
@@ -367,7 +434,7 @@ async function handleCallback(
     config = await discovery(settings.issuer);
   } catch (error: unknown) {
     (set as { status: number }).status = 502;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `OIDC discovery failed: ${error instanceof Error ? error.message : "unknown error"}`), 502);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `OIDC discovery failed: ${error instanceof Error ? error.message : "unknown error"}`), 502);
   }
 
   // Exchange the authorization code at the token endpoint.
@@ -392,7 +459,7 @@ async function handleCallback(
     });
   } catch (error: unknown) {
     (set as { status: number }).status = 502;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `Token exchange failed: ${error instanceof Error ? error.message : "network error"}`), 502);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `Token exchange failed: ${error instanceof Error ? error.message : "network error"}`), 502);
   }
   const tokenData = await tokenResponse.json().catch((): Record<string, unknown> => ({})) as Record<string, unknown>;
   if (!tokenResponse.ok || typeof tokenData.id_token !== "string") {
@@ -402,7 +469,7 @@ async function handleCallback(
         ? tokenData.error
         : String(tokenResponse.status);
     (set as { status: number }).status = 502;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", `Token exchange failed: ${detail}`), 502);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `Token exchange failed: ${detail}`), 502);
   }
 
   // Validate the ID token.
@@ -413,18 +480,18 @@ async function handleCallback(
     header = jwt.header;
     payload = jwt.payload;
     verifyClaims(payload, settings, pending.nonce);
-    await verifyJwtSignature(header, jwt.signingInput, jwt.signature, settings);
+    await verifyJwtSignature(header, jwt.signingInput, jwt.signature, settings, config);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "ID token validation failed";
-    await auditLog("sso-failure", "oidc", null, null, null, { reason: message });
+    const detail = error instanceof Error ? error.message : "ID token validation failed";
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", message), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The identity provider response could not be validated. Please try again."), 400);
   }
 
   const subject = typeof payload.sub === "string" && payload.sub !== "" ? payload.sub : null;
   if (subject === null) {
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The ID token contains no subject."), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no subject."), 400);
   }
   const email = validEmail(typeof payload.email === "string" ? payload.email : null);
   const username = sanitizeUsername(
@@ -434,7 +501,7 @@ async function handleCallback(
   );
   if (username === null) {
     (set as { status: number }).status = 400;
-    return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The ID token contains no usable username claim."), 400);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The ID token contains no usable username claim."), 400);
   }
 
   let result: Awaited<ReturnType<typeof provisionSsoUser>>;
@@ -452,15 +519,11 @@ async function handleCallback(
     if (error instanceof SsoConflictError) {
       await auditLog("sso-conflict", "oidc", null, null, null, { username: error.username });
       (set as { status: number }).status = 409;
-      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", error.message), 409);
+      return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", error.message), 409);
     }
     throw error;
   }
   await auditLog("sso-login", "oidc", result.user.id, result.user.id, null, { username: result.user.username });
   await issueSsoLogin(result.user, { set, request, server }, { wantsToken: false });
-  // Attach the browser-session refresh cookie written by issueLoginSession.
-  const cookie = (set.headers as Record<string, string | number>)["Set-Cookie"];
-  const response = ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "You are signed in.", { redirectUrl: "/app" }));
-  if (cookie !== undefined) response.headers.set("Set-Cookie", String(cookie));
-  return response;
+  return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "You are signed in.", { redirectUrl: "/app" }), 200);
 }

@@ -39,20 +39,25 @@ describe("OIDC SSO flow", () => {
   const ecPublicJwk = ecPublicKey.export({ format: "jwk" }) as Record<string, unknown> as Record<string, string>;
 
   // Signing algorithm the mock IdP uses when issuing the ID token.
-  let mockAlg: "RS256" | "HS256" | "HS384" | "HS512" | "ES256" = "RS256";
+  let mockAlg: "RS256" | "HS256" | "HS384" | "HS512" | "ES256" | "none" = "RS256";
+  let mockHmacSecret = "test-secret";
+  let mockSupportedAlgorithms: string[] = ["RS256", "HS384", "ES256"];
 
   // Claim overrides let each test determine who the mock IdP says the user is.
   let mockSubject = `oidc-sub-${suffix}`;
   let mockEmail = `oidc-alice-${suffix}@example.com`;
   let mockUsername = `oidc-alice-${suffix}`;
+  let mockEmailVerified = true;
   let mockNonce: string | null = null;
-  const authorizeParams = new Map<string, { nonce: string }>();
+  let mockAudience: string | string[] = "test-client";
+  let mockAzp: string | null | undefined;
+  const authorizeParams = new Map<string, { nonce: string; codeChallenge: string; redirectUri: string }>();
 
   let server: ReturnType<typeof Bun.serve> | undefined;
   const baseUrl = (): string => `http://127.0.0.1:${server?.port ?? 0}`;
 
   /** Drive one full browser SSO sequence: /oidc/auth -> IdP authorize -> SP callback. */
-  async function completeFlow(): Promise<{ response: Response; state: string }> {
+  async function completeFlow(callbackMethod: "GET" | "POST" = "GET"): Promise<{ response: Response; state: string }> {
     const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
     expect(authResponse.status).toBe(302);
     // The auth response sets the state cookie that binds this browser to the
@@ -65,14 +70,19 @@ describe("OIDC SSO flow", () => {
     expect(idpResponse.status).toBe(302);
     const callbackUrl = idpResponse.headers.get("Location") ?? "";
     const callback = new URL(callbackUrl);
-    const response = await app.handle(new Request(callback.toString(), {
-      headers: { Cookie: cookie },
-    }));
+    const headers = { Cookie: cookie };
+    const response = callbackMethod === "POST"
+      ? await app.handle(new Request("http://terrence.test/users/oidc/callback", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" },
+        body: callback.searchParams.toString(),
+      }))
+      : await app.handle(new Request(callback.toString(), { headers }));
     return { response, state: callback.searchParams.get("state") ?? "" };
   }
 
   beforeAll(async () => {
-    resetOidcCaches();
+    await resetOidcCaches();
     server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -84,6 +94,7 @@ describe("OIDC SSO flow", () => {
             authorization_endpoint: `${baseUrl()}/authorize`,
             token_endpoint: `${baseUrl()}/token`,
             jwks_uri: `${baseUrl()}/jwks`,
+            id_token_signing_alg_values_supported: mockSupportedAlgorithms,
           });
         }
         if (url.pathname === "/jwks") {
@@ -98,7 +109,11 @@ describe("OIDC SSO flow", () => {
         }
         if (url.pathname === "/authorize") {
           const state = url.searchParams.get("state") ?? "";
-          authorizeParams.set(state, { nonce: url.searchParams.get("nonce") ?? "" });
+          authorizeParams.set(state, {
+            nonce: url.searchParams.get("nonce") ?? "",
+            codeChallenge: url.searchParams.get("code_challenge") ?? "",
+            redirectUri: url.searchParams.get("redirect_uri") ?? "",
+          });
           const redirect = new URL(url.searchParams.get("redirect_uri") ?? "http://terrence.test/users/oidc/callback");
           redirect.searchParams.set("code", `test-code-${state}`);
           redirect.searchParams.set("state", state);
@@ -109,24 +124,39 @@ describe("OIDC SSO flow", () => {
           const codeParam = form.get("code");
           const code = typeof codeParam === "string" ? codeParam : "";
           const state = code.replace("test-code-", "");
+          const authorization = authorizeParams.get(state);
+          const verifierValue = form.get("code_verifier");
+          const verifier = typeof verifierValue === "string" ? verifierValue : "";
+          const authorizationHeader = innerRequest.headers.get("authorization") ?? "";
+          if (form.get("client_id") !== "test-client"
+            || authorizationHeader !== `Basic ${Buffer.from("test-client:test-secret").toString("base64")}`
+            || authorization?.redirectUri !== (form.get("redirect_uri") ?? "")
+            || authorization.codeChallenge !== createHash("sha256").update(verifier).digest("base64url")) {
+            return Response.json({ error: "invalid_grant" }, { status: 400 });
+          }
           const now = Math.floor(Date.now() / 1000);
           const payload = {
             iss: baseUrl(),
             sub: mockSubject,
-            aud: "test-client",
+            aud: mockAudience,
             exp: now + 300,
             iat: now,
-            nonce: mockNonce ?? authorizeParams.get(state)?.nonce ?? "",
+            nonce: mockNonce ?? authorization.nonce,
             email: mockEmail,
-            email_verified: true,
+            email_verified: mockEmailVerified,
             preferred_username: mockUsername,
+            ...(mockAzp === undefined ? {} : { azp: mockAzp }),
           };
           let idToken: string;
-          if (mockAlg.startsWith("HS")) {
+          if (mockAlg === "none") {
+            const header = { alg: "none", typ: "JWT" };
+            const input = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
+            idToken = `${input}.`;
+          } else if (mockAlg.startsWith("HS")) {
             const header = { alg: mockAlg, typ: "JWT" };
             const input = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
             const hash = mockAlg === "HS256" ? "sha256" : mockAlg === "HS384" ? "sha384" : "sha512";
-            idToken = `${input}.${base64Url(createHmac(hash, "test-secret").update(input).digest())}`;
+            idToken = `${input}.${base64Url(createHmac(hash, mockHmacSecret).update(input).digest())}`;
           } else if (mockAlg === "ES256") {
             idToken = signJwt({ alg: "ES256", typ: "JWT" }, payload, ecPrivateKey, "ieee-p1363");
           } else {
@@ -161,6 +191,7 @@ describe("OIDC SSO flow", () => {
 
   afterAll(async () => {
     await server?.stop(true);
+    await resetOidcCaches();
     // The suite provisions users through the flow (oidc-alice-, hs384-,
     // es256-, etc.) as well as inserting usr-oidc-other- directly; delete
     // every row whose id carries this suite's suffix.
@@ -217,6 +248,21 @@ describe("OIDC SSO flow", () => {
     expect(linked?.ssoSubject).toBe(`oidc-sub-link-${suffix}`);
   });
 
+  test("provisions an unverified duplicate email without a unique-key failure", async () => {
+    mockSubject = `oidc-sub-unverified-${suffix}`;
+    mockEmail = `local-${suffix}@example.com`;
+    mockUsername = `unverified-${suffix}`;
+    mockEmailVerified = false;
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(200);
+      const created = await db.query.users.findFirst({ where: eq(users.username, mockUsername) });
+      expect(created?.email).toBeNull();
+    } finally {
+      mockEmailVerified = true;
+    }
+  });
+
   test("blocks provisioning when the username collides with a local account", async () => {
     await db.insert(users).values({
       id: `usr-oidc-other-${suffix}`,
@@ -237,10 +283,57 @@ describe("OIDC SSO flow", () => {
     mockUsername = `nonce-${suffix}`;
     mockEmail = `nonce-${suffix}@example.com`;
     mockNonce = "attacker-nonce";
-    const { response } = await completeFlow();
-    mockNonce = null;
-    expect(response.status).toBe(400);
-    expect(await response.text()).toContain("nonce");
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("could not be validated");
+    } finally {
+      mockNonce = null;
+    }
+  });
+
+  test("accepts a cross-site form_post callback and clears the state cookie", async () => {
+    const { response } = await completeFlow("POST");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+  });
+
+  test("requires azp when the ID token has multiple audiences", async () => {
+    mockAudience = ["test-client", "another-client"];
+    mockAzp = null;
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+    } finally {
+      mockAudience = "test-client";
+      mockAzp = undefined;
+    }
+  });
+
+  test("rejects alg none", async () => {
+    await resetOidcCaches();
+    mockAlg = "none";
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+    } finally {
+      mockAlg = "RS256";
+    }
+  });
+
+  test("does not accept an RSA public key as an HMAC secret", async () => {
+    await resetOidcCaches();
+    mockAlg = "HS256";
+    mockSupportedAlgorithms = ["RS256"];
+    mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+    } finally {
+      mockAlg = "RS256";
+      mockHmacSecret = "test-secret";
+      mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
+    }
   });
 
   test("rejects a callback with an unknown state", async () => {
@@ -262,7 +355,7 @@ describe("OIDC SSO flow", () => {
   });
 
   test("verifies HS384 ID tokens with the matching digest algorithm", async () => {
-    resetOidcCaches();
+    await resetOidcCaches();
     mockSubject = `oidc-sub-hs384-${suffix}`;
     mockUsername = `hs384-${suffix}`;
     mockEmail = `hs384-${suffix}@example.com`;
@@ -276,7 +369,7 @@ describe("OIDC SSO flow", () => {
   });
 
   test("verifies ES256 ID tokens when the JWKS omits kid", async () => {
-    resetOidcCaches();
+    await resetOidcCaches();
     mockSubject = `oidc-sub-es256-${suffix}`;
     mockUsername = `es256-${suffix}`;
     mockEmail = `es256-${suffix}@example.com`;

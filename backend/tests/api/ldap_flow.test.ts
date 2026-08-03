@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Elysia } from "elysia";
 import { eq, inArray } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import ldap from "ldapjs";
@@ -7,6 +8,7 @@ import type { Server } from "ldapjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
+import { oauthPlugin } from "../../src/oauth";
 
 const SERVICE_DN = "cn=admin,dc=example,dc=com";
 const USER_DN = (username: string): string => `uid=${username},dc=example,dc=com`;
@@ -82,6 +84,7 @@ describe("LDAP authentication", () => {
   const adminId = `usr-ldap-admin-${suffix}`;
   const localId = `usr-ldap-local-${suffix}`;
   const adminToken = `ldap-admin-token-${suffix}`;
+  const oauthApp = new Elysia().use(oauthPlugin);
   let ldapPort = 0;
   let ldapServer: Server | undefined;
 
@@ -208,6 +211,48 @@ describe("LDAP authentication", () => {
     }
   });
 
+  test("uses LDAP for Terraform CLI authorization when local auth is disabled", async () => {
+    const verifier = "ldap-cli-verifier-012345678901234567890123456789";
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    const parameters = new URLSearchParams({
+      client_id: "terraform-cli",
+      code_challenge: Buffer.from(digest).toString("base64url"),
+      code_challenge_method: "S256",
+      redirect_uri: "http://localhost:10000/login",
+      response_type: "code",
+      state: `ldap-cli-${suffix}`,
+      username: "alice",
+      password: VALID_USER_PASSWORD,
+    });
+    await setLocalAuth(false);
+    try {
+      const authorization = await oauthApp.handle(new Request("http://localhost/oauth/authorization", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: parameters,
+      }));
+      expect(authorization.status).toBe(302);
+      const callback = new URL(authorization.headers.get("Location") ?? "");
+      const token = await oauthApp.handle(new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from("terraform-cli:").toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          client_id: "terraform-cli",
+          code: callback.searchParams.get("code") ?? "",
+          code_verifier: verifier,
+          grant_type: "authorization_code",
+          redirect_uri: "http://localhost:10000/login",
+        }),
+      }));
+      expect(token.status).toBe(200);
+    } finally {
+      await setLocalAuth(true);
+    }
+  });
+
   test("blocks provisioning when the username is already in use locally", async () => {
     const response = await login("bob", "ldap-pass", true);
     expect(response.status).toBe(401);
@@ -316,7 +361,12 @@ describe("LDAP authentication", () => {
     });
     expect(saved.status).toBe(200);
     const savedAttrs = ((await saved.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
-    expect(savedAttrs).toMatchObject({ "user-filter": "(cn={{username}})", encryption: "starttls" });
+    expect(savedAttrs).toMatchObject({
+      "user-filter": "(cn={{username}})",
+      encryption: "starttls",
+      host: "127.0.0.1",
+      "base-dn": "dc=example,dc=com",
+    });
     await setLdapSettings(true);
   });
 });

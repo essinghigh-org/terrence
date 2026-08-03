@@ -4,7 +4,8 @@ import * as bcrypt from "bcryptjs";
 import { db } from "./db";
 import { apiTokens, users } from "./db/schema";
 import { createHash } from "node:crypto";
-import { ssoSettingsSnapshot } from "./lib/sso";
+import { authenticateLdap } from "./lib/ldap";
+import { ldapSettings, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -230,28 +231,47 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     if (authorization === null) return htmlResponse(loginPage(null), 400);
 
     const sso = await ssoSettingsSnapshot();
-    if (!sso.localAuthEnabled) {
-      return htmlResponse(
-        loginPage(authorization, "Local password sign-in is disabled. Use single sign-on.", "", {
-          saml: sso.samlEnabled,
-          oidc: sso.oidcEnabled,
-          ldap: sso.ldapEnabled,
-          localAuthEnabled: false,
-        }),
-        401,
-      );
-    }
-
     const username = field(body, "username");
     const password = field(body, "password");
-    const user = username !== ""
-      ? await db.query.users.findFirst({ where: eq(users.username, username) })
-      : null;
+    let user: typeof users.$inferSelect | null = null;
+    if (sso.ldapEnabled && username !== "") {
+      const ldap = await ldapSettings();
+      const authenticated = await authenticateLdap(ldap, username, password);
+      if (authenticated.user !== null) {
+        try {
+          user = (await provisionSsoUser({
+            provider: "ldap",
+            subject: authenticated.user.dn,
+            username: authenticated.user.username,
+            email: authenticated.user.email,
+            emailVerified: true,
+          })).user;
+        } catch (error: unknown) {
+          if (error instanceof SsoConflictError) {
+            return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, {
+              saml: sso.samlEnabled,
+              oidc: sso.oidcEnabled,
+              ldap: sso.ldapEnabled,
+              localAuthEnabled: sso.localAuthEnabled,
+            }), 401);
+          }
+          throw error;
+        }
+      }
+    }
 
-    if (user === null || user === undefined || password === "" || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (user === null && sso.localAuthEnabled && username !== "") {
+      user = await db.query.users.findFirst({ where: eq(users.username, username) }) ?? null;
+      if (user !== null && (password === "" || !(await bcrypt.compare(password, user.passwordHash)))) user = null;
+    }
+
+    if (user === null) {
       // Preserve the SSO state so a user who mistypes a local password can
       // still reach the identity-provider links without restarting.
-      return htmlResponse(loginPage(authorization, "Invalid username or password.", username, {
+      const message = sso.localAuthEnabled || sso.ldapEnabled
+        ? "Invalid username or password."
+        : "Local password sign-in is disabled. Use single sign-on.";
+      return htmlResponse(loginPage(authorization, message, username, {
         saml: sso.samlEnabled,
         oidc: sso.oidcEnabled,
         ldap: sso.ldapEnabled,

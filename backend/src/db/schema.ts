@@ -18,7 +18,7 @@ export const users = sqliteTable("users", {
   ssoSubject: text("sso_subject"),
   // True when the site-admin flag was granted through the SAML site-admin
   // attribute; such grants are revoked when the attribute stops matching.
-  ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).default(false),
+  ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);
@@ -48,6 +48,7 @@ export const samlSettings = sqliteTable("saml_settings", {
   debug: integer("debug", { mode: "boolean" }).notNull().default(false),
   oldIdpCert: text("old_idp_cert"),
   idpCert: text("idp_cert"),
+  idpEntityId: text("idp_entity_id"),
   sloEndpointUrl: text("slo_endpoint_url"),
   ssoEndpointUrl: text("sso_endpoint_url"),
   attrUsername: text("attr_username").notNull().default("Username"),
@@ -1086,6 +1087,16 @@ export const adminSettings = sqliteTable("admin_settings", {
   values: text("values", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
+
+/** Single-use SAML/OIDC state shared by all backend instances. */
+export const ssoChallenges = sqliteTable("sso_challenges", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("sso_challenges_kind_expires_idx").on(table.kind, table.expiresAt),
+]);
 
 export const supportBundleRequests = sqliteTable("support_bundle_requests", {
   id: text("id").primaryKey(),

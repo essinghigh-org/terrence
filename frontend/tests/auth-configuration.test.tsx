@@ -38,6 +38,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   let samlServerEnabled = false;
   let oidcServerEnabled = false;
   let ldapServerEnabled = false;
+  let localAuthServerEnabled = true;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
@@ -123,10 +124,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/general-settings" && init?.method === undefined) {
-      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": true } } });
+      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": localAuthServerEnabled } } });
     }
     if (url === "/api/v2/admin/general-settings" && init?.method === "PATCH") {
-      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": true } } });
+      const body = typeof init.body === "string" ? JSON.parse(init.body) as { data?: { attributes?: { "local-auth-enabled"?: boolean } } } : {};
+      localAuthServerEnabled = body.data?.attributes?.["local-auth-enabled"] ?? localAuthServerEnabled;
+      return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": localAuthServerEnabled } } });
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === undefined) {
       return json({
@@ -247,7 +250,11 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   await act(async (): Promise<void> => { fireEvent.click(saveLocalAuth); });
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/general-settings" && init?.method === "PATCH")).toBeTrue();
+      urlOf(input) === "/api/v2/admin/general-settings"
+      && init?.method === "PATCH"
+      && typeof init.body === "string"
+      && !(JSON.parse(init.body) as { data: { attributes: { "local-auth-enabled": boolean } } }).data.attributes["local-auth-enabled"],
+    )).toBeTrue();
   });
 
   // --- LDAP section ---

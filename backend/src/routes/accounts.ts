@@ -55,7 +55,8 @@ function extractAttrs(body: unknown): Attrs | undefined {
   return payload.data?.attributes;
 }
 
-type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+type HeaderValue = string | number | readonly string[];
+type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
 
 type RequestInfo = Readonly<{
   url: string;
@@ -159,6 +160,18 @@ export async function revokeBrowserSession(
   const revoked = await revokeRefreshFamily(current.familyId, current.userId);
   clearRefreshCookie(set, request);
   return revoked;
+}
+
+export async function browserSessionUser(
+  request: RequestInfo | undefined,
+): Promise<Readonly<typeof users.$inferSelect> | null> {
+  const token = refreshCookie(request);
+  if (token === undefined || token === "") return null;
+  const current = await db.query.refreshSessions.findFirst({
+    where: eq(refreshSessions.tokenHash, tokenHash(token)),
+  });
+  if (current === undefined || current.revokedAt !== null || current.expiresAt <= Date.now()) return null;
+  return await db.query.users.findFirst({ where: eq(users.id, current.userId) }) ?? null;
 }
 
 export function accessTokenDocument(

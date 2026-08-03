@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { and, eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { clearSsoChallenges } from "../../src/lib/sso-challenges";
 import {
   apiTokens,
   organizationMemberships,
@@ -16,12 +17,14 @@ import {
   ACS_URL,
   ENTITY_ID,
   IDP_CERT,
+  IDP_ENTITY_ID,
   IDP_OLD_CERT,
   IDP_OLD_KEY,
   buildSignedLogoutRequest,
   buildSignedSamlResponse,
   inflateAndDecode,
   samlAcsRequest,
+  type SamlResponseOptions,
 } from "./saml_helpers";
 
 describe("SAML SSO flow", () => {
@@ -42,6 +45,22 @@ describe("SAML SSO flow", () => {
       body: body === undefined ? null : JSON.stringify(body),
     }));
 
+  const validAcs = async (options: SamlResponseOptions = {}, relayState?: string, extraHeaders: Record<string, string> = {}): Promise<Response> => {
+    const auth = await app.handle(new Request("http://terrence.test/users/saml/auth"));
+    const location = new URL(auth.headers.get("Location") ?? "");
+    const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
+    if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
+    const response = buildSignedSamlResponse({ ...options, inResponseTo: requestId });
+    if (Object.keys(extraHeaders).length === 0) return app.handle(samlAcsRequest(response, relayState));
+    const params = new URLSearchParams({ SAMLResponse: response });
+    if (relayState !== undefined) params.set("RelayState", relayState);
+    return app.handle(new Request("http://terrence.test/users/saml/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", ...extraHeaders },
+      body: params.toString(),
+    }));
+  };
+
   beforeAll(async () => {
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
@@ -60,6 +79,7 @@ describe("SAML SSO flow", () => {
       enabled: true,
       debug: true,
       idpCert: IDP_CERT,
+      idpEntityId: IDP_ENTITY_ID,
       ssoEndpointUrl: "https://idp.example.test/sso",
       sloEndpointUrl: "https://idp.example.test/slo",
       attrUsername: "Username",
@@ -72,6 +92,8 @@ describe("SAML SSO flow", () => {
   });
 
   afterAll(async () => {
+    await clearSsoChallenges("saml-authn");
+    await clearSsoChallenges("saml-assertion");
     const provisioned = await db.query.users.findMany({
       where: like(users.username, `%-${suffix}`),
     });
@@ -115,19 +137,21 @@ describe("SAML SSO flow", () => {
     await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
       data: { type: "saml-settings", attributes: { enabled: false } },
     });
-    const response = await app.handle(new Request("http://terrence.test/users/saml/auth"));
-    expect(response.status).toBe(404);
-    await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
-      data: { type: "saml-settings", attributes: { enabled: true } },
-    });
+    try {
+      const response = await app.handle(new Request("http://terrence.test/users/saml/auth"));
+      expect(response.status).toBe(404);
+    } finally {
+      await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
+        data: { type: "saml-settings", attributes: { enabled: true } },
+      });
+    }
   });
 
   test("accepts a valid signed response, provisions a user, and issues a browser session", async () => {
-    const samlResponse = buildSignedSamlResponse({
+    const response = await validAcs({
       username: `alice-${suffix}`,
       email: `alice-${suffix}@example.com`,
     });
-    const response = await app.handle(samlAcsRequest(samlResponse));
     expect(response.status).toBe(200);
     expect(response.headers.has("Set-Cookie")).toBe(true);
     expect((await response.text())).toContain("You are signed in");
@@ -153,10 +177,7 @@ describe("SAML SSO flow", () => {
 
   test("issues a short-lived API token for the CLI flow via RelayState", async () => {
     const before = Date.now();
-    const response = await app.handle(samlAcsRequest(
-      buildSignedSamlResponse({ username: `cli-${suffix}`, email: `cli-${suffix}@example.com` }),
-      "api",
-    ));
+    const response = await validAcs({ username: `cli-${suffix}`, email: `cli-${suffix}@example.com` }, "api");
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("sso-token");
@@ -173,17 +194,11 @@ describe("SAML SSO flow", () => {
   });
 
   test("returns JSON token when the ACS is called with an API Accept header", async () => {
-    const response = await app.handle(new Request("http://terrence.test/users/saml/auth", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: new URLSearchParams({
-        SAMLResponse: buildSignedSamlResponse({ username: `json-${suffix}`, email: `json-${suffix}@example.com` }),
-        RelayState: "cli",
-      }).toString(),
-    }));
+    const response = await validAcs(
+      { username: `json-${suffix}`, email: `json-${suffix}@example.com` },
+      "cli",
+      { Accept: "application/json" },
+    );
     expect(response.status).toBe(200);
     const json = await response.json() as { data: { attributes: { token: string; "expired-at": string } } };
     expect(json.data.attributes.token).toMatch(/^user-/);
@@ -191,10 +206,10 @@ describe("SAML SSO flow", () => {
   });
 
   test("links an existing local account by matching email", async () => {
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: `local-${suffix}`,
       email: "conflict@example.com",
-    })));
+    });
     expect(response.status).toBe(200);
     const linked = await db.query.users.findFirst({ where: eq(users.id, orgUserId) });
     expect(linked?.ssoProvider).toBe("saml");
@@ -209,10 +224,10 @@ describe("SAML SSO flow", () => {
       email: `other-${suffix}@example.com`,
       passwordHash: "unused",
     });
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: `other-${suffix}`,
       email: `ssonew-${suffix}@example.com`,
-    })));
+    });
     expect(response.status).toBe(409);
     expect(await response.text()).toContain("already in use");
     const notTakenOver = await db.query.users.findFirst({ where: eq(users.email, `ssonew-${suffix}@example.com`) });
@@ -220,13 +235,12 @@ describe("SAML SSO flow", () => {
   });
 
   test("rejects an invalid signature", async () => {
-    const samlResponse = buildSignedSamlResponse({
+    const response = await validAcs({
       username: `bad-sig-${suffix}`,
       email: `bad-sig-${suffix}@example.com`,
       privateKey: IDP_OLD_KEY,
       publicCert: IDP_OLD_CERT,
     });
-    const response = await app.handle(samlAcsRequest(samlResponse));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("signature");
   });
@@ -237,12 +251,12 @@ describe("SAML SSO flow", () => {
     await db.update(samlSettings).set({ idpCert: IDP_CERT, oldIdpCert: IDP_OLD_CERT, updatedAt: Date.now() })
       .where(eq(samlSettings.id, "saml"));
     try {
-      const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+      const response = await validAcs({
         username: `rotate-${suffix}`,
         email: `rotate-${suffix}@example.com`,
         privateKey: IDP_OLD_KEY,
         publicCert: IDP_OLD_CERT,
-      })));
+      });
       expect(response.status).toBe(200);
     } finally {
       // Restore so later tests that sign with the old key still reject.
@@ -253,32 +267,41 @@ describe("SAML SSO flow", () => {
 
   test("rejects an expired assertion", async () => {
     const minutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: `expired-${suffix}`,
       email: `expired-${suffix}@example.com`,
       notBefore: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
       notOnOrAfter: minutesAgo,
-    })));
+    });
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("expired");
   });
 
   test("rejects an assertion for a different audience", async () => {
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: `aud-${suffix}`,
       email: `aud-${suffix}@example.com`,
       audience: "https://other.example.com/metadata",
-    })));
+    });
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("audience");
   });
 
-  test("maps groups to teams and the owners role", async () => {
+  test("rejects an unsolicited assertion without signed InResponseTo", async () => {
     const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+      username: `unsolicited-${suffix}`,
+      email: `unsolicited-${suffix}@example.com`,
+    })));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("confirmation");
+  });
+
+  test("maps groups to teams and the owners role", async () => {
+    const response = await validAcs({
       username: `grouped-${suffix}`,
       email: `grouped-${suffix}@example.com`,
       groups: ["admins", "developers"],
-    })));
+    });
     expect(response.status).toBe(200);
     const grouped = await db.query.users.findFirst({ where: eq(users.username, `grouped-${suffix}`) });
     expect(grouped).not.toBeUndefined();
@@ -293,11 +316,11 @@ describe("SAML SSO flow", () => {
   });
 
   test("promotes a user to site admin when the site-admin attribute matches", async () => {
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: `siteadmin-${suffix}`,
       email: `siteadmin-${suffix}@example.com`,
       siteAdmin: "site-admins",
-    })));
+    });
     expect(response.status).toBe(200);
     const promoted = await db.query.users.findFirst({ where: eq(users.username, `siteadmin-${suffix}`) });
     expect(promoted?.isSiteAdmin).toBeTrue();
@@ -307,20 +330,20 @@ describe("SAML SSO flow", () => {
   test("demotes a SAML-sourced site admin when the attribute stops matching", async () => {
     const adminUsername = `revoked-${suffix}`;
     // First login includes the site-admin attribute and elevates the account.
-    const first = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const first = await validAcs({
       username: adminUsername,
       email: `${adminUsername}@example.com`,
       siteAdmin: "site-admins",
-    })));
+    });
     expect(first.status).toBe(200);
     let admin = await db.query.users.findFirst({ where: eq(users.username, adminUsername) });
     expect(admin?.isSiteAdmin).toBeTrue();
 
     // Next login omits the attribute; the SAML-sourced grant must be revoked.
-    const second = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const second = await validAcs({
       username: adminUsername,
       email: `${adminUsername}@example.com`,
-    })));
+    });
     expect(second.status).toBe(200);
     admin = await db.query.users.findFirst({ where: eq(users.username, adminUsername) });
     expect(admin?.isSiteAdmin).toBeFalse();
@@ -338,10 +361,10 @@ describe("SAML SSO flow", () => {
       isSiteAdmin: true,
     });
     // Email-links to the existing local admin, but ssoSiteAdmin stays false.
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
+    const response = await validAcs({
       username: localAdminUsername,
       email: `${localAdminUsername}@example.com`,
-    })));
+    });
     expect(response.status).toBe(200);
     const localAdmin = await db.query.users.findFirst({ where: eq(users.id, localAdminId) });
     expect(localAdmin?.isSiteAdmin).toBeTrue();
@@ -360,7 +383,7 @@ describe("SAML SSO flow", () => {
   test("revokes the local session on IdP-initiated logout", async () => {
     // Sign in first to get a browser refresh session.
     const options = { username: `slo-${suffix}`, email: `slo-${suffix}@example.com` };
-    const login = await app.handle(samlAcsRequest(buildSignedSamlResponse(options)));
+    const login = await validAcs(options);
     expect(login.status).toBe(200);
     const setCookie = login.headers.get("Set-Cookie") ?? "";
     expect(setCookie).toContain("terrence_refresh=");
@@ -375,8 +398,11 @@ describe("SAML SSO flow", () => {
     // An IdP-initiated LogoutRequest (signed) clears the session.
     const logoutResponse = await app.handle(new Request("http://terrence.test/users/saml/logout", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest() }).toString(),
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: `terrence_refresh=${refreshToken}`,
+      },
+      body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest(options.username) }).toString(),
     }));
     expect(logoutResponse.status).toBe(200);
     expect(await logoutResponse.text()).toContain("LogoutResponse");
