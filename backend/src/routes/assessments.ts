@@ -75,6 +75,23 @@ function assessmentResource(result: Assessment): Record<string, unknown> {
   };
 }
 
+type CheckResult = DeepReadonly<typeof assessmentCheckResults.$inferSelect>;
+
+function checkResultResource(check: CheckResult): Record<string, unknown> {
+  return {
+    id: check.id,
+    type: "check-results",
+    attributes: {
+      address: check.address,
+      kind: check.kind,
+      status: check.status,
+      message: check.message,
+      detail: check.detail,
+      "created-at": new Date(check.createdAt).toISOString(),
+    },
+  };
+}
+
 async function findAuthorizedAssessment(
   id: string,
   userId: string | undefined,
@@ -133,18 +150,7 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
       where: eq(assessmentCheckResults.assessmentResultId, id),
     });
     return {
-      data: checks.map((check: DeepReadonly<typeof assessmentCheckResults.$inferSelect>): Record<string, unknown> => ({
-        id: check.id,
-        type: "check-results",
-        attributes: {
-          address: check.address,
-          kind: check.kind,
-          status: check.status,
-          message: check.message,
-          detail: check.detail,
-          "created-at": new Date(check.createdAt).toISOString(),
-        },
-      })),
+      data: checks.map((check: CheckResult): Record<string, unknown> => checkResultResource(check)),
     };
   })
   .get("/api/v2/runs/:run_id/check-results", async (context: ParamContext): Promise<unknown> => {
@@ -154,18 +160,7 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
       where: eq(assessmentCheckResults.runId, runId),
     });
     return {
-      data: checks.map((check: DeepReadonly<typeof assessmentCheckResults.$inferSelect>): Record<string, unknown> => ({
-        id: check.id,
-        type: "check-results",
-        attributes: {
-          address: check.address,
-          kind: check.kind,
-          status: check.status,
-          message: check.message,
-          detail: check.detail,
-          "created-at": new Date(check.createdAt).toISOString(),
-        },
-      })),
+      data: checks.map((check: CheckResult): Record<string, unknown> => checkResultResource(check)),
     };
   })
   .get("/api/v2/assessment-results/:assessment_result_id/json-output", async (context: ParamContext): Promise<unknown> =>

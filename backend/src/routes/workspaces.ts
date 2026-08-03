@@ -50,6 +50,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Guard against ReDoS-prone patterns (e.g. nested quantified groups such as
+ * `(a+)+`) that could make regex evaluation catastrophic on untrusted Git tag
+ * names. Also surfaced as a bounded validation for the tags-regex setting.
+ */
+function hasNestedQuantifiers(pattern: string): boolean {
+  const openGroups: boolean[] = [];
+  let inClass = false;
+  let escaped = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index] ?? "";
+    if (escaped) { escaped = false; continue; }
+    if (char === "\\") { escaped = true; continue; }
+    if (inClass) {
+      if (char === "]") inClass = false;
+      continue;
+    }
+    if (char === "[") { inClass = true; continue; }
+    if (char === "(") { openGroups.push(false); continue; }
+    if (char === ")") {
+      const nested = openGroups.pop() ?? false;
+      const next = pattern[index + 1] ?? "";
+      if (nested && (next === "*" || next === "+" || next === "?")) return true;
+      continue;
+    }
+    if (char === "*" || char === "+" || char === "?" || char === "{") {
+      if (openGroups.length > 0) openGroups[openGroups.length - 1] = true;
+    }
+  }
+  return false;
+}
+
+function isValidTagsRegex(pattern: string): boolean {
+  if (pattern.length > 256) return false;
+  let compiled: RegExp;
+  try {
+    compiled = new RegExp(pattern);
+  } catch {
+    return false;
+  }
+  if (hasNestedQuantifiers(pattern)) return false;
+  // Reject excessive alternation fan-out that can also degrade matching.
+  if ((compiled.source.match(/\|/g) ?? []).length > 100) return false;
+  return true;
+}
+
 function stringValues(value: unknown): readonly string[] {
   if (typeof value === "string") return [value];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -293,7 +339,7 @@ async function normalizeVcsRepo(
     : typeof tagsRegexValue === "string" ? tagsRegexValue : existing?.tagsRegex;
   if (tagsRegex !== undefined) {
     if (tagsRegex.length > 256) return { error: "tags-regex must be at most 256 characters" };
-    try { new RegExp(tagsRegex); } catch { return { error: "tags-regex must be a valid regular expression" }; }
+    if (!isValidTagsRegex(tagsRegex)) return { error: "tags-regex must be a valid, non-pathological regular expression" };
   }
   const ingressValue = raw["ingress-submodules"] ?? raw.ingressSubmodules;
   if (ingressValue !== undefined && typeof ingressValue !== "boolean") {
@@ -339,12 +385,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (search !== undefined && search !== "") conditions.push(like(workspaces.name, `%${search}%`));
     const tags = csv("search[tags]");
     if (tags.length > 0) {
-      const workspaceIdsByTag = await Promise.all(tags.map(async (tag): Promise<string[]> =>
-        (await db.query.workspaceTags.findMany({
-          where: eq(workspaceTags.key, tag),
-          columns: { workspaceId: true },
-        })).map((binding: Readonly<{ workspaceId: string }>): string => binding.workspaceId)));
-      for (const workspaceIds of workspaceIdsByTag) {
+      const tagRows = await db.query.workspaceTags.findMany({
+        where: inArray(workspaceTags.key, [...new Set(tags)]),
+        columns: { key: true, workspaceId: true },
+      });
+      const idsByTag = new Map<string, string[]>();
+      for (const row of tagRows) {
+        const ids = idsByTag.get(row.key);
+        if (ids === undefined) idsByTag.set(row.key, [row.workspaceId]);
+        else ids.push(row.workspaceId);
+      }
+      for (const tag of tags) {
+        const workspaceIds = idsByTag.get(tag) ?? [];
         conditions.push(workspaceIds.length > 0
           ? inArray(workspaces.id, [...new Set(workspaceIds)])
           : eq(workspaces.id, "__no_matching_workspace__"));

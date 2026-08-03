@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
   decodeStatePayload,
+  isUniqueConstraintError,
   parseStatePayload,
+  parseTerraformStatePayload,
+  tokenExpiry,
   validVariableAttributes,
   validVariableSetVariableAttributes,
   validVariableSetAttributes,
@@ -146,5 +149,129 @@ describe("validVariableSetAttributes", () => {
 
   it("accepts null description", () => {
     expect(validVariableSetAttributes({ name: "x", description: null })).toBeTrue();
+  });
+});
+
+describe("isUniqueConstraintError", () => {
+  it("matches an error with the SQLITE_CONSTRAINT_UNIQUE code", () => {
+    expect(isUniqueConstraintError({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: users.email" })).toBeTrue();
+  });
+
+  it("matches a UNIQUE constraint message on the error itself", () => {
+    expect(isUniqueConstraintError(new Error("UNIQUE constraint failed: workspaces.name"))).toBeTrue();
+  });
+
+  it("matches a UNIQUE constraint surfaced on the error cause", () => {
+    expect(isUniqueConstraintError({ cause: { code: "SQLITE_CONSTRAINT_UNIQUE" } })).toBeTrue();
+    expect(isUniqueConstraintError({ cause: new Error("UNIQUE constraint failed: tokens.description") })).toBeTrue();
+  });
+
+  it("rejects unrelated errors and values", () => {
+    expect(isUniqueConstraintError(new Error("no such table: workspaces"))).toBeFalse();
+    expect(isUniqueConstraintError({ code: "SQLITE_CONSTRAINT_FOREIGNKEY" })).toBeFalse();
+    expect(isUniqueConstraintError(null)).toBeFalse();
+    expect(isUniqueConstraintError("boom")).toBeFalse();
+    expect(isUniqueConstraintError(undefined)).toBeFalse();
+  });
+});
+
+describe("tokenExpiry", () => {
+  it("returns null for undefined and null", () => {
+    expect(tokenExpiry(undefined)).toBeNull();
+    expect(tokenExpiry(null)).toBeNull();
+  });
+
+  it("returns NaN for non-string or non-date-shaped input", () => {
+    expect(tokenExpiry(12345)).toBeNaN();
+    expect(tokenExpiry({})).toBeNaN();
+    expect(tokenExpiry("tomorrow")).toBeNaN();
+    expect(tokenExpiry("2026-12-31")).toBeNaN();
+  });
+
+  it("parses an ISO-8601 date string", () => {
+    expect(tokenExpiry("2026-12-31T23:59:59Z")).toBe(Date.parse("2026-12-31T23:59:59Z"));
+  });
+
+  it("parses a date string without a timezone", () => {
+    const parsed = tokenExpiry("2026-12-31T23:59:59");
+    expect(parsed).not.toBeNaN();
+    expect(parsed).toBe(Date.parse("2026-12-31T23:59:59"));
+  });
+});
+
+describe("parseTerraformStatePayload", () => {
+  const validState = {
+    version: 4,
+    serial: 1,
+    lineage: "abc-123",
+    terraform_version: "1.9.0",
+    outputs: {},
+    resources: [{
+      mode: "managed",
+      type: "aws_instance",
+      name: "web",
+      provider: "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      instances: [{ schema_version: 0, sensitive_attributes: [], dependencies: [], attributes: {} }],
+    }],
+  };
+
+  it("accepts a valid v4 state object", () => {
+    expect(parseTerraformStatePayload(JSON.stringify(validState))).toEqual(validState);
+  });
+
+  it("accepts optional instance fields", () => {
+    const state = {
+      ...validState,
+      resources: [{
+        mode: "data",
+        type: "aws_ami",
+        name: "ubuntu",
+        provider: "provider[\"registry.terraform.io/hashicorp/aws\"]",
+        instances: [{ attributes: {} }],
+      }],
+    };
+    expect(parseTerraformStatePayload(JSON.stringify(state))).not.toBeNull();
+  });
+
+  it("rejects a state whose version is not 4", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, version: 3 }))).toBeNull();
+  });
+
+  it("rejects a non-integer or negative serial", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, serial: 1.5 }))).toBeNull();
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, serial: -1 }))).toBeNull();
+  });
+
+  it("rejects a missing or empty lineage", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, lineage: "" }))).toBeNull();
+    const { lineage: _lineage, ...noLineage } = validState;
+    expect(parseTerraformStatePayload(JSON.stringify(noLineage))).toBeNull();
+  });
+
+  it("rejects a non-array resources field", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: {} }))).toBeNull();
+  });
+
+  it("rejects resources with invalid mode or missing fields", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], mode: "import" }] }))).toBeNull();
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], name: "" }] }))).toBeNull();
+  });
+
+  it("rejects instances with a non-integer schema_version", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({
+      ...validState,
+      resources: [{ ...validState.resources[0], instances: [{ schema_version: "nope" }] }],
+    }))).toBeNull();
+  });
+
+  it("rejects a non-string terraform_version and a non-object outputs", () => {
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, terraform_version: 42 }))).toBeNull();
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, outputs: [] }))).toBeNull();
+  });
+
+  it("rejects invalid JSON and non-object payloads", () => {
+    expect(parseTerraformStatePayload("not-json")).toBeNull();
+    expect(parseTerraformStatePayload(null)).toBeNull();
+    expect(parseTerraformStatePayload("[]")).toBeNull();
   });
 });

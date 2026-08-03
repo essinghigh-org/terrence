@@ -1,10 +1,29 @@
-import { join, resolve } from "path";
+import { isAbsolute, join, relative, resolve, sep } from "path";
 import { mkdir, exists, chmod, unlink, readdir, rm } from "fs/promises";
 import { spawn } from "bun";
 import { log } from "./lib/log";
 
 const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
 const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
+
+/** Reject a single archive entry whose normalized path escapes the extraction
+ * root via an absolute path, a drive letter, or a `..` traversal segment. */
+function zipEntryEscapes(entry: string): boolean {
+  const normalized = entry.replaceAll("\\", "/");
+  return normalized.startsWith("/")
+    || /^[A-Za-z]:/.test(normalized)
+    || normalized.split("/").some((segment): boolean => segment === "..");
+}
+
+/** Inspect a Zip archive's member list before extracting so a potentially
+ * malicious entry can never be written outside the target directory. Returns
+ * the member names, or `null` if the listing could not be produced. */
+async function listZipEntries(zipPath: string): Promise<string[] | null> {
+  const listingProc = spawn(["unzip", "-Z1", zipPath], { stdout: "pipe", stderr: "pipe" });
+  const listingText = await new Response(listingProc.stdout).text();
+  if ((await listingProc.exited) !== 0) return null;
+  return listingText.split("\n").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+}
 
 export function validateVersion(version: string): boolean {
   if (version === "") return false;
@@ -299,28 +318,38 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
 
     await Bun.write(zipPath, arrayBuffer);
 
+    // Zip Slip protection: verify the archive's member list BEFORE extraction
+    // so a malicious entry can never be written outside the target directory.
+    const zipEntries = await listZipEntries(zipPath);
+    if (zipEntries === null || zipEntries.some(zipEntryEscapes)) {
+      await rm(targetDir, { recursive: true, force: true });
+      throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
+    }
+
     let exitCode = -1;
     try {
       const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
       exitCode = await unzipProc.exited;
-      // Zip Slip protection: verify no extracted file escaped the target directory
+      // Defense in depth: confirm every extracted path still resolves under the
+      // target directory (path containment, not a string prefix check).
       if (exitCode === 0) {
         const resolvedTarget = resolve(targetDir);
         const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
-        for (const entry of entries) {
-          const fullPath = join(targetDir, entry);
-          const resolved = resolve(fullPath);
-          if (!resolved.startsWith(resolvedTarget)) {
-            try {
-              await rm(targetDir, { recursive: true, force: true });
-            } catch {
-              // Cleanup failure is secondary — Zip Slip error is primary
-            }
-            throw new Error(`Zip Slip detected: extracted path ${resolved} is outside target directory`);
+        const escaped = entries.some((entry): boolean => {
+          const relativePath = relative(resolvedTarget, resolve(join(targetDir, entry)));
+          return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+        });
+        if (escaped) {
+          exitCode = -1;
+          try {
+            await rm(targetDir, { recursive: true, force: true });
+          } catch {
+            // Cleanup failure is secondary — Zip Slip error is primary
           }
         }
       }
     } catch (spawnErr: unknown) {
+      exitCode = -1;
       const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
       console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
     }

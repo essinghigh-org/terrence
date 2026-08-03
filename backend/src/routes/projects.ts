@@ -309,7 +309,10 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const projectWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.projectId, projectId) });
     await db.transaction(async (tx): Promise<void> => {
       await tx.update(projects).set(updates).where(eq(projects.id, projectId));
-      // ponytail: project setting changes are rare; switch to set-based JSON SQL if fan-out becomes hot.
+      // Batch the per-workspace setting fan-out: workspaces that resolve to the
+      // same resulting update are written with one query keyed by an IN clause,
+      // instead of updating each workspace one-by-one.
+      const updatesById = new Map<string, Partial<typeof workspaces.$inferInsert>>();
       for (const workspace of projectWorkspaces) {
         const workspaceUpdates: Partial<typeof workspaces.$inferInsert> = {};
         const overwrites = workspace.settingOverwrites ?? {};
@@ -325,8 +328,18 @@ export const projectRoutes = new Elysia({ name: "projects" })
           workspaceUpdates.autoDestroyActivityDuration = settings.value.autoDestroyActivityDuration;
         }
         if (Object.keys(workspaceUpdates).length > 0) {
-          await tx.update(workspaces).set(workspaceUpdates).where(eq(workspaces.id, workspace.id));
+          updatesById.set(workspace.id, workspaceUpdates);
         }
+      }
+      const groups = new Map<string, { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }>();
+      for (const [workspaceId, update] of updatesById) {
+        const key = JSON.stringify(update);
+        const group = groups.get(key);
+        if (group === undefined) groups.set(key, { ids: [workspaceId], update });
+        else group.ids.push(workspaceId);
+      }
+      for (const group of groups.values()) {
+        await tx.update(workspaces).set(group.update).where(inArray(workspaces.id, group.ids));
       }
     });
     const updated = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });

@@ -782,18 +782,12 @@ async function executeRunTasks(
       await db.update(runTaskResults).set({ status, message, url: resultUrl }).where(eq(runTaskResults.id, resultId));
     }
     if (status === "running") {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const latest = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
-        if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
-          status = latest.status;
-          message = latest.message;
-          resultUrl = latest.url;
-          break;
-        }
-        await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())));
-      }
-      if (status === "running") {
+      const latest = await waitForTaskSettlement(resultId, timeoutMs);
+      if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
+        status = latest.status;
+        message = latest.message;
+        resultUrl = latest.url;
+      } else {
         status = "failed";
         message = `Run task callback timed out after ${String(timeoutMs)}ms`;
         await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
@@ -806,6 +800,30 @@ async function executeRunTasks(
   }
 
   return proceed;
+}
+
+const RUN_TASK_POLL_INTERVAL_MS = 100;
+
+/**
+ * Poll the run-task table until the caller (or a callback mechanism) records a
+ * settled status. This worker has no pub/sub or Redis dependency, so a bounded,
+ * fixed-interval poll is the only signal source for an external task CLI that
+ * does not write back via the REST callback. The loop is strictly bounded by
+ * `timeoutMs`, and the interval is kept constant to avoid hot-looping the DB.
+ */
+async function waitForTaskSettlement(
+  resultId: string,
+  timeoutMs: number,
+): Promise<Readonly<{ status: string; message: string | null; url: string | null }> | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const latest = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
+    if (latest !== undefined && ["passed", "failed"].includes(latest.status)) return latest;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await Bun.sleep(Math.min(RUN_TASK_POLL_INTERVAL_MS, remaining));
+  }
+  return undefined;
 }
 
 export async function executeRun(runId: string): Promise<void> {

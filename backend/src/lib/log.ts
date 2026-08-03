@@ -7,6 +7,21 @@ function isLogLevelEnabled(level: LogLevel): boolean {
   return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
 }
 
+/** Serialize log meta defensively: BigInt throws in JSON.stringify and
+ * circular references would otherwise crash the logger (and, with it, the
+ * request handler that called it). */
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, entry) => {
+    if (typeof entry === "bigint") return entry.toString();
+    if (entry !== null && typeof entry === "object") {
+      if (seen.has(entry)) return "[Circular]";
+      seen.add(entry);
+    }
+    return entry;
+  });
+}
+
 function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
   if (!isLogLevelEnabled(level)) return;
   const entry: Record<string, unknown> = {
@@ -15,13 +30,18 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
     message,
     ...(meta !== undefined ? { ...meta } : {}),
   };
-  const output = JSON.stringify(entry);
-  if (level === "error") {
-    console.error(output);
-  } else if (level === "warn") {
-    console.warn(output);
-  } else {
-    console.log(output);
+  const output = safeJsonStringify(entry);
+  // Logging is best-effort: a failing stream must not crash the process.
+  try {
+    if (level === "error") {
+      console.error(output);
+    } else if (level === "warn") {
+      console.warn(output);
+    } else {
+      console.log(output);
+    }
+  } catch {
+    // Swallow: logging failures must never propagate to the caller.
   }
 }
 

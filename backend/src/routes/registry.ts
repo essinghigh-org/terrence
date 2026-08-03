@@ -60,6 +60,27 @@ type DeepReadonly<T> = T extends null | undefined
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
+function registryNotFound(set: SetObj): Record<string, unknown> {
+  (set as { status: number }).status = 404;
+  return { errors: [{ status: "404", title: "Not Found" }] };
+}
+
+/** Resolve a registry module by its namespace/name/provider triple and verify
+ * the caller may read it, so protocol endpoints share one lookup+guard path. */
+async function findRegistryModule(
+  namespace: string,
+  name: string,
+  provider: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+): Promise<ModItem | undefined> {
+  const mod = await db.query.registryModules.findFirst({
+    where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+  });
+  if (mod === undefined || !(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId))) return undefined;
+  return mod;
+}
+
 type ParamCtx = Readonly<{
   readonly params: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
@@ -961,8 +982,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)) });
-    if (mod === undefined || !(await checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined) return registryNotFound(set);
     const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
     return { modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }] };
   })
@@ -971,8 +992,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)) });
-    if (mod === undefined || !(await checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
@@ -982,8 +1003,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)) });
-    if (mod === undefined || !(await checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set.headers as Record<string, string | number>)["X-Terraform-Get"] = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
@@ -1003,8 +1024,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)) });
-    if (mod === undefined || !(await checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined) return registryNotFound(set);
     const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id), orderBy: [desc(registryModuleVersions.createdAt)] });
     const latestVersion = verList[0]?.version ?? "0.0.0";
     const status = verList[0]?.status ?? "pending";

@@ -1337,14 +1337,18 @@ async function markConfigurationVersionsErrored(configurationVersionIds: readonl
     .where(inArray(configurationVersions.id, [...configurationVersionIds]));
   const affectedRuns = await db.query.runs.findMany({
     where: inArray(runs.configurationVersionId, [...configurationVersionIds]),
-    columns: { id: true, statusTimestamps: true },
+    columns: { id: true },
   });
   const erroredAt = new Date().toISOString();
-  for (const run of affectedRuns) {
-    await db.update(runs).set({
-      status: "errored",
-      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": erroredAt },
-    }).where(eq(runs.id, run.id));
-    void reportRunVcsStatus(run.id, "errored");
+  if (affectedRuns.length > 0) {
+    await db.update(runs)
+      .set({
+        status: "errored",
+        statusTimestamps: sql`json_patch(coalesce(${runs.statusTimestamps}, '{}'), json_object('errored-at', ${erroredAt}))`,
+      })
+      .where(inArray(runs.id, affectedRuns.map((run): string => run.id)));
+    for (const run of affectedRuns) {
+      void reportRunVcsStatus(run.id, "errored");
+    }
   }
 }
