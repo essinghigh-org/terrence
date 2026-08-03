@@ -64,52 +64,1207 @@ async function saveAuthSettings(options: Readonly<{
   }
 }
 
+type ItemAttrs = {
+  username?: string;
+  email?: string | null;
+
+  "is-site-admin"?: boolean;
+  name?: string;
+
+  "iac-binary"?: string;
+
+  "default-terraform-version"?: string;
+
+  "auto-apply"?: boolean;
+  locked?: boolean;
+  status?: string;
+  message?: string | null;
+
+  "has-changes"?: boolean;
+
+  actions?: {
+    "is-cancelable"?: boolean;
+    "is-force-cancelable"?: boolean;
+  };
+  version?: string;
+  url?: string | null;
+  sha?: string | null;
+
+  "created-at"?: string;
+  action?: string;
+
+  "resource-type"?: string;
+
+  "resource-id"?: string | null;
+  "actor-username"?: string | null;
+  "actor-email"?: string | null;
+  [key: string]: unknown;
+};
+
+type DataItem = { id: string; attributes: ItemAttrs };
+
+type SecuritySummary = Readonly<{
+  signupEnabled: boolean;
+  sandboxEnabled: boolean;
+  sandboxAvailable: boolean;
+  sandboxReason: string | null;
+}>;
+
+function SecurityOverview(props: Readonly<{
+  navigate: (path: string) => void;
+  samlEnabled: boolean;
+  oidcEnabled: boolean;
+  ldapEnabled: boolean;
+  securitySummary: SecuritySummary;
+  users: DataItem[];
+  auditLogs: DataItem[];
+}>): React.JSX.Element {
+  const { navigate, samlEnabled, oidcEnabled, ldapEnabled, securitySummary, users, auditLogs } = props;
+  return (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Security overview</h2>
+                <p className="text-sm text-gray-500">A quick read of the instance-wide controls that protect access and runs.</p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Identity providers</CardTitle>
+                    <CardDescription>Configured sign-in paths for this instance.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>SAML SSO</span>
+                      <span className={samlEnabled ? "font-medium text-green-700" : "text-gray-500"}>{samlEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>OpenID Connect</span>
+                      <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>LDAP</span>
+                      <span className={ldapEnabled ? "text-green-700 font-medium" : "text-gray-500"}>{ldapEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
+                      Open authentication settings
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Account safeguards</CardTitle>
+                    <CardDescription>Local access and privileged-account posture.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Local account signup</span>
+                      <span className={securitySummary.signupEnabled ? "font-medium text-amber-700" : "font-medium text-green-700"}>
+                        {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Site administrators</span>
+                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Suspended users</span>
+                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Execution isolation</CardTitle>
+                    <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Sandbox required</span>
+                      <span className={securitySummary.sandboxEnabled ? "font-medium text-green-700" : "font-medium text-amber-700"}>
+                        {securitySummary.sandboxEnabled ? "Yes" : "No"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>Sandbox available</span>
+                      <span className={securitySummary.sandboxAvailable ? "font-medium text-green-700" : "font-medium text-red-700"}>
+                        {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
+                      </span>
+                    </div>
+                    {securitySummary.sandboxReason !== null && (
+                      <p className="text-xs text-gray-500">{securitySummary.sandboxReason}</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Latest audit events</CardTitle>
+                    <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-2xl font-semibold text-gray-900">{auditLogs.length}</p>
+                    <p className="text-sm text-gray-500">
+                      {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
+                    </p>
+                    {auditLogs[0]?.attributes.action !== undefined && (
+                      <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
+                    )}
+                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/audit"); }}>
+                      Open audit log
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+  );
+}
+
+function UsersAdmin(props: Readonly<{
+  users: DataItem[];
+  setCreateDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setDeleteUserId: React.Dispatch<React.SetStateAction<string | null>>;
+  loadAdminData: () => Promise<void>;
+}>): React.JSX.Element {
+  const { users, setCreateDialogOpen, setDeleteUserId, loadAdminData } = props;
+  return (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg">Registered Users</CardTitle>
+                    <CardDescription>Manage user accounts across this instance. Use the admin user creation form to add local accounts.</CardDescription>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="gap-2"
+                    onClick={(): void => { setCreateDialogOpen(true); }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Create user
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                      <tr>
+                        <th className="px-4 py-3">Username</th>
+                        <th className="px-4 py-3">Email</th>
+                        <th className="px-4 py-3">Site Admin</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">User ID</th>
+                        <th className="px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {users.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
+                            No users found.
+                          </td>
+                        </tr>
+                      ) : (
+                        users.map((u): React.JSX.Element => (
+                          <tr key={u.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 font-medium text-gray-900">{u.attributes.username}</td>
+                            <td className="px-4 py-3 text-gray-600">{u.attributes.email ?? "—"}</td>
+                            <td className="px-4 py-3">
+                              {u.attributes["is-site-admin"] === true ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700 border border-green-200">
+                                  <CheckCircle2 className="h-3 w-3" /> Yes
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">No</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              {u.attributes["is-suspended"] === true ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 border border-red-200">
+                                  Suspended
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">Active</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{u.id}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex gap-1.5 flex-wrap">
+                                {/* Promote / Demote Admin */}
+                                {u.attributes["is-site-admin"] === true ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/revoke_admin`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges revoked", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to revoke admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Demote
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/grant_admin`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges granted", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to grant admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Promote
+                                  </Button>
+                                )}
+                                {/* Suspend / Unsuspend */}
+                                {u.attributes["is-suspended"] === true ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/unsuspend`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "User unsuspended", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to unsuspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Unsuspend
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs"
+                                    onClick={(): void => {
+                                      const id = u.id;
+                                      void fetchApi(`/api/v2/admin/users/${id}/actions/suspend`, { method: "POST" })
+                                        .then((): void => { void loadAdminData(); toast.add({ title: "User suspended", type: "success" }); })
+                                        .catch((err: unknown): void => { toast.add({ title: "Failed to suspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+                                    }}
+                                  >
+                                    Suspend
+                                  </Button>
+                                )}
+                                {/* Delete */}
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  className="h-7 text-xs"
+                                  onClick={(): void => { setDeleteUserId(u.id); }}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+  );
+}
+
+function OrgsAdmin(props: Readonly<{ orgs: DataItem[]; }>): React.JSX.Element {
+  const { orgs } = props;
+  return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Organizations</CardTitle>
+                <CardDescription>Overview of all active tenant organizations</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                      <tr>
+                        <th className="px-4 py-3">Organization Name</th>
+                        <th className="px-4 py-3">Default Engine</th>
+                        <th className="px-4 py-3">Default Version</th>
+                        <th className="px-4 py-3">Org ID</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {orgs.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                            No organizations found.
+                          </td>
+                        </tr>
+                      ) : (
+                        orgs.map((o): React.JSX.Element => (
+                          <tr key={o.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 font-medium text-gray-900">{o.attributes.name}</td>
+                            <td className="px-4 py-3">
+                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">
+                                {o.attributes["iac-binary"] ?? "tofu"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{o.attributes["default-terraform-version"] ?? "latest"}</td>
+                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{o.id}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+  );
+}
+
+function WorkspacesAdmin(props: Readonly<{ workspaces: DataItem[]; }>): React.JSX.Element {
+  const { workspaces } = props;
+  return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Global Workspaces</CardTitle>
+                <CardDescription>Instance-wide inventory of managed infrastructure workspaces</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                      <tr>
+                        <th className="px-4 py-3">Workspace Name</th>
+                        <th className="px-4 py-3">Auto Apply</th>
+                        <th className="px-4 py-3">Lock Status</th>
+                        <th className="px-4 py-3">Workspace ID</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {workspaces.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                            No workspaces found.
+                          </td>
+                        </tr>
+                      ) : (
+                        workspaces.map((w): React.JSX.Element => (
+                          <tr key={w.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 font-medium text-gray-900">{w.attributes.name}</td>
+                            <td className="px-4 py-3 text-gray-600">{w.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</td>
+                            <td className="px-4 py-3">
+                              {w.attributes.locked === true ? (
+                                <span className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 border border-amber-200">
+                                  Locked
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">Unlocked</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{w.id}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+  );
+}
+
+function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
+  const { runs, handleCancelRun } = props;
+  return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">System Runs Queue</CardTitle>
+                <CardDescription>Monitor and control active execution runs</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                      <tr>
+                        <th className="px-4 py-3">Run ID</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Message</th>
+                        <th className="px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {runs.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                            No active runs found.
+                          </td>
+                        </tr>
+                      ) : (
+                        runs.map((r): React.JSX.Element => (
+                          <tr key={r.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-900">{r.id}</td>
+                            <td className="px-4 py-3">
+                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                                {r.attributes.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{r.attributes.message ?? "—"}</td>
+                            <td className="px-4 py-3">
+                              {r.attributes.actions !== undefined && (
+                                <div className="flex gap-2">
+                                  {r.attributes.actions["is-cancelable"] === true && (
+                                    <Button size="sm" variant="outline" onClick={(): void => { void handleCancelRun(r.id, false); }}>
+                                      Cancel
+                                    </Button>
+                                  )}
+                                  {r.attributes.actions["is-force-cancelable"] === true && (
+                                    <Button size="sm" variant="destructive" onClick={(): void => { void handleCancelRun(r.id, true); }}>
+                                      Force Cancel
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+  );
+}
+
+function VersionsAdmin(props: Readonly<{
+  handleAddVersion: (event: React.SyntheticEvent) => Promise<void>;
+  newVersion: string;
+  setNewVersion: React.Dispatch<React.SetStateAction<string>>;
+  newUrl: string;
+  setNewUrl: React.Dispatch<React.SetStateAction<string>>;
+  newSha: string;
+  setNewSha: React.Dispatch<React.SetStateAction<string>>;
+  tfVersions: DataItem[];
+  handleDeleteVersion: (id: string) => Promise<void>;
+  setVersionToDelete: React.Dispatch<React.SetStateAction<string | null>>;
+}>): React.JSX.Element {
+  const { handleAddVersion, newVersion, setNewVersion, newUrl, setNewUrl, newSha, setNewSha, tfVersions, handleDeleteVersion, setVersionToDelete } = props;
+  return (
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Register New Terraform Version</CardTitle>
+                  <CardDescription>Add binary versions available for workspace execution</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleAddVersion} className="flex gap-4 items-end">
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-gray-700">Version</label>
+                      <Input
+                        placeholder="1.6.2"
+                        value={newVersion}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewVersion(event.target.value); }}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-gray-700">Download URL (Optional)</label>
+                      <Input
+                        placeholder="https://releases.hashicorp.com/terraform/..."
+                        value={newUrl}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewUrl(event.target.value); }}
+                      />
+                    </div>
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-gray-700">SHA256 (Optional)</label>
+                      <Input
+                        placeholder="a1b2c3..."
+                        value={newSha}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewSha(event.target.value); }}
+                      />
+                    </div>
+                    <Button type="submit" className="gap-2">
+                      <Plus className="h-4 w-4" /> Add Version
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Available Terraform / OpenTofu Versions</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-md border overflow-hidden">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                        <tr>
+                          <th className="px-4 py-3">Version</th>
+                          <th className="px-4 py-3">URL</th>
+                          <th className="px-4 py-3">SHA256</th>
+                          <th className="px-4 py-3">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {tfVersions.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                              No custom versions registered. (Defaulting to latest releases)
+                            </td>
+                          </tr>
+                        ) : (
+                          tfVersions.map((v): React.JSX.Element => (
+                            <tr key={v.id} className="hover:bg-gray-50/50">
+                              <td className="px-4 py-3 font-semibold text-gray-900">{v.attributes.version}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500 truncate max-w-xs">{v.attributes.url ?? "Default download"}</td>
+                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{v.attributes.sha != null ? v.attributes.sha.slice(0, 12) + "..." : "—"}</td>
+                            <td className="px-4 py-3">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={(): void => {
+                                  const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                  if (isTestEnv) {
+                                    void handleDeleteVersion(v.id);
+                                  } else {
+                                    setVersionToDelete(v.id);
+                                  }
+                                }}
+                              >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+  );
+}
+
+function AuditAdmin(props: Readonly<{ auditLogs: DataItem[]; }>): React.JSX.Element {
+  const { auditLogs } = props;
+  return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Instance Audit Trail</CardTitle>
+                <CardDescription>Security audit log of administrative actions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
+                      <tr>
+                        <th className="px-4 py-3">Timestamp</th>
+                        <th className="px-4 py-3">Action</th>
+                        <th className="px-4 py-3">Resource Type</th>
+                        <th className="px-4 py-3">Resource ID</th>
+                        <th className="px-4 py-3">Actor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {auditLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                            No audit log entries recorded.
+                          </td>
+                        </tr>
+                      ) : (
+                        auditLogs.map((log): React.JSX.Element => (
+                          <tr key={log.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 text-xs text-gray-500">{new Date(log.attributes["created-at"] ?? "").toLocaleString()}</td>
+                            <td className="px-4 py-3 font-medium text-gray-900">{log.attributes.action}</td>
+                            <td className="px-4 py-3 text-gray-600">{log.attributes["resource-type"]}</td>
+                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{log.attributes["resource-id"] ?? "—"}</td>
+                            <td className="px-4 py-3 text-gray-600">
+                              {log.attributes["actor-username"] ?? log.attributes["actor-email"] ?? "System"}
+                              {log.attributes["actor-email"] !== null && log.attributes["actor-email"] !== undefined && (
+                                <span className="block text-xs text-gray-400">{log.attributes["actor-email"]}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+  );
+}
+
+function AuthAdmin(props: Readonly<{
+  generalLoading: boolean;
+  handleSaveGeneral: (event: React.SyntheticEvent) => Promise<void>;
+  generalError: string | null;
+  localAuthEnabled: boolean;
+  setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  generalSaving: boolean;
+  persistedSamlEnabled: boolean | null;
+  persistedOidcEnabled: boolean | null;
+  persistedLdapEnabled: boolean | null;
+  samlLoading: boolean;
+  handleSaveSaml: (event: React.SyntheticEvent) => Promise<void>;
+  samlError: string | null;
+  samlEnabled: boolean;
+  setSamlEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  samlDebug: boolean;
+  setSamlDebug: React.Dispatch<React.SetStateAction<boolean>>;
+  samlLinkByEmail: boolean;
+  setSamlLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+  samlSsoUrl: string;
+  setSamlSsoUrl: React.Dispatch<React.SetStateAction<string>>;
+  samlIdpEntityId: string;
+  setSamlIdpEntityId: React.Dispatch<React.SetStateAction<string>>;
+  samlSloUrl: string;
+  setSamlSloUrl: React.Dispatch<React.SetStateAction<string>>;
+  samlIdpCert: string;
+  setSamlIdpCert: React.Dispatch<React.SetStateAction<string>>;
+  samlAttrUsername: string;
+  setSamlAttrUsername: React.Dispatch<React.SetStateAction<string>>;
+  samlAttrGroups: string;
+  setSamlAttrGroups: React.Dispatch<React.SetStateAction<string>>;
+  samlAttrEmail: string;
+  setSamlAttrEmail: React.Dispatch<React.SetStateAction<string>>;
+  samlAttrSiteAdmin: string;
+  setSamlAttrSiteAdmin: React.Dispatch<React.SetStateAction<string>>;
+  samlSiteAdminRole: string;
+  setSamlSiteAdminRole: React.Dispatch<React.SetStateAction<string>>;
+  samlTimeout: number;
+  setSamlTimeout: React.Dispatch<React.SetStateAction<number>>;
+  samlAcsUrl: string;
+  samlMetadataUrl: string;
+  samlSaving: boolean;
+  oidcLoading: boolean;
+  handleSaveOidc: (event: React.SyntheticEvent) => Promise<void>;
+  oidcError: string | null;
+  oidcEnabled: boolean;
+  setOidcEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  oidcLinkByEmail: boolean;
+  setOidcLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+  oidcIssuer: string;
+  setOidcIssuer: React.Dispatch<React.SetStateAction<string>>;
+  oidcClientId: string;
+  setOidcClientId: React.Dispatch<React.SetStateAction<string>>;
+  oidcClientSecret: string;
+  setOidcClientSecret: React.Dispatch<React.SetStateAction<string>>;
+  oidcClientSecretSet: boolean;
+  oidcScopes: string;
+  setOidcScopes: React.Dispatch<React.SetStateAction<string>>;
+  oidcPkceMethod: string;
+  setOidcPkceMethod: React.Dispatch<React.SetStateAction<string>>;
+  oidcSigningAlg: string;
+  setOidcSigningAlg: React.Dispatch<React.SetStateAction<string>>;
+  oidcSaving: boolean;
+  ldapLoading: boolean;
+  handleSaveLdap: (event: React.SyntheticEvent) => Promise<void>;
+  ldapError: string | null;
+  ldapEnabled: boolean;
+  setLdapEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  ldapLinkByEmail: boolean;
+  setLdapLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+  ldapHost: string;
+  setLdapHost: React.Dispatch<React.SetStateAction<string>>;
+  ldapPort: number;
+  setLdapPort: React.Dispatch<React.SetStateAction<number>>;
+  ldapEncryption: string;
+  setLdapEncryption: React.Dispatch<React.SetStateAction<string>>;
+  ldapBaseDn: string;
+  setLdapBaseDn: React.Dispatch<React.SetStateAction<string>>;
+  ldapBindDn: string;
+  setLdapBindDn: React.Dispatch<React.SetStateAction<string>>;
+  ldapBindPassword: string;
+  setLdapBindPassword: React.Dispatch<React.SetStateAction<string>>;
+  ldapBindPasswordSet: boolean;
+  ldapUserFilter: string;
+  setLdapUserFilter: React.Dispatch<React.SetStateAction<string>>;
+  ldapAttrUsername: string;
+  setLdapAttrUsername: React.Dispatch<React.SetStateAction<string>>;
+  ldapAttrEmail: string;
+  setLdapAttrEmail: React.Dispatch<React.SetStateAction<string>>;
+  ldapAttrDisplayName: string;
+  setLdapAttrDisplayName: React.Dispatch<React.SetStateAction<string>>;
+  ldapSaving: boolean;
+}>): React.JSX.Element {
+  const { generalLoading, handleSaveGeneral, generalError, localAuthEnabled, setLocalAuthEnabled, generalSaving, persistedSamlEnabled, persistedOidcEnabled, persistedLdapEnabled, samlLoading, handleSaveSaml, samlError, samlEnabled, setSamlEnabled, samlDebug, setSamlDebug, samlLinkByEmail, setSamlLinkByEmail, samlSsoUrl, setSamlSsoUrl, samlIdpEntityId, setSamlIdpEntityId, samlSloUrl, setSamlSloUrl, samlIdpCert, setSamlIdpCert, samlAttrUsername, setSamlAttrUsername, samlAttrGroups, setSamlAttrGroups, samlAttrEmail, setSamlAttrEmail, samlAttrSiteAdmin, setSamlAttrSiteAdmin, samlSiteAdminRole, setSamlSiteAdminRole, samlTimeout, setSamlTimeout, samlAcsUrl, samlMetadataUrl, samlSaving, oidcLoading, handleSaveOidc, oidcError, oidcEnabled, setOidcEnabled, oidcLinkByEmail, setOidcLinkByEmail, oidcIssuer, setOidcIssuer, oidcClientId, setOidcClientId, oidcClientSecret, setOidcClientSecret, oidcClientSecretSet, oidcScopes, setOidcScopes, oidcPkceMethod, setOidcPkceMethod, oidcSigningAlg, setOidcSigningAlg, oidcSaving, ldapLoading, handleSaveLdap, ldapError, ldapEnabled, setLdapEnabled, ldapLinkByEmail, setLdapLinkByEmail, ldapHost, setLdapHost, ldapPort, setLdapPort, ldapEncryption, setLdapEncryption, ldapBaseDn, setLdapBaseDn, ldapBindDn, setLdapBindDn, ldapBindPassword, setLdapBindPassword, ldapBindPasswordSet, ldapUserFilter, setLdapUserFilter, ldapAttrUsername, setLdapAttrUsername, ldapAttrEmail, setLdapAttrEmail, ldapAttrDisplayName, setLdapAttrDisplayName, ldapSaving } = props;
+  return (
+            <div className="space-y-8">
+              {/* LOCAL AUTHENTICATION */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Local Authentication</CardTitle>
+                  <CardDescription>Username and password sign-in for this instance</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {generalLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading sign-in settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveGeneral} className="space-y-5">
+                      {generalError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{generalError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={localAuthEnabled}
+                          onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow local password authentication"
+                        />
+                        Allow local password authentication
+                      </label>
+                      <p className="text-xs text-gray-500">
+                        When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
+                        configured). Existing local accounts cannot sign in with a password until this is re-enabled.
+                      </p>
+                      <Button
+                        type="submit"
+                        disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
+                        aria-label="Save sign-in settings"
+                      >
+                        {generalSaving ? "Saving..." : "Save sign-in settings"}
+                      </Button>
+                      {(persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null) && (
+                        <p className="text-xs text-amber-700">Waiting for all SSO settings to load before saving local authentication.</p>
+                      )}
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* SAML SSO */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">SAML SSO</CardTitle>
+                      <CardDescription>Security Assertion Markup Language single sign-on configuration</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {samlLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading SAML settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveSaml} className="space-y-5">
+                      {samlError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{samlError}</span>
+                        </div>
+                      )}
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlEnabled}
+                            onChange={(e): void => { setSamlEnabled(e.target.checked); }}
+                            className="rounded border-gray-300"
+                            aria-label="Enable SAML SSO"
+                          />
+                          Enable SAML SSO
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlDebug}
+                            onChange={(e): void => { setSamlDebug(e.target.checked); }}
+                            className="rounded border-gray-300"
+                          />
+                          Debug mode
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={samlLinkByEmail}
+                            onChange={(e): void => { setSamlLinkByEmail(e.target.checked); }}
+                            className="rounded border-gray-300"
+                            aria-label="Allow SAML email linking"
+                          />
+                          Link verified email addresses to existing accounts
+                        </label>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
+                        <Input
+                          placeholder="https://idp.example.com/sso"
+                          value={samlSsoUrl}
+                          onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
+                          aria-label="SSO Endpoint URL"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">IdP Entity ID</label>
+                        <Input
+                          placeholder="https://idp.example.com/metadata"
+                          value={samlIdpEntityId}
+                          onChange={(e): void => { setSamlIdpEntityId(e.target.value); }}
+                          aria-label="IdP Entity ID"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
+                        <Input
+                          placeholder="https://idp.example.com/slo"
+                          value={samlSloUrl}
+                          onChange={(e): void => { setSamlSloUrl(e.target.value); }}
+                          aria-label="SLO Endpoint URL"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
+                        <Input
+                          placeholder="Paste IdP certificate"
+                          value={samlIdpCert}
+                          onChange={(e): void => { setSamlIdpCert(e.target.value); }}
+                        />
+                      </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-3">Attribute mappings</p>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <Input
+                              value={samlAttrUsername}
+                              onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Groups attribute</label>
+                            <Input
+                              value={samlAttrGroups}
+                              onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <Input
+                              value={samlAttrEmail}
+                              onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
+                              aria-label="SAML email attribute"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Site admin attribute</label>
+                            <Input
+                              value={samlAttrSiteAdmin}
+                              onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Site admin role value</label>
+                            <Input
+                              value={samlSiteAdminRole}
+                              onChange={(e): void => { setSamlSiteAdminRole(e.target.value); }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
+                        <Input
+                          type="number"
+                          value={samlTimeout}
+                          onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
+                        />
+                      </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-2">Service provider endpoints</p>
+                        <p className="text-xs text-gray-500">
+                          Use these URLs to register this instance with your identity provider.
+                        </p>
+                        <dl className="mt-2 space-y-1 text-xs">
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="font-medium text-gray-700">ACS consumer URL</dt>
+                            <dd className="break-all text-gray-600 font-mono">{samlAcsUrl !== "" ? samlAcsUrl : "—"}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="font-medium text-gray-700">Metadata URL</dt>
+                            <dd className="break-all text-gray-600 font-mono">{samlMetadataUrl !== "" ? samlMetadataUrl : "—"}</dd>
+                          </div>
+                        </dl>
+                      </div>
+                      <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
+                        {samlSaving ? "Saving..." : "Save SAML settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* OIDC */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">OpenID Connect</CardTitle>
+                  <CardDescription>OpenID Connect provider configuration</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {oidcLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading OIDC settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveOidc} className="space-y-5">
+                      {oidcError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{oidcError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={oidcEnabled}
+                          onChange={(e): void => { setOidcEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Enable OIDC"
+                        />
+                        Enable OpenID Connect
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={oidcLinkByEmail}
+                          onChange={(e): void => { setOidcLinkByEmail(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow OIDC email linking"
+                        />
+                        Link verified email addresses to existing accounts
+                      </label>
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Issuer URL</label>
+                          <Input
+                            placeholder="https://accounts.example.com"
+                            value={oidcIssuer}
+                            onChange={(e): void => { setOidcIssuer(e.target.value); }}
+                            aria-label="Issuer URL"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Client ID</label>
+                          <Input
+                            value={oidcClientId}
+                            onChange={(e): void => { setOidcClientId(e.target.value); }}
+                            aria-label="Client ID"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Client Secret</label>
+                          <Input
+                            type="password"
+                            placeholder={oidcClientSecretSet ? "····· (leave blank to keep)" : undefined}
+                            value={oidcClientSecret}
+                            onChange={(e): void => { setOidcClientSecret(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Scopes</label>
+                          <Input
+                            value={oidcScopes}
+                            onChange={(e): void => { setOidcScopes(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">PKCE Method</label>
+                          <Input
+                            placeholder="S256"
+                            value={oidcPkceMethod}
+                            onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
+                          <select
+                            value={oidcSigningAlg}
+                            onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
+                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            aria-label="OIDC signing algorithm"
+                          >
+                            <option value="">Provider-advertised asymmetric algorithm</option>
+                            {[
+                              "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512",
+                              "HS256", "HS384", "HS512",
+                            ].map((algorithm): React.JSX.Element => <option key={algorithm} value={algorithm}>{algorithm}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
+                        {oidcSaving ? "Saving..." : "Save OIDC settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* LDAP */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">LDAP</CardTitle>
+                  <CardDescription>Lightweight Directory Access Protocol password authentication</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {ldapLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-500">Loading LDAP settings...</div>
+                  ) : (
+                    <form onSubmit={handleSaveLdap} className="space-y-5">
+                      {ldapError !== null && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{ldapError}</span>
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ldapEnabled}
+                          onChange={(e): void => { setLdapEnabled(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Enable LDAP"
+                        />
+                        Enable LDAP authentication
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ldapLinkByEmail}
+                          onChange={(e): void => { setLdapLinkByEmail(e.target.checked); }}
+                          className="rounded border-gray-300"
+                          aria-label="Allow LDAP email linking"
+                        />
+                        Link directory email addresses to existing accounts
+                      </label>
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Host</label>
+                          <Input
+                            placeholder="ldap.example.com"
+                            value={ldapHost}
+                            onChange={(e): void => { setLdapHost(e.target.value); }}
+                            aria-label="LDAP host"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Port</label>
+                          <Input
+                            type="number"
+                            value={ldapPort}
+                            onChange={(e): void => { setLdapPort(Number(e.target.value)); }}
+                            aria-label="LDAP port"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Encryption</label>
+                          <select
+                            value={ldapEncryption}
+                            onChange={(e): void => { setLdapEncryption(e.target.value); }}
+                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            aria-label="LDAP encryption"
+                          >
+                            <option value="plain">Plain (LDAP)</option>
+                            <option value="starttls">StartTLS</option>
+                            <option value="ldaps">LDAPS</option>
+                          </select>
+                          {ldapEncryption === "plain" && (
+                            <p className="text-xs text-amber-700">
+                              Warning: plain LDAP transmits the bind password and user passwords without
+                              encryption. Use StartTLS or LDAPS when possible.
+                            </p>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Base DN</label>
+                          <Input
+                            placeholder="dc=example,dc=com"
+                            value={ldapBaseDn}
+                            onChange={(e): void => { setLdapBaseDn(e.target.value); }}
+                            aria-label="LDAP base DN"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
+                          <Input
+                            placeholder="cn=service,dc=example,dc=com"
+                            value={ldapBindDn}
+                            onChange={(e): void => { setLdapBindDn(e.target.value); }}
+                            aria-label="LDAP bind DN"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-700">Bind password</label>
+                          <Input
+                            type="password"
+                            placeholder={ldapBindPasswordSet ? "····· (leave blank to keep)" : undefined}
+                            value={ldapBindPassword}
+                            onChange={(e): void => { setLdapBindPassword(e.target.value); }}
+                            aria-label="LDAP bind password"
+                          />
+                        </div>
+                      </div>
+                      <div className="border-t pt-4">
+                        <p className="text-xs font-semibold text-gray-700 mb-3">User mapping</p>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
+                            <Input
+                              value={ldapUserFilter}
+                              onChange={(e): void => { setLdapUserFilter(e.target.value); }}
+                              aria-label="LDAP user filter"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <Input
+                              value={ldapAttrUsername}
+                              onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
+                              aria-label="LDAP username attribute"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <Input
+                              value={ldapAttrEmail}
+                              onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
+                              aria-label="LDAP email attribute"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Display name attribute</label>
+                            <Input
+                              value={ldapAttrDisplayName}
+                              onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
+                              aria-label="LDAP display name attribute"
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs text-gray-500">
+                          The sign-in form first attempts LDAP, then falls back to local passwords (when enabled).
+                          A user who already exists locally with the same username will block LDAP provisioning to
+                          avoid account takeover.
+                        </p>
+                      </div>
+                      <Button type="submit" disabled={ldapSaving} aria-label="Save LDAP settings">
+                        {ldapSaving ? "Saving..." : "Save LDAP settings"}
+                      </Button>
+                    </form>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+  );
+}
+
 export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>): React.JSX.Element {
   const navigate = useNavigate();
   const { accountLoaded, siteAdmin } = useOutletContext<LayoutOutletContext>();
-  type ItemAttrs = {
-    username?: string;
-    email?: string | null;
-
-    "is-site-admin"?: boolean;
-    name?: string;
-
-    "iac-binary"?: string;
-
-    "default-terraform-version"?: string;
-
-    "auto-apply"?: boolean;
-    locked?: boolean;
-    status?: string;
-    message?: string | null;
-
-    "has-changes"?: boolean;
-
-    actions?: {
-      "is-cancelable"?: boolean;
-      "is-force-cancelable"?: boolean;
-    };
-    version?: string;
-    url?: string | null;
-    sha?: string | null;
-
-    "created-at"?: string;
-    action?: string;
-
-    "resource-type"?: string;
-
-    "resource-id"?: string | null;
-    "actor-username"?: string | null;
-    "actor-email"?: string | null;
-    [key: string]: unknown;
-  };
-  type DataItem = { id: string; attributes: ItemAttrs };
-  type SecuritySummary = Readonly<{
-    signupEnabled: boolean;
-    sandboxEnabled: boolean;
-    sandboxAvailable: boolean;
-    sandboxReason: string | null;
-  }>;
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [users, setUsers] = useState<DataItem[]>([]);
   const [orgs, setOrgs] = useState<DataItem[]>([]);
@@ -713,1022 +1868,158 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         <>
           {/* SECURITY OVERVIEW TAB */}
           {section === "security" && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Security overview</h2>
-                <p className="text-sm text-gray-500">A quick read of the instance-wide controls that protect access and runs.</p>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Identity providers</CardTitle>
-                    <CardDescription>Configured sign-in paths for this instance.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>SAML SSO</span>
-                      <span className={samlEnabled ? "font-medium text-green-700" : "text-gray-500"}>{samlEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>OpenID Connect</span>
-                      <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>LDAP</span>
-                      <span className={ldapEnabled ? "text-green-700 font-medium" : "text-gray-500"}>{ldapEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
-                      Open authentication settings
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Account safeguards</CardTitle>
-                    <CardDescription>Local access and privileged-account posture.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Local account signup</span>
-                      <span className={securitySummary.signupEnabled ? "font-medium text-amber-700" : "font-medium text-green-700"}>
-                        {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Site administrators</span>
-                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Suspended users</span>
-                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Execution isolation</CardTitle>
-                    <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Sandbox required</span>
-                      <span className={securitySummary.sandboxEnabled ? "font-medium text-green-700" : "font-medium text-amber-700"}>
-                        {securitySummary.sandboxEnabled ? "Yes" : "No"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Sandbox available</span>
-                      <span className={securitySummary.sandboxAvailable ? "font-medium text-green-700" : "font-medium text-red-700"}>
-                        {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
-                      </span>
-                    </div>
-                    {securitySummary.sandboxReason !== null && (
-                      <p className="text-xs text-gray-500">{securitySummary.sandboxReason}</p>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Latest audit events</CardTitle>
-                    <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <p className="text-2xl font-semibold text-gray-900">{auditLogs.length}</p>
-                    <p className="text-sm text-gray-500">
-                      {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
-                    </p>
-                    {auditLogs[0]?.attributes.action !== undefined && (
-                      <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
-                    )}
-                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/audit"); }}>
-                      Open audit log
-                    </Button>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
+            <SecurityOverview
+              navigate={navigate}
+              samlEnabled={samlEnabled}
+              oidcEnabled={oidcEnabled}
+              ldapEnabled={ldapEnabled}
+              securitySummary={securitySummary}
+              users={users}
+              auditLogs={auditLogs}
+            />
           )}
 
           {/* USERS TAB */}
           {section === "users" && (
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Registered Users</CardTitle>
-                    <CardDescription>Manage user accounts across this instance. Use the admin user creation form to add local accounts.</CardDescription>
-                  </div>
-                  <Button
-                    size="sm"
-                    className="gap-2"
-                    onClick={(): void => { setCreateDialogOpen(true); }}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Create user
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Username</th>
-                        <th className="px-4 py-3">Email</th>
-                        <th className="px-4 py-3">Site Admin</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">User ID</th>
-                        <th className="px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {users.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
-                            No users found.
-                          </td>
-                        </tr>
-                      ) : (
-                        users.map((u): React.JSX.Element => (
-                          <tr key={u.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{u.attributes.username}</td>
-                            <td className="px-4 py-3 text-gray-600">{u.attributes.email ?? "—"}</td>
-                            <td className="px-4 py-3">
-                              {u.attributes["is-site-admin"] === true ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700 border border-green-200">
-                                  <CheckCircle2 className="h-3 w-3" /> Yes
-                                </span>
-                              ) : (
-                                <span className="text-gray-400 text-xs">No</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3">
-                              {u.attributes["is-suspended"] === true ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 border border-red-200">
-                                  Suspended
-                                </span>
-                              ) : (
-                                <span className="text-gray-400 text-xs">Active</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{u.id}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex gap-1.5 flex-wrap">
-                                {/* Promote / Demote Admin */}
-                                {u.attributes["is-site-admin"] === true ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/revoke_admin`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges revoked", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to revoke admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
-                                  >
-                                    Demote
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/grant_admin`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges granted", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to grant admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
-                                  >
-                                    Promote
-                                  </Button>
-                                )}
-                                {/* Suspend / Unsuspend */}
-                                {u.attributes["is-suspended"] === true ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/unsuspend`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "User unsuspended", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to unsuspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
-                                  >
-                                    Unsuspend
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/suspend`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "User suspended", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to suspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
-                                  >
-                                    Suspend
-                                  </Button>
-                                )}
-                                {/* Delete */}
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  className="h-7 text-xs"
-                                  onClick={(): void => { setDeleteUserId(u.id); }}
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+            <UsersAdmin
+              users={users}
+              setCreateDialogOpen={setCreateDialogOpen}
+              setDeleteUserId={setDeleteUserId}
+              loadAdminData={loadAdminData}
+            />
           )}
 
           {/* ORGANIZATIONS TAB */}
           {section === "orgs" && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Organizations</CardTitle>
-                <CardDescription>Overview of all active tenant organizations</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Organization Name</th>
-                        <th className="px-4 py-3">Default Engine</th>
-                        <th className="px-4 py-3">Default Version</th>
-                        <th className="px-4 py-3">Org ID</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {orgs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                            No organizations found.
-                          </td>
-                        </tr>
-                      ) : (
-                        orgs.map((o): React.JSX.Element => (
-                          <tr key={o.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{o.attributes.name}</td>
-                            <td className="px-4 py-3">
-                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">
-                                {o.attributes["iac-binary"] ?? "tofu"}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{o.attributes["default-terraform-version"] ?? "latest"}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{o.id}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+            <OrgsAdmin orgs={orgs} />
           )}
 
           {/* WORKSPACES TAB */}
           {section === "workspaces" && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Global Workspaces</CardTitle>
-                <CardDescription>Instance-wide inventory of managed infrastructure workspaces</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Workspace Name</th>
-                        <th className="px-4 py-3">Auto Apply</th>
-                        <th className="px-4 py-3">Lock Status</th>
-                        <th className="px-4 py-3">Workspace ID</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {workspaces.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                            No workspaces found.
-                          </td>
-                        </tr>
-                      ) : (
-                        workspaces.map((w): React.JSX.Element => (
-                          <tr key={w.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{w.attributes.name}</td>
-                            <td className="px-4 py-3 text-gray-600">{w.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</td>
-                            <td className="px-4 py-3">
-                              {w.attributes.locked === true ? (
-                                <span className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 border border-amber-200">
-                                  Locked
-                                </span>
-                              ) : (
-                                <span className="text-gray-400 text-xs">Unlocked</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{w.id}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+            <WorkspacesAdmin workspaces={workspaces} />
           )}
 
           {/* RUNS TAB */}
           {section === "runs" && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">System Runs Queue</CardTitle>
-                <CardDescription>Monitor and control active execution runs</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Run ID</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">Message</th>
-                        <th className="px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {runs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                            No active runs found.
-                          </td>
-                        </tr>
-                      ) : (
-                        runs.map((r): React.JSX.Element => (
-                          <tr key={r.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-900">{r.id}</td>
-                            <td className="px-4 py-3">
-                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                                {r.attributes.status}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{r.attributes.message ?? "—"}</td>
-                            <td className="px-4 py-3">
-                              {r.attributes.actions !== undefined && (
-                                <div className="flex gap-2">
-                                  {r.attributes.actions["is-cancelable"] === true && (
-                                    <Button size="sm" variant="outline" onClick={(): void => { void handleCancelRun(r.id, false); }}>
-                                      Cancel
-                                    </Button>
-                                  )}
-                                  {r.attributes.actions["is-force-cancelable"] === true && (
-                                    <Button size="sm" variant="destructive" onClick={(): void => { void handleCancelRun(r.id, true); }}>
-                                      Force Cancel
-                                    </Button>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+            <RunsAdmin runs={runs} handleCancelRun={handleCancelRun} />
           )}
 
           {/* TOOL VERSIONS TAB */}
           {section === "versions" && (
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Register New Terraform Version</CardTitle>
-                  <CardDescription>Add binary versions available for workspace execution</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleAddVersion} className="flex gap-4 items-end">
-                    <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">Version</label>
-                      <Input
-                        placeholder="1.6.2"
-                        value={newVersion}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewVersion(event.target.value); }}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">Download URL (Optional)</label>
-                      <Input
-                        placeholder="https://releases.hashicorp.com/terraform/..."
-                        value={newUrl}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewUrl(event.target.value); }}
-                      />
-                    </div>
-                    <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">SHA256 (Optional)</label>
-                      <Input
-                        placeholder="a1b2c3..."
-                        value={newSha}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewSha(event.target.value); }}
-                      />
-                    </div>
-                    <Button type="submit" className="gap-2">
-                      <Plus className="h-4 w-4" /> Add Version
-                    </Button>
-                  </form>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Available Terraform / OpenTofu Versions</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                        <tr>
-                          <th className="px-4 py-3">Version</th>
-                          <th className="px-4 py-3">URL</th>
-                          <th className="px-4 py-3">SHA256</th>
-                          <th className="px-4 py-3">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {tfVersions.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                              No custom versions registered. (Defaulting to latest releases)
-                            </td>
-                          </tr>
-                        ) : (
-                          tfVersions.map((v): React.JSX.Element => (
-                            <tr key={v.id} className="hover:bg-gray-50/50">
-                              <td className="px-4 py-3 font-semibold text-gray-900">{v.attributes.version}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500 truncate max-w-xs">{v.attributes.url ?? "Default download"}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{v.attributes.sha != null ? v.attributes.sha.slice(0, 12) + "..." : "—"}</td>
-                            <td className="px-4 py-3">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-red-600 hover:text-red-700"
-                                onClick={(): void => {
-                                  const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                                  if (isTestEnv) {
-                                    void handleDeleteVersion(v.id);
-                                  } else {
-                                    setVersionToDelete(v.id);
-                                  }
-                                }}
-                              >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+            <VersionsAdmin
+              handleAddVersion={handleAddVersion}
+              newVersion={newVersion}
+              setNewVersion={setNewVersion}
+              newUrl={newUrl}
+              setNewUrl={setNewUrl}
+              newSha={newSha}
+              setNewSha={setNewSha}
+              tfVersions={tfVersions}
+              handleDeleteVersion={handleDeleteVersion}
+              setVersionToDelete={setVersionToDelete}
+            />
           )}
 
           {/* AUDIT LOGS TAB */}
           {section === "audit" && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Instance Audit Trail</CardTitle>
-                <CardDescription>Security audit log of administrative actions</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Timestamp</th>
-                        <th className="px-4 py-3">Action</th>
-                        <th className="px-4 py-3">Resource Type</th>
-                        <th className="px-4 py-3">Resource ID</th>
-                        <th className="px-4 py-3">Actor</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {auditLogs.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                            No audit log entries recorded.
-                          </td>
-                        </tr>
-                      ) : (
-                        auditLogs.map((log): React.JSX.Element => (
-                          <tr key={log.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 text-xs text-gray-500">{new Date(log.attributes["created-at"] ?? "").toLocaleString()}</td>
-                            <td className="px-4 py-3 font-medium text-gray-900">{log.attributes.action}</td>
-                            <td className="px-4 py-3 text-gray-600">{log.attributes["resource-type"]}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{log.attributes["resource-id"] ?? "—"}</td>
-                            <td className="px-4 py-3 text-gray-600">
-                              {log.attributes["actor-username"] ?? log.attributes["actor-email"] ?? "System"}
-                              {log.attributes["actor-email"] !== null && log.attributes["actor-email"] !== undefined && (
-                                <span className="block text-xs text-gray-400">{log.attributes["actor-email"]}</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+            <AuditAdmin auditLogs={auditLogs} />
           )}
 
           {/* AUTHENTICATION TAB */}
           {section === "auth" && (
-            <div className="space-y-8">
-              {/* LOCAL AUTHENTICATION */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Local Authentication</CardTitle>
-                  <CardDescription>Username and password sign-in for this instance</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {generalLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading sign-in settings...</div>
-                  ) : (
-                    <form onSubmit={handleSaveGeneral} className="space-y-5">
-                      {generalError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4 shrink-0" />
-                          <span>{generalError}</span>
-                        </div>
-                      )}
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={localAuthEnabled}
-                          onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
-                          aria-label="Allow local password authentication"
-                        />
-                        Allow local password authentication
-                      </label>
-                      <p className="text-xs text-gray-500">
-                        When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
-                        configured). Existing local accounts cannot sign in with a password until this is re-enabled.
-                      </p>
-                      <Button
-                        type="submit"
-                        disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
-                        aria-label="Save sign-in settings"
-                      >
-                        {generalSaving ? "Saving..." : "Save sign-in settings"}
-                      </Button>
-                      {(persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null) && (
-                        <p className="text-xs text-amber-700">Waiting for all SSO settings to load before saving local authentication.</p>
-                      )}
-                    </form>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* SAML SSO */}
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-lg">SAML SSO</CardTitle>
-                      <CardDescription>Security Assertion Markup Language single sign-on configuration</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {samlLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading SAML settings...</div>
-                  ) : (
-                    <form onSubmit={handleSaveSaml} className="space-y-5">
-                      {samlError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4 shrink-0" />
-                          <span>{samlError}</span>
-                        </div>
-                      )}
-                      <div className="grid gap-5 sm:grid-cols-2">
-                        <label className="flex items-center gap-2 text-sm cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={samlEnabled}
-                            onChange={(e): void => { setSamlEnabled(e.target.checked); }}
-                            className="rounded border-gray-300"
-                            aria-label="Enable SAML SSO"
-                          />
-                          Enable SAML SSO
-                        </label>
-                        <label className="flex items-center gap-2 text-sm cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={samlDebug}
-                            onChange={(e): void => { setSamlDebug(e.target.checked); }}
-                            className="rounded border-gray-300"
-                          />
-                          Debug mode
-                        </label>
-                        <label className="flex items-center gap-2 text-sm cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={samlLinkByEmail}
-                            onChange={(e): void => { setSamlLinkByEmail(e.target.checked); }}
-                            className="rounded border-gray-300"
-                            aria-label="Allow SAML email linking"
-                          />
-                          Link verified email addresses to existing accounts
-                        </label>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
-                        <Input
-                          placeholder="https://idp.example.com/sso"
-                          value={samlSsoUrl}
-                          onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
-                          aria-label="SSO Endpoint URL"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">IdP Entity ID</label>
-                        <Input
-                          placeholder="https://idp.example.com/metadata"
-                          value={samlIdpEntityId}
-                          onChange={(e): void => { setSamlIdpEntityId(e.target.value); }}
-                          aria-label="IdP Entity ID"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
-                        <Input
-                          placeholder="https://idp.example.com/slo"
-                          value={samlSloUrl}
-                          onChange={(e): void => { setSamlSloUrl(e.target.value); }}
-                          aria-label="SLO Endpoint URL"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
-                        <Input
-                          placeholder="Paste IdP certificate"
-                          value={samlIdpCert}
-                          onChange={(e): void => { setSamlIdpCert(e.target.value); }}
-                        />
-                      </div>
-                      <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-3">Attribute mappings</p>
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
-                            <Input
-                              value={samlAttrUsername}
-                              onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Groups attribute</label>
-                            <Input
-                              value={samlAttrGroups}
-                              onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
-                            <Input
-                              value={samlAttrEmail}
-                              onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
-                              aria-label="SAML email attribute"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Site admin attribute</label>
-                            <Input
-                              value={samlAttrSiteAdmin}
-                              onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Site admin role value</label>
-                            <Input
-                              value={samlSiteAdminRole}
-                              onChange={(e): void => { setSamlSiteAdminRole(e.target.value); }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
-                        <Input
-                          type="number"
-                          value={samlTimeout}
-                          onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
-                        />
-                      </div>
-                      <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-2">Service provider endpoints</p>
-                        <p className="text-xs text-gray-500">
-                          Use these URLs to register this instance with your identity provider.
-                        </p>
-                        <dl className="mt-2 space-y-1 text-xs">
-                          <div className="flex flex-col gap-0.5">
-                            <dt className="font-medium text-gray-700">ACS consumer URL</dt>
-                            <dd className="break-all text-gray-600 font-mono">{samlAcsUrl !== "" ? samlAcsUrl : "—"}</dd>
-                          </div>
-                          <div className="flex flex-col gap-0.5">
-                            <dt className="font-medium text-gray-700">Metadata URL</dt>
-                            <dd className="break-all text-gray-600 font-mono">{samlMetadataUrl !== "" ? samlMetadataUrl : "—"}</dd>
-                          </div>
-                        </dl>
-                      </div>
-                      <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
-                        {samlSaving ? "Saving..." : "Save SAML settings"}
-                      </Button>
-                    </form>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* OIDC */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">OpenID Connect</CardTitle>
-                  <CardDescription>OpenID Connect provider configuration</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {oidcLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading OIDC settings...</div>
-                  ) : (
-                    <form onSubmit={handleSaveOidc} className="space-y-5">
-                      {oidcError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4 shrink-0" />
-                          <span>{oidcError}</span>
-                        </div>
-                      )}
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={oidcEnabled}
-                          onChange={(e): void => { setOidcEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
-                          aria-label="Enable OIDC"
-                        />
-                        Enable OpenID Connect
-                      </label>
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={oidcLinkByEmail}
-                          onChange={(e): void => { setOidcLinkByEmail(e.target.checked); }}
-                          className="rounded border-gray-300"
-                          aria-label="Allow OIDC email linking"
-                        />
-                        Link verified email addresses to existing accounts
-                      </label>
-                      <div className="grid gap-5 sm:grid-cols-2">
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Issuer URL</label>
-                          <Input
-                            placeholder="https://accounts.example.com"
-                            value={oidcIssuer}
-                            onChange={(e): void => { setOidcIssuer(e.target.value); }}
-                            aria-label="Issuer URL"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Client ID</label>
-                          <Input
-                            value={oidcClientId}
-                            onChange={(e): void => { setOidcClientId(e.target.value); }}
-                            aria-label="Client ID"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Client Secret</label>
-                          <Input
-                            type="password"
-                            placeholder={oidcClientSecretSet ? "····· (leave blank to keep)" : undefined}
-                            value={oidcClientSecret}
-                            onChange={(e): void => { setOidcClientSecret(e.target.value); }}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Scopes</label>
-                          <Input
-                            value={oidcScopes}
-                            onChange={(e): void => { setOidcScopes(e.target.value); }}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">PKCE Method</label>
-                          <Input
-                            placeholder="S256"
-                            value={oidcPkceMethod}
-                            onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
-                          <select
-                            value={oidcSigningAlg}
-                            onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-                            aria-label="OIDC signing algorithm"
-                          >
-                            <option value="">Provider-advertised asymmetric algorithm</option>
-                            {[
-                              "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512",
-                              "HS256", "HS384", "HS512",
-                            ].map((algorithm): React.JSX.Element => <option key={algorithm} value={algorithm}>{algorithm}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                      <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
-                        {oidcSaving ? "Saving..." : "Save OIDC settings"}
-                      </Button>
-                    </form>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* LDAP */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">LDAP</CardTitle>
-                  <CardDescription>Lightweight Directory Access Protocol password authentication</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {ldapLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading LDAP settings...</div>
-                  ) : (
-                    <form onSubmit={handleSaveLdap} className="space-y-5">
-                      {ldapError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4 shrink-0" />
-                          <span>{ldapError}</span>
-                        </div>
-                      )}
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={ldapEnabled}
-                          onChange={(e): void => { setLdapEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
-                          aria-label="Enable LDAP"
-                        />
-                        Enable LDAP authentication
-                      </label>
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={ldapLinkByEmail}
-                          onChange={(e): void => { setLdapLinkByEmail(e.target.checked); }}
-                          className="rounded border-gray-300"
-                          aria-label="Allow LDAP email linking"
-                        />
-                        Link directory email addresses to existing accounts
-                      </label>
-                      <div className="grid gap-5 sm:grid-cols-2">
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Host</label>
-                          <Input
-                            placeholder="ldap.example.com"
-                            value={ldapHost}
-                            onChange={(e): void => { setLdapHost(e.target.value); }}
-                            aria-label="LDAP host"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Port</label>
-                          <Input
-                            type="number"
-                            value={ldapPort}
-                            onChange={(e): void => { setLdapPort(Number(e.target.value)); }}
-                            aria-label="LDAP port"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Encryption</label>
-                          <select
-                            value={ldapEncryption}
-                            onChange={(e): void => { setLdapEncryption(e.target.value); }}
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-                            aria-label="LDAP encryption"
-                          >
-                            <option value="plain">Plain (LDAP)</option>
-                            <option value="starttls">StartTLS</option>
-                            <option value="ldaps">LDAPS</option>
-                          </select>
-                          {ldapEncryption === "plain" && (
-                            <p className="text-xs text-amber-700">
-                              Warning: plain LDAP transmits the bind password and user passwords without
-                              encryption. Use StartTLS or LDAPS when possible.
-                            </p>
-                          )}
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Base DN</label>
-                          <Input
-                            placeholder="dc=example,dc=com"
-                            value={ldapBaseDn}
-                            onChange={(e): void => { setLdapBaseDn(e.target.value); }}
-                            aria-label="LDAP base DN"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
-                          <Input
-                            placeholder="cn=service,dc=example,dc=com"
-                            value={ldapBindDn}
-                            onChange={(e): void => { setLdapBindDn(e.target.value); }}
-                            aria-label="LDAP bind DN"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Bind password</label>
-                          <Input
-                            type="password"
-                            placeholder={ldapBindPasswordSet ? "····· (leave blank to keep)" : undefined}
-                            value={ldapBindPassword}
-                            onChange={(e): void => { setLdapBindPassword(e.target.value); }}
-                            aria-label="LDAP bind password"
-                          />
-                        </div>
-                      </div>
-                      <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-3">User mapping</p>
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
-                            <Input
-                              value={ldapUserFilter}
-                              onChange={(e): void => { setLdapUserFilter(e.target.value); }}
-                              aria-label="LDAP user filter"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
-                            <Input
-                              value={ldapAttrUsername}
-                              onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
-                              aria-label="LDAP username attribute"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
-                            <Input
-                              value={ldapAttrEmail}
-                              onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
-                              aria-label="LDAP email attribute"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Display name attribute</label>
-                            <Input
-                              value={ldapAttrDisplayName}
-                              onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
-                              aria-label="LDAP display name attribute"
-                            />
-                          </div>
-                        </div>
-                        <p className="mt-3 text-xs text-gray-500">
-                          The sign-in form first attempts LDAP, then falls back to local passwords (when enabled).
-                          A user who already exists locally with the same username will block LDAP provisioning to
-                          avoid account takeover.
-                        </p>
-                      </div>
-                      <Button type="submit" disabled={ldapSaving} aria-label="Save LDAP settings">
-                        {ldapSaving ? "Saving..." : "Save LDAP settings"}
-                      </Button>
-                    </form>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+            <AuthAdmin
+              generalLoading={generalLoading}
+              handleSaveGeneral={handleSaveGeneral}
+              generalError={generalError}
+              localAuthEnabled={localAuthEnabled}
+              setLocalAuthEnabled={setLocalAuthEnabled}
+              generalSaving={generalSaving}
+              persistedSamlEnabled={persistedSamlEnabled}
+              persistedOidcEnabled={persistedOidcEnabled}
+              persistedLdapEnabled={persistedLdapEnabled}
+              samlLoading={samlLoading}
+              handleSaveSaml={handleSaveSaml}
+              samlError={samlError}
+              samlEnabled={samlEnabled}
+              setSamlEnabled={setSamlEnabled}
+              samlDebug={samlDebug}
+              setSamlDebug={setSamlDebug}
+              samlLinkByEmail={samlLinkByEmail}
+              setSamlLinkByEmail={setSamlLinkByEmail}
+              samlSsoUrl={samlSsoUrl}
+              setSamlSsoUrl={setSamlSsoUrl}
+              samlIdpEntityId={samlIdpEntityId}
+              setSamlIdpEntityId={setSamlIdpEntityId}
+              samlSloUrl={samlSloUrl}
+              setSamlSloUrl={setSamlSloUrl}
+              samlIdpCert={samlIdpCert}
+              setSamlIdpCert={setSamlIdpCert}
+              samlAttrUsername={samlAttrUsername}
+              setSamlAttrUsername={setSamlAttrUsername}
+              samlAttrGroups={samlAttrGroups}
+              setSamlAttrGroups={setSamlAttrGroups}
+              samlAttrEmail={samlAttrEmail}
+              setSamlAttrEmail={setSamlAttrEmail}
+              samlAttrSiteAdmin={samlAttrSiteAdmin}
+              setSamlAttrSiteAdmin={setSamlAttrSiteAdmin}
+              samlSiteAdminRole={samlSiteAdminRole}
+              setSamlSiteAdminRole={setSamlSiteAdminRole}
+              samlTimeout={samlTimeout}
+              setSamlTimeout={setSamlTimeout}
+              samlAcsUrl={samlAcsUrl}
+              samlMetadataUrl={samlMetadataUrl}
+              samlSaving={samlSaving}
+              oidcLoading={oidcLoading}
+              handleSaveOidc={handleSaveOidc}
+              oidcError={oidcError}
+              oidcEnabled={oidcEnabled}
+              setOidcEnabled={setOidcEnabled}
+              oidcLinkByEmail={oidcLinkByEmail}
+              setOidcLinkByEmail={setOidcLinkByEmail}
+              oidcIssuer={oidcIssuer}
+              setOidcIssuer={setOidcIssuer}
+              oidcClientId={oidcClientId}
+              setOidcClientId={setOidcClientId}
+              oidcClientSecret={oidcClientSecret}
+              setOidcClientSecret={setOidcClientSecret}
+              oidcClientSecretSet={oidcClientSecretSet}
+              oidcScopes={oidcScopes}
+              setOidcScopes={setOidcScopes}
+              oidcPkceMethod={oidcPkceMethod}
+              setOidcPkceMethod={setOidcPkceMethod}
+              oidcSigningAlg={oidcSigningAlg}
+              setOidcSigningAlg={setOidcSigningAlg}
+              oidcSaving={oidcSaving}
+              ldapLoading={ldapLoading}
+              handleSaveLdap={handleSaveLdap}
+              ldapError={ldapError}
+              ldapEnabled={ldapEnabled}
+              setLdapEnabled={setLdapEnabled}
+              ldapLinkByEmail={ldapLinkByEmail}
+              setLdapLinkByEmail={setLdapLinkByEmail}
+              ldapHost={ldapHost}
+              setLdapHost={setLdapHost}
+              ldapPort={ldapPort}
+              setLdapPort={setLdapPort}
+              ldapEncryption={ldapEncryption}
+              setLdapEncryption={setLdapEncryption}
+              ldapBaseDn={ldapBaseDn}
+              setLdapBaseDn={setLdapBaseDn}
+              ldapBindDn={ldapBindDn}
+              setLdapBindDn={setLdapBindDn}
+              ldapBindPassword={ldapBindPassword}
+              setLdapBindPassword={setLdapBindPassword}
+              ldapBindPasswordSet={ldapBindPasswordSet}
+              ldapUserFilter={ldapUserFilter}
+              setLdapUserFilter={setLdapUserFilter}
+              ldapAttrUsername={ldapAttrUsername}
+              setLdapAttrUsername={setLdapAttrUsername}
+              ldapAttrEmail={ldapAttrEmail}
+              setLdapAttrEmail={setLdapAttrEmail}
+              ldapAttrDisplayName={ldapAttrDisplayName}
+              setLdapAttrDisplayName={setLdapAttrDisplayName}
+              ldapSaving={ldapSaving}
+            />
           )}
         </>
       )}
