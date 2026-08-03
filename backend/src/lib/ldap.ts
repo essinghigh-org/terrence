@@ -2,7 +2,7 @@
 // locates the user with the configured filter, then validates the presented
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
-import { Client, ResultCodeError, type Entry } from "ldapts";
+import { Client, InvalidCredentialsError, type Entry } from "ldapts";
 import type { LdapSettings } from "./sso";
 
 export type LdapUser = Readonly<{
@@ -83,13 +83,16 @@ export async function authenticateLdap(
   const client = new Client({
     ...clientOptions,
   });
+  let activeBind: "service" | "user" | null = null;
 
   try {
     if (settings.encryption === "starttls") {
       await client.startTLS();
     }
     if (settings.bindDn !== null) {
+      activeBind = "service";
       await client.bind(settings.bindDn, settings.bindPassword ?? "");
+      activeBind = null;
     }
 
     const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
@@ -113,6 +116,7 @@ export async function authenticateLdap(
     if (entry === undefined) return { user: null, unavailable: false };
 
     // Validate the presented password by binding as the found user.
+    activeBind = "user";
     await client.bind(entry.dn, password);
 
     return {
@@ -130,7 +134,7 @@ export async function authenticateLdap(
     // else (connect, TLS, startTLS, timeout) means the directory is
     // unavailable. Never log the password or bind password.
     const message = error instanceof Error ? error.message : String(error);
-    const credentialRejection = error instanceof ResultCodeError;
+    const credentialRejection = activeBind === "user" && error instanceof InvalidCredentialsError;
     if (!credentialRejection) {
       console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
     }

@@ -207,7 +207,13 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   if (byUsername !== undefined) {
     // A user with the same external subject but a different identity record
     // cannot happen (unique index), so any hit here is a genuine conflict.
-    throw new SsoConflictError(identity.provider, username);
+    const owner = byUsername.ssoProvider === null ? "a local account" : `an account linked to ${byUsername.ssoProvider}`;
+    throw new SsoConflictError(
+      identity.provider,
+      username,
+      `Sign-in blocked: username "${username}" is already in use by ${owner}. `
+      + "Rename the existing account or change the identity provider username, then retry.",
+    );
   }
 
   let insertEmail = email;
@@ -259,13 +265,19 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
  * grant the owner role; groups matching existing team names grant team
  * membership; all SAML users of SAML-enabled organizations get basic membership.
  */
-export async function applySamlGroupMapping(userId: string, groups: readonly string[]): Promise<void> {
-  const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
+type SamlGroupMappingData = Readonly<{
+  samlOrgs: readonly (typeof organizations.$inferSelect)[];
+  memberships: readonly (typeof organizationMemberships.$inferSelect)[];
+  orgTeams: readonly (typeof teams.$inferSelect)[];
+  existingTeamIds: ReadonlySet<string>;
+}>;
+
+async function loadSamlGroupMappingData(userId: string): Promise<SamlGroupMappingData> {
   const samlOrgs = await db.query.organizations.findMany({
     where: eq(organizations.samlEnabled, true),
   });
   const orgIds = samlOrgs.map((org): string => org.id);
-  if (orgIds.length === 0) return;
+  if (orgIds.length === 0) return { samlOrgs, memberships: [], orgTeams: [], existingTeamIds: new Set() };
   const [memberships, orgTeams] = await Promise.all([
     db.query.organizationMemberships.findMany({
       where: and(inArray(organizationMemberships.orgId, orgIds), eq(organizationMemberships.userId, userId)),
@@ -279,10 +291,21 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
       where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)),
       columns: { teamId: true },
     });
+  return {
+    samlOrgs,
+    memberships,
+    orgTeams,
+    existingTeamIds: new Set(existingTeamMemberships.map((membership): string => membership.teamId)),
+  };
+}
+
+export async function applySamlGroupMapping(userId: string, groups: readonly string[]): Promise<void> {
+  const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
+  const { samlOrgs, memberships, orgTeams, existingTeamIds } = await loadSamlGroupMappingData(userId);
   const membershipByOrg = new Map(memberships.map((membership) => [membership.orgId, membership]));
   const teamsByOrg = new Map<string, typeof orgTeams[number][]>();
   for (const team of orgTeams) teamsByOrg.set(team.orgId, [...(teamsByOrg.get(team.orgId) ?? []), team]);
-  const existingTeamIds = new Set(existingTeamMemberships.map((membership): string => membership.teamId));
+  const teamInserts: (typeof teamMemberships.$inferInsert)[] = [];
   for (const org of samlOrgs) {
     const existing = membershipByOrg.get(org.id);
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
@@ -297,10 +320,14 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         // remove or downgrade it without touching admin-granted rows.
         ssoSource: "saml",
       }).onConflictDoNothing();
-    } else if (isOwner && existing.role !== "owner") {
+    } else if (isOwner && existing.role !== "owner" && existing.ssoSource === "saml") {
       // Preserve admin-granted provenance so pruning never removes the row.
       await db.update(organizationMemberships).set({ role: "owner" })
-        .where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, userId)));
+        .where(and(
+          eq(organizationMemberships.orgId, org.id),
+          eq(organizationMemberships.userId, userId),
+          eq(organizationMemberships.ssoSource, "saml"),
+        ));
     }
 
     const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter((team): boolean => team.ssoTeamId !== null
@@ -316,8 +343,9 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         createdAt: Date.now(),
         ssoSource: "saml",
       }));
-    if (inserts.length > 0) await db.insert(teamMemberships).values(inserts).onConflictDoNothing();
+    teamInserts.push(...inserts);
   }
+  if (teamInserts.length > 0) await db.insert(teamMemberships).values(teamInserts).onConflictDoNothing();
 }
 
 /**
@@ -328,16 +356,7 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
  */
 export async function pruneSamlGroupMappings(userId: string, groups: readonly string[]): Promise<void> {
   const groupSet = new Set(groups.map((group): string => group.trim()).filter((group): boolean => group !== ""));
-  const samlOrgs = await db.query.organizations.findMany({
-    where: eq(organizations.samlEnabled, true),
-  });
-  const orgIds = samlOrgs.map((org): string => org.id);
-  if (orgIds.length === 0) return;
-
-  const [memberships, orgTeams] = await Promise.all([
-    db.query.organizationMemberships.findMany({ where: and(inArray(organizationMemberships.orgId, orgIds), eq(organizationMemberships.userId, userId)) }),
-    db.query.teams.findMany({ where: inArray(teams.orgId, orgIds) }),
-  ]);
+  const { samlOrgs, memberships, orgTeams } = await loadSamlGroupMappingData(userId);
   const teamByOrg = new Map<string, typeof orgTeams[number][]>();
   for (const team of orgTeams) {
     const list = teamByOrg.get(team.orgId) ?? [];
@@ -436,7 +455,7 @@ export function ssoHtmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "Content-Security-Policy": "default-src 'none'; script-src 'none'; style-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       "Content-Type": "text/html; charset=utf-8",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",

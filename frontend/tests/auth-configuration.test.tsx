@@ -139,12 +139,12 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
           type: "ldap-settings",
           attributes: {
             enabled: ldapServerEnabled,
-            host: null,
+            host: "ldap.example.com",
             port: 389,
             encryption: "plain",
             "bind-dn": null,
             "bind-password-set": true,
-            "base-dn": null,
+            "base-dn": "dc=example,dc=com",
             "user-filter": "(uid={{username}})",
             "attr-username": "uid",
             "attr-email": "mail",
@@ -265,34 +265,25 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   // --- LDAP section ---
   const ldapSection = view.getByText("LDAP").closest('[data-slot="card"]') ?? document.body;
   expect(within(ldapSection).getByText(/directory access protocol password authentication/i)).toBeTruthy();
+  await waitFor((): void => { expect(view.getByRole("button", { name: "Save LDAP settings" })).toBeTruthy(); });
   const ldapEnabledCheckbox = within(ldapSection).getByLabelText("Enable LDAP") as HTMLInputElement;
   expect(ldapEnabledCheckbox.checked).toBeFalse();
 
-  // Enabling LDAP without a host must be blocked client-side (the save would
-  // otherwise fail the API's host/base-dn requirement).
+  await waitFor((): void => {
+    expect((view.getByLabelText("LDAP host") as HTMLInputElement).value).toBe("ldap.example.com");
+    expect((view.getByLabelText("LDAP base DN") as HTMLInputElement).value).toBe("dc=example,dc=com");
+  });
   await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
   const saveLdap = within(ldapSection).getByRole("button", { name: "Save LDAP settings" });
-  await act(async (): Promise<void> => { fireEvent.click(saveLdap); });
-  await waitFor((): void => {
-    expect(within(ldapSection).getByText("Host and Base DN are required when LDAP is enabled.")).toBeTruthy();
-  });
-  // No request should have been sent for the unusable configuration.
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeFalse();
-
-  // A successful save with an empty bind-password must preserve the stored
-  // value by omitting the write-only field from the PATCH.
   await act(async (): Promise<void> => {
-    fireEvent.click(view.getByLabelText("Enable LDAP"));
-  });
-  await act(async (): Promise<void> => {
-    fireEvent.click(view.getByRole("button", { name: "Save LDAP settings" }));
+    fireEvent.click(saveLdap);
   });
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
   });
   expect(ldapPatchAttributes?.["bind-password"]).toBeUndefined();
+  expect(ldapPatchAttributes?.enabled).toBeTrue();
 });
 
 test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {

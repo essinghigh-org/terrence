@@ -55,6 +55,7 @@ function pemCertificate(certificate: string): string {
 const PENDING_AUTHNREQUEST_TTL_MS = 10 * 60 * 1000;
 const SAML_AUTHN_CHALLENGE_KIND = "saml-authn";
 const SAML_ASSERTION_CHALLENGE_KIND = "saml-assertion";
+const DEFAULT_SSO_API_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 type SamlRow = Readonly<typeof samlSettings.$inferSelect>;
 
@@ -136,6 +137,7 @@ function rawQueryParameter(requestUrl: string, name: string): string | undefined
 function verifyRedirectLogoutSignature(
   request: RequestInfo,
   certificates: readonly string[],
+  expectedRawRequest: string,
 ): Readonly<{ present: boolean; valid: boolean }> {
   const rawRequest = rawQueryParameter(request.url, "SAMLRequest");
   const rawSignature = rawQueryParameter(request.url, "Signature");
@@ -146,6 +148,13 @@ function verifyRedirectLogoutSignature(
   if (rawRequest === undefined || rawSignature === undefined || rawSigAlg === undefined) {
     return { present: true, valid: false };
   }
+  let decodedRawRequest: string;
+  try {
+    decodedRawRequest = decodeURIComponent(rawRequest.replaceAll("+", " "));
+  } catch {
+    return { present: true, valid: false };
+  }
+  if (decodedRawRequest !== expectedRawRequest) return { present: true, valid: false };
   let sigAlg: string;
   let signature: Buffer;
   try {
@@ -440,7 +449,7 @@ async function handleIdpInitiatedLogout(
   }
   const certificates = [settings.idpCert, settings.oldIdpCert]
     .filter((cert): cert is string => typeof cert === "string" && cert !== "");
-  const redirectSignature = verifyRedirectLogoutSignature(request, certificates);
+  const redirectSignature = verifyRedirectLogoutSignature(request, certificates, rawRequest);
   if (redirectSignature.present && !redirectSignature.valid) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML redirect signature verification failed" });
     return invalid("Invalid SAML logout request signature");
@@ -480,6 +489,17 @@ async function handleIdpInitiatedLogout(
   });
   appendSetCookies(response, set.headers["Set-Cookie"]);
   return response;
+}
+
+function isApplicationLogoutRequest(request: RequestInfo): boolean {
+  if (request.headers.get("sec-fetch-site") === "same-origin") return true;
+  const origin = request.headers.get("origin");
+  if (origin === null) return false;
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false;
+  }
 }
 
 export const samlRoutes = new Elysia({ name: "saml-sso" })
@@ -689,7 +709,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion contains no NameID."), 400);
     }
 
-    if (typeof inResponseTo !== "string" || !(await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo))) {
+    if (typeof inResponseTo !== "string" || !(await consumeSsoChallenge(inResponseTo))) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML response does not match an issuance from this instance."), 400);
     }
@@ -718,8 +738,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     );
   const usernameValues = namedAttribute(attributesList, settings.attrUsername);
   const username = usernameValues[0] ?? nameIdText;
-  const emailAttributeNames = [...new Set([settings.attrEmail, "email", "mail", "Email", "EmailAddress"])]
-    .filter((name): boolean => name !== "");
+  const emailAttributeNames = settings.attrEmail !== ""
+    ? [settings.attrEmail]
+    : ["email", "mail", "Email", "EmailAddress"];
   const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
   const email = emailValues[0] ?? (nameIdText.includes("@") ? nameIdText : undefined);
   const groups = namedAttribute(attributesList, settings.attrGroups).flatMap((value): string[] =>
@@ -768,9 +789,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
       ? settings.ssoApiTokenSessionTimeout * 1000
-      : undefined;
+      : DEFAULT_SSO_API_TOKEN_TTL_MS;
     const session = await issueSsoLogin(user, { set, request, server }, {
-      ...(tokenTtlMs === undefined ? {} : { tokenTtlMs }),
+      tokenTtlMs,
       wantsToken: wantsToken(request, relayState),
     });
     await auditLog("sso-login", "saml", user.id, user.id, null, { username: user.username });
@@ -810,6 +831,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       appendSetCookies(response, set.headers["Set-Cookie"]);
       return response;
     }
+    if (!isApplicationLogoutRequest(request)) return new Response("Invalid SAML logout request", {
+      status: 400,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
     const sessionUser = await browserSessionUser(request);
     const nameId = sessionUser?.ssoProvider === "saml" ? sessionUser.ssoSubject : null;
     // Terminate the local session regardless of the IdP's availability.

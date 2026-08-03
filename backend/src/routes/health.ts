@@ -4,6 +4,7 @@ import { organizations, runs, users, workspaces } from "../db/schema";
 import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
@@ -60,20 +61,18 @@ export const healthRoutes = new Elysia({ name: "health" })
     "providers.v1": "/api/registry/v1/providers/",
   }))
   .get("/api", (): string => "Terrence API")
-  .get("/api/v2/ping", async ({ set }: SetCtx): Promise<{
-    "signup-enabled": boolean;
-    "local-auth-enabled": boolean;
-    sso: { saml: boolean; oidc: boolean; ldap: boolean };
-  }> => {
+  .get("/api/v2/ping", async ({ set }: SetCtx): Promise<unknown> => {
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
-    const sso = await ssoSettingsSnapshot().catch(() => ({
-      localAuthEnabled: true,
-      samlEnabled: false,
-      oidcEnabled: false,
-      ldapEnabled: false,
-    }));
+    let sso;
+    try {
+      sso = await ssoSettingsSnapshot();
+    } catch (error: unknown) {
+      log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
+      (set as { status: number }).status = 503;
+      return { errors: [{ status: "503", title: "Service Unavailable", detail: "SSO configuration is unavailable" }] };
+    }
     return {
       "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
       "local-auth-enabled": sso.localAuthEnabled,

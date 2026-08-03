@@ -98,6 +98,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   // Auth config state
   const [samlEnabled, setSamlEnabled] = useState(false);
+  const [persistedSamlEnabled, setPersistedSamlEnabled] = useState<boolean | null>(null);
   const [samlDebug, setSamlDebug] = useState(false);
   const [samlSsoUrl, setSamlSsoUrl] = useState("");
   const [samlSloUrl, setSamlSloUrl] = useState("");
@@ -114,6 +115,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [samlError, setSamlError] = useState<string | null>(null);
 
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [persistedOidcEnabled, setPersistedOidcEnabled] = useState<boolean | null>(null);
   const [oidcIssuer, setOidcIssuer] = useState("");
   const [oidcClientId, setOidcClientId] = useState("");
   const [oidcClientSecret, setOidcClientSecret] = useState("");
@@ -131,6 +133,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   // LDAP state
   const [ldapEnabled, setLdapEnabled] = useState(false);
+  const [persistedLdapEnabled, setPersistedLdapEnabled] = useState<boolean | null>(null);
   const [ldapHost, setLdapHost] = useState("");
   const [ldapPort, setLdapPort] = useState(389);
   const [ldapEncryption, setLdapEncryption] = useState("plain");
@@ -252,8 +255,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           sandboxAvailable: sandbox?.available === true,
           sandboxReason: typeof sandbox?.reason === "string" ? sandbox.reason : null,
         });
-        setSamlEnabled((samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
-        setOidcEnabled((oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true);
+        const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+        const oidcIsEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+        setSamlEnabled(samlIsEnabled);
+        setPersistedSamlEnabled(samlIsEnabled);
+        setOidcEnabled(oidcIsEnabled);
+        setPersistedOidcEnabled(oidcIsEnabled);
       } else if (section === "users") {
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
         setUsers(res.data);
@@ -361,6 +368,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       };
       const attrs = res.data.attributes;
       setSamlEnabled(attrs["enabled"] === true);
+      setPersistedSamlEnabled(attrs["enabled"] === true);
       setSamlDebug(attrs["debug"] === true);
       setSamlSsoUrl(typeof attrs["sso-endpoint-url"] === "string" ? attrs["sso-endpoint-url"] : "");
       setSamlSloUrl(typeof attrs["slo-endpoint-url"] === "string" ? attrs["slo-endpoint-url"] : "");
@@ -405,6 +413,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       };
       const attrs = res.data.attributes;
       setLdapEnabled(attrs["enabled"] === true);
+      setPersistedLdapEnabled(attrs["enabled"] === true);
       setLdapHost(typeof attrs["host"] === "string" ? attrs["host"] : "");
       setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 389);
       setLdapEncryption(typeof attrs["encryption"] === "string" ? attrs["encryption"] : "plain");
@@ -425,7 +434,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!localAuthEnabled && !samlEnabled && !oidcEnabled && !ldapEnabled) {
+    if (!localAuthEnabled && persistedSamlEnabled === false && persistedOidcEnabled === false && persistedLdapEnabled === false) {
       setGeneralError("At least one authentication method must remain enabled.");
       return;
     }
@@ -495,6 +504,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      setPersistedLdapEnabled(ldapEnabled);
       void loadLdapSettings();
       toast.add({ title: "LDAP settings saved", type: "success" });
     } catch (err: unknown) {
@@ -513,6 +523,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       };
       const attrs = res.data.attributes;
       setOidcEnabled(attrs["enabled"] === true);
+      setPersistedOidcEnabled(attrs["enabled"] === true);
       setOidcIssuer(typeof attrs["issuer"] === "string" ? attrs["issuer"] : "");
       setOidcClientId(typeof attrs["client-id"] === "string" ? attrs["client-id"] : "");
       setOidcClientSecret(typeof attrs["client-secret"] === "string" ? attrs["client-secret"] : "");
@@ -553,6 +564,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      setPersistedSamlEnabled(samlEnabled);
       void loadSamlSettings();
       toast.add({ title: "SAML settings saved", type: "success" });
     } catch (err: unknown) {
@@ -584,6 +596,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      setPersistedOidcEnabled(oidcEnabled);
       void loadOidcSettings();
       toast.add({ title: "OIDC settings saved", type: "success" });
     } catch (err: unknown) {

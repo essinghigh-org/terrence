@@ -10,19 +10,20 @@ async function trimSsoChallenges(kind: string): Promise<void> {
     eq(ssoChallenges.kind, kind),
     lt(ssoChallenges.expiresAt, now),
   ));
+  if (Math.random() >= 0.01) return;
   const countRow = (await db.select({ value: count() }).from(ssoChallenges).where(eq(ssoChallenges.kind, kind)))[0];
   const total = countRow?.value ?? 0;
   if (total <= MAX_CHALLENGES_PER_KIND) return;
-  const retained = await db.query.ssoChallenges.findMany({
+  const evicted = await db.query.ssoChallenges.findMany({
     where: eq(ssoChallenges.kind, kind),
     orderBy: [asc(ssoChallenges.expiresAt)],
     columns: { id: true },
     limit: total - MAX_CHALLENGES_PER_KIND,
   });
-  if (retained.length > 0) {
+  if (evicted.length > 0) {
     await db.delete(ssoChallenges).where(inArray(
       ssoChallenges.id,
-      retained.map((challenge): string => challenge.id),
+      evicted.map((challenge): string => challenge.id),
     ));
   }
 }
@@ -33,11 +34,6 @@ export async function storeSsoChallenge(
   payload: Readonly<Record<string, unknown>>,
   expiresAt: number,
 ): Promise<void> {
-  await db.delete(ssoChallenges).where(and(
-    eq(ssoChallenges.kind, kind),
-    eq(ssoChallenges.id, id),
-    lt(ssoChallenges.expiresAt, Date.now()),
-  ));
   await db.insert(ssoChallenges).values({ id, kind, payload, expiresAt })
     .onConflictDoUpdate({
       target: ssoChallenges.id,
@@ -69,12 +65,8 @@ export async function clearSsoChallenges(kind: string): Promise<void> {
 }
 
 /** Atomically consume a live challenge; replayed or expired IDs return undefined. */
-export async function consumeSsoChallenge(
-  kind: string,
-  id: string,
-): Promise<Record<string, unknown> | undefined> {
+export async function consumeSsoChallenge(id: string): Promise<Record<string, unknown> | undefined> {
   const rows = await db.delete(ssoChallenges).where(and(
-    eq(ssoChallenges.kind, kind),
     eq(ssoChallenges.id, id),
     gt(ssoChallenges.expiresAt, Date.now()),
   )).returning({ payload: ssoChallenges.payload });

@@ -42,6 +42,7 @@ describe("OIDC SSO flow", () => {
   let mockAlg: "RS256" | "HS256" | "HS384" | "HS512" | "ES256" | "none" = "RS256";
   let mockHmacSecret = "test-secret";
   let mockSupportedAlgorithms: string[] = ["RS256", "HS384", "ES256"];
+  let mockPublishRsaJwks = false;
 
   // Claim overrides let each test determine who the mock IdP says the user is.
   let mockSubject = `oidc-sub-${suffix}`;
@@ -78,9 +79,11 @@ describe("OIDC SSO flow", () => {
     mockAlg = "RS256";
     mockHmacSecret = "test-secret";
     mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
+    mockPublishRsaJwks = false;
   });
 
   let server: ReturnType<typeof Bun.serve> | undefined;
+  let originalOidc: typeof adminSettings.$inferSelect | undefined;
   const baseUrl = (): string => `http://127.0.0.1:${server?.port ?? 0}`;
 
   /** Drive one full browser SSO sequence: /oidc/auth -> IdP authorize -> SP callback. */
@@ -109,6 +112,7 @@ describe("OIDC SSO flow", () => {
 
   beforeAll(async () => {
     await resetOidcCaches();
+    originalOidc = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "oidc") });
     server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -129,7 +133,7 @@ describe("OIDC SSO flow", () => {
             return Response.json({ keys: [{ ...ecPublicJwk, use: "sig", alg: "ES256" }] });
           }
           if (mockAlg.startsWith("HS")) {
-            return Response.json({ keys: [] });
+            return Response.json({ keys: mockPublishRsaJwks ? [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] : [] });
           }
           return Response.json({ keys: [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] });
         }
@@ -225,7 +229,12 @@ describe("OIDC SSO flow", () => {
     // every row whose id carries this suite's suffix.
     const provisioned = await db.query.users.findMany({ where: like(users.username, `%-${suffix}`) });
     const ids = [adminId, localUserId, ...provisioned.map((row): string => row.id)];
-    await db.delete(adminSettings).where(eq(adminSettings.id, "oidc"));
+    if (originalOidc === undefined) {
+      await db.delete(adminSettings).where(eq(adminSettings.id, "oidc"));
+    } else {
+      await db.update(adminSettings).set({ values: originalOidc.values, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "oidc"));
+    }
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
     await db.delete(users).where(inArray(users.id, ids));
   });
@@ -350,6 +359,7 @@ describe("OIDC SSO flow", () => {
   test("does not accept an RSA public key as an HMAC secret", async () => {
     mockAlg = "HS256";
     mockSupportedAlgorithms = ["RS256", "HS256"];
+    mockPublishRsaJwks = true;
     mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
     try {
       const { response } = await completeFlow();
@@ -358,6 +368,7 @@ describe("OIDC SSO flow", () => {
       mockAlg = "RS256";
       mockHmacSecret = "test-secret";
       mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
+      mockPublishRsaJwks = false;
     }
   });
 

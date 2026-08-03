@@ -76,6 +76,21 @@ const settingDefaults: Record<string, Settings> = {
 };
 // cost, smtp, twilio, customization, oidc, ldap settings are DB-persisted via admin_settings table.
 
+// ponytail: one Bun process is the deployment model; use a database row lock if horizontal scaling is added.
+let authSettingsQueue = Promise.resolve();
+
+async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = authSettingsQueue;
+  let release!: () => void;
+  authSettingsQueue = new Promise<void>((resolve): void => { release = resolve; });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
 export async function getSettings(group: string): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
   await db.insert(adminSettings).values({ id: group, values: defaults, updatedAt: Date.now() }).onConflictDoNothing();
@@ -107,9 +122,10 @@ async function currentSamlSettings(): Promise<SamlSettings> {
 async function authLockoutResponse(
   set: SetObj,
   methods: Readonly<{ saml: boolean; oidc: boolean; ldap: boolean }>,
+  localAuthEnabled?: boolean,
 ): Promise<{ errors: { status: string; title: string; detail: string }[] } | null> {
-  const general = await getSettings("general");
-  if (general["local-auth-enabled"] !== false || methods.saml || methods.oidc || methods.ldap) return null;
+  const localAuth = localAuthEnabled ?? (await getSettings("general"))["local-auth-enabled"] !== false;
+  if (localAuth || methods.saml || methods.oidc || methods.ldap) return null;
   (set as { status: number }).status = 422;
   return {
     errors: [{
@@ -226,7 +242,9 @@ function samlInput(
   )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
   if (sloEndpointUrl !== null && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
   if (ssoEndpointUrl !== null && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
-  if (attrUsername === "" || attrEmail === "" || attrGroups === "") return { error: "attr-username, attr-email, and attr-groups must not be empty" };
+  if (attrUsername === "" || attrEmail === "" || attrGroups === "" || attrSiteAdmin === "" || siteAdminRole === "") {
+    return { error: "attr-username, attr-email, attr-groups, attr-site-admin, and site-admin-role must not be empty" };
+  }
   if (enabled && (idpCert === null || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null)) {
     return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
@@ -849,6 +867,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const data = payload.data !== null && typeof payload.data === "object"
       ? payload.data as Record<string, unknown>
@@ -880,6 +899,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       }
     });
     return { data: samlSettingsResource(await currentSamlSettings(), request) };
+    });
   })
   .post("/api/v2/admin/saml-settings/actions/revoke-old-certificate", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
@@ -910,6 +930,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
   })
   .patch("/api/v2/admin/general-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -917,18 +938,19 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
       ? attrs["local-auth-enabled"]
       : current["local-auth-enabled"] !== false;
-    if (!localAuthEnabled) {
-      const [saml, oidc, ldap] = await Promise.all([
-        currentSamlSettings(),
-        getSettings("oidc"),
-        getSettings("ldap"),
-      ]);
-      if (saml.enabled !== true && oidc.enabled !== true && ldap.enabled !== true) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "At least one SSO provider must be enabled before local authentication is disabled" }] };
-      }
-    }
+    const [saml, oidc, ldap] = await Promise.all([
+      currentSamlSettings(),
+      getSettings("oidc"),
+      getSettings("ldap"),
+    ]);
+    const authError = await authLockoutResponse(set, {
+      saml: saml.enabled === true,
+      oidc: oidc.enabled === true,
+      ldap: ldap.enabled === true,
+    }, localAuthEnabled);
+    if (authError !== null) return authError;
     return settingResource("general-settings", await updateSettings("general", attrs));
+    });
   })
   // --- B.2 Data Retention Policy Settings ---
   .get("/api/v2/admin/data-retention-policy-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -1008,11 +1030,22 @@ export const adminRoutes = new Elysia({ name: "admin" })
   })
   .patch("/api/v2/admin/oidc-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
 
     const current = await getSettings("oidc");
+    if (attrs.enabled !== undefined && typeof attrs.enabled !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
+    }
+    for (const key of ["issuer", "client-id", "client-secret", "scopes", "pkce-method"] as const) {
+      if (attrs[key] !== undefined && attrs[key] !== null && typeof attrs[key] !== "string") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
+      }
+    }
     const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
     const issuerValue = attrs.issuer === undefined
       ? current.issuer
@@ -1050,6 +1083,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       "client-id": clientId,
       "pkce-method": pkce === "" ? null : pkce,
     }));
+    });
   })
   // --- B.9 LDAP Settings ---
   .get("/api/v2/admin/ldap-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -1064,6 +1098,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
   })
   .patch("/api/v2/admin/ldap-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -1087,16 +1122,22 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] };
     }
     const encryption = attrs.encryption === undefined ? current.encryption : attrs.encryption;
-    if (!["plain", "starttls", "ldaps"].includes(String(encryption))) {
+    if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
     }
     const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
     const host = attrs.host === null ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
     const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
-    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
+    const attrUsername = attrs["attr-username"] === null
+      ? ""
+      : typeof attrs["attr-username"] === "string" ? attrs["attr-username"].trim() : typeof current["attr-username"] === "string" ? current["attr-username"] : "uid";
+    const attrEmail = attrs["attr-email"] === null
+      ? ""
+      : typeof attrs["attr-email"] === "string" ? attrs["attr-email"].trim() : typeof current["attr-email"] === "string" ? current["attr-email"] : "mail";
+    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "" || attrUsername === "" || attrEmail === "")) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host, base-dn, attr-username, and attr-email are required when LDAP is enabled" }] };
     }
     // A bind DN without a password performs an unauthenticated (anonymous)
     // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
@@ -1131,6 +1172,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
 
     const updated = await updateSettings("ldap", {
       ...attrs,
+      encryption,
+      "attr-username": attrUsername,
+      "attr-email": attrEmail,
       ...(attrs.host === undefined ? {} : { host }),
       ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
       ...(attrs["bind-dn"] === undefined ? {} : { "bind-dn": bindDn }),
@@ -1140,5 +1184,6 @@ export const adminRoutes = new Elysia({ name: "admin" })
     return settingResource("ldap-settings", {
       ...safeUpdated,
       "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+    });
     });
   });

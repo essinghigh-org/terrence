@@ -184,7 +184,7 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (request.method === "GET" && (path === "/users/saml/auth" || path === "/users/saml/slo")) return path;
+  if (request.method === "GET" && (path === "/users/saml/auth" || path === "/users/saml/logout" || path === "/users/saml/slo")) return path;
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {

@@ -86,6 +86,29 @@ test("warns when local authentication and LDAP are disabled", async (): Promise<
   expect(view.queryByRole("button", { name: "Sign in", exact: true })).toBeNull();
 });
 
+test("reports when every authentication method is disabled", async (): Promise<void> => {
+  globalThis.fetch = mock(async (): Promise<Response> => json({
+    "signup-enabled": false,
+    "local-auth-enabled": false,
+    sso: { saml: false, oidc: false, ldap: false },
+  })) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/app" element={<div>Home</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("No authentication methods are configured. Contact an administrator.")).toBeTruthy();
+  });
+  expect(view.queryByLabelText(/Username/i)).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in", exact: true })).toBeNull();
+});
+
 test("renders the password form when no SSO provider is enabled", async (): Promise<void> => {
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": true,

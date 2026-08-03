@@ -16,7 +16,7 @@ export const ENTITY_ID = "http://terrence.test/users/saml/metadata";
 export const IDP_ENTITY_ID = "http://idp.example.test/metadata";
 
 export type SamlResponseOptions = Readonly<{
-  /** Destination attribute on the Response/Assertion. */
+  /** Destination attribute on the Response element. */
   destination?: string;
   recipient?: string;
   audience?: string;
@@ -88,22 +88,22 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
   ].join("");
 
   const responseXml = `<?xml version="1.0" encoding="UTF-8"?>
-<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${destination}">
-  <saml:Issuer>${issuer}</saml:Issuer>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${escapeXml(destination)}">
+  <saml:Issuer>${escapeXml(issuer)}</saml:Issuer>
   <samlp:Status>
   <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
   </samlp:Status>
   <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}">
-    <saml:Issuer>${issuer}</saml:Issuer>
+    <saml:Issuer>${escapeXml(issuer)}</saml:Issuer>
     <saml:Subject>
-      <saml:NameID>${nameId}</saml:NameID>
+      <saml:NameID>${escapeXml(nameId)}</saml:NameID>
       <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
-        <saml:SubjectConfirmationData Recipient="${recipient}" NotOnOrAfter="${notOnOrAfter}"${inResponseTo === undefined ? "" : ` InResponseTo="${inResponseTo}"`}/>
+        <saml:SubjectConfirmationData Recipient="${escapeXml(recipient)}" NotOnOrAfter="${escapeXml(notOnOrAfter)}"${inResponseTo === undefined ? "" : ` InResponseTo="${escapeXml(inResponseTo)}"`}/>
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}">
       <saml:AudienceRestriction>
-        <saml:Audience>${audience}</saml:Audience>
+        <saml:Audience>${escapeXml(audience)}</saml:Audience>
       </saml:AudienceRestriction>
     </saml:Conditions>
     <saml:AttributeStatement>

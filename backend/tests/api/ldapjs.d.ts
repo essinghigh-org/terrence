@@ -26,7 +26,7 @@ declare module "ldapjs" {
     on(event: string, listener: (...args: unknown[]) => void): void;
     listen(port: number, host: string, callback: () => void): void;
     address(): { port: number } | string | null;
-    close(callback?: () => void): void;
+    close(callback?: (error?: Error) => void): void;
   };
   export function createServer(): Server;
   export class InvalidCredentialsError extends Error {}

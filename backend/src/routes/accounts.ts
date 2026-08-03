@@ -146,13 +146,15 @@ export async function revokeBrowserSession(
 ): Promise<boolean> {
   const token = refreshCookie(request);
   if (token === undefined || token === "") return false;
-  const current = await db.query.refreshSessions.findFirst({
-    where: eq(refreshSessions.tokenHash, tokenHash(token)),
+  return withRefreshRotationLock(async (): Promise<boolean> => {
+    const current = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.tokenHash, tokenHash(token)),
+    });
+    if (current === undefined) return false;
+    const revoked = await revokeRefreshFamily(current.familyId, current.userId);
+    clearRefreshCookie(set, request);
+    return revoked;
   });
-  if (current === undefined) return false;
-  const revoked = await revokeRefreshFamily(current.familyId, current.userId);
-  clearRefreshCookie(set, request);
-  return revoked;
 }
 
 export async function browserSessionUser(

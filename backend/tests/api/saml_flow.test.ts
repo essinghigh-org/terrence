@@ -177,6 +177,23 @@ describe("SAML SSO flow", () => {
     expect(session.data.attributes.token).toMatch(/^user-/);
   });
 
+  test("rejects a replayed assertion", async () => {
+    const auth = await app.handle(new Request("http://terrence.test/users/saml/auth"));
+    const location = new URL(auth.headers.get("Location") ?? "");
+    const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
+    if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
+    const assertion = buildSignedSamlResponse({
+      username: `replay-${suffix}`,
+      email: `replay-${suffix}@example.com`,
+      inResponseTo: requestId,
+    });
+    const first = await app.handle(samlAcsRequest(assertion));
+    expect(first.status).toBe(200);
+    const replay = await app.handle(samlAcsRequest(assertion));
+    expect(replay.status).toBe(400);
+    expect(await replay.text()).toContain("does not match");
+  });
+
   test("issues a short-lived API token for the CLI flow via RelayState", async () => {
     const response = await validAcs({ username: `cli-${suffix}`, email: `cli-${suffix}@example.com` }, "api");
     expect(response.status).toBe(200);
@@ -382,7 +399,7 @@ describe("SAML SSO flow", () => {
     const login = await validAcs({ username, email: `${username}@example.com` });
     const refreshToken = cookieValue(login, "terrence_refresh");
     const response = await app.handle(new Request("http://terrence.test/users/saml/slo", {
-      headers: { Cookie: `terrence_refresh=${refreshToken}` },
+      headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "same-origin" },
     }));
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");

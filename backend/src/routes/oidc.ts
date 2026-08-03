@@ -133,7 +133,7 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
   const endpoint = `${issuer}/.well-known/openid-configuration`;
   const response = await fetch(endpoint, {
-    redirect: "follow",
+    redirect: "error",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
@@ -263,7 +263,7 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   }
   if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   const response = await fetch(jwksUri, {
-    redirect: "follow",
+    redirect: "error",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
@@ -407,7 +407,7 @@ async function handleCallback(
     (set as { status: number }).status = 400;
     return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "The sign-in request is invalid. Please try again."), 400);
   }
-  const pendingPayload = await consumeSsoChallenge(OIDC_CHALLENGE_KIND, state);
+  const pendingPayload = await consumeSsoChallenge(state);
   const pending = pendingPayload !== undefined
     && typeof pendingPayload.nonce === "string"
     && (pendingPayload.verifier === null || typeof pendingPayload.verifier === "string")
@@ -437,8 +437,10 @@ async function handleCallback(
   try {
     config = await discovery(settings.issuer);
   } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : "unknown error";
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
     (set as { status: number }).status = 502;
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `OIDC discovery failed: ${error instanceof Error ? error.message : "unknown error"}`), 502);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
   }
 
   // Exchange the authorization code at the token endpoint.
@@ -458,12 +460,14 @@ async function handleCallback(
       method: "POST",
       headers: tokenHeaders,
       body: tokenBody.toString(),
-      redirect: "follow",
+      redirect: "error",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : "network error";
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
     (set as { status: number }).status = 502;
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `Token exchange failed: ${error instanceof Error ? error.message : "network error"}`), 502);
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502);
   }
   const tokenData = await tokenResponse.json().catch((): Record<string, unknown> => ({})) as Record<string, unknown>;
   if (!tokenResponse.ok || typeof tokenData.id_token !== "string") {
@@ -473,7 +477,8 @@ async function handleCallback(
         ? tokenData.error
         : String(tokenResponse.status);
     (set as { status: number }).status = 502;
-    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `Token exchange failed: ${detail}`), 502);
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Token exchange failed. Please try again."), 502);
   }
 
   // Validate the ID token.

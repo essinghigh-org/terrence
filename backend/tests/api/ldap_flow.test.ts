@@ -26,8 +26,6 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
       }
       next(new ldap.InvalidCredentialsError());
     });
-    server.bind("cn=admin", (_req, res, next): void => { res.end(); next(); });
-
     // The mock directory knows exactly two users, plus an ambiguous multi-entry
     // case used to exercise the unique-match rule: "duplicate" has two entries.
     server.search("dc=example,dc=com", (req, res, next): void => {
@@ -88,10 +86,13 @@ describe("LDAP authentication", () => {
   const adminId = `usr-ldap-admin-${suffix}`;
   const localId = `usr-ldap-local-${suffix}`;
   const adminToken = `ldap-admin-token-${suffix}`;
+  const ldapUsername = `alice-${suffix}`;
+  const localUsername = `bob-${suffix}`;
   const oauthApp = new Elysia().use(oauthPlugin);
   let ldapPort = 0;
   let ldapServer: Server | undefined;
   let originalGeneral: typeof adminSettings.$inferSelect | undefined;
+  let originalLdap: typeof adminSettings.$inferSelect | undefined;
 
   const request = (method: string, path: string, token?: string, body?: unknown): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -137,13 +138,14 @@ describe("LDAP authentication", () => {
 
   beforeAll(async () => {
     originalGeneral = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "general") });
+    originalLdap = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "ldap") });
     const started = await startLdapMock();
     ldapServer = started.server;
     ldapPort = started.port;
 
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
-      { id: localId, username: "bob", email: "local-bob@example.com", passwordHash: await bcrypt.hash("local-pass", 10) },
+      { id: localId, username: localUsername, email: `local-${localUsername}@example.com`, passwordHash: await bcrypt.hash("local-pass", 10) },
     ]);
     await db.insert(apiTokens).values({
       id: `api-ldap-${suffix}`,
@@ -164,34 +166,39 @@ describe("LDAP authentication", () => {
         });
       });
     }
-    await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
+    if (originalLdap === undefined) {
+      await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
+    } else {
+      await db.update(adminSettings).set({ values: originalLdap.values, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "ldap"));
+    }
     if (originalGeneral === undefined) {
       await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
     } else {
       await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "general"));
     }
-    const provisioned = await db.query.users.findMany({ where: eq(users.ssoProvider, "ldap") });
+    const provisioned = await db.query.users.findMany({ where: inArray(users.username, [ldapUsername, localUsername]) });
     const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
     await db.delete(users).where(inArray(users.id, ids));
   });
 
   test("provisions a new user on successful directory credentials", async () => {
-    const response = await login("alice", VALID_USER_PASSWORD, true);
+    const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
     expect(response.status).toBe(200);
     const body = await response.json() as { data: { attributes: { token: string } } };
     expect(body.data.attributes.token).toMatch(/^user-/);
 
-    const created = await db.query.users.findFirst({ where: eq(users.username, "alice") });
+    const created = await db.query.users.findFirst({ where: eq(users.username, ldapUsername) });
     expect(created).not.toBeUndefined();
     expect(created?.ssoProvider).toBe("ldap");
-    expect(created?.ssoSubject).toBe(USER_DN("alice"));
-    expect(created?.email).toBe("alice@example.com");
+    expect(created?.ssoSubject).toBe(USER_DN(ldapUsername));
+    expect(created?.email).toBe(`${ldapUsername}@example.com`);
   });
 
   test("rejects wrong directory credentials", async () => {
-    const response = await login("alice", "wrong-password", true);
+    const response = await login(ldapUsername, "wrong-password", true);
     expect(response.status).toBe(401);
   });
 
@@ -208,16 +215,17 @@ describe("LDAP authentication", () => {
   });
 
   test("returns a non-browser token for API logins", async () => {
-    const response = await login("alice", VALID_USER_PASSWORD, false);
+    const response = await login(ldapUsername, VALID_USER_PASSWORD, false);
     expect(response.status).toBe(200);
     const body = await response.json() as { data: { attributes: { token: string } } };
     expect(body.data.attributes.token).toMatch(/^user-/);
+    expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_refresh="))).toBeFalse();
   });
 
   test("falls back to local password when the directory rejects", async () => {
-    // "bob" exists locally; the directory also has bob but with VALID_USER_PASSWORD.
-    // Logging in with bob's local password must still work when local auth is on.
-    const response = await login("bob", "local-pass", true);
+    // The local user also exists in the directory with VALID_USER_PASSWORD.
+    // Logging in with the local password must still work when local auth is on.
+    const response = await login(localUsername, "local-pass", true);
     expect(response.status).toBe(200);
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, localId) });
     expect(refreshed?.ssoProvider).toBeNull();
@@ -227,10 +235,10 @@ describe("LDAP authentication", () => {
     await setLocalAuth(false);
     try {
       // LDAP credentials still work.
-      const ldapOk = await login("alice", VALID_USER_PASSWORD, true);
+      const ldapOk = await login(ldapUsername, VALID_USER_PASSWORD, true);
       expect(ldapOk.status).toBe(200);
       // Local-only credentials are rejected even if a local account exists.
-      const localRejected = await login("bob", "local-pass", true);
+      const localRejected = await login(localUsername, "local-pass", true);
       expect(localRejected.status).toBe(401);
     } finally {
       await setLocalAuth(true);
@@ -247,7 +255,7 @@ describe("LDAP authentication", () => {
       redirect_uri: "http://localhost:10000/login",
       response_type: "code",
       state: `ldap-cli-${suffix}`,
-      username: "alice",
+      username: ldapUsername,
       password: VALID_USER_PASSWORD,
     });
     await setLocalAuth(false);
@@ -280,7 +288,7 @@ describe("LDAP authentication", () => {
   });
 
   test("blocks provisioning when the username is already in use locally", async () => {
-    const response = await login("bob", VALID_USER_PASSWORD, true);
+    const response = await login(localUsername, VALID_USER_PASSWORD, true);
     expect(response.status).toBe(401);
     const bob = await db.query.users.findFirst({ where: eq(users.id, localId) });
     expect(bob?.ssoProvider).toBeNull();
@@ -289,9 +297,9 @@ describe("LDAP authentication", () => {
   test("disabled LDAP falls back to local authentication entirely", async () => {
     await setLdapSettings(false);
     try {
-      const ok = await login("bob", "local-pass", true);
+      const ok = await login(localUsername, "local-pass", true);
       expect(ok.status).toBe(200);
-      const rejected = await login("alice", VALID_USER_PASSWORD, true);
+      const rejected = await login(ldapUsername, VALID_USER_PASSWORD, true);
       expect(rejected.status).toBe(401);
     } finally {
       await setLdapSettings(true);
@@ -302,7 +310,7 @@ describe("LDAP authentication", () => {
     await setLdapSettings(false);
     await setLocalAuth(false);
     try {
-      const response = await login("bob", "local-pass", true);
+      const response = await login(localUsername, "local-pass", true);
       expect(response.status).toBe(401);
       const noLocal = await request("POST", "/api/v2/users/login", undefined, {
         data: { attributes: { username: "does-not-exist", password: "x", "browser-session": true } },
@@ -320,7 +328,7 @@ describe("LDAP authentication", () => {
     await setLocalAuth(false);
     await setLdapSettings(true, { "bind-dn": SERVICE_DN, "bind-password": null });
     try {
-      const response = await login("alice", VALID_USER_PASSWORD, true);
+      const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
       expect(response.status).toBe(401);
     } finally {
       await setLdapSettings(true);
