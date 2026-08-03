@@ -17,9 +17,26 @@ const settingDefaults: Record<string, Settings> = {
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
 };
 
+const SETTINGS_CACHE_TTL_MS = 1_000;
+const settingsCache = new Map<string, { values: Settings; fetchedAt: number }>();
+
+/** Force the next getSettings(group) to hit the database (after admin writes). */
+export function invalidateSettingsCache(): void {
+  settingsCache.clear();
+}
+
 export async function getSettings(group: string): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
-  await db.insert(adminSettings).values({ id: group, values: defaults, updatedAt: Date.now() }).onConflictDoNothing();
+  const cached = settingsCache.get(group);
+  if (cached !== undefined && cached.fetchedAt + SETTINGS_CACHE_TTL_MS > Date.now()) {
+    return { ...defaults, ...cached.values };
+  }
+  // Initialization writes an empty map: unset keys keep inheriting the
+  // current defaults, so future default changes apply without a rewrite.
+  await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() })
+    .onConflictDoNothing();
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
-  return { ...defaults, ...(row?.values ?? {}) };
+  const values = row?.values ?? {};
+  settingsCache.set(group, { values, fetchedAt: Date.now() });
+  return { ...defaults, ...values };
 }

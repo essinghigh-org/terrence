@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { clearSsoChallenges, consumeSsoChallenge, purgeExpiredSsoChallenges, storeSsoChallenge } from "../../src/lib/sso-challenges";
+import { invalidateSettingsCache } from "../../src/lib/settings";
 import { resetOidcCaches } from "../../src/routes/oidc";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
@@ -228,6 +229,7 @@ describe("OIDC SSO flow", () => {
     };
     await db.insert(adminSettings).values({ id: "oidc", values: oidcValues, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values: oidcValues, updatedAt: Date.now() } });
+    invalidateSettingsCache();
   });
 
   afterAll(async () => {
@@ -248,6 +250,7 @@ describe("OIDC SSO flow", () => {
       await db.update(adminSettings).set({ values: originalOidc.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
     }
+    invalidateSettingsCache();
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
     await db.delete(users).where(inArray(users.id, ids));
   });
@@ -420,6 +423,7 @@ describe("OIDC SSO flow", () => {
     // instead of the missing-configuration guard.
     await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS256" }, updatedAt: Date.now() })
       .where(eq(adminSettings.id, "oidc"));
+    invalidateSettingsCache();
     try {
       const { response } = await completeFlow();
       expect(response.status).toBe(400);
@@ -430,6 +434,7 @@ describe("OIDC SSO flow", () => {
       mockPublishRsaJwks = false;
       await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
+      invalidateSettingsCache();
     }
   });
 
@@ -523,6 +528,7 @@ describe("OIDC SSO flow", () => {
     const originalValues = current?.values ?? {};
     await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS384" }, updatedAt: Date.now() })
       .where(eq(adminSettings.id, "oidc"));
+    invalidateSettingsCache();
     try {
       const { response } = await completeFlow();
       expect(response.status).toBe(200);
@@ -530,6 +536,7 @@ describe("OIDC SSO flow", () => {
       mockAlg = "RS256";
       await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
+      invalidateSettingsCache();
     }
   });
 

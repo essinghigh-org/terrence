@@ -15,6 +15,31 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
+test("falls back to local sign-in when the ping request fails", async (): Promise<void> => {
+  globalThis.fetch = mock(async (): Promise<Response> => {
+    throw new Error("ping unavailable");
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/app" element={<div>Home</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  // The fallback restores local authentication and signup while keeping the
+  // SSO flags disabled, so the credential form renders.
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(view.getByLabelText(/Username/i)).toBeTruthy();
+    expect(view.getByRole("link", { name: "Create account" })).toBeTruthy();
+  });
+  expect(view.queryByRole("button", { name: "Sign in with SAML SSO" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in with OpenID Connect" })).toBeNull();
+});
+
 test("renders SAML and OIDC single sign-on buttons when the providers are enabled", async (): Promise<void> => {
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,

@@ -5,6 +5,7 @@ import { and, eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { clearSsoChallenges } from "../../src/lib/sso-challenges";
+import { invalidateSettingsCache } from "../../src/lib/settings";
 import {
   adminSettings,
   apiTokens,
@@ -109,6 +110,7 @@ describe("SAML SSO flow", () => {
       .onConflictDoUpdate({ target: samlSettings.id, set: samlUpdate });
     await db.insert(adminSettings).values({ id: "saml", values: { "link-by-email": true }, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values: { "link-by-email": true }, updatedAt: Date.now() } });
+    invalidateSettingsCache();
   });
 
   afterAll(async () => {
@@ -127,11 +129,16 @@ describe("SAML SSO flow", () => {
       await db.update(adminSettings).set({ values: originalSamlLink.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "saml"));
     }
+    invalidateSettingsCache();
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
-    // Delete team memberships by team, not by user, so group-mapped rows do
-    // not remain and trip the FK on teams.
-    await db.delete(teamMemberships).where(eq(teamMemberships.teamId, `team-dev-${suffix}`));
-    await db.delete(teams).where(eq(teams.id, `team-dev-${suffix}`));
+    // Delete team memberships by organization, not by user or by a single
+    // team ID, so group-mapped rows cannot remain and trip the FK on teams.
+    const orgTeams = await db.query.teams.findMany({ where: eq(teams.orgId, orgId) });
+    if (orgTeams.length > 0) {
+      await db.delete(teamMemberships)
+        .where(inArray(teamMemberships.teamId, orgTeams.map((row): string => row.id)));
+    }
+    await db.delete(teams).where(eq(teams.orgId, orgId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(inArray(users.id, ids));

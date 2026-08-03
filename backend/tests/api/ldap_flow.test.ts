@@ -10,6 +10,7 @@ import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
 import { oauthPlugin } from "../../src/oauth";
 import { invalidatePingSsoCache } from "../../src/routes/health";
+import { invalidateSettingsCache } from "../../src/lib/settings";
 
 const SERVICE_DN = "cn=admin,dc=example,dc=com";
 const USER_DN = (username: string): string => `uid=${username},dc=example,dc=com`;
@@ -136,6 +137,7 @@ describe("LDAP authentication", () => {
     };
     await db.insert(adminSettings).values({ id: "ldap", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+    invalidateSettingsCache();
     invalidatePingSsoCache();
   };
 
@@ -145,6 +147,7 @@ describe("LDAP authentication", () => {
       : { "local-auth-enabled": false, "limit-user-organization-creation": false };
     await db.insert(adminSettings).values({ id: "general", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+    invalidateSettingsCache();
     invalidatePingSsoCache();
   };
 
@@ -193,6 +196,7 @@ describe("LDAP authentication", () => {
         await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
           .where(eq(adminSettings.id, "general"));
       }
+      invalidateSettingsCache();
       const provisioned = await db.query.users.findMany({ where: inArray(users.username, [ldapUsername, localUsername]) });
       const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
       await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));

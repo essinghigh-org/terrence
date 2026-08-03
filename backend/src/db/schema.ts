@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
-import { sqliteTable, text, integer, index, uniqueIndex, check } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const users = sqliteTable("users", {
@@ -13,17 +13,16 @@ export const users = sqliteTable("users", {
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
   theme: text("theme").notNull().default("original-light"),
   // External identity for SAML / OIDC / LDAP provisioned accounts.
-  // Both NULL for local accounts. (sso_provider, sso_subject) is unique.
+  // Both NULL for local accounts. (sso_provider, sso_subject) is unique and
+  // the all-or-nothing pairing is enforced by the users_sso_identity_pair_*
+  // triggers created in migration 0058 (a table check cannot be added to an
+  // existing table portably, so the triggers are the source of truth).
   ssoProvider: text("sso_provider"),
   ssoSubject: text("sso_subject"),
   // True when the site-admin flag was granted through the SAML site-admin
   // attribute; such grants are revoked when the attribute stops matching.
   ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
-  check("users_sso_identity_pair_check", sql`(
-    (${table.ssoProvider} IS NULL AND ${table.ssoSubject} IS NULL)
-    OR (${table.ssoProvider} IS NOT NULL AND ${table.ssoSubject} IS NOT NULL)
-  )`),
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);
 

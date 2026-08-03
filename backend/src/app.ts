@@ -112,6 +112,10 @@ function envPositiveInt(name: string, fallback: number): number {
 const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 30);
 const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
 const SENSITIVE_RATE_DURATION_MS = 60_000;
+// SSO initiation and IdP-initiated logout arrive from browsers/IdPs (shared
+// NATs, corporate proxies), so the 5/min credential limiter would break
+// legitimate flows; give them their own, higher-bound limiter.
+const SSO_GET_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SSO_GET_MAX", 60);
 // The five SSO endpoints are sensitive no matter the verb: the protected GETs
 // mutate challenge state and the POSTs consume assertion/form-post payloads.
 // Share one set so path matching and rate limiting never drift apart.
@@ -189,10 +193,15 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
   return authenticatedRateLimitKey(request) ?? ipRateLimitKey(request, server);
 }
 
+function sensitiveSsoPath(request: CustomRequest): string | undefined {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET" && SSO_AUTH_PATHS.has(path)) return path;
+  return undefined;
+}
+
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (request.method === "GET" && SSO_AUTH_PATHS.has(path)) return path;
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
@@ -274,6 +283,22 @@ export const app = new Elysia()
       }],
     },
     skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
+  }))
+  .use(rateLimit({
+    context: fixedWindowContext(),
+    duration: SENSITIVE_RATE_DURATION_MS,
+    max: SSO_GET_RATE_LIMIT,
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+      return `sso-get:${sensitiveSsoPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+    },
+    responseMessage: {
+      errors: [{
+        detail: "You have exceeded the API's rate limit.",
+        status: "429",
+        title: "Too Many Requests",
+      }],
+    },
+    skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
   }))
   .use(oauthPlugin)
   .onRequest(({ request, set }: RequestContext): void => {

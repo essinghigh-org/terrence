@@ -14,6 +14,9 @@ export type LdapUser = Readonly<{
   displayName: string | null;
 }>;
 
+/** Cap search results so a misconfigured filter cannot return unbounded rows. */
+const LDAP_SEARCH_SIZE_LIMIT = 10;
+
 /** RFC 4515 filter-value escaping. */
 function escapeFilterValue(value: string): string {
   return value
@@ -64,11 +67,20 @@ export async function authenticateLdap(
   username: string,
   password: string,
 ): Promise<{ user: LdapUser | null; unavailable: boolean }> {
-  if (!settings.enabled || settings.host === null || settings.baseDn === null) {
+  // Blank values mean "absent": normalize once so every guard and bind below
+  // treats them uniformly, and a blank bind DN is "no service account" even
+  // when a password was persisted next to it.
+  const host = settings.host !== null && settings.host.trim() !== "" ? settings.host.trim() : null;
+  const baseDn = settings.baseDn !== null && settings.baseDn.trim() !== "" ? settings.baseDn.trim() : null;
+  const bindDn = settings.bindDn !== null && settings.bindDn.trim() !== "" ? settings.bindDn.trim() : null;
+  const bindPassword = bindDn === null
+    ? null
+    : settings.bindPassword !== null && settings.bindPassword.trim() !== "" ? settings.bindPassword : null;
+  if (!settings.enabled || host === null || baseDn === null) {
     return { user: null, unavailable: false };
   }
   if (username === "" || password === "") return { user: null, unavailable: false };
-  if (settings.bindDn !== null && (settings.bindPassword === null || settings.bindPassword === "")) {
+  if (bindDn !== null && (bindPassword === null || bindPassword === "")) {
     // A zero-length password performs an *unauthenticated bind* per
     // RFC 4511 §4.2 — fail closed, and flag it as a config problem that
     // should degrade to local auth immediately rather than retry the wire.
@@ -78,7 +90,7 @@ export async function authenticateLdap(
   const scheme = settings.encryption === "ldaps" ? "ldaps" : "ldap";
   const tlsOptions = { minVersion: "TLSv1.2" as const };
   const clientOptions = {
-    url: `${scheme}://${settings.host}:${settings.port}`,
+    url: `${scheme}://${host}:${settings.port}`,
     timeout: 10_000,
     connectTimeout: 10_000,
     ...(settings.encryption === "plain" ? {} : { tlsOptions }),
@@ -92,14 +104,14 @@ export async function authenticateLdap(
     if (settings.encryption === "starttls") {
       await client.startTLS(tlsOptions);
     }
-    if (settings.bindDn !== null) {
+    if (bindDn !== null) {
       activeBind = "service";
-      await client.bind(settings.bindDn, settings.bindPassword ?? "");
+      await client.bind(bindDn, bindPassword ?? "");
       activeBind = null;
     }
 
     const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
-    const result = await client.search(settings.baseDn, {
+    const result = await client.search(baseDn, {
       scope: "sub",
       filter,
       attributes: [settings.attrUsername, settings.attrEmail, settings.attrDisplayName],
@@ -159,7 +171,6 @@ const ldapFailureCache = new Map<string, number>();
 const ldapProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const ldapHostProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
-const LDAP_SEARCH_SIZE_LIMIT = 10;
 // Probe keys must be unpredictable: a plain SHA-256 of the password could be
 // brute-forced offline. The key is random per process and lives only in
 // memory, so the digest is useless outside this instance.

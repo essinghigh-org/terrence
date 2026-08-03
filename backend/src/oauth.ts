@@ -92,6 +92,27 @@ function escapeHtml(value: string): string {
 
 type SsoInfo = Readonly<{ saml: boolean; oidc: boolean; ldap: boolean; localAuthEnabled: boolean }>;
 
+/**
+ * Read the SSO snapshot for the login page. On failure the page still has to
+ * render: fall back to local-only sign-in so the CLI flow stays usable.
+ */
+async function ssoInfoOrDefault(): Promise<SsoInfo> {
+  try {
+    const sso = await ssoSettingsSnapshot();
+    return {
+      saml: sso.samlEnabled,
+      oidc: sso.oidcEnabled,
+      ldap: sso.ldapEnabled,
+      localAuthEnabled: sso.localAuthEnabled,
+    };
+  } catch (error: unknown) {
+    log.warn("Unable to read SSO configuration; rendering login with defaults", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { saml: false, oidc: false, ldap: false, localAuthEnabled: true };
+  }
+}
+
 function loginPage(
   request: Readonly<AuthorizationRequest> | null,
   error = "",
@@ -224,13 +245,7 @@ type TokenCtx = {
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
   .get("/oauth/authorization", async ({ query }: QueryCtx): Promise<Response> => {
     const request = parseAuthorizationRequest(query);
-    const sso = await ssoSettingsSnapshot();
-    const ssoInfo: SsoInfo = {
-      saml: sso.samlEnabled,
-      oidc: sso.oidcEnabled,
-      ldap: sso.ldapEnabled,
-      localAuthEnabled: sso.localAuthEnabled,
-    };
+    const ssoInfo = await ssoInfoOrDefault();
     return htmlResponse(loginPage(request, "", "", ssoInfo), request !== null ? 200 : 400);
   })
   .post("/oauth/authorization", async ({ body }: BodyCtx): Promise<Response> => {

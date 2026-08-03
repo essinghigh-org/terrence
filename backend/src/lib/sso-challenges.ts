@@ -24,12 +24,15 @@ async function trimSsoChallenges(kind: string): Promise<void> {
     eq(ssoChallenges.kind, kind),
     lt(ssoChallenges.expiresAt, now),
   ));
-  if (Math.random() >= 0.01) return;
+  // Count on every store/claim so the per-kind cap is enforced even under a
+  // flood (no sampling).
   const countRow = (await db.select({ value: count() }).from(ssoChallenges).where(eq(ssoChallenges.kind, kind)))[0];
   const total = countRow?.value ?? 0;
   if (total <= MAX_CHALLENGES_PER_KIND) return;
+  // Only already-expired rows are evicted: live challenges belong to
+  // in-flight logins and must never be pruned to satisfy the cap.
   const evicted = await db.query.ssoChallenges.findMany({
-    where: eq(ssoChallenges.kind, kind),
+    where: and(eq(ssoChallenges.kind, kind), lt(ssoChallenges.expiresAt, now)),
     orderBy: [asc(ssoChallenges.expiresAt)],
     columns: { id: true },
     limit: total - MAX_CHALLENGES_PER_KIND,
@@ -42,19 +45,30 @@ async function trimSsoChallenges(kind: string): Promise<void> {
   }
 }
 
+/**
+ * Store (or refresh) a single-use challenge. Returns true when the row was
+ * written, false when an ID collision with a different kind left the existing
+ * row untouched.
+ */
 export async function storeSsoChallenge(
   kind: string,
   id: string,
   payload: Readonly<Record<string, unknown>>,
   expiresAt: number,
-): Promise<void> {
-  await db.insert(ssoChallenges).values({ id, kind, payload, expiresAt })
+): Promise<boolean> {
+  const rows = await db.insert(ssoChallenges).values({ id, kind, payload, expiresAt })
     .onConflictDoUpdate({
       target: ssoChallenges.id,
+      // The id column is the conflict target, so the same id under a
+      // different kind must not overwrite the live row: the setWhere guard
+      // keeps the first kind's record (SQLite skips the update silently).
       set: { payload, expiresAt },
-      where: eq(ssoChallenges.kind, kind),
-    });
+      setWhere: eq(ssoChallenges.kind, kind),
+    })
+    .returning({ id: ssoChallenges.id });
+  const written = rows.length === 1;
   await trimSsoChallenges(kind);
+  return written;
 }
 
 /** Claim an ID once without a read-then-write race. */

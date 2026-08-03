@@ -7,7 +7,6 @@ import { randomBytes, verify as verifySignature } from "node:crypto";
 import { deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
 import { DOMParser } from "@xmldom/xmldom";
 import { SignedXml } from "xml-crypto";
-import { XMLParser } from "fast-xml-parser";
 import { db } from "../db";
 import { samlSettings, users } from "../db/schema";
 import { getSettings } from "../lib/settings";
@@ -101,6 +100,10 @@ function acsUrl(request: RequestInfo): string {
 
 function sloUrl(request: RequestInfo): string {
   return new URL("/users/saml/slo", ssoBaseUrl(request)).toString();
+}
+
+function logoutEndpointUrl(request: RequestInfo): string {
+  return new URL("/users/saml/logout", ssoBaseUrl(request)).toString();
 }
 
 function xmlEscape(value: string): string {
@@ -224,6 +227,7 @@ type LogoutVerification = Readonly<{
   requestId?: string;
   issuer?: string;
   destination?: string;
+  issueInstant?: string;
 }>;
 
 function verifyLogoutSignature(
@@ -247,7 +251,8 @@ function verifyLogoutSignature(
   if (nameId === "") return { valid: false, error: "SAML logout request has no NameID" };
   const issuer = request?.getElementsByTagNameNS("*", "Issuer").item(0)?.textContent?.trim() ?? "";
   const destination = request?.getAttribute("Destination") ?? "";
-  if (redirectBinding) return { valid: true, error: "", nameId, requestId, issuer, destination };
+  const issueInstant = request?.getAttribute("IssueInstant") ?? "";
+  if (redirectBinding) return { valid: true, error: "", nameId, requestId, issuer, destination, issueInstant };
   const signatureElement = doc.getElementsByTagNameNS("*", "Signature").item(0);
   if (signatureElement === null) return { valid: false, error: "SAML logout request is not signed" };
   for (const certificate of certificates) {
@@ -268,7 +273,7 @@ function verifyLogoutSignature(
       if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) continue;
       const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
       if (signedNameId !== nameId) continue;
-      return { valid: true, error: "", nameId, requestId, issuer, destination };
+      return { valid: true, error: "", nameId, requestId, issuer, destination, issueInstant };
     } catch {
       // Try the next certificate (e.g. the old cert during rotation).
     }
@@ -276,59 +281,71 @@ function verifyLogoutSignature(
   return { valid: false, error: "SAML logout request signature verification failed" };
 }
 
-/** Local-name lookup against namespace-prefixed keys ("samlp:Response" -> "Response"). */
-function local(record: Record<string, unknown> | undefined, name: string): unknown {
-  if (record === undefined) return undefined;
-  if (name in record) return record[name];
-  const key = Object.keys(record).find((candidate): boolean => candidate.split(":")[1] === name);
-  return key === undefined ? undefined : record[key];
+/** Local-name DOM helpers: the document may use any namespace prefix. */
+type DomRoot = Readonly<{
+  getElementsByTagNameNS(namespaceURI: string | null, localName: string): Readonly<{ item(index: number): DomElement | null; readonly length: number }>;
+}>;
+type DomElement = Readonly<{
+  getAttribute(name: string): string | null;
+  readonly textContent: string | null;
+  getElementsByTagNameNS(namespaceURI: string | null, localName: string): Readonly<{ item(index: number): DomElement | null; readonly length: number }>;
+}>;
+
+function domElements(root: DomRoot | null, localName: string): DomElement[] {
+  if (root === null) return [];
+  const nodes = root.getElementsByTagNameNS("*", localName);
+  const out: DomElement[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes.item(index);
+    if (node !== null) out.push(node);
+  }
+  return out;
 }
 
-function attr(record: Record<string, unknown> | null | undefined): Record<string, unknown> {
-  if (record === null || record === undefined || typeof record !== "object") return {};
-  return record;
+function domElement(root: DomRoot | null, localName: string): DomElement | null {
+  return root?.getElementsByTagNameNS("*", localName).item(0) ?? null;
 }
 
-function attributeValues(element: Record<string, unknown> | undefined): string[] {
-  if (element === undefined) return [];
-  const value = local(element, "AttributeValue");
-  if (value === undefined) return [];
-  const values = Array.isArray(value) ? value : [value];
-  return values
-    .map((item): string => {
-      if (typeof item === "string") return item;
-      if (item !== null && typeof item === "object") {
-        const text = (item as Record<string, unknown>)["#text"];
-        return typeof text === "string" ? text : "";
-      }
-      return "";
-    })
-    .filter((item): boolean => item !== "");
+function domText(root: DomRoot | null, localName: string): string {
+  return domElement(root, localName)?.textContent ?? "";
 }
 
-/** Find the Attribute element whose Name or FriendlyName matches. */
+type SamlAttribute = Readonly<{ name: string | null; friendlyName: string | null; values: readonly string[] }>;
+
+/** Read Attribute elements (Name/FriendlyName + AttributeValue texts). */
+function samlAttributes(statement: DomElement): SamlAttribute[] {
+  return domElements(statement, "Attribute").map((attribute): SamlAttribute => ({
+    name: attribute.getAttribute("Name"),
+    friendlyName: attribute.getAttribute("FriendlyName"),
+    values: domElements(attribute, "AttributeValue")
+      .map((value): string => value.textContent ?? "")
+      .filter((value): boolean => value !== ""),
+  }));
+}
+
+/** Find every Attribute element whose Name or FriendlyName matches. */
 function namedAttribute(attributes: unknown, name: string): string[] {
   if (!Array.isArray(attributes)) return [];
+  const collected: string[] = [];
   for (const attribute of attributes) {
     if (attribute === null || typeof attribute !== "object") continue;
-    const record = attribute as Record<string, unknown>;
-    const attributeName = record["@_Name"];
-    const friendlyName = record["@_FriendlyName"];
-    if ((typeof attributeName === "string" && attributeName === name)
-      || (typeof friendlyName === "string" && friendlyName === name)) {
-      return attributeValues(record);
+    const record = attribute as SamlAttribute;
+    if ((typeof record.name === "string" && record.name === name)
+      || (typeof record.friendlyName === "string" && record.friendlyName === name)) {
+      collected.push(...record.values);
     }
   }
-  return [];
+  return collected;
 }
 
-function spMetadataXml(entityId: string, acs: string, slo: string): string {
+function spMetadataXml(entityId: string, acs: string, slo: string, postSlo: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${xmlEscape(entityId)}">
   <md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
     <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified</md:NameIDFormat>
     <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlEscape(acs)}" index="0" isDefault="true"/>
     <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${xmlEscape(slo)}"/>
+    <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlEscape(postSlo)}"/>
   </md:SPSSODescriptor>
 </md:EntityDescriptor>
 `;
@@ -343,17 +360,6 @@ function authnRequestXml(entityId: string, acs: string, ssoEndpointUrl: string, 
 </samlp:AuthnRequest>
 `;
 }
-
-const xmlParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: "@_",
-  textNodeName: "#text",
-  parseTagValue: false,
-  parseAttributeValue: false,
-  // Entity expansion stays disabled for accepted SAML messages; decodeSamlMessage
-  // already rejects DOCTYPEs.
-  processEntities: false,
-});
 
 /**
  * Verify a signed SAML response and return the exact (code-verified)
@@ -490,12 +496,19 @@ async function handleIdpInitiatedLogout(
     await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
     return invalid("Invalid SAML logout request signature");
   }
-  // The LogoutRequest must name this IdP and target this SP's SLO endpoint;
-  // otherwise the session must not be revoked on its authority.
+  // The IssueInstant must be present and within the clock-skew window: a
+  // stale or future-dated LogoutRequest is not worth acting on.
+  const issueInstantMs = verifiedLogout.issueInstant !== undefined ? Date.parse(verifiedLogout.issueInstant) : Number.NaN;
+  if (Number.isNaN(issueInstantMs) || Math.abs(Date.now() - issueInstantMs) > TIME_SKEW_MS) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issue instant out of range" });
+    return invalid("Invalid SAML logout request");
+  }
+  // The LogoutRequest must name this IdP and target one of this SP's SLO
+  // endpoints; otherwise the session must not be revoked on its authority.
   if (verifiedLogout.issuer === undefined || verifiedLogout.issuer === ""
     || verifiedLogout.issuer !== settings.idpEntityId
     || verifiedLogout.destination === undefined || verifiedLogout.destination === ""
-    || verifiedLogout.destination !== sloUrl(request)) {
+    || (verifiedLogout.destination !== sloUrl(request) && verifiedLogout.destination !== logoutEndpointUrl(request))) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issuer or destination mismatch" });
     return invalid("Invalid SAML logout request");
   }
@@ -560,7 +573,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     request: RequestInfo;
   }): Promise<Response> => {
     await currentSamlSettings();
-    return new Response(spMetadataXml(samlSpEntityId(request), acsUrl(request), sloUrl(request)), {
+    return new Response(spMetadataXml(samlSpEntityId(request), acsUrl(request), sloUrl(request), logoutEndpointUrl(request)), {
       headers: {
         "Content-Type": "application/xml; charset=utf-8",
         "Cache-Control": "public, max-age=300",
@@ -584,7 +597,13 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const requestId = `_${randomBytes(16).toString("hex")}`;
     // Record the issued AuthnRequest so the ACS can match InResponseTo and
     // reject replayed or unsolicited assertions.
-    const relayState = typeof query.RelayState === "string" ? query.RelayState : null;
+    const rawRelayState = typeof query.RelayState === "string" ? query.RelayState : null;
+    // SAML 2.0 bindings cap RelayState at 80 bytes; reject oversized values
+    // instead of storing or forwarding them to the IdP.
+    if (rawRelayState !== null && Buffer.byteLength(rawRelayState, "utf8") > 80) {
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "RelayState is too large."), 400);
+    }
+    const relayState = rawRelayState;
     await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, { relayState }, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
     const authnRequest = encodeRedirect(authnRequestXml(samlSpEntityId(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
     target.searchParams.set("SAMLRequest", authnRequest);
@@ -632,20 +651,25 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be decoded."), 400);
     }
 
-    // Parse the top-level response for its attributes (Status, Destination).
-    let parsed: Record<string, unknown>;
+    // Parse the top-level response with the DOM parser so structure,
+    // attributes, and signatures all come from the same source.
+    let responseDoc: ReturnType<DOMParser["parseFromString"]>;
     try {
-      parsed = xmlParser.parse(xml) as Record<string, unknown>;
+      responseDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(xml, "text/xml");
     } catch {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be parsed."), 400);
     }
-    const responseElement = attr(local(parsed, "Response") as Record<string, unknown> | undefined);
+    const responseElement = domElement(responseDoc, "Response");
+    if (responseElement === null) {
+      (set as { status: number }).status = 400;
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be parsed."), 400);
+    }
 
     // Reject an explicitly failed response. Status is outside an
     // assertion-only signature, so the signed assertion below remains the
     // authentication gate when the IdP does not sign the Response element.
-    const statusCode = attr(local(local(responseElement, "Status") as Record<string, unknown> | undefined, "StatusCode") as Record<string, unknown> | undefined)["@_Value"];
+    const statusCode = domElement(responseElement, "StatusCode")?.getAttribute("Value") ?? "";
     if (statusCode !== SAML_SUCCESS_STATUS) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
       (set as { status: number }).status = 400;
@@ -664,14 +688,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     // Parse only the assertion that was actually covered by the verified
     // signature — never the full untrusted document.
-    let parsedAssertion: Record<string, unknown>;
+    let assertionElement: DomElement;
     try {
-      const verified = xmlParser.parse(signature.assertionXml) as Record<string, unknown>;
-      const assertion = local(verified, "Assertion");
-      if (assertion === undefined || typeof assertion !== "object" || assertion === null) {
-        throw new Error("no assertion");
-      }
-      parsedAssertion = assertion as Record<string, unknown>;
+      const verifiedDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(signature.assertionXml, "text/xml");
+      const assertion = domElement(verifiedDoc, "Assertion");
+      if (assertion === null) throw new Error("no assertion");
+      assertionElement = assertion;
     } catch {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response contains no assertion."), 400);
@@ -679,71 +701,59 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     // Reject replays: an assertion whose ID we have already consumed within
     // its validity window is a re-submission of a live assertion.
-    const assertionIdElement = parsedAssertion["@_ID"];
-    if (typeof assertionIdElement !== "string" || assertionIdElement === "") {
+    const assertionIdElement = assertionElement.getAttribute("ID") ?? "";
+    if (assertionIdElement === "") {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion has no ID."), 400);
     }
 
-    const responseDestination = responseElement["@_Destination"];
+    const responseDestination = responseElement.getAttribute("Destination");
     if (typeof responseDestination === "string" && responseDestination !== "" && responseDestination !== acsUrl(request)) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion Destination does not match the ACS URL."), 400);
     }
-    const conditions = attr(local(parsedAssertion, "Conditions") as Record<string, unknown> | undefined);
-    const notBefore = conditions["@_NotBefore"];
-    const notOnOrAfter = conditions["@_NotOnOrAfter"];
+    const conditionsElement = domElement(assertionElement, "Conditions");
+    const notBefore = conditionsElement?.getAttribute("NotBefore") ?? undefined;
+    const notOnOrAfter = conditionsElement?.getAttribute("NotOnOrAfter") ?? undefined;
     const parseInstant = (value: unknown): number | undefined =>
       typeof value === "string" ? Date.parse(value) : undefined;
-    const notBeforeMs = typeof notBefore === "string" ? parseInstant(notBefore) : undefined;
+    const notBeforeMs = parseInstant(notBefore);
     if (notBeforeMs !== undefined && (Number.isNaN(notBeforeMs) || notBeforeMs - TIME_SKEW_MS > now)) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion is not yet valid."), 400);
     }
-    const notOnOrAfterMs = typeof notOnOrAfter === "string" ? parseInstant(notOnOrAfter) : undefined;
+    const notOnOrAfterMs = parseInstant(notOnOrAfter);
     if (notOnOrAfterMs !== undefined && (Number.isNaN(notOnOrAfterMs) || notOnOrAfterMs + TIME_SKEW_MS < now)) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion has expired."), 400);
     }
 
-    const audience = local(conditions, "AudienceRestriction");
-    const audiences = Array.isArray(audience)
-      ? audience.flatMap((entry): string[] => {
-        const value = local(attr(entry as Record<string, unknown>), "Audience");
-        return typeof value === "string" ? [value] : [];
-      })
-      : (() => {
-        const value = local(attr(audience as Record<string, unknown> | undefined), "Audience");
-        return typeof value === "string" ? [value] : [];
-      })();
+    const audiences = domElements(assertionElement, "AudienceRestriction").flatMap((restriction): string[] =>
+      domElements(restriction, "Audience").map((audience): string => audience.textContent?.trim() ?? "")
+    );
     const entityId = samlSpEntityId(request);
     if (audiences.length === 0 || !audiences.includes(entityId)) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion audience does not match this instance."), 400);
     }
 
-    const assertionIssuer = local(parsedAssertion, "Issuer");
-    const assertionIssuerText = typeof assertionIssuer === "string"
-      ? assertionIssuer
-      : attr(assertionIssuer as Record<string, unknown> | undefined)["#text"];
+    const assertionIssuerText = domText(assertionElement, "Issuer");
     if (typeof settings.idpEntityId !== "string" || settings.idpEntityId === ""
       || assertionIssuerText !== settings.idpEntityId) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion issuer does not match the configured identity provider."), 400);
     }
 
-    const subject = attr(local(parsedAssertion, "Subject") as Record<string, unknown> | undefined);
-    const confirmations = local(subject, "SubjectConfirmation");
-    const confirmationList: unknown[] = Array.isArray(confirmations) ? confirmations as unknown[] : [confirmations];
-    const validConfirmation = confirmationList.find((candidate): boolean => {
-      const confirmation = attr(candidate as Record<string, unknown> | undefined);
-      if (confirmation["@_Method"] !== BEARER) return false;
-      const data = attr(local(confirmation, "SubjectConfirmationData") as Record<string, unknown> | undefined);
-      const inResponseTo = data["@_InResponseTo"];
-      const recipient = data["@_Recipient"];
-      const notOnOrAfter = data["@_NotOnOrAfter"];
-      if (typeof inResponseTo !== "string" || inResponseTo === "") return false;
-      if (recipient !== acsUrl(request) || typeof notOnOrAfter !== "string") return false;
+    const subjectElement = domElement(assertionElement, "Subject");
+    const confirmationList = domElements(subjectElement, "SubjectConfirmation");
+    const validConfirmation = confirmationList.find((confirmation): boolean => {
+      if (confirmation.getAttribute("Method") !== BEARER) return false;
+      const data = domElement(confirmation, "SubjectConfirmationData");
+      if (data === null) return false;
+      const inResponseTo = data.getAttribute("InResponseTo") ?? "";
+      const recipient = data.getAttribute("Recipient") ?? "";
+      const notOnOrAfter = data.getAttribute("NotOnOrAfter") ?? "";
+      if (inResponseTo === "" || recipient !== acsUrl(request) || notOnOrAfter === "") return false;
       const expiresAt = Date.parse(notOnOrAfter);
       return !Number.isNaN(expiresAt) && expiresAt + TIME_SKEW_MS >= now;
     });
@@ -751,15 +761,11 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML subject confirmation is invalid or does not match this request."), 400);
     }
-    const subjectData = attr(local(
-      attr(validConfirmation as Record<string, unknown>),
-      "SubjectConfirmationData",
-    ) as Record<string, unknown> | undefined);
-    const inResponseTo = subjectData["@_InResponseTo"];
+    const subjectData = domElement(validConfirmation, "SubjectConfirmationData");
+    const inResponseTo = subjectData?.getAttribute("InResponseTo") ?? "";
 
-    const nameId = local(subject, "NameID");
-    const nameIdText = typeof nameId === "string" ? nameId : attr(nameId as Record<string, unknown> | undefined)["#text"];
-    if (typeof nameIdText !== "string" || nameIdText === "") {
+    const nameIdText = domText(subjectElement, "NameID");
+    if (nameIdText === "") {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion contains no NameID."), 400);
     }
@@ -784,19 +790,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion has already been used."), 400);
     }
 
-    const asArray = (value: unknown): unknown[] => {
-    if (value === undefined || value === null) return [];
-    return Array.isArray(value) ? value : [value];
-  };
-
-  // fast-xml-parser collapses repeated elements: a single Attribute becomes
-  // a plain object and several AttributeStatement elements become an array.
-  // Normalize both levels so single-attribute assertions are not silently
-  // dropped (which would wipe groups, site-admin, and email mapping).
-  const attributesList = asArray(local(parsedAssertion, "AttributeStatement"))
-    .flatMap((statement): unknown[] =>
-      asArray(local(attr(statement as Record<string, unknown>), "Attribute"))
-    );
+    const attributesList = domElements(assertionElement, "AttributeStatement")
+      .flatMap((statement): SamlAttribute[] => samlAttributes(statement));
   const usernameValues = namedAttribute(attributesList, settings.attrUsername);
   const username = usernameValues[0] ?? nameIdText;
   // Linking by email must be anchored to an explicitly configured attribute:

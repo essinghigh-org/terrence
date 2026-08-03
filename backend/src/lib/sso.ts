@@ -265,11 +265,30 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
   });
   if (raced === undefined) {
-    const usernameCollision = await db.query.users.findFirst({ where: eq(users.username, username) });
-    if (usernameCollision !== undefined) throw new SsoConflictError(identity.provider, username);
+    // The insert was skipped: find out why so the caller gets a specific,
+    // sanitized conflict instead of a silent failure. Usernames and emails
+    // are matched case-insensitively so "Alice" cannot shadow "alice".
+    const usernameCollision = await db.query.users.findFirst({
+      where: sql`lower(${users.username}) = lower(${username})`,
+    });
+    if (usernameCollision !== undefined) {
+      throw new SsoConflictError(
+        identity.provider,
+        username,
+        `Sign-in blocked: username "${username}" is already in use by a local account. `
+        + "Rename the local account or change the identity provider username, then retry.",
+      );
+    }
     if (email !== null) {
       const emailCollision = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
-      if (emailCollision !== undefined) throw new SsoConflictError(identity.provider, username);
+      if (emailCollision !== undefined) {
+        throw new SsoConflictError(
+          identity.provider,
+          username,
+          `Sign-in blocked: the email "${email}" is already in use by another account. `
+          + "Change the identity provider email, then retry.",
+        );
+      }
     }
     throw new Error("Failed to provision SSO user");
   }

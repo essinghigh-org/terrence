@@ -7,6 +7,11 @@ type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<stri
 type RequestInfo = Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
 type LoginContext = Readonly<{ set: SetObj; request: RequestInfo | undefined; server?: unknown }>;
 
+// SSO API tokens must never be immortal: when the caller does not supply an
+// explicit TTL, fall back to the default SAML session timeout used by the
+// ACS so every issued token expires.
+const DEFAULT_SSO_API_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+
 /** Browser session or SSO API token (RelayState "api"), shared by SAML + OIDC. */
 export async function issueSsoLogin(
   user: Readonly<typeof users.$inferSelect>,
@@ -15,7 +20,8 @@ export async function issueSsoLogin(
 ): Promise<unknown> {
   if (!options.wantsToken) return issueLoginSession(user, true, context.set, context.request, context.server);
   const createdAt = Date.now();
-  const expiresAt = options.tokenTtlMs !== undefined ? createdAt + options.tokenTtlMs : undefined;
+  const ttlMs = options.tokenTtlMs ?? DEFAULT_SSO_API_TOKEN_TTL_MS;
+  const expiresAt = createdAt + ttlMs;
   const tokenStr = opaqueToken("user");
   const tokenId = crypto.randomUUID();
   await db.insert(apiTokens).values({
@@ -24,9 +30,9 @@ export async function issueSsoLogin(
     userId: user.id,
     description: "SSO login token",
     createdAt,
-    expiresAt: expiresAt ?? null,
+    expiresAt,
   });
   // SSO API tokens carry no refresh session: mark them explicitly
-  // non-refreshable even when a TTL is configured.
+  // non-refreshable even though a TTL is always configured.
   return accessTokenDocument(tokenId, tokenStr, user, expiresAt, false);
 }

@@ -183,14 +183,17 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
 }
 
 function normalizeIssuer(value: string): string {
-  return value.trim();
+  // "https://idp.example.com/" and "https://idp.example.com" must compare
+  // identically everywhere the issuer appears (config, discovery, iss claim).
+  return value.trim().replace(/\/+$/, "");
 }
 
 /**
  * Validate an OIDC endpoint URL. With no issuer, https is always acceptable
  * and plain http only for loopback hosts. When an issuer is supplied (the
- * discovery document endpoints), the endpoint must use the issuer's scheme
- * and host so a document cannot point the server at a different authority.
+ * discovery document endpoints), HTTPS endpoints may live on any host — the
+ * document is already authenticated by the verified issuer's TLS identity —
+ * while plain HTTP stays restricted to loopback issuers and hosts.
  */
 function secureOidcEndpoint(value: string, issuer?: string): boolean {
   try {
@@ -204,12 +207,14 @@ function secureOidcEndpoint(value: string, issuer?: string): boolean {
     const issuerUrl = new URL(issuer);
     const issuerHost = issuerUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    if (url.protocol !== issuerUrl.protocol || hostname !== issuerHost) return false;
-    if (url.protocol === "http:") {
-      // Plain HTTP is only acceptable for loopback issuers (local testing).
-      return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    }
-    return true;
+    // The discovery document comes from the verified issuer over TLS, so
+    // endpoints may live on a different host (for example Google publishes
+    // its token endpoint and JWKS on separate hosts).
+    if (url.protocol === "https:") return true;
+    if (url.protocol !== "http:") return false;
+    // Plain HTTP is only acceptable for loopback issuers (local testing).
+    const loopback = (host: string): boolean => host === "localhost" || host === "127.0.0.1" || host === "::1";
+    return issuerUrl.protocol === "http:" && loopback(issuerHost) && loopback(hostname);
   } catch {
     return false;
   }
@@ -316,7 +321,12 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
       typeof key === "object" && key !== null && !Array.isArray(key)
     )) : [];
     if (keys.length === 0) {
-      if (cached !== undefined) return cached.keys;
+      if (cached !== undefined) {
+        // An empty JWKS is usually a rotation hiccup: keep serving the last
+        // good key set and stop refetching on every call.
+        jwksCache.set(jwksUri, { keys: cached.keys, fetchedAt: Date.now() });
+        return cached.keys;
+      }
       throw new Error("The OIDC provider JWKS contains no keys");
     }
     jwksCache.set(jwksUri, { keys, fetchedAt: Date.now() });
@@ -325,6 +335,12 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   jwksInFlight.set(jwksUri, request);
   try {
     return await request;
+  } catch (error: unknown) {
+    // A routine (non-forced) refresh failure is not fatal while a usable key
+    // set is cached; forced refreshes keep rejecting so rotation problems
+    // surface to the caller.
+    if (cached !== undefined && !forceRefresh) return cached.keys;
+    throw error;
   } finally {
     if (jwksInFlight.get(jwksUri) === request) jwksInFlight.delete(jwksUri);
   }

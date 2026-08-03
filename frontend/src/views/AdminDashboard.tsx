@@ -330,16 +330,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   useEffect((): void => {
     if (siteAdmin) {
-      if (section === "auth") {
-        setError(null);
-        void loadGeneralSettings();
-        void loadLdapSettings();
-        void loadSamlSettings();
-        void loadOidcSettings();
-        setLoading(false);
-      } else {
-        void loadAdminData();
-      }
+      setError(null);
+      void loadAdminData();
     }
   }, [section, siteAdmin]);
 
@@ -425,9 +417,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlMetadataUrl(attrString(attrs, "metadata-url", ""));
     } catch (err: unknown) {
       setSamlError(err instanceof Error ? err.message : "Failed to load SAML settings");
-      // The load failed: release the "loading" sentinel so the save button
-      // does not stay disabled forever on a transient error.
-      setPersistedSamlEnabled(false);
+      // The persisted flag stays null on failure: "unknown" must not look
+      // like a disabled provider, and the lockout guards skip validation
+      // while any provider state is unknown.
     } finally {
       setSamlLoading(false);
     }
@@ -472,8 +464,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapAttrDisplayName(attrString(attrs, "attr-display-name", "cn"));
     } catch (err: unknown) {
       setLdapError(err instanceof Error ? err.message : "Failed to load LDAP settings");
-      // Release the "loading" sentinel (see loadSamlSettings).
-      setPersistedLdapEnabled(false);
+      // The persisted flag stays null on failure (see loadSamlSettings).
     } finally {
       setLdapLoading(false);
     }
@@ -513,7 +504,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("Host and Base DN are required when LDAP is enabled.");
       return;
     }
-    if (ldapEnabled && (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535)) {
+    // The port must be usable whenever the form is saved, even while LDAP is
+    // disabled: a dormant misconfiguration breaks the next enable.
+    if (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535) {
       setLdapError("Port must be between 1 and 65535.");
       return;
     }
@@ -542,9 +535,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           "bind-dn": ldapBindDn.trim() !== "" ? ldapBindDn.trim() : null,
           // bind-password is write-only after the initial save. An empty
           // field preserves the stored value; a typed value replaces it.
-          ...(ldapBindPassword !== ""
-            ? { "bind-password": ldapBindPassword }
-            : {}),
+          // Clearing the bind DN explicitly removes the stored secret.
+          ...(ldapBindDn.trim() === ""
+            ? { "bind-password": null }
+            : ldapBindPassword !== ""
+              ? { "bind-password": ldapBindPassword }
+              : {}),
           "base-dn": ldapBaseDn.trim() !== "" ? ldapBaseDn.trim() : null,
           "user-filter": ldapUserFilter,
           "attr-username": ldapAttrUsername,
@@ -589,8 +585,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setOidcSigningAlg(attrString(attrs, "signing-alg", ""));
     } catch (err: unknown) {
       setOidcError(err instanceof Error ? err.message : "Failed to load OIDC settings");
-      // Release the "loading" sentinel (see loadSamlSettings).
-      setPersistedOidcEnabled(false);
+      // The persisted flag stays null on failure (see loadSamlSettings).
     } finally {
       setOidcLoading(false);
     }
@@ -655,7 +650,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           "link-by-email": oidcLinkByEmail,
           issuer: oidcIssuer.trim() !== "" ? oidcIssuer.trim() : null,
           "client-id": oidcClientId.trim() !== "" ? oidcClientId.trim() : null,
-          ...(oidcClientSecret.trim() !== "" ? { "client-secret": oidcClientSecret.trim() } : {}),
+          // An untouched field preserves the stored secret; a typed value
+          // replaces it; clearing the client ID removes the secret too.
+          ...(oidcClientId.trim() === ""
+            ? { "client-secret": null }
+            : oidcClientSecret.trim() !== ""
+              ? { "client-secret": oidcClientSecret.trim() }
+              : {}),
           scopes: oidcScopes,
           "pkce-method": oidcPkceMethod.trim() !== "" ? oidcPkceMethod.trim() : null,
           "signing-alg": oidcSigningAlg.trim() !== "" ? oidcSigningAlg.trim() : null,
@@ -1523,6 +1524,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                           <Input
                             value={oidcClientId}
                             onChange={(e): void => { setOidcClientId(e.target.value); }}
+                            aria-label="Client ID"
                           />
                         </div>
                         <div className="space-y-1">

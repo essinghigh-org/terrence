@@ -4,7 +4,7 @@ import { users, organizations, workspaces, runs, adminTerraformVersions, adminSe
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
-import { getSettings, type Settings } from "../lib/settings";
+import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
 import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -89,6 +89,7 @@ async function updateSettings(group: string, attrs: Settings): Promise<Settings>
   const values = { ...current };
   for (const key of Object.keys(attrs)) if (key in current) values[key] = attrs[key];
   await db.insert(adminSettings).values({ id: group, values, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+  invalidateSettingsCache();
   return values;
 }
 
@@ -915,6 +916,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       await t.insert(adminSettings).values({ id: "saml", values: linkValues, updatedAt: Date.now() })
         .onConflictDoUpdate({ target: adminSettings.id, set: { values: linkValues, updatedAt: Date.now() } });
     });
+    invalidateSettingsCache();
     invalidatePingSsoCache();
     return { data: samlSettingsResource(await currentSamlSettings(), request, linkByEmail) };
     });
@@ -1194,15 +1196,21 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
     const host = attrs.host === null ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
     const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
-    const attrUsername = typeof attrs["attr-username"] === "string"
-      ? attrs["attr-username"].trim() || "uid"
-      : attrs["attr-username"] === null ? "uid" : typeof current["attr-username"] === "string" && current["attr-username"].trim() !== "" ? current["attr-username"].trim() : "uid";
-    const attrEmail = typeof attrs["attr-email"] === "string"
-      ? attrs["attr-email"].trim() || "mail"
-      : attrs["attr-email"] === null ? "mail" : typeof current["attr-email"] === "string" && current["attr-email"].trim() !== "" ? current["attr-email"].trim() : "mail";
-    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "" || attrUsername === "" || attrEmail === "")) {
+    // A blank or absent value falls back to the attribute's default; the
+    // helper guarantees the result is never an empty string.
+    const attrFallback = (key: "attr-username" | "attr-email", fallback: string): string => {
+      const input = attrs[key];
+      const stored = current[key];
+      return typeof input === "string"
+        ? input.trim() || fallback
+        : input === null ? fallback
+          : typeof stored === "string" && stored.trim() !== "" ? stored.trim() : fallback;
+    };
+    const attrUsername = attrFallback("attr-username", "uid");
+    const attrEmail = attrFallback("attr-email", "mail");
+    if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host, base-dn, attr-username, and attr-email are required when LDAP is enabled" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
     }
     // A bind DN without a password performs an unauthenticated (anonymous)
     // bind per RFC 4511 §4.2; reject the misconfiguration up front rather
@@ -1210,6 +1218,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     // A blank or whitespace-only bind DN means "no service account"; storing
     // it as a string would make authenticateLdap require a bind password
     // forever, and a padded one would be validated trimmed but persisted raw.
+    const bindDnProvided = attrs["bind-dn"] !== undefined;
     const bindDn = typeof attrs["bind-dn"] === "string"
       ? (attrs["bind-dn"].trim() === "" ? null : attrs["bind-dn"].trim())
       : attrs["bind-dn"] === null ? null : current["bind-dn"];
@@ -1254,7 +1263,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
       "attr-email": attrEmail,
       ...(attrs.host === undefined ? {} : { host }),
       ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
-      ...(attrs["bind-dn"] === undefined ? {} : { "bind-dn": bindDn }),
+      // Clearing the bind DN removes the service account: drop the stored
+      // bind password with it so no orphaned secret lingers.
+      ...(bindDnProvided ? { "bind-dn": bindDn, ...(bindDn === null ? { "bind-password": null } : {}) } : {}),
       "user-filter": userFilter,
     });
     const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;

@@ -20,15 +20,20 @@ let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | unde
 let pingSsoLastKnown: PingSsoSnapshot | undefined;
 let pingSsoCacheGeneration = 0;
 let pingSsoInFlight: Readonly<{ generation: number; promise: Promise<PingSsoSnapshot> }> | undefined;
+let pingSsoErrorUntil = 0;
 
 export function invalidatePingSsoCache(): void {
   pingSsoCacheGeneration += 1;
   pingSsoCache = undefined;
+  pingSsoErrorUntil = 0;
 }
 
 async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   const now = Date.now();
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
+  // Negative-cache a failed read for the same TTL: while the marker is valid,
+  // serve the last known snapshot instead of hammering the database.
+  if (pingSsoErrorUntil > now && pingSsoLastKnown !== undefined) return pingSsoLastKnown;
   // A burst of /api/v2/ping probes (the Login page and the login API both hit
   // it on load) must not each start a fresh settings read: share the in-flight
   // lookup and cache the first result. An in-flight lookup belongs to the
@@ -44,8 +49,14 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
     if (generation === pingSsoCacheGeneration) {
       pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
       pingSsoLastKnown = value;
+      pingSsoErrorUntil = 0;
     }
     return value;
+  } catch (error: unknown) {
+    if (generation === pingSsoCacheGeneration) {
+      pingSsoErrorUntil = Date.now() + PING_SSO_CACHE_TTL_MS;
+    }
+    throw error;
   } finally {
     if (pingSsoInFlight?.generation === generation) pingSsoInFlight = undefined;
   }
@@ -111,7 +122,11 @@ export const healthRoutes = new Elysia({ name: "health" })
       return {
         "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
         "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
-        ...(lastKnown === undefined ? {} : { sso: { saml: lastKnown.samlEnabled, oidc: lastKnown.oidcEnabled, ldap: lastKnown.ldapEnabled } }),
+        sso: {
+          saml: lastKnown?.samlEnabled ?? false,
+          oidc: lastKnown?.oidcEnabled ?? false,
+          ldap: lastKnown?.ldapEnabled ?? false,
+        },
       };
     }
     return {

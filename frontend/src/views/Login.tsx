@@ -99,7 +99,7 @@ export function Login(): React.JSX.Element {
               {mfaChallengeToken === null ? (
                 <>
                   {!localAuthEnabled && !ldapEnabled && (
-                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <div role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                       {!samlEnabled && !oidcEnabled
                         ? "No authentication methods are configured. Contact an administrator."
                         : "Local password sign-in is disabled. Use single sign-on below."}
