@@ -35,6 +35,7 @@ const PROTOCOL = "urn:oasis:names:tc:SAML:2.0:protocol";
 // namespace, NOT under the assertion namespace.
 const BEARER = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
 const SAML_SUCCESS_STATUS = "urn:oasis:names:tc:SAML:2.0:status:Success";
+const SAML_PARTIAL_LOGOUT_STATUS = "urn:oasis:names:tc:SAML:2.0:status:PartialLogout";
 const TIME_SKEW_MS = 5 * 60 * 1000;
 // Cap the decoded/decodescapped SAML message size so an attacker-supplied
 // compressed payload cannot expand into excessive memory.
@@ -133,13 +134,14 @@ function logoutRequestXml(entityId: string, destination: string, requestId: stri
 }
 
 /** Build the LogoutResponse the SP returns for an IdP-initiated logout. */
-function logoutResponseXml(entityId: string, inResponseTo: string): string {
+function logoutResponseXml(entityId: string, inResponseTo: string, success: boolean): string {
   const now = new Date().toISOString();
+  const status = success ? SAML_SUCCESS_STATUS : SAML_PARTIAL_LOGOUT_STATUS;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:LogoutResponse xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="_${randomBytes(16).toString("hex")}" Version="2.0" IssueInstant="${now}" InResponseTo="${xmlEscape(inResponseTo)}">
   <saml:Issuer>${xmlEscape(entityId)}</saml:Issuer>
   <samlp:Status>
-    <samlp:StatusCode Value="${SAML_SUCCESS_STATUS}"/>
+    <samlp:StatusCode Value="${status}"/>
   </samlp:Status>
 </samlp:LogoutResponse>
 `;
@@ -491,7 +493,10 @@ async function handleIdpInitiatedLogout(
     appendSetCookies(response, set.headers["Set-Cookie"]);
     return response;
   }
-  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId)));
+  // A LogoutRequest whose NameID does not match the local session cannot
+  // count as a full logout: report PartialLogout per SAML 2.0 so the IdP
+  // does not consider the session terminated on this SP.
+  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId, subjectMatches)));
   if (relayState !== undefined) target.searchParams.set("RelayState", relayState);
   const response = new Response(null, {
     status: 302,
@@ -756,14 +761,21 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     );
   const usernameValues = namedAttribute(attributesList, settings.attrUsername);
   const username = usernameValues[0] ?? nameIdText;
-  const emailAttributeNames = settings.attrEmail !== ""
+  const emailAttributeNames = typeof settings.attrEmail === "string" && settings.attrEmail !== ""
     ? [settings.attrEmail]
     : ["email", "mail", "Email", "EmailAddress"];
   const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
   const email = emailValues[0] ?? (nameIdText.includes("@") ? nameIdText : undefined);
-  const groups = namedAttribute(attributesList, settings.attrGroups).flatMap((value): string[] =>
-    value.split(",").map((part): string => part.trim()).filter((part): boolean => part !== "")
-  );
+  // Group mapping runs only when attrGroups is configured: an empty setting
+  // (misconfiguration) must never wipe SAML-sourced memberships by treating
+  // the assertion as group-less. When configured, an assertion that omits
+  // the attribute synchronizes an empty set so stale memberships are pruned.
+  const attrGroupsConfigured = settings.attrGroups !== null && settings.attrGroups !== "";
+  const groups = attrGroupsConfigured
+    ? namedAttribute(attributesList, settings.attrGroups).flatMap((value): string[] =>
+        value.split(",").map((part): string => part.trim()).filter((part): boolean => part !== "")
+      )
+    : [];
   const siteAdminMatches = settings.attrSiteAdmin !== null && settings.attrSiteAdmin !== ""
     && namedAttribute(attributesList, settings.attrSiteAdmin).includes(settings.siteAdminRole);
 
@@ -789,7 +801,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     let user = result.user;
 
-    await syncSamlGroupMappings(user.id, groups);
+    if (attrGroupsConfigured) {
+      await syncSamlGroupMappings(user.id, groups);
+    }
     // The site-admin attribute is authoritative in both directions: matching
     // promotes, and once an account's admin status is SAML-sourced, losing the
     // role demotes it so the IdP can revoke elevated access. If the attribute

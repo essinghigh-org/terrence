@@ -79,11 +79,11 @@ type AuthReqCtx = Readonly<{
   set: SetObj;
 }>;
 
-function opaqueToken(prefix: string): string {
+export function opaqueToken(prefix: string): string {
   return `${prefix}-${randomBytes(32).toString("base64url")}`;
 }
 
-function tokenHash(token: string): string {
+export function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -169,11 +169,17 @@ export async function browserSessionUser(
   return await db.query.users.findFirst({ where: eq(users.id, current.userId) }) ?? null;
 }
 
+/**
+ * Build the JSON:API token document returned after successful
+ * authentication. Browser-session tokens are refreshable; SSO API tokens
+ * (which carry no refresh session) pass `refreshable = false`.
+ */
 export function accessTokenDocument(
   id: string,
   token: string,
   user: Readonly<typeof users.$inferSelect>,
   expiresAt?: number,
+  refreshable = true,
 ): Record<string, unknown> {
   return {
     data: {
@@ -184,7 +190,7 @@ export function accessTokenDocument(
         "must-change-password": user.mustChangePassword,
         ...(expiresAt === undefined
           ? {}
-          : { "expired-at": new Date(expiresAt).toISOString(), refreshable: true }),
+          : { "expired-at": new Date(expiresAt).toISOString(), refreshable }),
       },
     },
   };
@@ -443,13 +449,19 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
     const localAuthEnabled = sso.localAuthEnabled;
 
-    // LDAP is attempted first when enabled; local password auth remains the
-    // fallback unless an administrator has disabled local authentication.
+    // LDAP is tried first when the directory is reachable; local password
+    // auth remains the fallback unless an administrator has disabled local
+    // authentication. An *unavailable* directory is different from a rejected
+    // bind: when LDAP is the only configured path, a down directory is a
+    // service problem (503), not bad credentials.
     let user: typeof users.$inferSelect | null = null;
+    let ldapUnavailable = false;
     if (ldap.enabled) {
       let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
       try {
-        ldapUser = (await authenticateLdapWithCircuitBreaker(ldap, username, password)).user;
+        const ldapResult = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+        ldapUser = ldapResult.user;
+        ldapUnavailable = ldapResult.unavailable;
       } catch (error: unknown) {
         log.warn("LDAP authentication probe failed; continuing with local authentication", {
           error: error instanceof Error ? error.message : String(error),
@@ -479,6 +491,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     if (user === null) {
+      if (ldapUnavailable && !localAuthEnabled) {
+        (set as { status: number }).status = 503;
+        return { errors: [{ status: "503", title: "Service Unavailable", detail: "The LDAP directory is temporarily unavailable." }] };
+      }
       if (!localAuthEnabled) {
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
@@ -851,7 +867,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
     }
-    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    // passwordMatches swallows malformed/unusable hashes (SSO-provisioned
+    // accounts), so a bad hash cannot surface as a 500; it is just a failed
+    // password check.
+    if (!(await passwordMatches(currentPassword, user.passwordHash))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
     }

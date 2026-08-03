@@ -91,6 +91,7 @@ describe("SAML SSO flow", () => {
       ssoEndpointUrl: "https://idp.example.test/sso",
       sloEndpointUrl: "https://idp.example.test/slo",
       attrUsername: "Username",
+      attrEmail: "email",
       attrGroups: "MemberOf",
       attrSiteAdmin: "SiteAdmin",
       siteAdminRole: "site-admins",
@@ -395,6 +396,55 @@ describe("SAML SSO flow", () => {
       where: eq(teamMemberships.teamId, `team-dev-${suffix}`),
     });
     expect(teamMembership?.userId).toBe(grouped!.id);
+  });
+
+  test("removes SAML-sourced memberships when a later login omits the groups attribute", async () => {
+    const groupedUsername = `group-removal-${suffix}`;
+    // First login maps the groups attribute to teams and the owners role.
+    const first = await validAcs({
+      username: groupedUsername,
+      email: `${groupedUsername}@example.com`,
+      groups: ["admins", "developers"],
+    });
+    expect(first.status).toBe(200);
+    const grouped = await db.query.users.findFirst({ where: eq(users.username, groupedUsername) });
+    expect(grouped).not.toBeUndefined();
+    expect(await db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
+    })).not.toBeUndefined();
+    expect(await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
+    })).not.toBeUndefined();
+
+    // Next login omits the groups attribute; the empty-group synchronization
+    // prunes the SAML-sourced team membership and downgrades the org role.
+    const second = await validAcs({
+      username: groupedUsername,
+      email: `${groupedUsername}@example.com`,
+    });
+    expect(second.status).toBe(200);
+    expect(await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
+    })).toBeUndefined();
+    const membershipAfter = await db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
+    });
+    expect(membershipAfter?.role).toBe("member");
+  });
+
+  test("falls back to the default email attributes when attrEmail is cleared", async () => {
+    const username = `noattremail-${suffix}`;
+    // The admin API rejects an empty attr-email, so clear it directly; the
+    // ACS must fall back to the standard email attribute names.
+    await db.update(samlSettings).set({ attrEmail: "", updatedAt: Date.now() }).where(eq(samlSettings.id, "saml"));
+    try {
+      const response = await validAcs({ username, email: `${username}@example.com` });
+      expect(response.status).toBe(200);
+      const created = await db.query.users.findFirst({ where: eq(users.username, username) });
+      expect(created?.email).toBe(`${username}@example.com`);
+    } finally {
+      await db.update(samlSettings).set({ attrEmail: "email", updatedAt: Date.now() }).where(eq(samlSettings.id, "saml"));
+    }
   });
 
   test("promotes a user to site admin when the site-admin attribute matches", async () => {

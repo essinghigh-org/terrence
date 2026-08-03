@@ -271,13 +271,14 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           loadOidcSettings(),
         ]);
       } else if (section === "security") {
-        const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse] = await Promise.all([
+        const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse] = await Promise.all([
           fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
           fetchApi("/api/v2/admin/audit-logs"),
           fetchApi("/api/v2/ping"),
           fetchApi("/api/v2/meta"),
           fetchApi("/api/v2/admin/saml-settings"),
           fetchApi("/api/v2/admin/oidc-settings"),
+          fetchApi("/api/v2/admin/ldap-settings"),
         ]);
         setUsers(usersResponse);
         setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
@@ -293,10 +294,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         });
         const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
         const oidcIsEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+        const ldapIsEnabled = (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
         setSamlEnabled(samlIsEnabled);
         setPersistedSamlEnabled(samlIsEnabled);
         setOidcEnabled(oidcIsEnabled);
         setPersistedOidcEnabled(oidcIsEnabled);
+        setLdapEnabled(ldapIsEnabled);
+        setPersistedLdapEnabled(ldapIsEnabled);
       } else if (section === "users") {
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
         setUsers(res.data);
@@ -508,7 +512,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("Port must be between 1 and 65535.");
       return;
     }
-    if (ldapEnabled && !ldapUserFilter.includes("{{username}}")) {
+    if (!ldapUserFilter.includes("{{username}}")) {
       setLdapError("User filter must contain the {{username}} placeholder.");
       return;
     }
@@ -705,6 +709,10 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>OpenID Connect</span>
                       <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span>LDAP</span>
+                      <span className={ldapEnabled ? "text-green-700 font-medium" : "text-gray-500"}>{ldapEnabled ? "Enabled" : "Disabled"}</span>
                     </div>
                     <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
                       Open authentication settings

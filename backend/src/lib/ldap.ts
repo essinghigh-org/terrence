@@ -5,6 +5,7 @@
 import { Client, InvalidCredentialsError, SizeLimitExceededError, type Entry } from "ldapts";
 import { createHash } from "node:crypto";
 import type { LdapSettings } from "./sso";
+import { log } from "./log";
 
 export type LdapUser = Readonly<{
   dn: string;
@@ -142,7 +143,10 @@ export async function authenticateLdap(
     const credentialRejection = activeBind === "user" && error instanceof InvalidCredentialsError;
     const ambiguousSearch = error instanceof SizeLimitExceededError;
     if (!credentialRejection && !ambiguousSearch) {
-      console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
+      log.error("LDAP directory unavailable", {
+        url: `${scheme}://${settings.host}:${settings.port}`,
+        error: message,
+      });
     }
     return { user: null, unavailable: !credentialRejection && !ambiguousSearch };
   } finally {

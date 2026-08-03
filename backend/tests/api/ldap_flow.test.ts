@@ -272,6 +272,13 @@ describe("LDAP authentication", () => {
     });
     await setLocalAuth(false);
     try {
+      // With LDAP enabled, the authorizer still presents the username/password
+      // form even though local authentication is disabled: the directory
+      // accepts those credentials on the POST path.
+      const page = await oauthApp.handle(new Request(`http://localhost/oauth/authorization?${parameters.toString()}`));
+      const html = await page.text();
+      expect(html).toContain('id="username"');
+      expect(html).toContain('id="password"');
       const authorization = await oauthApp.handle(new Request("http://localhost/oauth/authorization", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },

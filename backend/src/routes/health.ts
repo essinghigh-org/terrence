@@ -19,6 +19,7 @@ type PingSsoSnapshot = Awaited<ReturnType<typeof ssoSettingsSnapshot>>;
 let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | undefined;
 let pingSsoLastKnown: PingSsoSnapshot | undefined;
 let pingSsoCacheGeneration = 0;
+let pingSsoInFlight: Promise<PingSsoSnapshot> | undefined;
 
 export function invalidatePingSsoCache(): void {
   pingSsoCacheGeneration += 1;
@@ -28,13 +29,22 @@ export function invalidatePingSsoCache(): void {
 async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   const now = Date.now();
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
+  // A burst of /api/v2/ping probes (the Login page and the login API both hit
+  // it on load) must not each start a fresh settings read: share the in-flight
+  // lookup and cache the first result.
+  if (pingSsoInFlight !== undefined) return pingSsoInFlight;
   const generation = pingSsoCacheGeneration;
-  const value = await ssoSettingsSnapshot();
-  if (generation === pingSsoCacheGeneration) {
-    pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
-    pingSsoLastKnown = value;
+  pingSsoInFlight = ssoSettingsSnapshot();
+  try {
+    const value = await pingSsoInFlight;
+    if (generation === pingSsoCacheGeneration) {
+      pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
+      pingSsoLastKnown = value;
+    }
+    return value;
+  } finally {
+    pingSsoInFlight = undefined;
   }
-  return value;
 }
 
 function metricValue(rows: readonly Readonly<{ value: number }>[] | undefined): number {

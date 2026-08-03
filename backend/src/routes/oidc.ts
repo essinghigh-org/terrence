@@ -459,7 +459,11 @@ async function handleCallback(
   if (pending.verifier !== null) tokenBody.set("code_verifier", pending.verifier);
   const tokenHeaders: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
   if (settings.clientSecret !== null) {
-    tokenHeaders.Authorization = `Basic ${Buffer.from(`${settings.clientId}:${settings.clientSecret}`).toString("base64")}`;
+    // RFC 6749 §2.3.1: client_id and client_secret must be form-urlencoded
+    // before the Basic credentials are base64-encoded.
+    tokenHeaders.Authorization = `Basic ${Buffer.from(
+      `${encodeURIComponent(settings.clientId)}:${encodeURIComponent(settings.clientSecret)}`,
+    ).toString("base64")}`;
   }
   let tokenResponse: Response;
   try {

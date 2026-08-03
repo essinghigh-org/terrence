@@ -145,7 +145,7 @@ export function Login(): React.JSX.Element {
                 )}
               </div>
             )}
-            {showLocalForm && (
+            {(showLocalForm || mfaChallengeToken !== null) && (
               <Button type="submit" className="w-full" disabled={submitting || (mfaChallengeToken === null ? username === "" || password === "" : mfaCode.trim() === "")}>
                 {submitting && <Spinner data-icon="inline-start" />}
                 {mfaChallengeToken === null ? "Sign in" : "Verify code"}

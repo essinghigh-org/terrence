@@ -410,6 +410,12 @@ describe("OIDC SSO flow", () => {
     mockSupportedAlgorithms = ["RS256", "HS256"];
     mockPublishRsaJwks = true;
     mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
+    const current = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "oidc") });
+    const originalValues = current?.values ?? {};
+    // Configure the symmetric algorithm so the flow reaches HMAC verification
+    // instead of the missing-configuration guard.
+    await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS256" }, updatedAt: Date.now() })
+      .where(eq(adminSettings.id, "oidc"));
     try {
       const { response } = await completeFlow();
       expect(response.status).toBe(400);
@@ -418,6 +424,8 @@ describe("OIDC SSO flow", () => {
       mockHmacSecret = "test-secret";
       mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
       mockPublishRsaJwks = false;
+      await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "oidc"));
     }
   });
 
@@ -425,6 +433,30 @@ describe("OIDC SSO flow", () => {
     const response = await app.handle(new Request("http://terrence.test/users/oidc/callback?code=whatever&state=definitely-not-real"));
     expect(response.status).toBe(400);
     expect(await response.text()).toMatch(/invalid|expired/);
+  });
+
+  test("rejects a callback when the browser-binding cookie is missing or mismatched", async () => {
+    // Start a real flow so the state exists in the challenge table; the
+    // browser-binding guard must still reject callbacks that do not present
+    // the exact cookie value the flow started with.
+    const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
+    const state = new URL(authResponse.headers.get("Location") ?? "").searchParams.get("state") ?? "";
+    expect(state).not.toBe("");
+    const stateCookie = cookieValue(authResponse, "terrence_oidc_state");
+
+    const missingCookie = await app.handle(new Request(
+      `http://terrence.test/users/oidc/callback?code=whatever&state=${state}`,
+    ));
+    expect(missingCookie.status).toBe(400);
+
+    const mismatchedCookie = await app.handle(new Request(
+      `http://terrence.test/users/oidc/callback?code=whatever&state=${state}`,
+      { headers: { Cookie: `terrence_oidc_state=${stateCookie}mismatch` } },
+    ));
+    expect(mismatchedCookie.status).toBe(400);
+    // The guard fires before the challenge is consumed: an attacker with the
+    // state but not the cookie cannot drain the flow.
+    expect(await consumeSsoChallenge("oidc-login", state)).not.toBeUndefined();
   });
 
   test("does not consume a challenge through a different flow kind", async () => {
@@ -441,14 +473,16 @@ describe("OIDC SSO flow", () => {
 
   test("does not overwrite a challenge when an ID collides across kinds", async () => {
     const id = `cross-kind-${suffix}`;
-    await storeSsoChallenge("first-kind", id, { value: "first" }, Date.now() + 60_000);
+    const firstKind = `first-kind-${suffix}`;
+    const secondKind = `second-kind-${suffix}`;
+    await storeSsoChallenge(firstKind, id, { value: "first" }, Date.now() + 60_000);
     try {
-      await storeSsoChallenge("second-kind", id, { value: "second" }, Date.now() + 60_000);
-      expect(await consumeSsoChallenge("first-kind", id)).toEqual({ value: "first" });
-      expect(await consumeSsoChallenge("second-kind", id)).toBeUndefined();
+      await storeSsoChallenge(secondKind, id, { value: "second" }, Date.now() + 60_000);
+      expect(await consumeSsoChallenge(firstKind, id)).toEqual({ value: "first" });
+      expect(await consumeSsoChallenge(secondKind, id)).toBeUndefined();
     } finally {
-      await clearSsoChallenges("first-kind");
-      await clearSsoChallenges("second-kind");
+      await clearSsoChallenges(firstKind);
+      await clearSsoChallenges(secondKind);
     }
   });
 

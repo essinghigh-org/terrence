@@ -112,6 +112,16 @@ function envPositiveInt(name: string, fallback: number): number {
 const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 30);
 const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
 const SENSITIVE_RATE_DURATION_MS = 60_000;
+// The five SSO endpoints are sensitive no matter the verb: the protected GETs
+// mutate challenge state and the POSTs consume assertion/form-post payloads.
+// Share one set so path matching and rate limiting never drift apart.
+const SSO_AUTH_PATHS = new Set([
+  "/users/oidc/auth",
+  "/users/oidc/callback",
+  "/users/saml/auth",
+  "/users/saml/logout",
+  "/users/saml/slo",
+]);
 const sensitivePaths = new Set([
   "/admin/initial-admin-user",
   "/api/v2/tokens",
@@ -119,11 +129,7 @@ const sensitivePaths = new Set([
   "/api/v2/users/login",
   "/oauth/authorization",
   "/oauth/token",
-  "/users/oidc/auth",
-  "/users/oidc/callback",
-  "/users/saml/auth",
-  "/users/saml/logout",
-  "/users/saml/slo",
+  ...SSO_AUTH_PATHS,
 ]);
 
 function fixedWindowContext(): RateLimitContext {
@@ -186,10 +192,7 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (request.method === "GET" && (
-    path === "/users/oidc/auth" || path === "/users/oidc/callback"
-    || path === "/users/saml/auth" || path === "/users/saml/logout" || path === "/users/saml/slo"
-  )) return path;
+  if (request.method === "GET" && SSO_AUTH_PATHS.has(path)) return path;
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {

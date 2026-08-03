@@ -132,11 +132,12 @@ settings endpoints), and only take effect once enabled there.
   enabled SAML, OIDC, and LDAP providers can still sign in. The login page, the
   CLI (`terraform login`) authorizer, and the login API all honor this setting.
 - **Provisioning conflicts** — External identities are mapped by
-  (provider, subject). A verified email links to an existing account; a
-  username that belongs to a different local account blocks sign-in with a
-  clear error instead of silently taking it over. Auto-provisioned accounts
-  receive an unusable password hash, so SSO identities can never sign in with
-  local credentials.
+  (provider, subject). A verified email links to an existing account only when
+  the provider's link-by-email setting is enabled; otherwise a new account is
+  created. A username that belongs to a different local account blocks sign-in
+  with a clear error instead of silently taking it over. Auto-provisioned
+  accounts receive an unusable password hash, so SSO identities can never sign
+  in with local credentials.
 
 The public `GET /api/v2/ping` endpoint reports `local-auth-enabled` and the
 enabled state of each provider under `sso`, so clients can render the correct

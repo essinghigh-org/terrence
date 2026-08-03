@@ -891,10 +891,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
+    const [oidcEnabled, ldapEnabledForSso] = await Promise.all([
+      getSettings("oidc").then((settings): boolean => settings.enabled === true),
+      ldapSettings().then((settings): boolean => settings.enabled),
+    ]);
     const authError = await authLockoutResponse(set, {
       saml: input.values.enabled === true,
-      oidc: (await getSettings("oidc")).enabled === true,
-      ldap: (await ldapSettings()).enabled,
+      oidc: oidcEnabled,
+      ldap: ldapEnabledForSso,
     });
     if (authError !== null) return authError;
     await db.transaction(async (tx: unknown): Promise<void> => {
@@ -1098,10 +1102,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "signing-alg must be a supported ID token algorithm or null" }] };
     }
 
+    const [samlEnabledForSso, ldapEnabledForSso] = await Promise.all([
+      currentSamlSettings().then((settings): boolean => settings.enabled),
+      ldapSettings().then((settings): boolean => settings.enabled),
+    ]);
     const authError = await authLockoutResponse(set, {
-      saml: (await currentSamlSettings()).enabled,
+      saml: samlEnabledForSso,
       oidc: enabled,
-      ldap: (await ldapSettings()).enabled,
+      ldap: ldapEnabledForSso,
     });
     if (authError !== null) return authError;
 
@@ -1208,9 +1216,13 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] };
     }
 
+    const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
+      currentSamlSettings().then((settings): boolean => settings.enabled),
+      getSettings("oidc").then((settings): boolean => settings.enabled === true),
+    ]);
     const authError = await authLockoutResponse(set, {
-      saml: (await currentSamlSettings()).enabled,
-      oidc: (await getSettings("oidc")).enabled === true,
+      saml: samlEnabledForSso,
+      oidc: oidcEnabledForSso,
       ldap: enabled === true,
     });
     if (authError !== null) return authError;

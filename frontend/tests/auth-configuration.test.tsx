@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -27,21 +27,32 @@ const typeInput = (element: HTMLInputElement, value: string): void => {
 const urlOf = (input: string | URL | Request): string =>
   typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
+// Track the configuration as the mock IdP "server" sees it after each PATCH,
+// so the GET re-fetches after saving reflect the newly enabled providers.
+let samlServerEnabled = false;
+let oidcServerEnabled = false;
+let oidcServerSecretSet = true;
+let ldapServerEnabled = false;
+let oidcPatchAttributes: Record<string, unknown> | null = null;
+let ldapPatchAttributes: Record<string, unknown> | null = null;
+let localAuthServerEnabled = true;
+
+beforeEach((): void => {
+  samlServerEnabled = false;
+  oidcServerEnabled = false;
+  oidcServerSecretSet = true;
+  ldapServerEnabled = false;
+  oidcPatchAttributes = null;
+  ldapPatchAttributes = null;
+  localAuthServerEnabled = true;
+});
+
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
 });
 
 test("shows SAML and OIDC auth configuration in the admin dashboard", async (): Promise<void> => {
-  // Track the configuration as the mock IdP "server" sees it after each PATCH,
-  // so the GET re-fetches after saving reflect the newly enabled providers.
-  let samlServerEnabled = false;
-  let oidcServerEnabled = false;
-  let oidcServerSecretSet = true;
-  let ldapServerEnabled = false;
-  let oidcPatchAttributes: Record<string, unknown> | null = null;
-  let ldapPatchAttributes: Record<string, unknown> | null = null;
-  let localAuthServerEnabled = true;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
@@ -278,7 +289,8 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
 
   // --- LDAP section ---
-  const ldapSection = view.getByText("LDAP").closest('[data-slot="card"]') ?? document.body;
+  const ldapSection = view.getByText("LDAP").closest('[data-slot="card"]');
+  if (ldapSection === null) throw new Error("LDAP card is missing");
   expect(within(ldapSection).getByText(/directory access protocol password authentication/i)).toBeTruthy();
   await waitFor((): void => { expect(view.getByRole("button", { name: "Save LDAP settings" })).toBeTruthy(); });
   const ldapEnabledCheckbox = within(ldapSection).getByLabelText("Enable LDAP") as HTMLInputElement;
@@ -353,6 +365,7 @@ test("shows the security overview from existing admin controls", async (): Promi
     }
     if (url === "/api/v2/admin/saml-settings") return json({ data: { attributes: { enabled: true } } });
     if (url === "/api/v2/admin/oidc-settings") return json({ data: { attributes: { enabled: false } } });
+    if (url === "/api/v2/admin/ldap-settings") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as typeof fetch;

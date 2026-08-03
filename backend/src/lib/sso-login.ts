@@ -1,7 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
 import { db } from "../db";
 import { apiTokens, type users } from "../db/schema";
-import { issueLoginSession } from "../routes/accounts";
+import { accessTokenDocument, issueLoginSession, opaqueToken, tokenHash } from "../routes/accounts";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -15,26 +14,19 @@ export async function issueSsoLogin(
   options: Readonly<{ tokenTtlMs?: number; wantsToken?: boolean }> = {},
 ): Promise<unknown> {
   if (!options.wantsToken) return issueLoginSession(user, true, context.set, context.request, context.server);
-  const tokenStr = `user-${randomBytes(32).toString("base64url")}`;
-  const tokenId = crypto.randomUUID();
   const createdAt = Date.now();
+  const expiresAt = options.tokenTtlMs !== undefined ? createdAt + options.tokenTtlMs : undefined;
+  const tokenStr = opaqueToken("user");
+  const tokenId = crypto.randomUUID();
   await db.insert(apiTokens).values({
     id: tokenId,
-    token: createHash("sha256").update(tokenStr).digest("hex"),
+    token: tokenHash(tokenStr),
     userId: user.id,
     description: "SSO login token",
     createdAt,
-    expiresAt: options.tokenTtlMs !== undefined ? createdAt + options.tokenTtlMs : null,
+    expiresAt: expiresAt ?? null,
   });
-  return {
-    data: {
-      id: tokenId,
-      type: "tokens",
-      attributes: {
-        token: tokenStr,
-        "must-change-password": user.mustChangePassword,
-        ...(options.tokenTtlMs === undefined ? {} : { "expired-at": new Date(createdAt + options.tokenTtlMs).toISOString() }),
-      },
-    },
-  };
+  // SSO API tokens carry no refresh session: mark them explicitly
+  // non-refreshable even when a TTL is configured.
+  return accessTokenDocument(tokenId, tokenStr, user, expiresAt, false);
 }

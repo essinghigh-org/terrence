@@ -117,13 +117,17 @@ function loginPage(
         sso.oidc ? `<a href="/users/oidc/auth">Sign in with OpenID Connect</a>` : ""
       }</p>`
     : "";
-  const localBlocked = !sso.localAuthEnabled
+  // LDAP credentials are accepted by the POST handler even when local
+  // password authentication is disabled, so the form must be offered while
+  // any username/password path exists.
+  const passwordAuthAvailable = sso.localAuthEnabled || sso.ldap;
+  const localBlocked = !passwordAuthAvailable
     ? `<p id="local-auth-disabled">Local password sign-in is disabled by your administrator. Use single sign-on instead.</p>`
     : "";
   const intro = request !== null
     ? `<p>Sign in to authorize Terraform CLI.</p>${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}`
     : "";
-  const form = request !== null && sso.localAuthEnabled
+  const form = request !== null && passwordAuthAvailable
     ? `<form method="post" action="/oauth/authorization">
       ${hidden}
       <p>
