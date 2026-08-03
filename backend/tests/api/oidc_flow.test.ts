@@ -233,9 +233,13 @@ describe("OIDC SSO flow", () => {
   afterAll(async () => {
     await server?.stop(true);
     await resetOidcCaches();
+    // Incomplete flows keep their challenge rows; clear them like the SAML
+    // suite does so the shared challenge table does not accumulate.
+    await clearSsoChallenges("oidc-login");
     // The suite provisions users through the flow (oidc-alice-, hs384-,
     // es256-, etc.) as well as inserting usr-oidc-other- directly; delete
-    // every row whose id carries this suite's suffix.
+    // every row whose username ends with this suite's suffix. Any user this
+    // suite inserts must therefore use a suffixed username.
     const provisioned = await db.query.users.findMany({ where: like(users.username, `%-${suffix}`) });
     const ids = [adminId, localUserId, ...provisioned.map((row): string => row.id)];
     if (originalOidc === undefined) {

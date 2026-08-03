@@ -19,7 +19,7 @@ type PingSsoSnapshot = Awaited<ReturnType<typeof ssoSettingsSnapshot>>;
 let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | undefined;
 let pingSsoLastKnown: PingSsoSnapshot | undefined;
 let pingSsoCacheGeneration = 0;
-let pingSsoInFlight: Promise<PingSsoSnapshot> | undefined;
+let pingSsoInFlight: Readonly<{ generation: number; promise: Promise<PingSsoSnapshot> }> | undefined;
 
 export function invalidatePingSsoCache(): void {
   pingSsoCacheGeneration += 1;
@@ -31,19 +31,23 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
   // A burst of /api/v2/ping probes (the Login page and the login API both hit
   // it on load) must not each start a fresh settings read: share the in-flight
-  // lookup and cache the first result.
-  if (pingSsoInFlight !== undefined) return pingSsoInFlight;
+  // lookup and cache the first result. An in-flight lookup belongs to the
+  // generation it started in; after an invalidation a fresh read is required
+  // even if a stale request is still pending.
+  if (pingSsoInFlight !== undefined && pingSsoInFlight.generation === pingSsoCacheGeneration) {
+    return pingSsoInFlight.promise;
+  }
   const generation = pingSsoCacheGeneration;
-  pingSsoInFlight = ssoSettingsSnapshot();
+  pingSsoInFlight = { generation, promise: ssoSettingsSnapshot() };
   try {
-    const value = await pingSsoInFlight;
+    const value = await pingSsoInFlight.promise;
     if (generation === pingSsoCacheGeneration) {
       pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
       pingSsoLastKnown = value;
     }
     return value;
   } finally {
-    pingSsoInFlight = undefined;
+    if (pingSsoInFlight?.generation === generation) pingSsoInFlight = undefined;
   }
 }
 

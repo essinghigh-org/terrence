@@ -463,6 +463,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         ldapUser = ldapResult.user;
         ldapUnavailable = ldapResult.unavailable;
       } catch (error: unknown) {
+        ldapUnavailable = true;
         log.warn("LDAP authentication probe failed; continuing with local authentication", {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -482,8 +483,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           user = provisioned.user;
         } catch (error: unknown) {
           if (error instanceof SsoConflictError) {
+            // Do not reveal whether a local account owns the username; log
+            // the specifics server-side only.
+            log.warn("LDAP provisioning conflict", { username });
             (set as { status: number }).status = 401;
-            return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
+            return { errors: [{ status: "401", title: "Unauthorized", detail: "This account cannot be provisioned from the directory" }] };
           }
           throw error;
         }

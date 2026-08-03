@@ -170,30 +170,34 @@ describe("LDAP authentication", () => {
 
   afterAll(async () => {
     const server = ldapServer;
-    if (server !== undefined) {
-      await new Promise<void>((resolve, reject): void => {
-        server.close((error?: Error): void => {
-          if (error === undefined) resolve();
-          else reject(error);
+    try {
+      if (server !== undefined) {
+        await new Promise<void>((resolve, reject): void => {
+          server.close((error?: Error): void => {
+            if (error === undefined) resolve();
+            else reject(error);
+          });
         });
-      });
+      }
+    } finally {
+      // Database restoration must run even if server.close rejects.
+      if (originalLdap === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
+      } else {
+        await db.update(adminSettings).set({ values: originalLdap.values, updatedAt: Date.now() })
+          .where(eq(adminSettings.id, "ldap"));
+      }
+      if (originalGeneral === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
+      } else {
+        await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
+          .where(eq(adminSettings.id, "general"));
+      }
+      const provisioned = await db.query.users.findMany({ where: inArray(users.username, [ldapUsername, localUsername]) });
+      const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
+      await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
+      await db.delete(users).where(inArray(users.id, ids));
     }
-    if (originalLdap === undefined) {
-      await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
-    } else {
-      await db.update(adminSettings).set({ values: originalLdap.values, updatedAt: Date.now() })
-        .where(eq(adminSettings.id, "ldap"));
-    }
-    if (originalGeneral === undefined) {
-      await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
-    } else {
-      await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
-        .where(eq(adminSettings.id, "general"));
-    }
-    const provisioned = await db.query.users.findMany({ where: inArray(users.username, [ldapUsername, localUsername]) });
-    const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
-    await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
-    await db.delete(users).where(inArray(users.id, ids));
   });
 
   test("provisions a new user on successful directory credentials", async () => {
@@ -387,6 +391,8 @@ describe("LDAP authentication", () => {
       expect(getResponse.status).toBe(200);
       const attrs = ((await getResponse.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
       expect(attrs).toMatchObject({ enabled: true, host: "127.0.0.1", port: ldapPort, encryption: "plain" });
+      // The bind password is a secret: the admin API must never echo it back.
+      expect(attrs["bind-password"]).not.toBe(SERVICE_PASSWORD);
 
       const badPort = await request("PATCH", "/api/v2/admin/ldap-settings", adminToken, {
         data: { attributes: { port: "not-a-number" } },

@@ -59,7 +59,9 @@ const ALLOWED_ALGS: ReadonlySet<string> = new Set([
 ]);
 
 const discoveryCache = new Map<string, { config: OidcDiscovery; fetchedAt: number }>();
+const discoveryInFlight = new Map<string, Promise<OidcDiscovery>>();
 const jwksCache = new Map<string, { keys: Record<string, unknown>[]; fetchedAt: number }>();
+const jwksInFlight = new Map<string, Promise<Record<string, unknown>[]>>();
 const jwksRefreshes = new Map<string, number>();
 const OIDC_STATE_COOKIE = "terrence_oidc_state";
 const JWKS_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
@@ -68,7 +70,9 @@ const OIDC_CHALLENGE_KIND = "oidc-login";
 /** Test hook: clear the discovery/JWKS caches between scenarios. */
 export async function resetOidcCaches(): Promise<void> {
   discoveryCache.clear();
+  discoveryInFlight.clear();
   jwksCache.clear();
+  jwksInFlight.clear();
   jwksRefreshes.clear();
   await clearSsoChallenges(OIDC_CHALLENGE_KIND);
 }
@@ -129,54 +133,83 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   if (!secureOidcEndpoint(issuer)) throw new Error("OIDC issuer must be an https URL without embedded credentials");
   const cached = discoveryCache.get(issuer);
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
-  const endpoint = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
-  const response = await fetch(endpoint, {
-    redirect: "error",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
-  const config = await response.json() as Partial<Record<string, unknown>>;
-  const discoveredIssuer = typeof config.issuer === "string" && config.issuer !== "" ? normalizeIssuer(config.issuer) : null;
-  if (discoveredIssuer === null || discoveredIssuer !== issuer) {
-    // RFC 8414: the document issuer must equal the configured issuer.
-    throw new Error("OIDC discovery issuer does not match the configured issuer");
+  // Concurrent callers share one outbound discovery request; the winner
+  // populates the cache and every caller gets the same result.
+  const pending = discoveryInFlight.get(issuer);
+  if (pending !== undefined) return pending;
+  const request = (async (): Promise<OidcDiscovery> => {
+    const endpoint = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
+    const response = await fetch(endpoint, {
+      redirect: "error",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
+    const config = await response.json() as Partial<Record<string, unknown>>;
+    const discoveredIssuer = typeof config.issuer === "string" && config.issuer !== "" ? normalizeIssuer(config.issuer) : null;
+    if (discoveredIssuer === null || discoveredIssuer !== issuer) {
+      // RFC 8414: the document issuer must equal the configured issuer.
+      throw new Error("OIDC discovery issuer does not match the configured issuer");
+    }
+    const authorizationEndpoint = typeof config.authorization_endpoint === "string" && config.authorization_endpoint !== "" ? config.authorization_endpoint : null;
+    const tokenEndpoint = typeof config.token_endpoint === "string" && config.token_endpoint !== "" ? config.token_endpoint : null;
+    const jwksUri = typeof config.jwks_uri === "string" && config.jwks_uri !== "" ? config.jwks_uri : null;
+    if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null
+      || !secureOidcEndpoint(authorizationEndpoint, issuer)
+      || !secureOidcEndpoint(tokenEndpoint, issuer)
+      || !secureOidcEndpoint(jwksUri, issuer)) {
+      throw new Error("OIDC discovery document is missing required endpoints");
+    }
+    const discovered: OidcDiscovery = {
+      issuer: discoveredIssuer,
+      authorizationEndpoint,
+      tokenEndpoint,
+      jwksUri,
+      ...(Array.isArray(config.id_token_signing_alg_values_supported)
+        ? { signingAlgorithms: config.id_token_signing_alg_values_supported.filter((value): value is string => typeof value === "string") }
+        : {}),
+      ...(Array.isArray(config.code_challenge_methods_supported)
+        ? { pkceMethods: config.code_challenge_methods_supported.filter((value): value is string => typeof value === "string") }
+        : {}),
+    };
+    discoveryCache.set(issuer, { config: discovered, fetchedAt: Date.now() });
+    return discovered;
+  })();
+  discoveryInFlight.set(issuer, request);
+  try {
+    return await request;
+  } finally {
+    if (discoveryInFlight.get(issuer) === request) discoveryInFlight.delete(issuer);
   }
-  const authorizationEndpoint = typeof config.authorization_endpoint === "string" && config.authorization_endpoint !== "" ? config.authorization_endpoint : null;
-  const tokenEndpoint = typeof config.token_endpoint === "string" && config.token_endpoint !== "" ? config.token_endpoint : null;
-  const jwksUri = typeof config.jwks_uri === "string" && config.jwks_uri !== "" ? config.jwks_uri : null;
-  if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null
-    || !secureOidcEndpoint(authorizationEndpoint)
-    || !secureOidcEndpoint(tokenEndpoint)
-    || !secureOidcEndpoint(jwksUri)) {
-    throw new Error("OIDC discovery document is missing required endpoints");
-  }
-  const discovered: OidcDiscovery = {
-    issuer: discoveredIssuer,
-    authorizationEndpoint,
-    tokenEndpoint,
-    jwksUri,
-    ...(Array.isArray(config.id_token_signing_alg_values_supported)
-      ? { signingAlgorithms: config.id_token_signing_alg_values_supported.filter((value): value is string => typeof value === "string") }
-      : {}),
-    ...(Array.isArray(config.code_challenge_methods_supported)
-      ? { pkceMethods: config.code_challenge_methods_supported.filter((value): value is string => typeof value === "string") }
-      : {}),
-  };
-  discoveryCache.set(issuer, { config: discovered, fetchedAt: Date.now() });
-  return discovered;
 }
 
 function normalizeIssuer(value: string): string {
   return value.trim();
 }
 
-function secureOidcEndpoint(value: string): boolean {
+/**
+ * Validate an OIDC endpoint URL. With no issuer, https is always acceptable
+ * and plain http only for loopback hosts. When an issuer is supplied (the
+ * discovery document endpoints), the endpoint must use the issuer's scheme
+ * and host so a document cannot point the server at a different authority.
+ */
+function secureOidcEndpoint(value: string, issuer?: string): boolean {
   try {
     const url = new URL(value);
+    if (url.username !== "" || url.password !== "") return false;
+    if (issuer === undefined) {
+      const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+      return url.protocol === "https:" || (url.protocol === "http:" && loopback);
+    }
+    const issuerUrl = new URL(issuer);
+    const issuerHost = issuerUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    return (url.protocol === "https:" || (url.protocol === "http:" && loopback))
-      && url.username === "" && url.password === "";
+    if (url.protocol !== issuerUrl.protocol || hostname !== issuerHost) return false;
+    if (url.protocol === "http:") {
+      // Plain HTTP is only acceptable for loopback issuers (local testing).
+      return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    }
+    return true;
   } catch {
     return false;
   }
@@ -267,22 +300,34 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   if (forceRefresh && cached !== undefined && (jwksRefreshes.get(jwksUri) ?? 0) + JWKS_REFRESH_MIN_INTERVAL_MS > now) {
     return cached.keys;
   }
+  // Concurrent verifications share one refresh instead of each issuing its
+  // own outbound request.
+  const pending = jwksInFlight.get(jwksUri);
+  if (pending !== undefined) return pending;
   if (forceRefresh) jwksRefreshes.set(jwksUri, now);
-  const response = await fetch(jwksUri, {
-    redirect: "error",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
-  const jwks = await response.json() as { keys?: unknown };
-  const keys = Array.isArray(jwks.keys) ? jwks.keys.filter((key): key is Record<string, unknown> => (
-    typeof key === "object" && key !== null && !Array.isArray(key)
-  )) : [];
-  if (keys.length === 0) {
-    if (cached !== undefined) return cached.keys;
-    throw new Error("The OIDC provider JWKS contains no keys");
+  const request = (async (): Promise<Record<string, unknown>[]> => {
+    const response = await fetch(jwksUri, {
+      redirect: "error",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
+    const jwks = await response.json() as { keys?: unknown };
+    const keys = Array.isArray(jwks.keys) ? jwks.keys.filter((key): key is Record<string, unknown> => (
+      typeof key === "object" && key !== null && !Array.isArray(key)
+    )) : [];
+    if (keys.length === 0) {
+      if (cached !== undefined) return cached.keys;
+      throw new Error("The OIDC provider JWKS contains no keys");
+    }
+    jwksCache.set(jwksUri, { keys, fetchedAt: Date.now() });
+    return keys;
+  })();
+  jwksInFlight.set(jwksUri, request);
+  try {
+    return await request;
+  } finally {
+    if (jwksInFlight.get(jwksUri) === request) jwksInFlight.delete(jwksUri);
   }
-  jwksCache.set(jwksUri, { keys, fetchedAt: now });
-  return keys;
 }
 
 async function resolveVerificationKey(
@@ -343,7 +388,7 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
       await auditLog("sso-failure", "oidc", null, null, null, { reason: error instanceof Error ? error.message : "discovery failed" });
       return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
     }
-    if (settings.pkceMethod === "S256" && !config.pkceMethods?.includes("S256")) {
+    if (settings.pkceMethod === "S256" && config.pkceMethods !== undefined && !config.pkceMethods.includes("S256")) {
       await auditLog("sso-failure", "oidc", null, null, null, { reason: "OIDC provider does not advertise S256 PKCE" });
       return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The OIDC provider does not support the required S256 PKCE method."), 502);
     }

@@ -907,8 +907,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
       if (input.values.enabled !== current.enabled) {
         await t.update(organizations).set({ samlEnabled: input.values.enabled });
       }
+      // The companion link-by-email setting must land atomically with the
+      // SAML row: a partial write could leave SAML enabled while the linking
+      // policy silently reverts, or vice versa.
+      const linkRow = await t.query.adminSettings.findFirst({ where: eq(adminSettings.id, "saml") });
+      const linkValues = { ...(linkRow?.values ?? { "link-by-email": false }), "link-by-email": linkByEmail };
+      await t.insert(adminSettings).values({ id: "saml", values: linkValues, updatedAt: Date.now() })
+        .onConflictDoUpdate({ target: adminSettings.id, set: { values: linkValues, updatedAt: Date.now() } });
     });
-    await updateSettings("saml", { "link-by-email": linkByEmail });
     invalidatePingSsoCache();
     return { data: samlSettingsResource(await currentSamlSettings(), request, linkByEmail) };
     });
@@ -1126,12 +1132,18 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] };
     }
+    // Without PKCE, the token exchange authenticates the client with its
+    // secret; an enabled provider with no secret could be impersonated.
+    if (enabled && pkce !== "S256" && (typeof clientSecret !== "string" || clientSecret === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required when pkce-method is not S256" }] };
+    }
     const updated = await updateSettings("oidc", {
       ...attrs,
       issuer,
       "client-id": clientId,
       "client-secret": clientSecret,
-      "pkce-method": pkce === "" ? null : pkce,
+      "pkce-method": pkce === "" || pkce === undefined ? null : pkce,
       "signing-alg": signingAlg,
     });
     invalidatePingSsoCache();
@@ -1205,6 +1217,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (typeof bindDn === "string" && bindDn !== "" && (typeof bindPassword !== "string" || bindPassword === "")) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind-password is required when bind-dn is set" }] };
+    }
+    // The bind password travels over the wire on every bind: never allow it
+    // over an unencrypted connection. The ldap settings default ("ldaps")
+    // keeps new configurations secure by construction.
+    if (enabled && encryption === "plain" && typeof bindDn === "string" && bindDn !== ""
+      && typeof bindPassword === "string" && bindPassword !== "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "bind credentials cannot be sent over plaintext LDAP; use starttls or ldaps" }] };
     }
     const userFilter = typeof attrs["user-filter"] === "string" && attrs["user-filter"] !== ""
       ? attrs["user-filter"]

@@ -40,6 +40,9 @@ const TIME_SKEW_MS = 5 * 60 * 1000;
 // Cap the decoded/decodescapped SAML message size so an attacker-supplied
 // compressed payload cannot expand into excessive memory.
 const MAX_SAML_MESSAGE_BYTES = 1024 * 1024;
+// Signature verification is the expensive step; cap the elements checked so
+// a doctored document cannot force unbounded signature work.
+const MAX_SAML_SIGNATURE_NODES = 4;
 const REDIRECT_SIGNATURE_ALGORITHMS: Readonly<Record<string, string>> = {
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256": "RSA-SHA256",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384": "RSA-SHA384",
@@ -112,14 +115,20 @@ function decodeSamlMessage(value: string): string {
   const raw = Buffer.from(value.replaceAll(" ", "+"), "base64");
   if (raw.length > MAX_SAML_MESSAGE_BYTES) throw new Error("SAML message too large");
   // IdPs may compress the XML (DEFLATE, gzip, or raw).
+  let text: string;
   if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
-    return gunzipSync(raw, { maxOutputLength: MAX_SAML_MESSAGE_BYTES }).toString("utf8");
+    text = gunzipSync(raw, { maxOutputLength: MAX_SAML_MESSAGE_BYTES }).toString("utf8");
+  } else {
+    try {
+      text = inflateRawSync(raw, { maxOutputLength: MAX_SAML_MESSAGE_BYTES }).toString("utf8");
+    } catch {
+      text = raw.toString("utf8");
+    }
   }
-  try {
-    return inflateRawSync(raw, { maxOutputLength: MAX_SAML_MESSAGE_BYTES }).toString("utf8");
-  } catch {
-    return raw.toString("utf8");
-  }
+  // A DOCTYPE can declare entity expansions; reject it before any parser
+  // touches the message (both parsers keep entity expansion disabled too).
+  if (/<!doctype/i.test(text)) throw new Error("SAML message must not contain a DOCTYPE");
+  return text;
 }
 
 /** Build an SP-initiated LogoutRequest for the HTTP-Redirect binding. */
@@ -158,7 +167,8 @@ function rawQueryParameter(requestUrl: string, name: string): string | undefined
         return part.slice(separator + 1);
       }
     } catch {
-      return undefined;
+      // One malformed parameter must not hide the one we are looking for.
+      continue;
     }
   }
   return undefined;
@@ -207,11 +217,20 @@ function verifyRedirectLogoutSignature(
   return { present: true, valid };
 }
 
+type LogoutVerification = Readonly<{
+  valid: boolean;
+  error: string;
+  nameId?: string;
+  requestId?: string;
+  issuer?: string;
+  destination?: string;
+}>;
+
 function verifyLogoutSignature(
   xml: string,
   certificates: readonly string[],
   redirectBinding = false,
-): Readonly<{ valid: boolean; error: string; nameId?: string; requestId?: string }> {
+): LogoutVerification {
   if (certificates.length === 0) return { valid: false, error: "No IdP certificate configured" };
   let doc: ReturnType<DOMParser["parseFromString"]>;
   try {
@@ -226,7 +245,9 @@ function verifyLogoutSignature(
   if (requestId === "") return { valid: false, error: "SAML logout request has no request ID" };
   const nameId = request?.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
   if (nameId === "") return { valid: false, error: "SAML logout request has no NameID" };
-  if (redirectBinding) return { valid: true, error: "", nameId, requestId };
+  const issuer = request?.getElementsByTagNameNS("*", "Issuer").item(0)?.textContent?.trim() ?? "";
+  const destination = request?.getAttribute("Destination") ?? "";
+  if (redirectBinding) return { valid: true, error: "", nameId, requestId, issuer, destination };
   const signatureElement = doc.getElementsByTagNameNS("*", "Signature").item(0);
   if (signatureElement === null) return { valid: false, error: "SAML logout request is not signed" };
   for (const certificate of certificates) {
@@ -247,7 +268,7 @@ function verifyLogoutSignature(
       if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) continue;
       const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
       if (signedNameId !== nameId) continue;
-      return { valid: true, error: "", nameId, requestId };
+      return { valid: true, error: "", nameId, requestId, issuer, destination };
     } catch {
       // Try the next certificate (e.g. the old cert during rotation).
     }
@@ -329,6 +350,9 @@ const xmlParser = new XMLParser({
   textNodeName: "#text",
   parseTagValue: false,
   parseAttributeValue: false,
+  // Entity expansion stays disabled for accepted SAML messages; decodeSamlMessage
+  // already rejects DOCTYPEs.
+  processEntities: false,
 });
 
 /**
@@ -372,6 +396,11 @@ function signedAssertionResult(
 
   const signatureNodes = doc.getElementsByTagNameNS("*", "Signature");
   if (signatureNodes.length === 0) return { valid: false, error: "SAML response is not signed" };
+  // An attacker can stuff a document with signature elements to exhaust CPU;
+  // the single verified signature is all the flow ever needs.
+  if (signatureNodes.length > MAX_SAML_SIGNATURE_NODES) {
+    return { valid: false, error: "SAML response contains too many signatures" };
+  }
 
   for (let index = 0; index < signatureNodes.length; index += 1) {
     const signatureElement = signatureNodes.item(index);
@@ -460,6 +489,15 @@ async function handleIdpInitiatedLogout(
   if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
     return invalid("Invalid SAML logout request signature");
+  }
+  // The LogoutRequest must name this IdP and target this SP's SLO endpoint;
+  // otherwise the session must not be revoked on its authority.
+  if (verifiedLogout.issuer === undefined || verifiedLogout.issuer === ""
+    || verifiedLogout.issuer !== settings.idpEntityId
+    || verifiedLogout.destination === undefined || verifiedLogout.destination === ""
+    || verifiedLogout.destination !== sloUrl(request)) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issuer or destination mismatch" });
+    return invalid("Invalid SAML logout request");
   }
   if (!(await claimSsoChallenge(
     SAML_LOGOUT_CHALLENGE_KIND,
@@ -761,7 +799,11 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     );
   const usernameValues = namedAttribute(attributesList, settings.attrUsername);
   const username = usernameValues[0] ?? nameIdText;
-  const emailAttributeNames = typeof settings.attrEmail === "string" && settings.attrEmail !== ""
+  // Linking by email must be anchored to an explicitly configured attribute:
+  // guessing among well-known names could attach an identity by an attribute
+  // the administrator never vetted.
+  const attrEmailConfigured = typeof settings.attrEmail === "string" && settings.attrEmail !== "";
+  const emailAttributeNames = attrEmailConfigured
     ? [settings.attrEmail]
     : ["email", "mail", "Email", "EmailAddress"];
   const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
@@ -778,6 +820,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     : [];
   const siteAdminMatches = settings.attrSiteAdmin !== null && settings.attrSiteAdmin !== ""
     && namedAttribute(attributesList, settings.attrSiteAdmin).includes(settings.siteAdminRole);
+  const linkByEmailEnabled = (await getSettings("saml"))["link-by-email"] === true;
 
     let result: Awaited<ReturnType<typeof provisionSsoUser>>;
     try {
@@ -789,7 +832,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         // SAML attribute statements are signed with the IdP assertion, so
         // the operator-controlled directory is the verification authority.
         emailVerified: true,
-        allowEmailLinking: (await getSettings("saml"))["link-by-email"] === true,
+        allowEmailLinking: linkByEmailEnabled && attrEmailConfigured,
       });
     } catch (error: unknown) {
       if (error instanceof SsoConflictError) {
@@ -803,8 +846,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     if (attrGroupsConfigured) {
       await syncSamlGroupMappings(user.id, groups);
-    }
-    // The site-admin attribute is authoritative in both directions: matching
+    }    // The site-admin attribute is authoritative in both directions: matching
     // promotes, and once an account's admin status is SAML-sourced, losing the
     // role demotes it so the IdP can revoke elevated access. If the attribute
     // is misconfigured (empty `attrSiteAdmin`), we never touch the flag.
@@ -837,8 +879,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
     // The browser-session refresh cookie is written into set.headers by
     // issueLoginSession; attach it to the HTML response we return.
-    const respond = (body: string): Response => {
-      const response = ssoHtmlResponse(body);
+    const respond = (body: string, status = 200): Response => {
+      const response = ssoHtmlResponse(body, status);
       appendSetCookies(response, set.headers["Set-Cookie"]);
       return response;
     };
@@ -848,8 +890,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     if (wantsTokenResponse) {
       if (sessionToken === null) {
         await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "SSO token response was malformed" });
-        (set as { status: number }).status = 500;
-        return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }));
+        return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }), 500);
       }
       if (wantsJson) {
         const response = Response.json(session, {

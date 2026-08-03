@@ -425,6 +425,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlMetadataUrl(attrString(attrs, "metadata-url", ""));
     } catch (err: unknown) {
       setSamlError(err instanceof Error ? err.message : "Failed to load SAML settings");
+      // The load failed: release the "loading" sentinel so the save button
+      // does not stay disabled forever on a transient error.
+      setPersistedSamlEnabled(false);
     } finally {
       setSamlLoading(false);
     }
@@ -469,6 +472,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapAttrDisplayName(attrString(attrs, "attr-display-name", "cn"));
     } catch (err: unknown) {
       setLdapError(err instanceof Error ? err.message : "Failed to load LDAP settings");
+      // Release the "loading" sentinel (see loadSamlSettings).
+      setPersistedLdapEnabled(false);
     } finally {
       setLdapLoading(false);
     }
@@ -508,16 +513,21 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("Host and Base DN are required when LDAP is enabled.");
       return;
     }
-    if (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535) {
+    if (ldapEnabled && (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535)) {
       setLdapError("Port must be between 1 and 65535.");
       return;
     }
-    if (!ldapUserFilter.includes("{{username}}")) {
+    if (ldapEnabled && !ldapUserFilter.includes("{{username}}")) {
       setLdapError("User filter must contain the {{username}} placeholder.");
       return;
     }
     if (ldapBindDn.trim() !== "" && ldapBindPassword === "" && !ldapBindPasswordSet) {
       setLdapError("A bind password is required when a bind DN is set.");
+      return;
+    }
+    // Never allow the last authentication method to be switched off.
+    if (!ldapEnabled && !localAuthEnabled && persistedSamlEnabled === false && persistedOidcEnabled === false) {
+      setLdapError("At least one authentication method must remain enabled.");
       return;
     }
     const body: Record<string, unknown> = {
@@ -579,6 +589,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setOidcSigningAlg(attrString(attrs, "signing-alg", ""));
     } catch (err: unknown) {
       setOidcError(err instanceof Error ? err.message : "Failed to load OIDC settings");
+      // Release the "loading" sentinel (see loadSamlSettings).
+      setPersistedOidcEnabled(false);
     } finally {
       setOidcLoading(false);
     }
@@ -586,6 +598,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveSaml = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    // Client-side mirror of the API's lockout guard: never allow the last
+    // authentication method to be switched off.
+    if (!samlEnabled && !localAuthEnabled && persistedOidcEnabled === false && persistedLdapEnabled === false) {
+      setSamlError("At least one authentication method must remain enabled.");
+      return;
+    }
     const body: Record<string, unknown> = {
       data: {
         type: "saml-settings",
@@ -624,6 +642,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveOidc = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    // Client-side mirror of the API's lockout guard (see handleSaveSaml).
+    if (!oidcEnabled && !localAuthEnabled && persistedSamlEnabled === false && persistedLdapEnabled === false) {
+      setOidcError("At least one authentication method must remain enabled.");
+      return;
+    }
     const body: Record<string, unknown> = {
       data: {
         type: "oidc-settings",
@@ -1618,6 +1641,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <option value="starttls">StartTLS</option>
                             <option value="ldaps">LDAPS</option>
                           </select>
+                          {ldapEncryption === "plain" && (
+                            <p className="text-xs text-amber-700">
+                              Warning: plain LDAP transmits the bind password and user passwords without
+                              encryption. Use StartTLS or LDAPS when possible.
+                            </p>
+                          )}
                         </div>
                         <div className="space-y-1">
                           <label className="text-xs font-medium text-gray-700">Base DN</label>

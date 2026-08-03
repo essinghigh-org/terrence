@@ -12,8 +12,15 @@ export const IDP_OLD_CERT = readFileSync(join(import.meta.dir, "../fixtures/idp-
 export const IDP_OLD_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-old-key.pem"), "utf8");
 
 export const ACS_URL = "http://terrence.test/users/saml/auth";
+export const SLO_URL = "http://terrence.test/users/saml/slo";
 export const ENTITY_ID = "http://terrence.test/users/saml/metadata";
 export const IDP_ENTITY_ID = "http://idp.example.test/metadata";
+// Attribute names the SP and the mock IdP agree on; the flow suite must
+// configure the same names or attribute mapping silently stops working.
+export const ATTR_USERNAME = "Username";
+export const ATTR_EMAIL = "email";
+export const ATTR_GROUPS = "MemberOf";
+export const ATTR_SITE_ADMIN = "SiteAdmin";
 
 export type SamlResponseOptions = Readonly<{
   /** Destination attribute on the Response element. */
@@ -83,10 +90,10 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
   const now = iso(0);
   const responseId = `_response_${crypto.randomUUID().replaceAll("-", "")}`;
   const attributeXml = [
-    serializedAttribute("Username", username),
-    serializedAttribute("email", email),
-    ...(groups.length > 0 ? [serializedAttribute("MemberOf", groups)] : []),
-    ...(siteAdmin !== undefined ? [serializedAttribute("SiteAdmin", siteAdmin)] : []),
+    serializedAttribute(ATTR_USERNAME, username),
+    serializedAttribute(ATTR_EMAIL, email),
+    ...(groups.length > 0 ? [serializedAttribute(ATTR_GROUPS, groups)] : []),
+    ...(siteAdmin !== undefined ? [serializedAttribute(ATTR_SITE_ADMIN, siteAdmin)] : []),
     ...Object.entries(attributes).map(([name, values]): string => serializedAttribute(name, values)),
   ].join("");
 
@@ -149,9 +156,9 @@ export function buildSignedLogoutRequest(
   const now = new Date().toISOString();
   const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
   const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
-<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}">
-  <saml:Issuer>${IDP_ENTITY_ID}</saml:Issuer>
-  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${nameId}</saml:NameID>
+<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}" Destination="${escapeXml(SLO_URL)}">
+  <saml:Issuer>${escapeXml(IDP_ENTITY_ID)}</saml:Issuer>
+  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${escapeXml(nameId)}</saml:NameID>
 </samlp:LogoutRequest>
 `;
   const signed = new SignedXml({

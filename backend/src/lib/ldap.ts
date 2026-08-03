@@ -3,7 +3,7 @@
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
 import { Client, InvalidCredentialsError, SizeLimitExceededError, type Entry } from "ldapts";
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { LdapSettings } from "./sso";
 import { log } from "./log";
 
@@ -160,6 +160,10 @@ const ldapProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const ldapHostProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
 const LDAP_SEARCH_SIZE_LIMIT = 10;
+// Probe keys must be unpredictable: a plain SHA-256 of the password could be
+// brute-forced offline. The key is random per process and lives only in
+// memory, so the digest is useless outside this instance.
+const probeHmacKey = randomBytes(32);
 
 /** Share the short circuit-breaker window across browser and CLI login paths. */
 export async function authenticateLdapWithCircuitBreaker(
@@ -170,7 +174,7 @@ export async function authenticateLdapWithCircuitBreaker(
   const hostKey = `${settings.encryption}:${settings.host ?? ""}:${settings.port}`;
   const now = Date.now();
   if ((ldapFailureCache.get(hostKey) ?? 0) > now) return { user: null, unavailable: true };
-  const probeKey = `${hostKey}:${username}:${createHash("sha256").update(password).digest("hex")}`;
+  const probeKey = `${hostKey}:${username}:${createHmac("sha256", probeHmacKey).update(password).digest("hex")}`;
   const pending = ldapProbes.get(probeKey);
   if (pending !== undefined) return pending;
   const hostPending = ldapHostProbes.get(hostKey);

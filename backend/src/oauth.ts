@@ -1,9 +1,10 @@
 import { Elysia } from "elysia";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { createHash } from "node:crypto";
 import { authenticateLdapWithCircuitBreaker } from "./lib/ldap";
+import { log } from "./lib/log";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
 
 const CLIENT_ID = "terraform-cli";
@@ -169,7 +170,9 @@ function htmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      // The Terraform Login page ships one static inline stylesheet; nothing
+      // user-controlled is ever interpolated into it.
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       "Content-Type": "text/html; charset=utf-8",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
@@ -244,30 +247,45 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     const username = field(body, "username");
     const password = field(body, "password");
     let user: typeof users.$inferSelect | null = null;
+    let ldapUnavailable = false;
     if (sso.ldapEnabled && username !== "" && password !== "") {
       const ldap = await ldapSettings();
-      const authenticated = await authenticateLdapWithCircuitBreaker(ldap, username, password);
-      if (authenticated.user !== null) {
-        try {
-          user = (await provisionSsoUser({
-            provider: "ldap",
-            subject: authenticated.user.dn,
-            username: authenticated.user.username,
-            email: authenticated.user.email,
-            emailVerified: true,
-            allowEmailLinking: ldap.allowEmailLinking,
-          })).user;
-        } catch (error: unknown) {
-          if (error instanceof SsoConflictError) {
-            return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, ssoInfo), 401);
+      try {
+        const authenticated = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+        ldapUnavailable = authenticated.unavailable;
+        if (authenticated.user !== null) {
+          try {
+            user = (await provisionSsoUser({
+              provider: "ldap",
+              subject: authenticated.user.dn,
+              username: authenticated.user.username,
+              email: authenticated.user.email,
+              emailVerified: true,
+              allowEmailLinking: ldap.allowEmailLinking,
+            })).user;
+          } catch (error: unknown) {
+            if (error instanceof SsoConflictError) {
+              return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, ssoInfo), 401);
+            }
+            throw error;
           }
-          throw error;
         }
+      } catch (error: unknown) {
+        // A transport failure must degrade to local authentication, never to
+        // the global error handler.
+        ldapUnavailable = true;
+        log.warn("LDAP authentication probe failed; continuing with local authentication", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
     if (user === null && sso.localAuthEnabled) {
-      const found = username === "" ? undefined : await db.query.users.findFirst({ where: eq(users.username, username) });
+      const found = username === ""
+        ? undefined
+        : await db.query.users.findFirst({
+            where: or(eq(users.username, username), eq(users.email, username)),
+          });
       const passwordValid = await passwordMatches(password, found?.passwordHash);
       user = found !== undefined && passwordValid ? found : null;
     }
@@ -275,6 +293,9 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     if (user === null) {
       // Preserve the SSO state so a user who mistypes a local password can
       // still reach the identity-provider links without restarting.
+      if (ldapUnavailable && !sso.localAuthEnabled) {
+        return htmlResponse(loginPage(authorization, "The LDAP directory is temporarily unavailable. Please try again later.", username, ssoInfo), 503);
+      }
       const message = sso.localAuthEnabled || sso.ldapEnabled
         ? "Invalid username or password."
         : "Local password sign-in is disabled. Use single sign-on.";

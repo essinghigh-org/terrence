@@ -17,6 +17,10 @@ import {
 } from "../../src/db/schema";
 import {
   ACS_URL,
+  ATTR_EMAIL,
+  ATTR_GROUPS,
+  ATTR_SITE_ADMIN,
+  ATTR_USERNAME,
   ENTITY_ID,
   IDP_CERT,
   IDP_KEY,
@@ -82,7 +86,7 @@ describe("SAML SSO flow", () => {
       token: createHash("sha256").update(adminToken).digest("hex"),
       userId: adminId,
     });
-    await db.insert(samlSettings).values({
+    const samlValues = {
       id: "saml",
       enabled: true,
       debug: true,
@@ -90,14 +94,19 @@ describe("SAML SSO flow", () => {
       idpEntityId: IDP_ENTITY_ID,
       ssoEndpointUrl: "https://idp.example.test/sso",
       sloEndpointUrl: "https://idp.example.test/slo",
-      attrUsername: "Username",
-      attrEmail: "email",
-      attrGroups: "MemberOf",
-      attrSiteAdmin: "SiteAdmin",
+      attrUsername: ATTR_USERNAME,
+      attrEmail: ATTR_EMAIL,
+      attrGroups: ATTR_GROUPS,
+      attrSiteAdmin: ATTR_SITE_ADMIN,
       siteAdminRole: "site-admins",
       ssoApiTokenSessionTimeout: 3600,
       updatedAt: Date.now(),
-    });
+    };
+    const { id: _samlId, ...samlUpdate } = samlValues;
+    // Upsert so a row left behind by a crashed parallel suite cannot fail the
+    // whole file's setup.
+    await db.insert(samlSettings).values(samlValues)
+      .onConflictDoUpdate({ target: samlSettings.id, set: samlUpdate });
     await db.insert(adminSettings).values({ id: "saml", values: { "link-by-email": true }, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values: { "link-by-email": true }, updatedAt: Date.now() } });
   });
@@ -153,16 +162,18 @@ describe("SAML SSO flow", () => {
   });
 
   test("returns 404 for the auth endpoint when SAML is disabled", async () => {
-    await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
+    const disabled = await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
       data: { type: "saml-settings", attributes: { enabled: false } },
     });
+    expect(disabled.status).toBe(200);
     try {
       const response = await app.handle(new Request("http://terrence.test/users/saml/auth"));
       expect(response.status).toBe(404);
     } finally {
-      await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
+      const restored = await request("PATCH", "/api/v2/admin/saml-settings", adminToken, {
         data: { type: "saml-settings", attributes: { enabled: true } },
       });
+      expect(restored.status).toBe(200);
     }
   });
 
@@ -393,9 +404,9 @@ describe("SAML SSO flow", () => {
     });
     expect(membership?.role).toBe("owner");
     const teamMembership = await db.query.teamMemberships.findFirst({
-      where: eq(teamMemberships.teamId, `team-dev-${suffix}`),
+      where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
     });
-    expect(teamMembership?.userId).toBe(grouped!.id);
+    expect(teamMembership).not.toBeUndefined();
   });
 
   test("removes SAML-sourced memberships when a later login omits the groups attribute", async () => {
@@ -521,6 +532,19 @@ describe("SAML SSO flow", () => {
     const logoutRequest = inflateAndDecode(location.searchParams.get("SAMLRequest") ?? "");
     expect(logoutRequest).toContain('Destination="https://idp.example.test/slo"');
     expect(logoutRequest).toContain(`<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${username}</saml:NameID>`);
+  });
+
+  test("rejects an SP-initiated SLO request from a cross-site caller", async () => {
+    const username = `cross-slo-${suffix}`;
+    const login = await validAcs({ username, email: `${username}@example.com` });
+    const refreshToken = cookieValue(login, "terrence_refresh");
+    // A cross-site request cannot start an SP-initiated logout: the browser
+    // binding guard rejects it instead of redirecting to the IdP.
+    const response = await app.handle(new Request("http://terrence.test/users/saml/slo", {
+      headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "cross-site" },
+    }));
+    expect(response.status).toBe(400);
+    expect(response.headers.get("Location")).toBeNull();
   });
 
   test("handles an IdP-initiated redirect-binding logout", async () => {
