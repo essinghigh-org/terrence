@@ -3,7 +3,7 @@
 // the saml_settings table (admin API + dashboard).
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, verify as verifySignature } from "node:crypto";
 import { deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
 import { DOMParser } from "@xmldom/xmldom";
 import { SignedXml } from "xml-crypto";
@@ -38,6 +38,12 @@ const TIME_SKEW_MS = 5 * 60 * 1000;
 // Cap the decoded/decodescapped SAML message size so an attacker-supplied
 // compressed payload cannot expand into excessive memory.
 const MAX_SAML_MESSAGE_BYTES = 1024 * 1024;
+const REDIRECT_SIGNATURE_ALGORITHMS: Readonly<Record<string, string>> = {
+  "http://www.w3.org/2000/09/xmldsig#rsa-sha1": "RSA-SHA1",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256": "RSA-SHA256",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384": "RSA-SHA384",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512": "RSA-SHA512",
+};
 
 // AuthnRequests we issued are recorded and matched against InResponseTo so
 // captured assertions cannot be replayed against the ACS.
@@ -82,12 +88,12 @@ function decodeSamlMessage(value: string): string {
 }
 
 /** Build an SP-initiated LogoutRequest for the HTTP-Redirect binding. */
-function logoutRequestXml(entityId: string, destination: string, requestId: string): string {
+function logoutRequestXml(entityId: string, destination: string, requestId: string, nameId: string): string {
   const now = new Date().toISOString();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:LogoutRequest xmlns:samlp="${PROTOCOL}" xmlns:saml="${SAML_VERSION}" ID="${requestId}" Version="2.0" IssueInstant="${now}" Destination="${xmlEscape(destination)}">
   <saml:Issuer>${xmlEscape(entityId)}</saml:Issuer>
-  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">logout</saml:NameID>
+  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${xmlEscape(nameId)}</saml:NameID>
 </samlp:LogoutRequest>
 `;
 }
@@ -106,7 +112,62 @@ function logoutResponseXml(entityId: string, inResponseTo: string): string {
 }
 
 /** Verify the IdP's LogoutRequest signature against the configured certs. */
-function verifyLogoutSignature(xml: string, certificates: readonly string[]): Readonly<{ valid: boolean; error: string; nameId?: string; requestId?: string }> {
+function rawQueryParameter(requestUrl: string, name: string): string | undefined {
+  const query = new URL(requestUrl).search.slice(1);
+  for (const part of query.split("&")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    try {
+      if (decodeURIComponent(part.slice(0, separator).replaceAll("+", " ")) === name) {
+        return part.slice(separator + 1);
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function verifyRedirectLogoutSignature(
+  request: RequestInfo,
+  certificates: readonly string[],
+): Readonly<{ present: boolean; valid: boolean }> {
+  const rawRequest = rawQueryParameter(request.url, "SAMLRequest");
+  const rawSignature = rawQueryParameter(request.url, "Signature");
+  const rawSigAlg = rawQueryParameter(request.url, "SigAlg");
+  if (rawSignature === undefined && rawSigAlg === undefined) {
+    return { present: false, valid: false };
+  }
+  if (rawRequest === undefined || rawSignature === undefined || rawSigAlg === undefined) {
+    return { present: true, valid: false };
+  }
+  let sigAlg: string;
+  let signature: Buffer;
+  try {
+    sigAlg = decodeURIComponent(rawSigAlg);
+    signature = Buffer.from(decodeURIComponent(rawSignature).replaceAll(" ", "+"), "base64");
+  } catch {
+    return { present: true, valid: false };
+  }
+  const algorithm = REDIRECT_SIGNATURE_ALGORITHMS[sigAlg];
+  if (algorithm === undefined) return { present: true, valid: false };
+  const rawRelayState = rawQueryParameter(request.url, "RelayState");
+  const signedInput = `SAMLRequest=${rawRequest}${rawRelayState === undefined ? "" : `&RelayState=${rawRelayState}`}&SigAlg=${rawSigAlg}`;
+  const valid = certificates.some((certificate): boolean => {
+    try {
+      return verifySignature(algorithm, Buffer.from(signedInput, "utf8"), certificate, signature);
+    } catch {
+      return false;
+    }
+  });
+  return { present: true, valid };
+}
+
+function verifyLogoutSignature(
+  xml: string,
+  certificates: readonly string[],
+  redirectBinding = false,
+): Readonly<{ valid: boolean; error: string; nameId?: string; requestId?: string }> {
   if (certificates.length === 0) return { valid: false, error: "No IdP certificate configured" };
   let doc: ReturnType<DOMParser["parseFromString"]>;
   try {
@@ -119,6 +180,9 @@ function verifyLogoutSignature(xml: string, certificates: readonly string[]): Re
   const request = requests.item(0);
   const requestId = request?.getAttribute("ID") ?? "";
   if (requestId === "") return { valid: false, error: "SAML logout request has no request ID" };
+  const nameId = request?.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
+  if (nameId === "") return { valid: false, error: "SAML logout request has no NameID" };
+  if (redirectBinding) return { valid: true, error: "", nameId, requestId };
   const signatureElement = doc.getElementsByTagNameNS("*", "Signature").item(0);
   if (signatureElement === null) return { valid: false, error: "SAML logout request is not signed" };
   for (const certificate of certificates) {
@@ -138,8 +202,8 @@ function verifyLogoutSignature(xml: string, certificates: readonly string[]): Re
       const signedRequest = signedRequests.length === 1 ? signedRequests.item(0) : null;
       if (signedRequest === null || signedRequest.getAttribute("ID") !== requestId) continue;
       const signedNameId = signedRequest.getElementsByTagNameNS("*", "NameID").item(0)?.textContent?.trim() ?? "";
-      if (signedNameId === "") continue;
-      return { valid: true, error: "", nameId: signedNameId, requestId };
+      if (signedNameId !== nameId) continue;
+      return { valid: true, error: "", nameId, requestId };
     } catch {
       // Try the next certificate (e.g. the old cert during rotation).
     }
@@ -155,8 +219,8 @@ function local(record: Record<string, unknown> | undefined, name: string): unkno
   return key === undefined ? undefined : record[key];
 }
 
-function attr(record: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (record === undefined || typeof record !== "object") return {};
+function attr(record: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  if (record === null || record === undefined || typeof record !== "object") return {};
   return record;
 }
 
@@ -230,10 +294,14 @@ const xmlParser = new XMLParser({
  * attacker inserting an extra unsigned assertion cannot smuggle it past the
  * single-Reference check into the consumed document.
  */
+type SignedAssertionResult =
+  | Readonly<{ valid: true; error: ""; assertionXml: string }>
+  | Readonly<{ valid: false; error: string }>;
+
 function signedAssertionResult(
   xml: string,
   certificates: readonly string[],
-): Readonly<{ valid: boolean; error: string; assertionXml?: string }> {
+): SignedAssertionResult {
   if (certificates.length === 0) {
     return { valid: false, error: "No IdP certificate configured" };
   }
@@ -258,37 +326,35 @@ function signedAssertionResult(
     return { valid: false, error: "SAML response must contain exactly one Assertion element" };
   }
 
-  const signatures = doc.getElementsByTagNameNS("*", "Signature");
-  if (signatures.length === 0) return { valid: false, error: "SAML response is not signed" };
-  const signatureElement = signatures[0];
-  if (signatureElement === undefined) return { valid: false, error: "SAML response is not signed" };
+  const signatureNodes = doc.getElementsByTagNameNS("*", "Signature");
+  if (signatureNodes.length === 0) return { valid: false, error: "SAML response is not signed" };
 
-  for (const certificate of certificates) {
-    try {
-      const signed = new SignedXml();
-      signed.getCertFromKeyInfo = (): string => certificate;
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      signed.loadSignature(String(signatureElement));
-      if (!signed.checkSignature(xml)) continue;
-      const references = signed.getReferences();
-      // The references type from xml-crypto exposes `uri`; tolerate shaped
-      // variants without losing type-safety.
-      const uris = references.map((ref): string => (ref as { uri?: string }).uri ?? "");
-      if (uris.length !== 1) continue;
-      const uri = uris[0]?.replace(/^#/, "") ?? "";
-      if (uri === "") continue;
-      const assertionId = assertionNode.getAttribute("ID");
-      if (assertionId !== uri) continue;
-      const signedReferences = signed.getSignedReferences();
-      if (signedReferences.length !== 1 || signedReferences[0] === undefined) continue;
-      // The signature covers exactly the assertion we will consume.
-      return {
-        valid: true,
-        error: "",
-        assertionXml: signedReferences[0],
-      };
-    } catch {
-      // Try the next certificate (e.g. the old cert during rotation).
+  for (let index = 0; index < signatureNodes.length; index += 1) {
+    const signatureElement = signatureNodes.item(index);
+    if (signatureElement === null) continue;
+    for (const certificate of certificates) {
+      try {
+        const signed = new SignedXml();
+        signed.getCertFromKeyInfo = (): string => certificate;
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
+        signed.loadSignature(String(signatureElement));
+        if (!signed.checkSignature(xml)) continue;
+        const references = signed.getReferences();
+        // The references type from xml-crypto exposes `uri`; tolerate shaped
+        // variants without losing type-safety.
+        const uris = references.map((ref): string => (ref as { uri?: string }).uri ?? "");
+        if (uris.length !== 1) continue;
+        const uri = uris[0]?.replace(/^#/, "") ?? "";
+        if (uri === "") continue;
+        const assertionId = assertionNode.getAttribute("ID");
+        if (assertionId !== uri) continue;
+        const signedReferences = signed.getSignedReferences();
+        if (signedReferences.length !== 1 || signedReferences[0] === undefined) continue;
+        // The signature covers exactly the assertion we will consume.
+        return { valid: true, error: "", assertionXml: signedReferences[0] };
+      } catch {
+        // Try the next signature and certificate (e.g. during rotation).
+      }
     }
   }
   return { valid: false, error: "SAML signature verification failed" };
@@ -346,6 +412,69 @@ function wantsToken(request: RequestInfo | undefined, relayState: string | null)
   if (relayState === "api" || relayState === "api-token" || relayState === "terraform-cli") return true;
   const accept = request?.headers.get("accept") ?? "";
   return accept.includes("application/json") && relayState !== null && relayState.startsWith("cli");
+}
+
+async function handleIdpInitiatedLogout(
+  rawRequest: string,
+  relayState: string | undefined,
+  settings: SamlRow,
+  request: RequestInfo,
+  set: SetObj,
+): Promise<Response> {
+  const invalid = (message: string): Response => new Response(message, {
+    status: 400,
+    headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+  });
+  if (rawRequest === "") return invalid("Invalid SAML logout request");
+
+  let xml: string;
+  try {
+    xml = decodeSamlMessage(rawRequest);
+  } catch {
+    return invalid("Invalid SAML logout request");
+  }
+  const certificates = [settings.idpCert, settings.oldIdpCert]
+    .filter((cert): cert is string => typeof cert === "string" && cert !== "");
+  const redirectSignature = verifyRedirectLogoutSignature(request, certificates);
+  if (redirectSignature.present && !redirectSignature.valid) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML redirect signature verification failed" });
+    return invalid("Invalid SAML logout request signature");
+  }
+  const verifiedLogout = verifyLogoutSignature(xml, certificates, redirectSignature.present);
+  if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
+    return invalid("Invalid SAML logout request signature");
+  }
+
+  const sessionUser = await browserSessionUser(request);
+  if (sessionUser?.ssoProvider !== "saml" || sessionUser.ssoSubject !== verifiedLogout.nameId) {
+    await auditLog("sso-failure", "saml", null, sessionUser?.id ?? null, null, { reason: "logout NameID does not match session" });
+    return invalid("Invalid SAML logout request subject");
+  }
+  await revokeBrowserSession(set, request);
+  await auditLog("sso-logout", "saml", null, null, null, { reason: "IdP-initiated" });
+
+  if (settings.sloEndpointUrl === null) {
+    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+    appendSetCookies(response, set.headers["Set-Cookie"]);
+    return response;
+  }
+  let target: URL;
+  try {
+    target = new URL(settings.sloEndpointUrl);
+  } catch {
+    const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+    appendSetCookies(response, set.headers["Set-Cookie"]);
+    return response;
+  }
+  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId)));
+  if (relayState !== undefined) target.searchParams.set("RelayState", relayState);
+  const response = new Response(null, {
+    status: 302,
+    headers: { "Cache-Control": "no-store", Location: target.toString() },
+  });
+  appendSetCookies(response, set.headers["Set-Cookie"]);
+  return response;
 }
 
 export const samlRoutes = new Elysia({ name: "saml-sso" })
@@ -433,9 +562,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     const responseElement = attr(local(parsed, "Response") as Record<string, unknown> | undefined);
 
-    // A Response carrying a non-Success status must be rejected outright —
-    // a failed auth must not be accepted just because it also holds an
-    // assertion.
+    // Reject an explicitly failed response. Status is outside an
+    // assertion-only signature, so the signed assertion below remains the
+    // authentication gate when the IdP does not sign the Response element.
     const statusCode = attr(local(local(responseElement, "Status") as Record<string, unknown> | undefined, "StatusCode") as Record<string, unknown> | undefined)["@_Value"];
     if (statusCode !== SAML_SUCCESS_STATUS) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
@@ -457,7 +586,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     // signature — never the full untrusted document.
     let parsedAssertion: Record<string, unknown>;
     try {
-      const verified = xmlParser.parse(signature.assertionXml ?? xml) as Record<string, unknown>;
+      const verified = xmlParser.parse(signature.assertionXml) as Record<string, unknown>;
       const assertion = local(verified, "Assertion");
       if (assertion === undefined || typeof assertion !== "object" || assertion === null) {
         throw new Error("no assertion");
@@ -584,10 +713,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     );
   const usernameValues = namedAttribute(attributesList, settings.attrUsername);
   const username = usernameValues[0] ?? nameIdText;
-  const emailValues = ["email", "mail", "Email", "EmailAddress"].flatMap((name): string[] => namedAttribute(attributesList, name));
+  const emailAttributeNames = [...new Set([settings.attrEmail, "email", "mail", "Email", "EmailAddress"])]
+    .filter((name): boolean => name !== "");
+  const emailValues = emailAttributeNames.flatMap((name): string[] => namedAttribute(attributesList, name));
   const email = emailValues[0] ?? (nameIdText.includes("@") ? nameIdText : undefined);
   const groups = namedAttribute(attributesList, settings.attrGroups).flatMap((value): string[] =>
-    value.split(/[,\s]+/).filter((part): boolean => part !== "")
+    value.split(",").map((part): string => part.trim()).filter((part): boolean => part !== "")
   );
   const siteAdminMatches = settings.attrSiteAdmin !== null && settings.attrSiteAdmin !== ""
     && namedAttribute(attributesList, settings.attrSiteAdmin).includes(settings.siteAdminRole);
@@ -655,19 +786,35 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
   })
-  .get("/users/saml/slo", async ({ set, request }: {
+  .get("/users/saml/slo", async ({ set, request, query }: {
     set: SetObj;
     request: RequestInfo;
+    query: Readonly<Record<string, unknown>>;
   }): Promise<unknown> => {
     const settings = await currentSamlSettings();
+    const samlRequest = typeof query.SAMLRequest === "string" ? query.SAMLRequest : "";
+    if (samlRequest !== "") {
+      const relayState = typeof query.RelayState === "string" ? query.RelayState : undefined;
+      return handleIdpInitiatedLogout(samlRequest, relayState, settings, request, set);
+    }
+    // The IdP's response to an SP-initiated redirect binding completes at the
+    // same endpoint. Local logout already happened before the request, so
+    // just finish in the application instead of starting another request.
+    if (typeof query.SAMLResponse === "string" && query.SAMLResponse !== "") {
+      const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
+      appendSetCookies(response, set.headers["Set-Cookie"]);
+      return response;
+    }
+    const sessionUser = await browserSessionUser(request);
+    const nameId = sessionUser?.ssoProvider === "saml" ? sessionUser.ssoSubject : null;
     // Terminate the local session regardless of the IdP's availability.
     await revokeBrowserSession(set, request);
-    if (settings.enabled && settings.sloEndpointUrl !== null) {
+    if (settings.enabled && settings.sloEndpointUrl !== null && nameId !== null && nameId !== "") {
       // Send SP-initiated logout to the IdP so the session is ended on both
       // sides. The IdP acknowledges via its own LogoutResponse; we do not
       // block the local redirect on it.
       const requestId = `_${randomBytes(16).toString("hex")}`;
-      const logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId);
+      const logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId, nameId);
       let target: URL;
       try {
         target = new URL(settings.sloEndpointUrl);
@@ -709,39 +856,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       : typeof query.SAMLRequest === "string"
         ? query.SAMLRequest
         : "";
-    if (logoutRequestRaw === "") {
-      (set as { status: number }).status = 400;
-      return new Response("Invalid SAML logout request", { status: 400 });
-    }
-    const certificates = [settings.idpCert, settings.oldIdpCert].filter((cert): cert is string => typeof cert === "string" && cert !== "");
-    let xml: string;
-    try {
-      xml = decodeSamlMessage(logoutRequestRaw);
-    } catch {
-      (set as { status: number }).status = 400;
-      return new Response("Invalid SAML logout request", { status: 400 });
-    }
-    const verifiedLogout = verifyLogoutSignature(xml, certificates);
-    if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
-      await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
-      (set as { status: number }).status = 400;
-      return new Response("Invalid SAML logout request signature", { status: 400 });
-    }
-    const sessionUser = await browserSessionUser(request);
-    if (sessionUser?.ssoProvider !== "saml" || sessionUser.ssoSubject !== verifiedLogout.nameId) {
-      await auditLog("sso-failure", "saml", null, sessionUser?.id ?? null, null, { reason: "logout NameID does not match session" });
-      (set as { status: number }).status = 400;
-      return new Response("Invalid SAML logout request subject", { status: 400 });
-    }
-    await revokeBrowserSession(set, request);
-    await auditLog("sso-logout", "saml", null, null, null, { reason: "IdP-initiated" });
-    const response = new Response(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId), {
-      status: 200,
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "text/xml; charset=utf-8",
-      },
-    });
-    appendSetCookies(response, set.headers["Set-Cookie"]);
-    return response;
+    const relayState = typeof form.RelayState === "string"
+      ? form.RelayState
+      : typeof query.RelayState === "string" ? query.RelayState : undefined;
+    return handleIdpInitiatedLogout(logoutRequestRaw, relayState, settings, request, set);
   });

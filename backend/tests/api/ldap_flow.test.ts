@@ -28,9 +28,8 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
     });
     server.bind("cn=admin", (_req, res, next): void => { res.end(); next(); });
 
-    // The mock directory knows exactly two users.
     // The mock directory knows exactly two users, plus an ambiguous multi-entry
-    // case used to exercise the unique-match rule: "dupe" has two entries.
+    // case used to exercise the unique-match rule: "duplicate" has two entries.
     server.search("dc=example,dc=com", (req, res, next): void => {
       const value = req.filter.value ?? req.filter.attributeValue;
       const username = typeof value === "string" && value !== "" ? value : "alice";
@@ -87,6 +86,7 @@ describe("LDAP authentication", () => {
   const oauthApp = new Elysia().use(oauthPlugin);
   let ldapPort = 0;
   let ldapServer: Server | undefined;
+  let originalGeneral: typeof adminSettings.$inferSelect | undefined;
 
   const request = (method: string, path: string, token?: string, body?: unknown): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -131,6 +131,7 @@ describe("LDAP authentication", () => {
   };
 
   beforeAll(async () => {
+    originalGeneral = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "general") });
     const started = await startLdapMock();
     ldapServer = started.server;
     ldapPort = started.port;
@@ -150,6 +151,12 @@ describe("LDAP authentication", () => {
   afterAll(async () => {
     ldapServer?.close();
     await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
+    if (originalGeneral === undefined) {
+      await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
+    } else {
+      await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "general"));
+    }
     const provisioned = await db.query.users.findFirst({ where: eq(users.username, "alice") });
     const ids = [adminId, localId, ...(provisioned === undefined ? [] : [provisioned.id])];
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
@@ -178,6 +185,11 @@ describe("LDAP authentication", () => {
     // The mock returns two entries whose uid equals the presented username;
     // binding an arbitrary one would sign the caller in as the wrong identity.
     const response = await login("duplicate", VALID_USER_PASSWORD, true);
+    expect(response.status).toBe(401);
+  });
+
+  test("rejects a username that is missing from the directory", async () => {
+    const response = await login("carol", VALID_USER_PASSWORD, true);
     expect(response.status).toBe(401);
   });
 

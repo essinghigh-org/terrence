@@ -2,7 +2,7 @@
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
 import * as bcrypt from "bcryptjs";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
 import {
@@ -106,7 +106,7 @@ export function sanitizeUsername(value: string): string | null {
 
 export function validEmail(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim();
+  const trimmed = value.trim().toLowerCase();
   if (trimmed.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return null;
   return trimmed;
 }
@@ -146,6 +146,13 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   created: boolean;
 }> {
   const subject = identity.subject.trim();
+  if (subject === "") {
+    throw new SsoConflictError(
+      identity.provider,
+      identity.username,
+      "Sign-in blocked: the identity provider did not return a stable subject identifier.",
+    );
+  }
   const username = sanitizeUsername(identity.username);
   if (username === null) {
     throw new SsoConflictError(
@@ -177,7 +184,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   // in with an address they can control. SAML and LDAP callers pass
   // emailVerified = true; OIDC derives it from the email_verified claim.
   if (email !== null && identity.emailVerified === true) {
-    const byEmail = await db.query.users.findFirst({ where: eq(users.email, email) });
+    const byEmail = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (byEmail !== undefined) {
       const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
       if (claimed) throw new SsoConflictError(identity.provider, username);
@@ -201,7 +208,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
 
   let insertEmail = email;
   if (email !== null && identity.emailVerified !== true) {
-    const emailOwner = await db.query.users.findFirst({ where: eq(users.email, email) });
+    const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (emailOwner !== undefined) insertEmail = null;
   }
 
@@ -223,7 +230,15 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   const raced = await db.query.users.findFirst({
     where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
   });
-  if (raced === undefined) throw new Error("Failed to provision SSO user");
+  if (raced === undefined) {
+    const usernameCollision = await db.query.users.findFirst({ where: eq(users.username, username) });
+    if (usernameCollision !== undefined) throw new SsoConflictError(identity.provider, username);
+    if (email !== null) {
+      const emailCollision = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
+      if (emailCollision !== undefined) throw new SsoConflictError(identity.provider, username);
+    }
+    throw new Error("Failed to provision SSO user");
+  }
   if (raced.id !== userId) {
     // Another concurrent login created the identity; reuse that account.
     return { user: raced, created: false };
@@ -262,7 +277,8 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         ssoSource: "saml",
       });
     } else if (isOwner && existing.role !== "owner") {
-      await db.update(organizationMemberships).set({ role: "owner", ssoSource: "saml" })
+      // Preserve admin-granted provenance so pruning never removes the row.
+      await db.update(organizationMemberships).set({ role: "owner" })
         .where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, userId)));
     }
 
@@ -365,10 +381,11 @@ export function ssoHtmlPage(
 ): string {
   // Only same-origin relative redirects are allowed; absolute or scheme-relative
   // URLs are dropped so an attacker cannot inject an external navigation.
-  const safeRedirect = options.redirectUrl !== undefined
-    && options.redirectUrl.startsWith("/")
-    && !options.redirectUrl.startsWith("//")
-    ? options.redirectUrl
+  const candidate = options.redirectUrl;
+  const safeRedirect = candidate !== undefined
+    && /^\/(?![/\\])/.test(candidate)
+    && !/[\u0000-\u001F\u007F]/.test(candidate)
+    ? candidate
     : undefined;
   const body = options.token !== undefined
     ? `<p id="sso-token">${escapeHtml(options.token)}</p><p>Copy this token and use it as your user token. It is shown only once.</p>`

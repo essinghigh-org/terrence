@@ -4,7 +4,7 @@ import * as bcrypt from "bcryptjs";
 import { db } from "./db";
 import { apiTokens, users } from "./db/schema";
 import { createHash } from "node:crypto";
-import { authenticateLdap } from "./lib/ldap";
+import { authenticateLdapWithCircuitBreaker } from "./lib/ldap";
 import { ldapSettings, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
 
 const CLIENT_ID = "terraform-cli";
@@ -234,9 +234,9 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     const username = field(body, "username");
     const password = field(body, "password");
     let user: typeof users.$inferSelect | null = null;
-    if (sso.ldapEnabled && username !== "") {
+    if (sso.ldapEnabled && username !== "" && password !== "") {
       const ldap = await ldapSettings();
-      const authenticated = await authenticateLdap(ldap, username, password);
+      const authenticated = await authenticateLdapWithCircuitBreaker(ldap, username, password);
       if (authenticated.user !== null) {
         try {
           user = (await provisionSsoUser({

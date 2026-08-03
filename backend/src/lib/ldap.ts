@@ -2,7 +2,7 @@
 // locates the user with the configured filter, then validates the presented
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
-import { Client, type Entry } from "ldapts";
+import { Client, InvalidCredentialsError, type Entry } from "ldapts";
 import type { LdapSettings } from "./sso";
 
 export type LdapUser = Readonly<{
@@ -34,7 +34,8 @@ type LdapEntry = Readonly<{
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts Entry buffers are mutable by contract
 function attributeValue(entry: LdapEntry, name: string): string | null {
-  const raw: unknown = entry[name];
+  const key = Object.keys(entry).find((candidate): boolean => candidate.toLowerCase() === name.toLowerCase());
+  const raw: unknown = key === undefined ? undefined : entry[key];
   if (typeof raw === "string") return raw;
   if (Array.isArray(raw)) {
     const first: unknown = raw[0];
@@ -95,9 +96,11 @@ export async function authenticateLdap(
       sizeLimit: 10,
     });
 
+    const wanted = username.trim().toLowerCase();
     const byAttr = result.searchEntries.filter(
       // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts rows are mutable
-      (candidate: Entry): boolean => attributeValue(candidate as LdapEntry, settings.attrUsername) === username,
+      (candidate: Entry): boolean =>
+        attributeValue(candidate as LdapEntry, settings.attrUsername)?.trim().toLowerCase() === wanted,
     );
     // Require a unique match: binding an arbitrary entry would authenticate a
     // different identity than the one presented. Extra entries mean the filter
@@ -122,9 +125,8 @@ export async function authenticateLdap(
     // auth outcome — the directory is fine, the credentials are not. Anything
     // else (connect, TLS, startTLS, timeout) means the directory is
     // unavailable. Never log the password or bind password.
-    const name = error instanceof Error ? error.constructor.name : "";
     const message = error instanceof Error ? error.message : String(error);
-    const credentialRejection = name === "InvalidCredentialsError" || message.includes("InvalidCredentials");
+    const credentialRejection = error instanceof InvalidCredentialsError;
     if (!credentialRejection) {
       console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
     }
@@ -132,4 +134,22 @@ export async function authenticateLdap(
   } finally {
     await client.unbind().catch((): void => undefined);
   }
+}
+
+const ldapFailureCache = new Map<string, number>();
+const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
+
+/** Share the short circuit-breaker window across browser and CLI login paths. */
+export async function authenticateLdapWithCircuitBreaker(
+  settings: LdapSettings,
+  username: string,
+  password: string,
+): Promise<{ user: LdapUser | null; unavailable: boolean }> {
+  const hostKey = `${settings.encryption}:${settings.host ?? ""}:${settings.port}`;
+  const now = Date.now();
+  if ((ldapFailureCache.get(hostKey) ?? 0) > now) return { user: null, unavailable: true };
+  const result = await authenticateLdap(settings, username, password);
+  if (result.unavailable) ldapFailureCache.set(hostKey, now + LDAP_FAILURE_EXPIRY_MS);
+  else if (result.user !== null) ldapFailureCache.delete(hostKey);
+  return result;
 }

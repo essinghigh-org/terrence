@@ -10,6 +10,7 @@ import {
   samlSettings,
   users,
 } from "../../src/db/schema";
+import { IDP_ENTITY_ID } from "./saml_helpers";
 
 describe("SAML settings", () => {
   const suffix = crypto.randomUUID();
@@ -75,6 +76,7 @@ describe("SAML settings", () => {
       enabled: false,
       debug: false,
       "attr-username": "Username",
+      "attr-email": "email",
       "attr-groups": "MemberOf",
       "sso-api-token-session-timeout": 1_209_600,
       "acs-consumer-url": "http://terrence.test/users/saml/auth",
@@ -93,7 +95,7 @@ describe("SAML settings", () => {
           enabled: true,
           debug: true,
           "idp-cert": firstCertificate,
-          "idp-entity-id": "https://idp.example.test/metadata",
+          "idp-entity-id": IDP_ENTITY_ID,
           "sso-endpoint-url": "https://idp.example.test/sso",
           "slo-endpoint-url": "https://idp.example.test/slo",
           "attr-username": "mail",
@@ -108,7 +110,7 @@ describe("SAML settings", () => {
       debug: true,
       "old-idp-cert": null,
       "idp-cert": firstCertificate,
-      "idp-entity-id": "https://idp.example.test/metadata",
+      "idp-entity-id": IDP_ENTITY_ID,
       "attr-username": "mail",
       "attr-groups": "groups",
       "sso-api-token-session-timeout": 3600,

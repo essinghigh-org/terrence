@@ -1,6 +1,6 @@
 import { createHash, createHmac, generateKeyPairSync, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { resetOidcCaches } from "../../src/routes/oidc";
@@ -52,6 +52,24 @@ describe("OIDC SSO flow", () => {
   let mockAudience: string | string[] = "test-client";
   let mockAzp: string | null | undefined;
   const authorizeParams = new Map<string, { nonce: string; codeChallenge: string; redirectUri: string }>();
+  const defaultClaims = {
+    subject: `oidc-sub-${suffix}`,
+    email: `oidc-alice-${suffix}@example.com`,
+    username: `oidc-alice-${suffix}`,
+  };
+
+  beforeEach((): void => {
+    mockSubject = defaultClaims.subject;
+    mockEmail = defaultClaims.email;
+    mockUsername = defaultClaims.username;
+    mockEmailVerified = true;
+    mockNonce = null;
+    mockAudience = "test-client";
+    mockAzp = undefined;
+    mockAlg = "RS256";
+    mockHmacSecret = "test-secret";
+    mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
+  });
 
   let server: ReturnType<typeof Bun.serve> | undefined;
   const baseUrl = (): string => `http://127.0.0.1:${server?.port ?? 0}`;
@@ -324,7 +342,7 @@ describe("OIDC SSO flow", () => {
   test("does not accept an RSA public key as an HMAC secret", async () => {
     await resetOidcCaches();
     mockAlg = "HS256";
-    mockSupportedAlgorithms = ["RS256"];
+    mockSupportedAlgorithms = ["RS256", "HS256"];
     mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
     try {
       const { response } = await completeFlow();

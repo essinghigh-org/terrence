@@ -10,7 +10,7 @@ import { auditLog } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { getSettings } from "./admin";
-import { authenticateLdap } from "../lib/ldap";
+import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, provisionSsoUser, SsoConflictError } from "../lib/sso";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -24,13 +24,6 @@ let refreshRotationQueue = Promise.resolve();
 // In-memory MFA login challenges: token -> { userId, expiresAt }.
 // Single-process deployment; challenges expire after 5 minutes.
 const mfaChallenges = new Map<string, { userId: string; expiresAt: number }>();
-
-// Consecutive LDAP connection failures per directory host. After a few
-// failures, login skips the directory entirely for a short window so a
-// blackholed host cannot stall every request with the TCP timeout.
-// Single-process deployment; values expire after 30 s.
-const ldapFailureCache = new Map<string, number>();
-const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
 
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = refreshRotationQueue;
@@ -170,7 +163,7 @@ export async function browserSessionUser(
   const current = await db.query.refreshSessions.findFirst({
     where: eq(refreshSessions.tokenHash, tokenHash(token)),
   });
-  if (current === undefined || current.revokedAt !== null || current.expiresAt <= Date.now()) return null;
+  if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) return null;
   return await db.query.users.findFirst({ where: eq(users.id, current.userId) }) ?? null;
 }
 
@@ -450,39 +443,27 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     // LDAP is attempted first when enabled; local password auth remains the
     // fallback unless an administrator has disabled local authentication.
-    // A short-lived circuit breaker prevents a dead or blackholed directory
-    // from stalling every login for up to the TCP timeout (10s).
     let user: typeof users.$inferSelect | null = null;
     if (ldap.enabled) {
-      // stores the time until a tripped breaker reopens; the first failure
-      // trips it for LDAP_FAILURE_EXPIRY_MS.
-      const hostKey = ldap.host ?? "";
-      const breakerUntil = ldapFailureCache.get(hostKey) ?? 0;
-      if (breakerUntil < Date.now()) {
-        const { user: ldapUser, unavailable } = await authenticateLdap(ldap, username, password);
-        // Only connection-level failures trip the breaker; a plain credential
-        // rejection is a normal outcome that must not block the next attempt.
-        if (unavailable) ldapFailureCache.set(hostKey, Date.now() + LDAP_FAILURE_EXPIRY_MS);
-        if (ldapUser !== null) {
-          ldapFailureCache.delete(hostKey);
-          try {
-            const provisioned = await provisionSsoUser({
-              provider: "ldap",
-              subject: ldapUser.dn,
-              username: ldapUser.username,
-              email: ldapUser.email,
-              // Directory attributes are operator-controlled; the bind against
-              // the user DN already authenticated the caller.
-              emailVerified: true,
-            });
-            user = provisioned.user;
-          } catch (error: unknown) {
-            if (error instanceof SsoConflictError) {
-              (set as { status: number }).status = 401;
-              return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
-            }
-            throw error;
+      const { user: ldapUser } = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+      if (ldapUser !== null) {
+        try {
+          const provisioned = await provisionSsoUser({
+            provider: "ldap",
+            subject: ldapUser.dn,
+            username: ldapUser.username,
+            email: ldapUser.email,
+            // Directory attributes are operator-controlled; the bind against
+            // the user DN already authenticated the caller.
+            emailVerified: true,
+          });
+          user = provisioned.user;
+        } catch (error: unknown) {
+          if (error instanceof SsoConflictError) {
+            (set as { status: number }).status = 401;
+            return { errors: [{ status: "401", title: "Unauthorized", detail: "This username is already in use by a local account" }] };
           }
+          throw error;
         }
       }
     }

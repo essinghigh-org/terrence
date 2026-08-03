@@ -39,12 +39,21 @@ function iso(offsetSeconds: number): string {
   return new Date(Date.now() + offsetSeconds * 1000).toISOString();
 }
 
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
 function serializedAttribute(name: string, values: string | string[]): string {
   const list = Array.isArray(values) ? values : [values];
   const rendered = list
-    .map((value): string => `<saml:AttributeValue>${value}</saml:AttributeValue>`)
+    .map((value): string => `<saml:AttributeValue>${escapeXml(value)}</saml:AttributeValue>`)
     .join("");
-  return `<saml:Attribute Name="${name}">${rendered}</saml:Attribute>`;
+  return `<saml:Attribute Name="${escapeXml(name)}">${rendered}</saml:Attribute>`;
 }
 
 /** Build a self-consistent, signed SAMLResponse as base64. */
@@ -120,7 +129,7 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     uri: `#${assertionId}`,
   });
   signed.computeSignature(responseXml, {
-    location: { reference: "//*[local-name()='AttributeStatement']", action: "append" },
+    location: { reference: "//*[local-name()='Assertion']", action: "append" },
   });
   return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
 }

@@ -137,7 +137,10 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   const authorizationEndpoint = typeof config.authorization_endpoint === "string" && config.authorization_endpoint !== "" ? config.authorization_endpoint : null;
   const tokenEndpoint = typeof config.token_endpoint === "string" && config.token_endpoint !== "" ? config.token_endpoint : null;
   const jwksUri = typeof config.jwks_uri === "string" && config.jwks_uri !== "" ? config.jwks_uri : null;
-  if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null) {
+  if (authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null
+    || !secureOidcEndpoint(authorizationEndpoint)
+    || !secureOidcEndpoint(tokenEndpoint)
+    || !secureOidcEndpoint(jwksUri)) {
     throw new Error("OIDC discovery document is missing required endpoints");
   }
   const discovered: OidcDiscovery = {
@@ -161,6 +164,18 @@ function normalizeIssuer(value: string): string {
   }
 }
 
+function secureOidcEndpoint(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return (url.protocol === "https:" || (url.protocol === "http:" && loopback))
+      && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
+}
+
 function base64UrlDecode(value: string): string {
   return Buffer.from(value, "base64url").toString("utf8");
 }
@@ -175,31 +190,6 @@ function parseJwt(token: string): { header: Record<string, unknown>; payload: Re
   return { header, payload, signature: signature ?? "", signingInput: `${headerPart}.${payloadPart}` };
 }
 
-function derEncodeEsSignature(signature: Buffer, alg: string): Buffer {
-  const expectedLength: Record<string, number> = { ES256: 64, ES384: 96, ES512: 132 };
-  if (signature.length !== expectedLength[alg]) throw new Error("ID token ECDSA signature is invalid");
-  const half = signature.length / 2;
-  const r = signature.subarray(0, half);
-  const s = signature.subarray(half);
-  const encodeInt = (value: Buffer): Buffer => {
-    let bytes = value;
-    while (bytes.length > 0 && bytes[0] === 0) bytes = bytes.subarray(1);
-    if (bytes.length === 0) bytes = Buffer.from([0]);
-    if (((bytes[0] ?? 0) & 0x80) !== 0) bytes = Buffer.concat([Buffer.from([0]), bytes]);
-    return Buffer.concat([Buffer.from([0x02, bytes.length]), bytes]);
-  };
-  const rEncoded = encodeInt(r);
-  const sEncoded = encodeInt(s);
-  // DER length can use short form only for lengths <= 127; ES512's raw
-  // signature is larger, so emit the long-form length byte when needed or
-  // every valid ES512 token fails verification.
-  const bodyLength = rEncoded.length + sEncoded.length;
-  const lengthBytes = bodyLength < 0x80
-    ? Buffer.from([bodyLength])
-    : Buffer.from([0x81, bodyLength]);
-  return Buffer.concat([Buffer.from([0x30]), lengthBytes, rEncoded, sEncoded]);
-}
-
 async function verifyJwtSignature(
   header: Readonly<Record<string, unknown>>,
   signingInput: string,
@@ -212,6 +202,9 @@ async function verifyJwtSignature(
     throw new Error("Unsupported ID token algorithm.");
   }
   if (discoveryConfig.signingAlgorithms !== undefined && !discoveryConfig.signingAlgorithms.includes(alg)) {
+    throw new Error("ID token algorithm is not allowed by the provider configuration.");
+  }
+  if (discoveryConfig.signingAlgorithms === undefined && alg.startsWith("HS")) {
     throw new Error("ID token algorithm is not allowed by the provider configuration.");
   }
   const signatureBuffer = Buffer.from(signature, "base64url");
@@ -240,16 +233,15 @@ async function verifyJwtSignature(
   if (key === undefined) throw new Error("No matching key found in the OIDC provider JWKS");
 
   const publicKey = createPublicKey({ key, format: "jwk" });
-  const verifiable = alg.startsWith("ES")
-    ? derEncodeEsSignature(signatureBuffer, alg)
-    : signatureBuffer;
   const valid = alg.startsWith("PS")
     ? verifySignature(hash, data, {
       key: publicKey,
       padding: constants.RSA_PKCS1_PSS_PADDING,
       saltLength: Number(alg.slice(2, 5)) / 8,
-    }, verifiable)
-    : verifySignature(hash, data, publicKey, verifiable);
+    }, signatureBuffer)
+    : alg.startsWith("ES")
+      ? verifySignature(hash, data, { key: publicKey, dsaEncoding: "ieee-p1363" }, signatureBuffer)
+      : verifySignature(hash, data, publicKey, signatureBuffer);
   if (!valid) throw new Error("ID token signature is invalid");
 }
 
@@ -260,6 +252,7 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   if (forceRefresh && cached !== undefined && (jwksRefreshes.get(jwksUri) ?? 0) + JWKS_REFRESH_MIN_INTERVAL_MS > now) {
     return cached.keys;
   }
+  if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   const response = await fetch(jwksUri, {
     redirect: "follow",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -268,7 +261,6 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   const jwks = await response.json() as { keys?: Record<string, unknown>[] };
   const keys = jwks.keys ?? [];
   jwksCache.set(jwksUri, { keys, fetchedAt: now });
-  if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   return keys;
 }
 
@@ -309,7 +301,9 @@ function verifyClaims(
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.exp !== "number" || payload.exp <= now - CLOCK_SKEW_S) throw new Error("ID token has expired");
   if (typeof payload.iat !== "number" || payload.iat > now + CLOCK_SKEW_S) throw new Error("ID token was issued in the future");
-  if (payload.iss !== settings.issuer) throw new Error("ID token issuer does not match");
+  if (typeof payload.iss !== "string" || normalizeIssuer(payload.iss) !== settings.issuer) {
+    throw new Error("ID token issuer does not match");
+  }
   const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (settings.clientId === null || !audience.includes(settings.clientId) || audience.some((value): boolean => typeof value !== "string")) {
     throw new Error("ID token audience does not match");
@@ -418,6 +412,7 @@ async function handleCallback(
   const error = typeof params.error === "string" ? params.error : "";
   if (error !== "") {
     const description = typeof params.error_description === "string" ? params.error_description : error;
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: error });
     (set as { status: number }).status = 400;
     // ssoHtmlPage escapes the message, so no ad-hoc escaping is needed here.
     return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", `The identity provider refused sign-in: ${description}`), 400);
@@ -479,8 +474,8 @@ async function handleCallback(
     const jwt = parseJwt(tokenData.id_token);
     header = jwt.header;
     payload = jwt.payload;
-    verifyClaims(payload, settings, pending.nonce);
     await verifyJwtSignature(header, jwt.signingInput, jwt.signature, settings, config);
+    verifyClaims(payload, settings, pending.nonce);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "ID token validation failed";
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });

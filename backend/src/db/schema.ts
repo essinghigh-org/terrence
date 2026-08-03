@@ -52,6 +52,7 @@ export const samlSettings = sqliteTable("saml_settings", {
   sloEndpointUrl: text("slo_endpoint_url"),
   ssoEndpointUrl: text("sso_endpoint_url"),
   attrUsername: text("attr_username").notNull().default("Username"),
+  attrEmail: text("attr_email").notNull().default("email"),
   attrGroups: text("attr_groups").notNull().default("MemberOf"),
   attrSiteAdmin: text("attr_site_admin").notNull().default("SiteAdmin"),
   siteAdminRole: text("site_admin_role").notNull().default("site-admins"),

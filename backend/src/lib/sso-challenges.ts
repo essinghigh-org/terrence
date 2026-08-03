@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lt } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { ssoChallenges } from "../db/schema";
 
@@ -10,16 +10,19 @@ async function trimSsoChallenges(kind: string): Promise<void> {
     eq(ssoChallenges.kind, kind),
     lt(ssoChallenges.expiresAt, now),
   ));
+  const countRow = (await db.select({ value: count() }).from(ssoChallenges).where(eq(ssoChallenges.kind, kind)))[0];
+  const total = countRow?.value ?? 0;
+  if (total <= MAX_CHALLENGES_PER_KIND) return;
   const retained = await db.query.ssoChallenges.findMany({
     where: eq(ssoChallenges.kind, kind),
     orderBy: [asc(ssoChallenges.expiresAt)],
     columns: { id: true },
-    limit: MAX_CHALLENGES_PER_KIND + 1,
+    limit: total - MAX_CHALLENGES_PER_KIND,
   });
-  if (retained.length > MAX_CHALLENGES_PER_KIND) {
+  if (retained.length > 0) {
     await db.delete(ssoChallenges).where(inArray(
       ssoChallenges.id,
-      retained.slice(0, retained.length - MAX_CHALLENGES_PER_KIND).map((challenge): string => challenge.id),
+      retained.map((challenge): string => challenge.id),
     ));
   }
 }

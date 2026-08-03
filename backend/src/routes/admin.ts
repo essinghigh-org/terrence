@@ -52,6 +52,7 @@ const SAML_DEFAULTS = {
   sloEndpointUrl: null,
   ssoEndpointUrl: null,
   attrUsername: "Username",
+  attrEmail: "email",
   attrGroups: "MemberOf",
   attrSiteAdmin: "SiteAdmin",
   siteAdminRole: "site-admins",
@@ -103,6 +104,22 @@ async function currentSamlSettings(): Promise<SamlSettings> {
   return settings;
 }
 
+async function authLockoutResponse(
+  set: SetObj,
+  methods: Readonly<{ saml: boolean; oidc: boolean; ldap: boolean }>,
+): Promise<{ errors: { status: string; title: string; detail: string }[] } | null> {
+  const general = await getSettings("general");
+  if (general["local-auth-enabled"] !== false || methods.saml || methods.oidc || methods.ldap) return null;
+  (set as { status: number }).status = 422;
+  return {
+    errors: [{
+      status: "422",
+      title: "Unprocessable Entity",
+      detail: "At least one authentication method must remain enabled",
+    }],
+  };
+}
+
 function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: string }>): Record<string, unknown> {
   return {
     id: SAML_SETTINGS_ID,
@@ -116,6 +133,7 @@ function samlSettingsResource(settings: SamlSettings, request: Readonly<{ url: s
       "slo-endpoint-url": settings.sloEndpointUrl,
       "sso-endpoint-url": settings.ssoEndpointUrl,
       "attr-username": settings.attrUsername,
+      "attr-email": settings.attrEmail,
       "attr-groups": settings.attrGroups,
       "attr-site-admin": settings.attrSiteAdmin,
       "site-admin-role": settings.siteAdminRole,
@@ -170,6 +188,7 @@ function samlInput(
     "slo-endpoint-url",
     "sso-endpoint-url",
     "attr-username",
+    "attr-email",
     "attr-groups",
     "attr-site-admin",
     "site-admin-role",
@@ -186,7 +205,7 @@ function samlInput(
   const nullableString = (key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
     attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
   const requiredString = (
-    key: "attr-username" | "attr-groups" | "attr-site-admin" | "site-admin-role",
+    key: "attr-username" | "attr-email" | "attr-groups" | "attr-site-admin" | "site-admin-role",
     fallback: string,
   ): string => attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
 
@@ -195,6 +214,7 @@ function samlInput(
   const sloEndpointUrl = nullableString("slo-endpoint-url", current.sloEndpointUrl);
   const ssoEndpointUrl = nullableString("sso-endpoint-url", current.ssoEndpointUrl);
   const attrUsername = requiredString("attr-username", current.attrUsername);
+  const attrEmail = requiredString("attr-email", current.attrEmail);
   const attrGroups = requiredString("attr-groups", current.attrGroups);
   const attrSiteAdmin = requiredString("attr-site-admin", current.attrSiteAdmin);
   const siteAdminRole = requiredString("site-admin-role", current.siteAdminRole);
@@ -206,7 +226,7 @@ function samlInput(
   )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
   if (sloEndpointUrl !== null && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
   if (ssoEndpointUrl !== null && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
-  if (attrUsername === "" || attrGroups === "") return { error: "attr-username and attr-groups must not be empty" };
+  if (attrUsername === "" || attrEmail === "" || attrGroups === "") return { error: "attr-username, attr-email, and attr-groups must not be empty" };
   if (enabled && (idpCert === null || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null)) {
     return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
@@ -224,6 +244,7 @@ function samlInput(
       sloEndpointUrl,
       ssoEndpointUrl,
       attrUsername,
+      attrEmail,
       attrGroups,
       attrSiteAdmin,
       siteAdminRole,
@@ -845,6 +866,12 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
+    const authError = await authLockoutResponse(set, {
+      saml: input.values.enabled === true,
+      oidc: (await getSettings("oidc")).enabled === true,
+      ldap: (await getSettings("ldap")).enabled === true,
+    });
+    if (authError !== null) return authError;
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.update(samlSettings).set(input.values).where(eq(samlSettings.id, SAML_SETTINGS_ID));
@@ -986,7 +1013,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
 
     const current = await getSettings("oidc");
-    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled;
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
     const issuerValue = attrs.issuer === undefined
       ? current.issuer
       : typeof attrs.issuer === "string" ? attrs.issuer.trim() : null;
@@ -999,9 +1026,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer and client-id are required when OIDC is enabled" }] };
     }
     if (typeof issuer === "string" && issuer !== "") {
-      try {
-        if (!validOidcIssuer(issuer)) throw new Error();
-      } catch {
+      if (!validOidcIssuer(issuer)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "issuer must be a valid URL" }] };
       }
@@ -1011,6 +1036,13 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "pkce-method must be \"S256\" or null" }] };
     }
+
+    const authError = await authLockoutResponse(set, {
+      saml: (await currentSamlSettings()).enabled,
+      oidc: enabled,
+      ldap: (await getSettings("ldap")).enabled === true,
+    });
+    if (authError !== null) return authError;
 
     return settingResource("oidc-settings", await updateSettings("oidc", {
       ...attrs,
@@ -1059,9 +1091,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
     }
-    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled;
-    const host = attrs.host === null && attrs.host !== undefined ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
-    const baseDn = attrs["base-dn"] === null && attrs["base-dn"] !== undefined ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
+    const host = attrs.host === null ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
+    const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
     if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "")) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host and base-dn are required when LDAP is enabled" }] };
@@ -1090,11 +1122,23 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "user-filter must contain the {{username}} placeholder" }] };
     }
 
-    return settingResource("ldap-settings", await updateSettings("ldap", {
+    const authError = await authLockoutResponse(set, {
+      saml: (await currentSamlSettings()).enabled,
+      oidc: (await getSettings("oidc")).enabled === true,
+      ldap: enabled === true,
+    });
+    if (authError !== null) return authError;
+
+    const updated = await updateSettings("ldap", {
       ...attrs,
       ...(attrs.host === undefined ? {} : { host }),
       ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
       ...(attrs["bind-dn"] === undefined ? {} : { "bind-dn": bindDn }),
       "user-filter": userFilter,
-    }));
+    });
+    const { "bind-password": updatedBindPassword, ...safeUpdated } = updated;
+    return settingResource("ldap-settings", {
+      ...safeUpdated,
+      "bind-password-set": typeof updatedBindPassword === "string" && updatedBindPassword !== "",
+    });
   });

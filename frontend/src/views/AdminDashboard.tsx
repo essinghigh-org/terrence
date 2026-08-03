@@ -104,6 +104,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [samlIdpCert, setSamlIdpCert] = useState("");
   const [samlIdpEntityId, setSamlIdpEntityId] = useState("");
   const [samlAttrUsername, setSamlAttrUsername] = useState("Username");
+  const [samlAttrEmail, setSamlAttrEmail] = useState("email");
   const [samlAttrGroups, setSamlAttrGroups] = useState("MemberOf");
   const [samlAttrSiteAdmin, setSamlAttrSiteAdmin] = useState("SiteAdmin");
   const [samlSiteAdminRole, setSamlSiteAdminRole] = useState("site-admins");
@@ -366,6 +367,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlIdpCert(typeof attrs["idp-cert"] === "string" ? attrs["idp-cert"] : "");
       setSamlIdpEntityId(typeof attrs["idp-entity-id"] === "string" ? attrs["idp-entity-id"] : "");
       setSamlAttrUsername(typeof attrs["attr-username"] === "string" ? attrs["attr-username"] : "Username");
+      setSamlAttrEmail(typeof attrs["attr-email"] === "string" ? attrs["attr-email"] : "email");
       setSamlAttrGroups(typeof attrs["attr-groups"] === "string" ? attrs["attr-groups"] : "MemberOf");
       setSamlAttrSiteAdmin(typeof attrs["attr-site-admin"] === "string" ? attrs["attr-site-admin"] : "SiteAdmin");
       setSamlSiteAdminRole(typeof attrs["site-admin-role"] === "string" ? attrs["site-admin-role"] : "site-admins");
@@ -423,6 +425,10 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
+    if (!localAuthEnabled && !samlEnabled && !oidcEnabled && !ldapEnabled) {
+      setGeneralError("At least one authentication method must remain enabled.");
+      return;
+    }
     setGeneralSaving(true);
     setGeneralError(null);
     try {
@@ -535,6 +541,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             "idp-cert": samlIdpCert.trim() !== "" ? samlIdpCert.trim() : null,
             "idp-entity-id": samlIdpEntityId.trim() !== "" ? samlIdpEntityId.trim() : null,
             "attr-username": samlAttrUsername,
+            "attr-email": samlAttrEmail,
             "attr-groups": samlAttrGroups,
             "attr-site-admin": samlAttrSiteAdmin,
             "site-admin-role": samlSiteAdminRole,
@@ -1300,6 +1307,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={samlAttrGroups}
                               onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <Input
+                              value={samlAttrEmail}
+                              onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
