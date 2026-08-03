@@ -176,18 +176,14 @@ function validOidcIssuer(value: string): boolean {
     const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
     return (url.protocol === "https:" || (url.protocol === "http:" && loopback))
-      && url.username === "" && url.password === "";
+      && url.username === "" && url.password === "" && url.search === "" && url.hash === "";
   } catch {
     return false;
   }
 }
 
 function normalizeIssuer(value: string): string {
-  try {
-    return new URL(value).toString();
-  } catch {
-    return value.trim();
-  }
+  return value.trim();
 }
 
 function samlInput(
@@ -1114,6 +1110,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
       : typeof attrs["client-secret"] === "string" && attrs["client-secret"] !== ""
         ? attrs["client-secret"]
         : current["client-secret"];
+    if (attrs["client-secret"] === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "client-secret must be a non-empty string or null" }] };
+    }
     if (enabled && signingAlg?.startsWith("HS") === true && (typeof clientSecret !== "string" || clientSecret === "")) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a client secret is required for symmetric signing algorithms" }] };
@@ -1174,12 +1174,12 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
     const host = attrs.host === null ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
     const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
-    const attrUsername = attrs["attr-username"] === null
-      ? ""
-      : typeof attrs["attr-username"] === "string" ? attrs["attr-username"].trim() : typeof current["attr-username"] === "string" ? current["attr-username"] : "uid";
-    const attrEmail = attrs["attr-email"] === null
-      ? ""
-      : typeof attrs["attr-email"] === "string" ? attrs["attr-email"].trim() : typeof current["attr-email"] === "string" ? current["attr-email"] : "mail";
+    const attrUsername = typeof attrs["attr-username"] === "string"
+      ? attrs["attr-username"].trim() || "uid"
+      : attrs["attr-username"] === null ? "uid" : typeof current["attr-username"] === "string" && current["attr-username"].trim() !== "" ? current["attr-username"].trim() : "uid";
+    const attrEmail = typeof attrs["attr-email"] === "string"
+      ? attrs["attr-email"].trim() || "mail"
+      : attrs["attr-email"] === null ? "mail" : typeof current["attr-email"] === "string" && current["attr-email"].trim() !== "" ? current["attr-email"].trim() : "mail";
     if (enabled && (typeof host !== "string" || host === "" || typeof baseDn !== "string" || baseDn === "" || attrUsername === "" || attrEmail === "")) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "host, base-dn, attr-username, and attr-email are required when LDAP is enabled" }] };

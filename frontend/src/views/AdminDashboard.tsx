@@ -512,6 +512,10 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("User filter must contain the {{username}} placeholder.");
       return;
     }
+    if (ldapBindDn.trim() !== "" && ldapBindPassword === "" && !ldapBindPasswordSet) {
+      setLdapError("A bind password is required when a bind DN is set.");
+      return;
+    }
     const body: Record<string, unknown> = {
       data: {
         type: "ldap-settings",

@@ -51,6 +51,8 @@ describe("OIDC SSO flow", () => {
   let mockUsername = `oidc-alice-${suffix}`;
   let mockEmailVerified = true;
   let mockNonce: string | null = null;
+  let mockExp: number | null = null;
+  let mockIssuer: string | null = null;
   let mockAudience: string | string[] = "test-client";
   let mockAzp: string | null | undefined;
   const authorizeParams = new Map<string, { nonce: string; codeChallenge: string; redirectUri: string }>();
@@ -75,6 +77,8 @@ describe("OIDC SSO flow", () => {
     mockUsername = defaultClaims.username;
     mockEmailVerified = true;
     mockNonce = null;
+    mockExp = null;
+    mockIssuer = null;
     mockAudience = "test-client";
     mockAzp = undefined;
     mockAlg = "RS256";
@@ -127,6 +131,7 @@ describe("OIDC SSO flow", () => {
             token_endpoint: `${baseUrl()}/token`,
             jwks_uri: `${baseUrl()}/jwks`,
             id_token_signing_alg_values_supported: mockSupportedAlgorithms,
+            code_challenge_methods_supported: ["S256"],
           });
         }
         if (url.pathname === "/jwks") {
@@ -170,10 +175,10 @@ describe("OIDC SSO flow", () => {
           authorizeParams.delete(state);
           const now = Math.floor(Date.now() / 1000);
           const payload = {
-            iss: baseUrl(),
+            iss: mockIssuer ?? baseUrl(),
             sub: mockSubject,
             aud: mockAudience,
-            exp: now + 300,
+            exp: mockExp ?? now + 300,
             iat: now,
             nonce: mockNonce ?? authorization.nonce,
             email: mockEmail,
@@ -345,6 +350,26 @@ describe("OIDC SSO flow", () => {
       expect(await response.text()).toContain("could not be validated");
     } finally {
       mockNonce = null;
+    }
+  });
+
+  test("rejects an expired ID token", async () => {
+    mockExp = Math.floor(Date.now() / 1000) - 300;
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+    } finally {
+      mockExp = null;
+    }
+  });
+
+  test("rejects an ID token from a different issuer", async () => {
+    mockIssuer = "https://attacker.example.test";
+    try {
+      const { response } = await completeFlow();
+      expect(response.status).toBe(400);
+    } finally {
+      mockIssuer = null;
     }
   });
 

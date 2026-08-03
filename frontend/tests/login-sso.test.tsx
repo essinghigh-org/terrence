@@ -83,7 +83,7 @@ test("warns when local authentication and LDAP are disabled", async (): Promise<
     expect(view.getByRole("button", { name: "Sign in with SAML SSO" })).toBeTruthy();
   });
   expect(view.queryByLabelText(/Username/i)).toBeNull();
-  expect(view.queryByRole("button", { name: "Sign in", exact: true })).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in" })).toBeNull();
 });
 
 test("reports when every authentication method is disabled", async (): Promise<void> => {
@@ -109,7 +109,7 @@ test("reports when every authentication method is disabled", async (): Promise<v
   expect(view.queryByRole("button", { name: "Sign in with SAML SSO" })).toBeNull();
   expect(view.queryByRole("button", { name: "Sign in with OpenID Connect" })).toBeNull();
   expect(view.queryByText("Or sign in with single sign-on")).toBeNull();
-  expect(view.queryByRole("button", { name: "Sign in", exact: true })).toBeNull();
+  expect(view.queryByRole("button", { name: "Sign in" })).toBeNull();
 });
 
 test("renders the password form when no SSO provider is enabled", async (): Promise<void> => {

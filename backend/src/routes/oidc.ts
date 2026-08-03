@@ -40,6 +40,7 @@ type OidcDiscovery = Readonly<{
   tokenEndpoint: string;
   jwksUri: string;
   signingAlgorithms?: readonly string[];
+  pkceMethods?: readonly string[];
 }>;
 
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
@@ -157,17 +158,16 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
     ...(Array.isArray(config.id_token_signing_alg_values_supported)
       ? { signingAlgorithms: config.id_token_signing_alg_values_supported.filter((value): value is string => typeof value === "string") }
       : {}),
+    ...(Array.isArray(config.code_challenge_methods_supported)
+      ? { pkceMethods: config.code_challenge_methods_supported.filter((value): value is string => typeof value === "string") }
+      : {}),
   };
   discoveryCache.set(issuer, { config: discovered, fetchedAt: Date.now() });
   return discovered;
 }
 
 function normalizeIssuer(value: string): string {
-  try {
-    return new URL(value.trim()).toString();
-  } catch {
-    return value.trim();
-  }
+  return value.trim();
 }
 
 function secureOidcEndpoint(value: string): boolean {
@@ -328,6 +328,8 @@ function verifyClaims(
   if (typeof payload.nonce !== "string" || payload.nonce !== nonce) throw new Error("ID token nonce does not match");
 }
 
+// app.ts applies the sensitive-path rate limiter to both OIDC endpoints before
+// these handlers create or consume authentication challenges.
 export const oidcRoutes = new Elysia({ name: "oidc-sso" })
   .get("/users/oidc/auth", async ({ request }: { request: RequestInfo }): Promise<unknown> => {
     const settings = await oidcSettings();
@@ -340,6 +342,10 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
     } catch (error: unknown) {
       await auditLog("sso-failure", "oidc", null, null, null, { reason: error instanceof Error ? error.message : "discovery failed" });
       return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OIDC discovery failed. Please try again."), 502);
+    }
+    if (settings.pkceMethod === "S256" && !config.pkceMethods?.includes("S256")) {
+      await auditLog("sso-failure", "oidc", null, null, null, { reason: "OIDC provider does not advertise S256 PKCE" });
+      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "The OIDC provider does not support the required S256 PKCE method."), 502);
     }
 
     let verifier: string | null = null;

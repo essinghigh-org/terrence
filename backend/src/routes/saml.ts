@@ -46,10 +46,12 @@ const REDIRECT_SIGNATURE_ALGORITHMS: Readonly<Record<string, string>> = {
 };
 const XML_SIGNATURE_ALGORITHMS = new Set([
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512",
 ]);
 const XML_DIGEST_ALGORITHMS = new Set([
   "http://www.w3.org/2001/04/xmlenc#sha256",
+  "http://www.w3.org/2001/04/xmldsig-more#sha384",
   "http://www.w3.org/2001/04/xmlenc#sha512",
 ]);
 const XML_CANONICALIZATION_ALGORITHMS = new Set([
@@ -80,6 +82,7 @@ function pemCertificate(certificate: string): string {
 const PENDING_AUTHNREQUEST_TTL_MS = 10 * 60 * 1000;
 const SAML_AUTHN_CHALLENGE_KIND = "saml-authn";
 const SAML_ASSERTION_CHALLENGE_KIND = "saml-assertion";
+const SAML_LOGOUT_CHALLENGE_KIND = "saml-logout";
 const DEFAULT_SSO_API_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 type SamlRow = Readonly<typeof samlSettings.$inferSelect>;
@@ -414,6 +417,16 @@ function wantsToken(request: RequestInfo | undefined, relayState: string | null)
   return accept.includes("application/json") && relayState !== null && relayState.startsWith("cli");
 }
 
+function sessionTokenValue(session: unknown): string | null {
+  if (session === null || typeof session !== "object") return null;
+  const data = (session as { data?: unknown }).data;
+  if (data === null || typeof data !== "object") return null;
+  const attributes = (data as { attributes?: unknown }).attributes;
+  if (attributes === null || typeof attributes !== "object") return null;
+  const token = (attributes as { token?: unknown }).token;
+  return typeof token === "string" ? token : null;
+}
+
 async function handleIdpInitiatedLogout(
   rawRequest: string,
   relayState: string | undefined,
@@ -421,6 +434,7 @@ async function handleIdpInitiatedLogout(
   request: RequestInfo,
   set: SetObj,
 ): Promise<Response> {
+  if (!settings.enabled) return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML single sign-on is not enabled."), 404);
   const invalid = (message: string): Response => new Response(message, {
     status: 400,
     headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
@@ -444,6 +458,15 @@ async function handleIdpInitiatedLogout(
   if (!verifiedLogout.valid || verifiedLogout.nameId === undefined || verifiedLogout.requestId === undefined) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: verifiedLogout.error });
     return invalid("Invalid SAML logout request signature");
+  }
+  if (!(await claimSsoChallenge(
+    SAML_LOGOUT_CHALLENGE_KIND,
+    verifiedLogout.requestId,
+    {},
+    Date.now() + PENDING_AUTHNREQUEST_TTL_MS,
+  ))) {
+    await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request replayed" });
+    return invalid("SAML logout request has already been used");
   }
 
   const sessionUser = await browserSessionUser(request);
@@ -518,8 +541,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const requestId = `_${randomBytes(16).toString("hex")}`;
     // Record the issued AuthnRequest so the ACS can match InResponseTo and
     // reject replayed or unsolicited assertions.
-    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, {}, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
     const relayState = typeof query.RelayState === "string" ? query.RelayState : null;
+    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, { relayState }, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
     const authnRequest = encodeRedirect(authnRequestXml(samlSpEntityId(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
     target.searchParams.set("SAMLRequest", authnRequest);
     if (relayState !== null) target.searchParams.set("RelayState", relayState);
@@ -550,7 +573,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       : typeof query.SAMLResponse === "string"
         ? query.SAMLResponse
         : "";
-    const relayState = typeof form.RelayState === "string" ? form.RelayState : null;
+    const relayState = typeof form.RelayState === "string"
+      ? form.RelayState
+      : typeof query.RelayState === "string" ? query.RelayState : null;
     if (samlResponse === "") {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "Missing SAMLResponse."), 400);
@@ -696,7 +721,13 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion contains no NameID."), 400);
     }
 
-    if (typeof inResponseTo !== "string" || !(await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo))) {
+    const authnChallenge = typeof inResponseTo === "string"
+      ? await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo)
+      : undefined;
+    const issuedRelayState = authnChallenge?.relayState === null || typeof authnChallenge?.relayState === "string"
+      ? authnChallenge.relayState
+      : undefined;
+    if (issuedRelayState === undefined || issuedRelayState !== relayState) {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML response does not match an issuance from this instance."), 400);
     }
@@ -783,9 +814,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
       ? settings.ssoApiTokenSessionTimeout * 1000
       : DEFAULT_SSO_API_TOKEN_TTL_MS;
+    const wantsTokenResponse = wantsToken(request, issuedRelayState);
     const session = await issueSsoLogin(user, { set, request, server }, {
       tokenTtlMs,
-      wantsToken: wantsToken(request, relayState),
+      wantsToken: wantsTokenResponse,
     });
     await auditLog("sso-login", "saml", user.id, user.id, null, { username: user.username });
 
@@ -797,15 +829,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return response;
     };
 
-    const sessionToken = typeof session === "object" && session !== null
-      && typeof (session as { data?: unknown }).data === "object"
-      && (session as { data: { attributes?: unknown } }).data !== null
-      && typeof (session as { data: { attributes?: unknown } }).data.attributes === "object"
-      && (session as { data: { attributes: { token?: unknown } } }).data.attributes !== null
-      && typeof (session as { data: { attributes: { token?: unknown } } }).data.attributes.token === "string"
-      ? (session as { data: { attributes: { token: string } } }).data.attributes.token
-      : null;
-    const wantsTokenResponse = wantsToken(request, relayState);
+    const sessionToken = sessionTokenValue(session);
     const wantsJson = request?.headers.get("accept")?.includes("application/json") === true;
     if (wantsTokenResponse) {
       if (sessionToken === null) {
@@ -813,7 +837,16 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         (set as { status: number }).status = 500;
         return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }));
       }
-      if (wantsJson) return session;
+      if (wantsJson) {
+        const response = Response.json(session, {
+          headers: {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/vnd.api+json",
+          },
+        });
+        appendSetCookies(response, set.headers["Set-Cookie"]);
+        return response;
+      }
       return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { token: sessionToken }));
     }
     return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));

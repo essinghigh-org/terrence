@@ -102,8 +102,11 @@ export async function authenticateLdap(
       scope: "sub",
       filter,
       attributes: [settings.attrUsername, settings.attrEmail, settings.attrDisplayName],
-      sizeLimit: 10,
+      sizeLimit: LDAP_SEARCH_SIZE_LIMIT,
     });
+    // ldapts returns partial entries when the client-side size limit is hit;
+    // do not authenticate against a truncated result set.
+    if (result.searchEntries.length >= LDAP_SEARCH_SIZE_LIMIT) return { user: null, unavailable: false };
 
     const wanted = username.trim().toLowerCase();
     const byAttr = result.searchEntries.filter(
@@ -152,6 +155,7 @@ const ldapFailureCache = new Map<string, number>();
 const ldapProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const ldapHostProbes = new Map<string, Promise<LdapAuthenticationResult>>();
 const LDAP_FAILURE_EXPIRY_MS = 30 * 1000;
+const LDAP_SEARCH_SIZE_LIMIT = 10;
 
 /** Share the short circuit-breaker window across browser and CLI login paths. */
 export async function authenticateLdapWithCircuitBreaker(
@@ -168,11 +172,11 @@ export async function authenticateLdapWithCircuitBreaker(
   const hostPending = ldapHostProbes.get(hostKey);
   if (hostPending !== undefined) {
     const hostResult = await hostPending;
-    if (hostResult.unavailable) return hostResult;
+    if (hostResult.unavailable && (ldapFailureCache.get(hostKey) ?? 0) > Date.now()) return hostResult;
   }
   const result = authenticateLdap(settings, username, password)
     .then((value): LdapAuthenticationResult => {
-      if (value.unavailable) ldapFailureCache.set(hostKey, now + LDAP_FAILURE_EXPIRY_MS);
+      if (value.unavailable) ldapFailureCache.set(hostKey, Date.now() + LDAP_FAILURE_EXPIRY_MS);
       else if (value.user !== null) ldapFailureCache.delete(hostKey);
       return value;
     })

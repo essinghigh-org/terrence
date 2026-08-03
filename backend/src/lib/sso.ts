@@ -14,6 +14,7 @@ import {
   users,
 } from "../db/schema";
 import { getSettings } from "./settings";
+import { log } from "./log";
 import { apiURL, auditLog } from "./utils";
 import { isUniqueConstraintError } from "./validation";
 
@@ -45,6 +46,10 @@ function bool(value: unknown, fallback = false): boolean {  return typeof value 
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+function strOr(value: unknown, fallback: string): string {
+  return str(value) ?? fallback;
 }
 
 export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
@@ -80,8 +85,11 @@ export type LdapSettings = Readonly<{
 
 export async function ldapSettings(): Promise<LdapSettings> {
   const raw = await getSettings("ldap");
-  const encryptionValue = String(raw.encryption);
+  const encryptionValue = typeof raw.encryption === "string" ? raw.encryption : "";
   const encryptionConfigured = ["plain", "starttls", "ldaps"].includes(encryptionValue);
+  if (bool(raw.enabled) && !encryptionConfigured) {
+    log.warn("LDAP settings are enabled without a valid encryption mode; LDAP login is disabled");
+  }
   const encryption = encryptionConfigured
     ? encryptionValue as LdapSettings["encryption"]
     : "plain";
@@ -97,12 +105,10 @@ export async function ldapSettings(): Promise<LdapSettings> {
     bindDn: str(raw["bind-dn"]),
     bindPassword: str(raw["bind-password"]),
     baseDn: str(raw["base-dn"]),
-    userFilter: typeof raw["user-filter"] === "string" && raw["user-filter"] !== ""
-      ? raw["user-filter"]
-      : "(uid={{username}})",
-    attrUsername: typeof raw["attr-username"] === "string" && raw["attr-username"] !== "" ? raw["attr-username"] : "uid",
-    attrEmail: typeof raw["attr-email"] === "string" && raw["attr-email"] !== "" ? raw["attr-email"] : "mail",
-    attrDisplayName: typeof raw["attr-display-name"] === "string" && raw["attr-display-name"] !== "" ? raw["attr-display-name"] : "cn",
+    userFilter: strOr(raw["user-filter"], "(uid={{username}})"),
+    attrUsername: strOr(raw["attr-username"], "uid"),
+    attrEmail: strOr(raw["attr-email"], "mail"),
+    attrDisplayName: strOr(raw["attr-display-name"], "cn"),
   };
 }
 
@@ -233,8 +239,8 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     );
   }
 
-  let insertEmail = email;
-  if (email !== null && (identity.emailVerified !== true || identity.allowEmailLinking !== true)) {
+  let insertEmail = identity.emailVerified === true ? email : null;
+  if (insertEmail !== null && identity.allowEmailLinking !== true) {
     const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (emailOwner !== undefined) insertEmail = null;
   }

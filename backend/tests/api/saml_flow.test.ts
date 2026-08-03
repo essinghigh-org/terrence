@@ -59,7 +59,7 @@ describe("SAML SSO flow", () => {
   };
 
   const validAcs = async (options: SamlResponseOptions = {}, relayState?: string, extraHeaders: Record<string, string> = {}): Promise<Response> => {
-    const auth = await app.handle(new Request("http://terrence.test/users/saml/auth"));
+    const auth = await app.handle(new Request(`http://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`));
     const location = new URL(auth.headers.get("Location") ?? "");
     const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
     if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
@@ -104,6 +104,7 @@ describe("SAML SSO flow", () => {
   afterAll(async () => {
     await clearSsoChallenges("saml-authn");
     await clearSsoChallenges("saml-assertion");
+    await clearSsoChallenges("saml-logout");
     const provisioned = await db.query.users.findMany({
       where: like(users.username, `%-${suffix}`),
     });
@@ -314,6 +315,18 @@ describe("SAML SSO flow", () => {
     expect(await response.text()).toContain("signature");
   });
 
+  test("rejects an IdP logout signed by an unconfigured certificate", async () => {
+    const response = await app.handle(new Request("http://terrence.test/users/saml/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        SAMLRequest: buildSignedLogoutRequest(`wrong-cert-${suffix}`, { privateKey: IDP_OLD_KEY, publicCert: IDP_OLD_CERT }),
+      }).toString(),
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("signature");
+  });
+
   test("verifies with the previous certificate during rotation", async () => {
     // Current cert is the NEW one; responses signed with the OLD cert must
     // still verify because the old cert is retained during rotation.
@@ -472,16 +485,16 @@ describe("SAML SSO flow", () => {
     const encodedSigAlg = encodeURIComponent(sigAlg);
     const signedInput = `SAMLRequest=${encodeURIComponent(encodedRequest)}&RelayState=${encodedRelayState}&SigAlg=${encodedSigAlg}`;
     const signature = createSign("RSA-SHA256").update(signedInput).sign(IDP_KEY).toString("base64");
-    const response = await app.handle(new Request(
-      `http://terrence.test/users/saml/slo?${signedInput}&Signature=${encodeURIComponent(signature)}`,
-      { headers: { Cookie: `terrence_refresh=${refreshToken}` } },
-    ));
+    const logoutUrl = `http://terrence.test/users/saml/slo?${signedInput}&Signature=${encodeURIComponent(signature)}`;
+    const response = await app.handle(new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }));
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
     expect(location.origin + location.pathname).toBe("https://idp.example.test/slo");
     expect(location.searchParams.get("RelayState")).toBe(relayState);
     expect(inflateAndDecode(location.searchParams.get("SAMLResponse") ?? ""))
       .toContain("LogoutResponse");
+    const replay = await app.handle(new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }));
+    expect(replay.status).toBe(400);
   });
 
   test("revokes the local session on IdP-initiated logout", async () => {

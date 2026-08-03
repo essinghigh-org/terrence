@@ -7,6 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
+import { log } from "../lib/log";
 import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
@@ -446,7 +447,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // fallback unless an administrator has disabled local authentication.
     let user: typeof users.$inferSelect | null = null;
     if (ldap.enabled) {
-      const { user: ldapUser } = await authenticateLdapWithCircuitBreaker(ldap, username, password);
+      let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
+      try {
+        ldapUser = (await authenticateLdapWithCircuitBreaker(ldap, username, password)).user;
+      } catch (error: unknown) {
+        log.warn("LDAP authentication probe failed; continuing with local authentication", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       if (ldapUser !== null) {
         try {
           const provisioned = await provisionSsoUser({

@@ -218,18 +218,25 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
   .get("/oauth/authorization", async ({ query }: QueryCtx): Promise<Response> => {
     const request = parseAuthorizationRequest(query);
     const sso = await ssoSettingsSnapshot();
-    return htmlResponse(loginPage(request, "", "", {
+    const ssoInfo: SsoInfo = {
       saml: sso.samlEnabled,
       oidc: sso.oidcEnabled,
       ldap: sso.ldapEnabled,
       localAuthEnabled: sso.localAuthEnabled,
-    }), request !== null ? 200 : 400);
+    };
+    return htmlResponse(loginPage(request, "", "", ssoInfo), request !== null ? 200 : 400);
   })
   .post("/oauth/authorization", async ({ body }: BodyCtx): Promise<Response> => {
     const authorization = parseAuthorizationRequest(body);
     if (authorization === null) return htmlResponse(loginPage(null), 400);
 
     const sso = await ssoSettingsSnapshot();
+    const ssoInfo: SsoInfo = {
+      saml: sso.samlEnabled,
+      oidc: sso.oidcEnabled,
+      ldap: sso.ldapEnabled,
+      localAuthEnabled: sso.localAuthEnabled,
+    };
     const username = field(body, "username");
     const password = field(body, "password");
     let user: typeof users.$inferSelect | null = null;
@@ -248,12 +255,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
           })).user;
         } catch (error: unknown) {
           if (error instanceof SsoConflictError) {
-            return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, {
-              saml: sso.samlEnabled,
-              oidc: sso.oidcEnabled,
-              ldap: sso.ldapEnabled,
-              localAuthEnabled: sso.localAuthEnabled,
-            }), 401);
+            return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, ssoInfo), 401);
           }
           throw error;
         }
@@ -272,22 +274,12 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       const message = sso.localAuthEnabled || sso.ldapEnabled
         ? "Invalid username or password."
         : "Local password sign-in is disabled. Use single sign-on.";
-      return htmlResponse(loginPage(authorization, message, username, {
-        saml: sso.samlEnabled,
-        oidc: sso.oidcEnabled,
-        ldap: sso.ldapEnabled,
-        localAuthEnabled: sso.localAuthEnabled,
-      }), 401);
+      return htmlResponse(loginPage(authorization, message, username, ssoInfo), 401);
     }
 
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa?.enabled === true) {
-      return htmlResponse(loginPage(authorization, "MFA-enabled accounts must sign in through the browser login flow.", username, {
-        saml: sso.samlEnabled,
-        oidc: sso.oidcEnabled,
-        ldap: sso.ldapEnabled,
-        localAuthEnabled: sso.localAuthEnabled,
-      }), 401);
+      return htmlResponse(loginPage(authorization, "MFA-enabled accounts must sign in through the browser login flow.", username, ssoInfo), 401);
     }
 
     const now = Date.now();

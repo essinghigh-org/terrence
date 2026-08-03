@@ -142,7 +142,10 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
 }
 
 /** Build a signed IdP-initiated LogoutRequest as base64. */
-export function buildSignedLogoutRequest(nameId = "slo-user"): string {
+export function buildSignedLogoutRequest(
+  nameId = "slo-user",
+  signing: Readonly<{ privateKey?: string; publicCert?: string }> = {},
+): string {
   const now = new Date().toISOString();
   const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
   const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -152,8 +155,8 @@ export function buildSignedLogoutRequest(nameId = "slo-user"): string {
 </samlp:LogoutRequest>
 `;
   const signed = new SignedXml({
-    privateKey: IDP_KEY,
-    publicCert: IDP_CERT,
+    privateKey: signing.privateKey ?? IDP_KEY,
+    publicCert: signing.publicCert ?? IDP_CERT,
     signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
     canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
   });

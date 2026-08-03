@@ -17,6 +17,7 @@ type MetricsCtx = Readonly<{
 const PING_SSO_CACHE_TTL_MS = 1_000;
 type PingSsoSnapshot = Awaited<ReturnType<typeof ssoSettingsSnapshot>>;
 let pingSsoCache: Readonly<{ value: PingSsoSnapshot; expiresAt: number }> | undefined;
+let pingSsoLastKnown: PingSsoSnapshot | undefined;
 let pingSsoCacheGeneration = 0;
 
 export function invalidatePingSsoCache(): void {
@@ -29,7 +30,10 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   if (pingSsoCache !== undefined && pingSsoCache.expiresAt > now) return pingSsoCache.value;
   const generation = pingSsoCacheGeneration;
   const value = await ssoSettingsSnapshot();
-  if (generation === pingSsoCacheGeneration) pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
+  if (generation === pingSsoCacheGeneration) {
+    pingSsoCache = { value, expiresAt: Date.now() + PING_SSO_CACHE_TTL_MS };
+    pingSsoLastKnown = value;
+  }
   return value;
 }
 
@@ -89,8 +93,12 @@ export const healthRoutes = new Elysia({ name: "health" })
       sso = await pingSsoSnapshot();
     } catch (error: unknown) {
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "SSO configuration is unavailable" }] };
+      const lastKnown = pingSsoLastKnown;
+      return {
+        "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+        "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
+        ...(lastKnown === undefined ? {} : { sso: { saml: lastKnown.samlEnabled, oidc: lastKnown.oidcEnabled, ldap: lastKnown.ldapEnabled } }),
+      };
     }
     return {
       "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
