@@ -172,12 +172,12 @@ export function inflateAndDecode(value: string): string {
 }
 
 /** Build a form-encoded POST request to the ACS endpoint. */
-export function samlAcsRequest(samlResponse: string, relayState?: string): Request {
+export function samlAcsRequest(samlResponse: string, relayState?: string, extraHeaders: Record<string, string> = {}): Request {
   const params = new URLSearchParams({ SAMLResponse: samlResponse });
   if (relayState !== undefined) params.set("RelayState", relayState);
   return new Request("http://terrence.test/users/saml/auth", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", ...extraHeaders },
     body: params.toString(),
   });
 }

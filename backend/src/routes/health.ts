@@ -68,7 +68,12 @@ export const healthRoutes = new Elysia({ name: "health" })
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
-    const sso = await ssoSettingsSnapshot();
+    const sso = await ssoSettingsSnapshot().catch(() => ({
+      localAuthEnabled: true,
+      samlEnabled: false,
+      oidcEnabled: false,
+      ldapEnabled: false,
+    }));
     return {
       "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
       "local-auth-enabled": sso.localAuthEnabled,

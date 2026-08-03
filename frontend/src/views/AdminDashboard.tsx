@@ -458,7 +458,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("Host and Base DN are required when LDAP is enabled.");
       return;
     }
-    if (ldapEnabled && (ldapPort < 1 || ldapPort > 65535)) {
+    if (ldapEnabled && (!Number.isInteger(ldapPort) || ldapPort < 1 || ldapPort > 65535)) {
       setLdapError("Port must be between 1 and 65535.");
       return;
     }
@@ -1536,6 +1536,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={ldapUserFilter}
                               onChange={(e): void => { setLdapUserFilter(e.target.value); }}
+                              aria-label="LDAP user filter"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1543,6 +1544,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={ldapAttrUsername}
                               onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
+                              aria-label="LDAP username attribute"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1550,6 +1552,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={ldapAttrEmail}
                               onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
+                              aria-label="LDAP email attribute"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1557,6 +1560,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                             <Input
                               value={ldapAttrDisplayName}
                               onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
+                              aria-label="LDAP display name attribute"
                             />
                           </div>
                         </div>

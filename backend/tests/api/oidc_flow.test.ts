@@ -58,7 +58,16 @@ describe("OIDC SSO flow", () => {
     username: `oidc-alice-${suffix}`,
   };
 
-  beforeEach((): void => {
+  const cookieValue = (response: Response, name: string): string => {
+    const prefix = `${name}=`;
+    const pair = response.headers.getSetCookie()
+      .map((value): string => value.split(";")[0] ?? "")
+      .find((value): boolean => value.startsWith(prefix));
+    return pair?.slice(prefix.length) ?? "";
+  };
+
+  beforeEach(async (): Promise<void> => {
+    await resetOidcCaches();
     mockSubject = defaultClaims.subject;
     mockEmail = defaultClaims.email;
     mockUsername = defaultClaims.username;
@@ -80,8 +89,7 @@ describe("OIDC SSO flow", () => {
     expect(authResponse.status).toBe(302);
     // The auth response sets the state cookie that binds this browser to the
     // flow; the callback must present it (same-origin browser behavior).
-    const stateCookie = authResponse.headers.get("Set-Cookie") ?? "";
-    const cookie = stateCookie.split(";")[0] ?? "";
+    const cookie = `terrence_oidc_state=${cookieValue(authResponse, "terrence_oidc_state")}`;
     expect(cookie).toContain("terrence_oidc_state=");
     const authorizeUrl = authResponse.headers.get("Location") ?? "";
     const idpResponse = await fetch(authorizeUrl, { redirect: "manual" }); // real HTTP to the mock IdP
@@ -146,12 +154,14 @@ describe("OIDC SSO flow", () => {
           const verifierValue = form.get("code_verifier");
           const verifier = typeof verifierValue === "string" ? verifierValue : "";
           const authorizationHeader = innerRequest.headers.get("authorization") ?? "";
-          if (form.get("client_id") !== "test-client"
+          if (authorization === undefined
+            || form.get("client_id") !== "test-client"
             || authorizationHeader !== `Basic ${Buffer.from("test-client:test-secret").toString("base64")}`
             || authorization?.redirectUri !== (form.get("redirect_uri") ?? "")
             || authorization.codeChallenge !== createHash("sha256").update(verifier).digest("base64url")) {
             return Response.json({ error: "invalid_grant" }, { status: 400 });
           }
+          authorizeParams.delete(state);
           const now = Math.floor(Date.now() / 1000);
           const payload = {
             iss: baseUrl(),
@@ -246,8 +256,7 @@ describe("OIDC SSO flow", () => {
     expect(created?.ssoSubject).toBe(`oidc-sub-${suffix}`);
     expect(created?.email).toBe(`oidc-alice-${suffix}@example.com`);
 
-    const cookie = response.headers.get("Set-Cookie") ?? "";
-    const refreshToken = cookie.split(";")[0]?.split("=")[1] ?? "";
+    const refreshToken = cookieValue(response, "terrence_refresh");
     const refreshResponse = await app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
       method: "POST",
       headers: { Cookie: `terrence_refresh=${refreshToken}` },
@@ -329,7 +338,6 @@ describe("OIDC SSO flow", () => {
   });
 
   test("rejects alg none", async () => {
-    await resetOidcCaches();
     mockAlg = "none";
     try {
       const { response } = await completeFlow();
@@ -340,7 +348,6 @@ describe("OIDC SSO flow", () => {
   });
 
   test("does not accept an RSA public key as an HMAC secret", async () => {
-    await resetOidcCaches();
     mockAlg = "HS256";
     mockSupportedAlgorithms = ["RS256", "HS256"];
     mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
@@ -373,7 +380,6 @@ describe("OIDC SSO flow", () => {
   });
 
   test("verifies HS384 ID tokens with the matching digest algorithm", async () => {
-    await resetOidcCaches();
     mockSubject = `oidc-sub-hs384-${suffix}`;
     mockUsername = `hs384-${suffix}`;
     mockEmail = `hs384-${suffix}@example.com`;
@@ -387,7 +393,6 @@ describe("OIDC SSO flow", () => {
   });
 
   test("verifies ES256 ID tokens when the JWKS omits kid", async () => {
-    await resetOidcCaches();
     mockSubject = `oidc-sub-es256-${suffix}`;
     mockUsername = `es256-${suffix}`;
     mockEmail = `es256-${suffix}@example.com`;

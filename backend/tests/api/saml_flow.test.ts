@@ -47,20 +47,21 @@ describe("SAML SSO flow", () => {
       body: body === undefined ? null : JSON.stringify(body),
     }));
 
+  const cookieValue = (response: Response, name: string): string => {
+    const prefix = `${name}=`;
+    const pair = response.headers.getSetCookie()
+      .map((value): string => value.split(";")[0] ?? "")
+      .find((value): boolean => value.startsWith(prefix));
+    return pair?.slice(prefix.length) ?? "";
+  };
+
   const validAcs = async (options: SamlResponseOptions = {}, relayState?: string, extraHeaders: Record<string, string> = {}): Promise<Response> => {
     const auth = await app.handle(new Request("http://terrence.test/users/saml/auth"));
     const location = new URL(auth.headers.get("Location") ?? "");
     const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
     if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
     const response = buildSignedSamlResponse({ ...options, inResponseTo: requestId });
-    if (Object.keys(extraHeaders).length === 0) return app.handle(samlAcsRequest(response, relayState));
-    const params = new URLSearchParams({ SAMLResponse: response });
-    if (relayState !== undefined) params.set("RelayState", relayState);
-    return app.handle(new Request("http://terrence.test/users/saml/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", ...extraHeaders },
-      body: params.toString(),
-    }));
+    return app.handle(samlAcsRequest(response, relayState, extraHeaders));
   };
 
   beforeAll(async () => {
@@ -166,8 +167,7 @@ describe("SAML SSO flow", () => {
     expect(created?.ssoSubject).toBe(`alice-${suffix}`);
 
     // The issued browser session is usable.
-    const cookie = response.headers.get("Set-Cookie") ?? "";
-    const refreshToken = cookie.split(";")[0]?.split("=")[1] ?? "";
+    const refreshToken = cookieValue(response, "terrence_refresh");
     const refreshResponse = await app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
       method: "POST",
       headers: { Cookie: `terrence_refresh=${refreshToken}` },
@@ -178,11 +178,11 @@ describe("SAML SSO flow", () => {
   });
 
   test("issues a short-lived API token for the CLI flow via RelayState", async () => {
-    const before = Date.now();
     const response = await validAcs({ username: `cli-${suffix}`, email: `cli-${suffix}@example.com` }, "api");
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("sso-token");
+    const completedAt = Date.now();
 
     const user = await db.query.users.findFirst({ where: eq(users.username, `cli-${suffix}`) });
     expect(user).not.toBeUndefined();
@@ -191,8 +191,8 @@ describe("SAML SSO flow", () => {
     });
     expect(tokenRow).not.toBeUndefined();
     expect(tokenRow!.expiresAt).not.toBeNull();
-    expect(tokenRow!.expiresAt! - before).toBeGreaterThan(3_500_000);
-    expect(tokenRow!.expiresAt! - before).toBeLessThanOrEqual(3_650_000);
+    expect(tokenRow!.expiresAt! - completedAt).toBeGreaterThan(3_500_000);
+    expect(tokenRow!.expiresAt! - completedAt).toBeLessThanOrEqual(3_650_000);
   });
 
   test("returns JSON token when the ACS is called with an API Accept header", async () => {
@@ -380,9 +380,9 @@ describe("SAML SSO flow", () => {
   test("routes SLO to the IdP single logout endpoint", async () => {
     const username = `sp-slo-${suffix}`;
     const login = await validAcs({ username, email: `${username}@example.com` });
-    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
+    const refreshToken = cookieValue(login, "terrence_refresh");
     const response = await app.handle(new Request("http://terrence.test/users/saml/slo", {
-      headers: { Cookie: cookie },
+      headers: { Cookie: `terrence_refresh=${refreshToken}` },
     }));
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
@@ -396,7 +396,7 @@ describe("SAML SSO flow", () => {
   test("handles an IdP-initiated redirect-binding logout", async () => {
     const username = `redirect-slo-${suffix}`;
     const login = await validAcs({ username, email: `${username}@example.com` });
-    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
+    const refreshToken = cookieValue(login, "terrence_refresh");
     const logoutXml = Buffer.from(buildSignedLogoutRequest(username), "base64").toString("utf8");
     const encodedRequest = Buffer.from(deflateRawSync(Buffer.from(logoutXml, "utf8"))).toString("base64");
     const relayState = "return";
@@ -407,7 +407,7 @@ describe("SAML SSO flow", () => {
     const signature = createSign("RSA-SHA256").update(signedInput).sign(IDP_KEY).toString("base64");
     const response = await app.handle(new Request(
       `http://terrence.test/users/saml/slo?${signedInput}&Signature=${encodeURIComponent(signature)}`,
-      { headers: { Cookie: cookie } },
+      { headers: { Cookie: `terrence_refresh=${refreshToken}` } },
     ));
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
@@ -422,16 +422,15 @@ describe("SAML SSO flow", () => {
     const options = { username: `slo-${suffix}`, email: `slo-${suffix}@example.com` };
     const login = await validAcs(options);
     expect(login.status).toBe(200);
-    const setCookie = login.headers.get("Set-Cookie") ?? "";
-    expect(setCookie).toContain("terrence_refresh=");
-    const refreshToken = setCookie.split(";")[0]?.split("=")[1] ?? "";
+    const refreshToken = cookieValue(login, "terrence_refresh");
+    expect(refreshToken).not.toBe("");
 
     const refresh = await app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
       method: "POST",
       headers: { Cookie: `terrence_refresh=${refreshToken}` },
     }));
     expect(refresh.status).toBe(200);
-    const activeRefreshToken = (refresh.headers.get("Set-Cookie") ?? "").split(";")[0]?.split("=")[1] ?? "";
+    const activeRefreshToken = cookieValue(refresh, "terrence_refresh");
     expect(activeRefreshToken).not.toBe("");
 
     // An IdP-initiated LogoutRequest (signed) clears the session.

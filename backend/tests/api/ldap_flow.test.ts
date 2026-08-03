@@ -32,7 +32,12 @@ function startLdapMock(): Promise<{ server: Server; port: number }> {
     // case used to exercise the unique-match rule: "duplicate" has two entries.
     server.search("dc=example,dc=com", (req, res, next): void => {
       const value = req.filter.value ?? req.filter.attributeValue;
-      const username = typeof value === "string" && value !== "" ? value : "alice";
+      const username = typeof value === "string" ? value : "";
+      if (username === "") {
+        res.end();
+        next();
+        return;
+      }
       const dn = USER_DN(username);
       if (username === "carol") {
         res.end();
@@ -146,10 +151,19 @@ describe("LDAP authentication", () => {
       userId: adminId,
     });
     await setLdapSettings(true);
+    await setLocalAuth(true);
   });
 
   afterAll(async () => {
-    ldapServer?.close();
+    const server = ldapServer;
+    if (server !== undefined) {
+      await new Promise<void>((resolve, reject): void => {
+        server.close((error?: Error): void => {
+          if (error === undefined) resolve();
+          else reject(error);
+        });
+      });
+    }
     await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
     if (originalGeneral === undefined) {
       await db.delete(adminSettings).where(eq(adminSettings.id, "general"));
@@ -157,8 +171,8 @@ describe("LDAP authentication", () => {
       await db.update(adminSettings).set({ values: originalGeneral.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "general"));
     }
-    const provisioned = await db.query.users.findFirst({ where: eq(users.username, "alice") });
-    const ids = [adminId, localId, ...(provisioned === undefined ? [] : [provisioned.id])];
+    const provisioned = await db.query.users.findMany({ where: eq(users.ssoProvider, "ldap") });
+    const ids = [adminId, localId, ...provisioned.map((row): string => row.id)];
     await db.delete(apiTokens).where(inArray(apiTokens.userId, ids));
     await db.delete(users).where(inArray(users.id, ids));
   });
@@ -194,7 +208,7 @@ describe("LDAP authentication", () => {
   });
 
   test("returns a non-browser token for API logins", async () => {
-    const response = await login("alice", "ldap-pass", false);
+    const response = await login("alice", VALID_USER_PASSWORD, false);
     expect(response.status).toBe(200);
     const body = await response.json() as { data: { attributes: { token: string } } };
     expect(body.data.attributes.token).toMatch(/^user-/);
@@ -213,7 +227,7 @@ describe("LDAP authentication", () => {
     await setLocalAuth(false);
     try {
       // LDAP credentials still work.
-      const ldapOk = await login("alice", "ldap-pass", true);
+      const ldapOk = await login("alice", VALID_USER_PASSWORD, true);
       expect(ldapOk.status).toBe(200);
       // Local-only credentials are rejected even if a local account exists.
       const localRejected = await login("bob", "local-pass", true);
@@ -266,7 +280,7 @@ describe("LDAP authentication", () => {
   });
 
   test("blocks provisioning when the username is already in use locally", async () => {
-    const response = await login("bob", "ldap-pass", true);
+    const response = await login("bob", VALID_USER_PASSWORD, true);
     expect(response.status).toBe(401);
     const bob = await db.query.users.findFirst({ where: eq(users.id, localId) });
     expect(bob?.ssoProvider).toBeNull();
@@ -277,7 +291,7 @@ describe("LDAP authentication", () => {
     try {
       const ok = await login("bob", "local-pass", true);
       expect(ok.status).toBe(200);
-      const rejected = await login("alice", "ldap-pass", true);
+      const rejected = await login("alice", VALID_USER_PASSWORD, true);
       expect(rejected.status).toBe(401);
     } finally {
       await setLdapSettings(true);

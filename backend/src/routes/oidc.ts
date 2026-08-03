@@ -85,7 +85,14 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
 function secureRequest(request: RequestInfo): boolean {
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   return (forwarded === "https" || forwarded === "https:")
-    || new URL(request.url).protocol === "https:";
+    || new URL(request.url).protocol === "https:"
+    || (() => {
+      try {
+        return new URL(ssoBaseUrl(request)).protocol === "https:";
+      } catch {
+        return false;
+      }
+    })();
 }
 
 function stateCookie(request: RequestInfo, state: string, maxAge: number): string {
@@ -102,13 +109,14 @@ function callbackResponse(request: RequestInfo, set: SetObj, body: string, statu
 
 async function oidcSettings(): Promise<OidcSettings> {
   const raw = await getSettings("oidc");
-  const pkce = raw["pkce-method"] === "S256" ? "S256" : null;
   const configuredIssuer = typeof raw.issuer === "string" && raw.issuer !== "" ? raw.issuer : null;
+  const clientSecret = typeof raw["client-secret"] === "string" && raw["client-secret"] !== "" ? raw["client-secret"] : null;
+  const pkce = raw["pkce-method"] === "S256" || clientSecret === null ? "S256" : null;
   return {
     enabled: raw.enabled === true,
     issuer: configuredIssuer === null ? null : normalizeIssuer(configuredIssuer),
     clientId: typeof raw["client-id"] === "string" && raw["client-id"] !== "" ? raw["client-id"] : null,
-    clientSecret: typeof raw["client-secret"] === "string" && raw["client-secret"] !== "" ? raw["client-secret"] : null,
+    clientSecret,
     scopes: typeof raw.scopes === "string" && raw.scopes !== "" ? raw.scopes : "openid profile email",
     pkceMethod: pkce,
   };
@@ -120,6 +128,7 @@ function callbackUrl(request: RequestInfo): string {
 
 async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   const issuer = normalizeIssuer(providerIssuer);
+  if (!secureOidcEndpoint(issuer)) throw new Error("OIDC issuer must be an https URL without embedded credentials");
   const cached = discoveryCache.get(issuer);
   if (cached !== undefined && cached.fetchedAt + DISCOVERY_TTL_MS > Date.now()) return cached.config;
   const endpoint = `${issuer}/.well-known/openid-configuration`;
@@ -516,7 +525,10 @@ async function handleCallback(
       (set as { status: number }).status = 409;
       return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", error.message), 409);
     }
-    throw error;
+    const detail = error instanceof Error ? error.message : "provisioning failed";
+    await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
+    (set as { status: number }).status = 500;
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Sign-in could not be completed. Please try again."), 500);
   }
   await auditLog("sso-login", "oidc", result.user.id, result.user.id, null, { username: result.user.username });
   await issueSsoLogin(result.user, { set, request, server }, { wantsToken: false });

@@ -19,7 +19,7 @@ const json = (data: unknown): Response =>
  */
 const typeInput = (element: HTMLInputElement, value: string): void => {
   const tracker = Reflect.get(element, "_valueTracker") as { setValue: (v: string) => void } | undefined;
-  if (tracker !== undefined) tracker.setValue("");
+  if (tracker !== undefined) tracker.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
   fireEvent.input(element, { target: { value } });
   fireEvent.change(element, { target: { value } });
@@ -38,6 +38,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   let samlServerEnabled = false;
   let oidcServerEnabled = false;
   let ldapServerEnabled = false;
+  let ldapPatchAttributes: Record<string, unknown> | null = null;
   let localAuthServerEnabled = true;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
@@ -142,7 +143,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
             port: 389,
             encryption: "plain",
             "bind-dn": null,
-            "bind-password-set": false,
+            "bind-password-set": true,
             "base-dn": null,
             "user-filter": "(uid={{username}})",
             "attr-username": "uid",
@@ -153,6 +154,10 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
       });
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
+      const body = typeof init.body === "string"
+        ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
+        : {};
+      ldapPatchAttributes = body.data?.attributes ?? null;
       ldapServerEnabled = true;
       return json({
         data: {
@@ -274,8 +279,20 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   // No request should have been sent for the unusable configuration.
   expect(fetchMock.mock.calls.some(([input, init]): boolean =>
     urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeFalse();
-  // Disable again to leave the auth-tab state consistent.
-  await act(async (): Promise<void> => { fireEvent.click(ldapEnabledCheckbox); });
+
+  // A successful save with an empty bind-password must preserve the stored
+  // value by omitting the write-only field from the PATCH.
+  await act(async (): Promise<void> => {
+    fireEvent.click(view.getByLabelText("Enable LDAP"));
+  });
+  await act(async (): Promise<void> => {
+    fireEvent.click(view.getByRole("button", { name: "Save LDAP settings" }));
+  });
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      urlOf(input) === "/api/v2/admin/ldap-settings" && init?.method === "PATCH")).toBeTrue();
+  });
+  expect(ldapPatchAttributes?.["bind-password"]).toBeUndefined();
 });
 
 test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {

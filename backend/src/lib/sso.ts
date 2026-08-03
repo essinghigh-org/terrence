@@ -170,6 +170,10 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   if (byIdentity !== undefined) {
     const updates: Partial<typeof users.$inferInsert> = {};
     if (byIdentity.email === null && email !== null && identity.emailVerified === true) updates.email = email;
+    if (updates.email !== undefined) {
+      const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
+      if (emailOwner !== undefined && emailOwner.id !== byIdentity.id) delete updates.email;
+    }
     if (Object.keys(updates).length > 0) {
       await db.update(users).set(updates).where(eq(users.id, byIdentity.id));
     }
@@ -260,10 +264,27 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
   const samlOrgs = await db.query.organizations.findMany({
     where: eq(organizations.samlEnabled, true),
   });
-  for (const org of samlOrgs) {
-    const existing = await db.query.organizationMemberships.findFirst({
-      where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, userId)),
+  const orgIds = samlOrgs.map((org): string => org.id);
+  if (orgIds.length === 0) return;
+  const [memberships, orgTeams] = await Promise.all([
+    db.query.organizationMemberships.findMany({
+      where: and(inArray(organizationMemberships.orgId, orgIds), eq(organizationMemberships.userId, userId)),
+    }),
+    db.query.teams.findMany({ where: inArray(teams.orgId, orgIds) }),
+  ]);
+  const teamIds = orgTeams.map((team): string => team.id);
+  const existingTeamMemberships = teamIds.length === 0
+    ? []
+    : await db.query.teamMemberships.findMany({
+      where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)),
+      columns: { teamId: true },
     });
+  const membershipByOrg = new Map(memberships.map((membership) => [membership.orgId, membership]));
+  const teamsByOrg = new Map<string, typeof orgTeams[number][]>();
+  for (const team of orgTeams) teamsByOrg.set(team.orgId, [...(teamsByOrg.get(team.orgId) ?? []), team]);
+  const existingTeamIds = new Set(existingTeamMemberships.map((membership): string => membership.teamId));
+  for (const org of samlOrgs) {
+    const existing = membershipByOrg.get(org.id);
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
     if (existing === undefined) {
       await db.insert(organizationMemberships).values({
@@ -275,25 +296,19 @@ export async function applySamlGroupMapping(userId: string, groups: readonly str
         // Mark the membership as SAML-managed so group pruning can later
         // remove or downgrade it without touching admin-granted rows.
         ssoSource: "saml",
-      });
+      }).onConflictDoNothing();
     } else if (isOwner && existing.role !== "owner") {
       // Preserve admin-granted provenance so pruning never removes the row.
       await db.update(organizationMemberships).set({ role: "owner" })
         .where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, userId)));
     }
 
-    const orgTeams = await db.query.teams.findMany({ where: eq(teams.orgId, org.id) });
-    const matchedTeams = orgTeams.filter((team): boolean => team.ssoTeamId !== null
+    const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter((team): boolean => team.ssoTeamId !== null
       ? groupSet.has(team.ssoTeamId)
       : groupSet.has(team.name));
     if (matchedTeams.length === 0) continue;
-    const existingMemberships = await db.query.teamMemberships.findMany({
-      where: and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, matchedTeams.map((team): string => team.id))),
-      columns: { teamId: true },
-    });
-    const existingIds = new Set(existingMemberships.map((membership): string => membership.teamId));
     const inserts = matchedTeams
-      .filter((team): boolean => !existingIds.has(team.id))
+      .filter((team): boolean => !existingTeamIds.has(team.id))
       .map((team): typeof teamMemberships.$inferInsert => ({
         id: `tmem-${crypto.randomUUID()}`,
         teamId: team.id,

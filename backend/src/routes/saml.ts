@@ -39,11 +39,16 @@ const TIME_SKEW_MS = 5 * 60 * 1000;
 // compressed payload cannot expand into excessive memory.
 const MAX_SAML_MESSAGE_BYTES = 1024 * 1024;
 const REDIRECT_SIGNATURE_ALGORITHMS: Readonly<Record<string, string>> = {
-  "http://www.w3.org/2000/09/xmldsig#rsa-sha1": "RSA-SHA1",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256": "RSA-SHA256",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384": "RSA-SHA384",
   "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512": "RSA-SHA512",
 };
+
+function pemCertificate(certificate: string): string {
+  if (certificate.includes("-----BEGIN CERTIFICATE-----")) return certificate;
+  const body = certificate.replace(/\s+/g, "").match(/.{1,64}/g)?.join("\n") ?? "";
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+}
 
 // AuthnRequests we issued are recorded and matched against InResponseTo so
 // captured assertions cannot be replayed against the ACS.
@@ -155,7 +160,7 @@ function verifyRedirectLogoutSignature(
   const signedInput = `SAMLRequest=${rawRequest}${rawRelayState === undefined ? "" : `&RelayState=${rawRelayState}`}&SigAlg=${rawSigAlg}`;
   const valid = certificates.some((certificate): boolean => {
     try {
-      return verifySignature(algorithm, Buffer.from(signedInput, "utf8"), certificate, signature);
+      return verifySignature(algorithm, Buffer.from(signedInput, "utf8"), pemCertificate(certificate), signature);
     } catch {
       return false;
     }
@@ -188,7 +193,7 @@ function verifyLogoutSignature(
   for (const certificate of certificates) {
     try {
       const signed = new SignedXml();
-      signed.getCertFromKeyInfo = (): string => certificate;
+      signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
       signed.loadSignature(String(signatureElement));
       if (!signed.checkSignature(xml)) continue;
@@ -335,7 +340,7 @@ function signedAssertionResult(
     for (const certificate of certificates) {
       try {
         const signed = new SignedXml();
-        signed.getCertFromKeyInfo = (): string => certificate;
+        signed.getCertFromKeyInfo = (): string => pemCertificate(certificate);
         // eslint-disable-next-line @typescript-eslint/no-base-to-string
         signed.loadSignature(String(signatureElement));
         if (!signed.checkSignature(xml)) continue;
@@ -761,9 +766,9 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       }
     }
 
-    const tokenTtlMs = settings.ssoApiTokenSessionTimeout === 0
-      ? undefined
-      : settings.ssoApiTokenSessionTimeout * 1000;
+    const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
+      ? settings.ssoApiTokenSessionTimeout * 1000
+      : undefined;
     const session = await issueSsoLogin(user, { set, request, server }, {
       ...(tokenTtlMs === undefined ? {} : { tokenTtlMs }),
       wantsToken: wantsToken(request, relayState),

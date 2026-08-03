@@ -2,7 +2,7 @@
 // locates the user with the configured filter, then validates the presented
 // password by binding as that user. Returns null for any failure so the login
 // route can fall back to local authentication.
-import { Client, InvalidCredentialsError, type Entry } from "ldapts";
+import { Client, ResultCodeError, type Entry } from "ldapts";
 import type { LdapSettings } from "./sso";
 
 export type LdapUser = Readonly<{
@@ -74,10 +74,14 @@ export async function authenticateLdap(
   }
 
   const scheme = settings.encryption === "ldaps" ? "ldaps" : "ldap";
-  const client = new Client({
+  const clientOptions = {
     url: `${scheme}://${settings.host}:${settings.port}`,
     timeout: 10_000,
     connectTimeout: 10_000,
+    ...(settings.encryption === "plain" ? {} : { tlsOptions: { minVersion: "TLSv1.2" as const } }),
+  };
+  const client = new Client({
+    ...clientOptions,
   });
 
   try {
@@ -126,7 +130,7 @@ export async function authenticateLdap(
     // else (connect, TLS, startTLS, timeout) means the directory is
     // unavailable. Never log the password or bind password.
     const message = error instanceof Error ? error.message : String(error);
-    const credentialRejection = error instanceof InvalidCredentialsError;
+    const credentialRejection = error instanceof ResultCodeError;
     if (!credentialRejection) {
       console.error(`[ldap] directory ${scheme}://${settings.host}:${settings.port} unavailable: ${message}`);
     }
