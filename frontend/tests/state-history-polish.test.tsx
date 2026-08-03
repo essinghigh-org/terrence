@@ -120,3 +120,31 @@ test("uploads a Terraform state file and adds the new state version", async () =
   });
   expect(view.getByRole("button", { name: "Upload state" })).toBeTruthy();
 });
+
+test("falls back to the raw state payload when the fetched state JSON cannot be parsed", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/workspaces/ws-1/state-versions") {
+      // The list item carries no embedded `state`, so View JSON fetches it.
+      return json({ data: [{ id: "sv-raw", attributes: { serial: 1 } }], meta: { pagination: { "next-page": null } } });
+    }
+    if (url === "/api/v2/state-versions/sv-raw") {
+      // Malformed state content to force the JSON.parse fallback branch.
+      return json({ data: { attributes: { state: "{not-valid-json" } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(<StateHistory workspaceId="ws-1" />);
+  await waitFor((): void => {
+    expect(view.getByText("sv-raw")).toBeTruthy();
+  });
+
+  fireEvent.click(view.getByRole("button", { name: "View JSON" }));
+
+  await waitFor((): void => {
+    const dialog = view.getByRole("dialog");
+    expect(dialog.textContent).toContain("{not-valid-json");
+  });
+});

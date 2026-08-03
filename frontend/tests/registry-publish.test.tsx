@@ -247,3 +247,54 @@ test("shows validation errors on empty required fields in publish modal", async 
   // Validation error should appear
   await view.findByText(/name is required/i);
 });
+
+test("shows the API error when publishing a module version fails", async () => {
+  const moduleId = "mod-version-error";
+  let createdModule = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    const method = init?.method ?? "GET";
+    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET") {
+      return json({ data: [] });
+    }
+    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET") {
+      return json({ data: [] });
+    }
+    if (url === "/api/v2/organizations/acme/registry-modules" && method === "POST") {
+      createdModule = true;
+      return json({
+        data: { id: moduleId, type: "registry-modules", attributes: { name: "vpc", namespace: "acme", provider: "aws", "created-at": "2026-07-30T12:00:00.000Z" } },
+      }, 201);
+    }
+    if (url === `/api/v2/registry-modules/${moduleId}/versions` && method === "POST") {
+      expect(createdModule).toBeTrue();
+      return json({ errors: [{ status: "422", detail: "Version 1.0.0 already exists" }] }, 422);
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/registry"]}>
+      <Routes>
+        <Route path="/app/:orgName/registry" element={<Registry />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await view.findByText("No private modules");
+
+  fireEvent.click(view.getByRole("button", { name: /publish/i }));
+  await view.findByRole("heading", { name: /publish module/i });
+
+  fireEvent.input(view.getByRole("textbox", { name: "Name" }), { target: { value: "vpc" } });
+  fireEvent.input(view.getByRole("textbox", { name: "Provider" }), { target: { value: "aws" } });
+  fireEvent.click(view.getByRole("button", { name: /create module/i }));
+  await view.findByRole("heading", { name: /publish version/i });
+
+  fireEvent.input(view.getByRole("textbox", { name: "Version" }), { target: { value: "1.0.0" } });
+  fireEvent.click(view.getByRole("button", { name: /publish version$/i }));
+
+  // The API failure surfaces the backend detail in the dialog instead of closing it.
+  await view.findByText("Version 1.0.0 already exists");
+  expect(view.queryByRole("heading", { name: /publish/i })).not.toBeNull();
+});
