@@ -2221,6 +2221,10 @@ export async function pollWorkerQueue(): Promise<string[]> {
 }
 
 export function startWorkerQueue(): void {
+  // Off switch for benchmarks/tests that must run in a process with no
+  // background DB activity (the 1.5s poll loop otherwise injects queries
+  // and CPU into measurements).
+  if (process.env.TERRENCE_DISABLE_WORKER === "1") return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
 

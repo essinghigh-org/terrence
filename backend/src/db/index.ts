@@ -33,6 +33,27 @@ function getColumnNames(rows: readonly unknown[]): Set<string> {
   return new Set(rows.map((r: unknown): string => (r as TableInfoRow).name));
 }
 
+// Opt-in SQL query instrumentation for the benchmark suite
+// (TERRENCE_QUERY_COUNT=1). Drizzle routes every statement through
+// client.prepare(), so counting prepares counts queries. Zero overhead when
+// the env var is unset (the wrapper is never installed).
+let queryCount = 0;
+if (process.env.TERRENCE_QUERY_COUNT === "1") {
+  const originalPrepare = client.prepare.bind(client);
+  client.prepare = ((sql: string, ...params: unknown[]) => {
+    queryCount += 1;
+    return originalPrepare(sql, ...(params as [never]));
+  }) as typeof client.prepare;
+}
+
+export function resetQueryCount(): void {
+  queryCount = 0;
+}
+
+export function getQueryCount(): number {
+  return queryCount;
+}
+
 export const db = drizzle(client, { schema });
 
 // bun:sqlite's native transaction() rolls back only when its callback throws
