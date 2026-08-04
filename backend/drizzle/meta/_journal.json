@@ -407,6 +407,13 @@
       "when": 1787053000000,
       "tag": "0058_sso_identity_pair_check",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1787054000000,
+      "tag": "0059_perf_indexes",
+      "breakpoints": true
     }
   ]
 }

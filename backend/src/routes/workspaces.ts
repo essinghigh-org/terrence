@@ -9,7 +9,7 @@ import {
   type WorkspaceResourcePermissions,
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspaceIdsForPermission, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
@@ -191,39 +191,20 @@ async function resourcePermissions(
   principalOrgId: string | null,
   teamId: string | null,
 ): Promise<WorkspaceResourcePermissions> {
-  const [
-    canPlan,
-    canApply,
-    canLock,
-    canAdmin,
-    canWriteVariables,
-    canReadVariables,
-    canReadStateVersions,
-    canWriteStateVersions,
-    canWorkspaceRunTasks,
-    canManageOrgRunTasks,
-  ] = await Promise.all([
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "plan"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "apply"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "lock"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "admin"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "variables-write"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "variables-read"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "state-read"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "state-write"),
-    checkWorkspacePermission(workspace, userId, principalOrgId, teamId, "run-tasks"),
-    checkOrganizationPermission(workspace.orgId, userId, principalOrgId, teamId, "manage-run-tasks"),
-  ]);
+  // One access-base load for the whole permission matrix instead of one per
+  // level (the per-level derivation is pure in-memory afterwards).
+  const sets = await workspacePermissionSets(workspace.orgId, userId, principalOrgId, teamId);
+  const canManageOrgRunTasks = await checkOrganizationPermission(workspace.orgId, userId, principalOrgId, teamId, "manage-run-tasks");
   return {
-    canPlan,
-    canApply,
-    canLock,
-    canAdmin,
-    canWriteVariables,
-    canReadVariables,
-    canReadStateVersions,
-    canWriteStateVersions,
-    canManageRunTasks: canWorkspaceRunTasks && canManageOrgRunTasks,
+    canPlan: workspaceAllows(sets.plan, workspace.id),
+    canApply: workspaceAllows(sets.apply, workspace.id),
+    canLock: workspaceAllows(sets.lock, workspace.id),
+    canAdmin: workspaceAllows(sets.admin, workspace.id),
+    canWriteVariables: workspaceAllows(sets.variablesWrite, workspace.id),
+    canReadVariables: workspaceAllows(sets.variablesRead, workspace.id),
+    canReadStateVersions: workspaceAllows(sets.stateRead, workspace.id),
+    canWriteStateVersions: workspaceAllows(sets.stateWrite, workspace.id),
+    canManageRunTasks: workspaceAllows(sets.runTasks, workspace.id) && canManageOrgRunTasks,
   };
 }
 
@@ -347,7 +328,8 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const searchParams = new URL(request.url).searchParams;
     const csv = (name: string): string[] => [...new Set(searchParams.get(name)?.split(",").filter(Boolean) ?? [])];
     const conditions: unknown[] = [eq(workspaces.orgId, org.id)];
-    const allowedWorkspaceIds = await workspaceIdsForPermission(org.id, user?.id, principalOrgId ?? null, teamId ?? null, "read");
+    const permSets = await workspacePermissionSets(org.id, user?.id, principalOrgId ?? null, teamId ?? null);
+    const allowedWorkspaceIds = permSets.read;
     if (allowedWorkspaceIds !== null) {
       conditions.push(allowedWorkspaceIds.length > 0
         ? inArray(workspaces.id, [...allowedWorkspaceIds])
@@ -405,9 +387,19 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     const currentRunStatuses = csv("filter[current-run][status]");
     if (currentRunStatuses.length > 0) {
-      // ponytail: scans only run status metadata; use a window-function subquery if histories make this filter slow.
+      // Latest run per workspace by created_at; scoped to THIS org's
+      // workspaces (runs are per-workspace, so scoping cannot change which
+      // workspace matches — it only stops the scan crossing every org).
+      // Needs runs(workspace_id, created_at) to stay index-only (migration
+      // 0059); a window-function subquery would be the next step if the
+      // org's run history grows very deep.
+      const orgWorkspaceIdRows = await db.query.workspaces.findMany({
+        where: eq(workspaces.orgId, org.id),
+        columns: { id: true },
+      });
       const runHistory = await db.query.runs.findMany({
         columns: { workspaceId: true, status: true },
+        where: inArray(runs.workspaceId, orgWorkspaceIdRows.map((row): string => row.id)),
         orderBy: [desc(runs.createdAt)],
       });
       const seen = new Set<string>();
@@ -427,44 +419,36 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       db.select({ total: count() }).from(workspaces).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    const principalOrg = principalOrgId ?? null;
-    const principalTeam = teamId ?? null;
-    const [
-      planIds,
-      applyIds,
-      lockIds,
-      adminIds,
-      writeVariableIds,
-      readVariableIds,
-      readStateIds,
-      writeStateIds,
-      runTaskIds,
-      canManageOrgRunTasks,
-    ] = await Promise.all([
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "plan"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "apply"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "lock"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "admin"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "variables-write"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "variables-read"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "state-read"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "state-write"),
-      workspaceIdsForPermission(org.id, user?.id, principalOrg, principalTeam, "run-tasks"),
-      checkOrganizationPermission(org.id, user?.id, principalOrg, principalTeam, "manage-run-tasks"),
-    ]);
-    const allows = (ids: readonly string[] | null, workspaceId: string): boolean =>
-      ids === null || ids.includes(workspaceId);
+    const canManageOrgRunTasks = await checkOrganizationPermission(org.id, user?.id, principalOrgId ?? null, teamId ?? null, "manage-run-tasks");
+    // Batch the per-row N+1 (workspace_tags + org name): one query for the
+    // whole page instead of two per workspace. `org` is already loaded, so
+    // the org name costs nothing extra.
+    const tagRows = wsList.length === 0
+      ? []
+      : await db.query.workspaceTags.findMany({
+        where: inArray(workspaceTags.workspaceId, wsList.map((w: WsItem): string => w.id)),
+        orderBy: [asc(workspaceTags.key)],
+      });
+    const tagsByWorkspace = new Map<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>();
+    for (const tag of tagRows) {
+      const list = tagsByWorkspace.get(tag.workspaceId) ?? [];
+      list.push(tag);
+      tagsByWorkspace.set(tag.workspaceId, list);
+    }
     const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> =>
       workspaceResource(w, org.defaultIacBinary, {
-        canAdmin: allows(adminIds, w.id),
-        canApply: allows(applyIds, w.id),
-        canLock: allows(lockIds, w.id),
-        canManageRunTasks: canManageOrgRunTasks && allows(runTaskIds, w.id),
-        canPlan: allows(planIds, w.id),
-        canReadStateVersions: allows(readStateIds, w.id),
-        canWriteStateVersions: allows(writeStateIds, w.id),
-        canReadVariables: allows(readVariableIds, w.id),
-        canWriteVariables: allows(writeVariableIds, w.id),
+        canAdmin: workspaceAllows(permSets.admin, w.id),
+        canApply: workspaceAllows(permSets.apply, w.id),
+        canLock: workspaceAllows(permSets.lock, w.id),
+        canManageRunTasks: canManageOrgRunTasks && workspaceAllows(permSets.runTasks, w.id),
+        canPlan: workspaceAllows(permSets.plan, w.id),
+        canReadStateVersions: workspaceAllows(permSets.stateRead, w.id),
+        canWriteStateVersions: workspaceAllows(permSets.stateWrite, w.id),
+        canReadVariables: workspaceAllows(permSets.variablesRead, w.id),
+        canWriteVariables: workspaceAllows(permSets.variablesWrite, w.id),
+      }, {
+        orgName: org.name,
+        tags: tagsByWorkspace.get(w.id) ?? [],
       })));
     return { data, ...pagination(request, number, size, totalCount) };
   })

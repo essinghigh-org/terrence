@@ -76,7 +76,35 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
         scopeCoversOrg(scopes, r.orgId) && scopeGrants(scopes, "varsets:read"));
     }
     const totalCount = records.length;
-    const data = await Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> => variableSetResource(r)));
+    // Batch the per-row N+1 (workspace/project/variable links + org name):
+    // three queries for the whole page instead of three per variable set.
+    const setIds = records.map((r: VarSetItem): string => r.id);
+    const [workspaceLinkRows, projectLinkRows, variableRows] = setIds.length === 0
+      ? [[], [], []]
+      : await Promise.all([
+        db.query.variableSetWorkspaces.findMany({ where: inArray(variableSetWorkspaces.variableSetId, setIds) }),
+        db.query.variableSetProjects.findMany({ where: inArray(variableSetProjects.variableSetId, setIds) }),
+        db.query.variableSetVariables.findMany({ where: inArray(variableSetVariables.variableSetId, setIds) }),
+      ]);
+    const groupBySetId = <T extends { variableSetId: string }>(rows: readonly T[]): Map<string, T[]> => {
+      const grouped = new Map<string, T[]>();
+      for (const row of rows) {
+        const list = grouped.get(row.variableSetId) ?? [];
+        list.push(row);
+        grouped.set(row.variableSetId, list);
+      }
+      return grouped;
+    };
+    const workspaceLinksBySet = groupBySetId(workspaceLinkRows);
+    const projectLinksBySet = groupBySetId(projectLinkRows);
+    const variablesBySet = groupBySetId(variableRows);
+    const data = await Promise.all(records.map(async (r: VarSetItem): Promise<Record<string, unknown>> =>
+      variableSetResource(r, {
+        orgName: org.name,
+        workspaceLinks: workspaceLinksBySet.get(r.id) ?? [],
+        projectLinks: projectLinksBySet.get(r.id) ?? [],
+        variables: variablesBySet.get(r.id) ?? [],
+      })));
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {

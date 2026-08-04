@@ -36,22 +36,31 @@ function getColumnNames(rows: readonly unknown[]): Set<string> {
 // Opt-in SQL query instrumentation for the benchmark suite
 // (TERRENCE_QUERY_COUNT=1). Drizzle routes every statement through
 // client.prepare(), so counting prepares counts queries. Zero overhead when
-// the env var is unset (the wrapper is never installed).
+// the env var is unset (the wrapper is never installed). Set
+// TERRENCE_QUERY_LOG=1 alongside it to also capture the SQL text.
 let queryCount = 0;
+const queryLog: string[] = [];
+const logQueries = process.env.TERRENCE_QUERY_LOG === "1";
 if (process.env.TERRENCE_QUERY_COUNT === "1") {
   const originalPrepare = client.prepare.bind(client);
   client.prepare = ((sql: string, ...params: unknown[]) => {
     queryCount += 1;
+    if (logQueries) queryLog.push(sql);
     return originalPrepare(sql, ...(params as [never]));
   }) as typeof client.prepare;
 }
 
 export function resetQueryCount(): void {
   queryCount = 0;
+  queryLog.length = 0;
 }
 
 export function getQueryCount(): number {
   return queryCount;
+}
+
+export function getQueryLog(): readonly string[] {
+  return queryLog;
 }
 
 export const db = drizzle(client, { schema });
@@ -88,6 +97,16 @@ const session = (db as unknown as { session: SQLiteBunSession<Record<string, unk
 };
 
 migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
+
+// Read-path performance indexes (also in migration 0059). Re-applied
+// idempotently here so deployments with historically incomplete migration
+// journals still get the indexes even though the journal doesn't record 0059.
+// All three are pure read-shape accelerators; no data or semantics change.
+runSql(`
+  CREATE INDEX IF NOT EXISTS runs_workspace_created_idx ON runs (workspace_id, created_at);
+  CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id);
+  CREATE INDEX IF NOT EXISTS organization_memberships_user_org_idx ON organization_memberships (user_id, org_id);
+`);
 
 // Keep upgrades from pre-RBAC releases safe even when their migration journal is incomplete.
 runSql(`

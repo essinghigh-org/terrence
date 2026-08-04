@@ -3,7 +3,7 @@ import { db } from "../db";
 import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, apiTokens, samlSettings, teams, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { organizationResource, organizationName } from "../lib/response";
-import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermission, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
+import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermissionsMany, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
 import { currentTokenScopes } from "../lib/request-scope";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
@@ -39,8 +39,17 @@ async function organizationResourceForPrincipal(
   tokenOrgId: string | null | undefined,
   tokenTeamId: string | null | undefined,
 ): Promise<Record<string, unknown>> {
+  const [canManageOrganization, orgPermissionFlags] = await Promise.all([
+    checkOrgPermission(userId, org.id, "owner", tokenOrgId ?? null, tokenTeamId ?? null),
+    checkOrganizationPermissionsMany(
+      org.id,
+      userId,
+      tokenOrgId,
+      tokenTeamId,
+      ["manage-workspaces", "read-projects", "manage-projects", "manage-vcs-settings", "manage-agent-pools", "manage-teams", "manage-membership", "manage-organization-access"],
+    ),
+  ]);
   const [
-    canManageOrganization,
     canManageWorkspaces,
     canReadProjects,
     canManageProjects,
@@ -49,17 +58,7 @@ async function organizationResourceForPrincipal(
     canCreateTeam,
     canManageUsers,
     canUpdateOrganizationAccess,
-  ] = await Promise.all([
-    checkOrgPermission(userId, org.id, "owner", tokenOrgId ?? null, tokenTeamId ?? null),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-workspaces"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "read-projects"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-projects"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-vcs-settings"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-agent-pools"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-teams"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-membership"),
-    checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId, "manage-organization-access"),
-  ]);
+  ] = orgPermissionFlags;
   const resource = organizationResource(org);
   return {
     ...resource,

@@ -193,18 +193,28 @@ export type WorkspaceResourcePermissions = Readonly<{
   canWriteVariables: boolean;
 }>;
 
+type WorkspaceResourceOptions = {
+  /** Preloaded org name; skips the per-workspace organizations lookup. */
+  orgName?: string | null;
+  /** Preloaded tags for this workspace; skips the per-workspace tags query. */
+  tags?: readonly DeepReadonly<typeof workspaceTags.$inferSelect>[];
+};
+
 export async function workspaceResource(
   workspace: WorkspaceParam,
   defaultIacBinary: string | null | undefined,
   permissions: WorkspaceResourcePermissions,
+  options?: WorkspaceResourceOptions,
 ): Promise<Record<string, unknown>> {
-  const [tags, orgName] = await Promise.all([
-    db.query.workspaceTags.findMany({
+  const tags = options?.tags !== undefined
+    ? options.tags
+    : await db.query.workspaceTags.findMany({
       where: eq(workspaceTags.workspaceId, workspace.id),
       orderBy: [asc(workspaceTags.key)],
-    }),
-    organizationName(workspace.orgId),
-  ]);
+    });
+  const orgName = options?.orgName !== undefined
+    ? options.orgName
+    : await organizationName(workspace.orgId);
 
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "tofu";
 
@@ -406,19 +416,37 @@ export function variableSetVariableUpdate(
 
 type VarSetParam = DeepReadonly<typeof variableSets.$inferSelect>;
 
-export async function variableSetResource(variableSet: VarSetParam): Promise<Record<string, unknown>> {
-  const [workspaceLinks, projectLinks, variables, orgName] = await Promise.all([
-    db.query.variableSetWorkspaces.findMany({
-      where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
-    }),
-    db.query.variableSetProjects.findMany({
-      where: eq(variableSetProjects.variableSetId, variableSet.id),
-    }),
-    db.query.variableSetVariables.findMany({
-      where: eq(variableSetVariables.variableSetId, variableSet.id),
-    }),
-    organizationName(variableSet.orgId),
-  ]);
+type VariableSetResourceOptions = {
+  workspaceLinks?: readonly DeepReadonly<typeof variableSetWorkspaces.$inferSelect>[];
+  projectLinks?: readonly DeepReadonly<typeof variableSetProjects.$inferSelect>[];
+  variables?: readonly DeepReadonly<typeof variableSetVariables.$inferSelect>[];
+  orgName?: string | null;
+};
+
+export async function variableSetResource(
+  variableSet: VarSetParam,
+  options?: VariableSetResourceOptions,
+): Promise<Record<string, unknown>> {
+  const [workspaceLinks, projectLinks, variables] = options !== undefined
+    ? [
+      options.workspaceLinks ?? [],
+      options.projectLinks ?? [],
+      options.variables ?? [],
+    ]
+    : await Promise.all([
+      db.query.variableSetWorkspaces.findMany({
+        where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
+      }),
+      db.query.variableSetProjects.findMany({
+        where: eq(variableSetProjects.variableSetId, variableSet.id),
+      }),
+      db.query.variableSetVariables.findMany({
+        where: eq(variableSetVariables.variableSetId, variableSet.id),
+      }),
+    ]);
+  const orgName = options?.orgName !== undefined
+    ? options.orgName
+    : await organizationName(variableSet.orgId);
   return {
     id: variableSet.id,
     type: "varsets",
