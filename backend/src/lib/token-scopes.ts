@@ -162,7 +162,7 @@ const ALL_PERMISSION_GRANTS: readonly WorkspacePermissionGrant[] = Object.keys(
   GRANT_IMPLICATIONS,
 ) as WorkspacePermissionGrant[];
 
-export type TokenScopeTagFilter = Readonly<{
+type TokenScopeTagFilter = Readonly<{
   key: string;
   value: string;
 }>;
@@ -172,7 +172,7 @@ export type TokenScopeTagFilter = Readonly<{
  * with AND or OR. Groups may nest arbitrarily, so rules like
  * `(foo=bar AND baz=bing) OR xyz=abc` are directly representable.
  */
-export type TokenScopeTagRule =
+type TokenScopeTagRule =
   | TokenScopeTagFilter
   | Readonly<{ combinator: "AND" | "OR"; rules: readonly TokenScopeTagRule[] }>;
 

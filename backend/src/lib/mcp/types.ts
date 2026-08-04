@@ -23,7 +23,7 @@ export type McpSession = Readonly<{
   scopes: TokenScopes | null;
 }>;
 
-export type ToolHandler = (session: McpSession, args: Readonly<Record<string, unknown>>) => Promise<unknown>;
+type ToolHandler = (session: McpSession, args: Readonly<Record<string, unknown>>) => Promise<unknown>;
 
 export type McpTool = Readonly<{
   name: string;
@@ -53,8 +53,4 @@ export function toolError(message: string): JsonRpcError {
 /** Invalid arguments / resource-not-found style failure. */
 export function toolBadRequest(message: string): JsonRpcError {
   return { jsonrpc: "2.0", id: null, error: { code: -32602, message } };
-}
-
-export function isJsonRpcError(value: unknown): value is JsonRpcError {
-  return typeof value === "object" && value !== null && "jsonrpc" in value && "error" in value;
 }

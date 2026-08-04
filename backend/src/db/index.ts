@@ -51,15 +51,18 @@ if (process.env.TERRENCE_QUERY_COUNT === "1") {
   });
 }
 
+/** @public Used by the dynamically imported benchmark runner. */
 export function resetQueryCount(): void {
   queryCount = 0;
   queryLog.length = 0;
 }
 
+/** @public Used by the dynamically imported benchmark runner. */
 export function getQueryCount(): number {
   return queryCount;
 }
 
+/** @public Used by the dynamically imported benchmark runner. */
 export function getQueryLog(): readonly string[] {
   return queryLog.slice();
 }
@@ -70,6 +73,7 @@ export function getQueryLog(): readonly string[] {
  * leak into a later breakdown. Zero cost while disabled: the hot path only
  * reads a boolean.
  */
+/** @public Used by the dynamically imported benchmark runner. */
 export function setQueryLogging(enabled: boolean): void {
   queryLogEnabled = enabled;
   if (!enabled) queryLog.length = 0;

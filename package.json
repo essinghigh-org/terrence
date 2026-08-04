@@ -22,13 +22,9 @@
   ],
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "@radix-ui/react-avatar": "^1.2.6",
-    "@radix-ui/react-dropdown-menu": "^2.1.24",
-    "@types/node": "^26.1.2",
     "eslint": "^10.7.0",
-    "frontend": "workspace:*",
     "knip": "^6.29.0",
-    "typescript": "^7.0.2",
+    "typescript": "~6.0.2",
     "typescript-eslint": "^8.65.0"
   }
 }

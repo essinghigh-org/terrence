@@ -2,7 +2,7 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-export type InputProps = {} & React.InputHTMLAttributes<HTMLInputElement>
+type InputProps = {} & React.InputHTMLAttributes<HTMLInputElement>
 
 const inputComponent = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, ...props }: Readonly<InputProps>, ref: React.Ref<HTMLInputElement>): React.JSX.Element => {

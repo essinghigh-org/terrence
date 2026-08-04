@@ -49,7 +49,7 @@ type PlanJson = {
 
 type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
 
-export type ExecutionState =
+type ExecutionState =
   | "pending"
   | "creating"
   | "created"

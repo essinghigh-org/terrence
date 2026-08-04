@@ -317,7 +317,7 @@ export function applyThemeIfUnchanged(themeId: unknown, revision: number): boole
   return true;
 }
 
-// Kept as a small compatibility wrapper for callers that only know light/dark.
+/** @public Compatibility wrapper for callers that only know light/dark. */
 export function applyThemeMode(mode?: unknown): void {
   applyTheme(mode === "dark" ? "original-dark" : mode === "light" ? "original-light" : undefined);
 }

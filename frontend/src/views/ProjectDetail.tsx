@@ -737,5 +737,5 @@ export function ProjectDetail({
   );
 }
 
-// Re-export for route usage: keep the runStatusFilters import from being tree-shaken in tests.
+/** @public Compatibility export retained for route and test consumers. */
 export const projectRunStatusFilters = runStatusFilters;

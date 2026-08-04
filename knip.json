@@ -1,9 +1,26 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    ".agents/skills/elysia/examples/**"
+  ],
+  "ignoreDependencies": [
+    "oxlint",
+    "shadcn"
+  ],
+  "ignoreExportsUsedInFile": true,
   "tags": [
     "-lintignore"
   ],
   "workspaces": {
-    ".": {}
+    ".": {},
+    "backend": {
+      "entry": [
+        "bench/**/*.ts",
+        "seed.ts"
+      ]
+    },
+    "frontend": {
+      "entry": "src/components/ui/*.tsx"
+    }
   }
 }

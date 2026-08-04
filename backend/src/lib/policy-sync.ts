@@ -24,7 +24,7 @@ export type PolicyWebhookDetails = {
   readonly filesChanged: ReadonlySet<string>;
   readonly repoFullName: string;
 };
-export type VcsPolicySet = DeepReadonly<typeof policySets.$inferSelect>;
+type VcsPolicySet = DeepReadonly<typeof policySets.$inferSelect>;
 
 type ParsedPolicy = Readonly<{
   description: string | null;

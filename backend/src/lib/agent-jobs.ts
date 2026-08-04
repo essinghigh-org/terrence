@@ -26,8 +26,6 @@ import {
   type PlanJson,
 } from "./plan-json";
 
-export type AgentJobPhase = "plan" | "apply";
-
 export type AgentJobCompletion = Readonly<{
   status: "completed" | "errored";
   errorMessage: string | null;
@@ -55,7 +53,7 @@ type Database = Readonly<typeof db>;
 
 const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
 
-export type AgentPolicyEvaluation = Readonly<{
+type AgentPolicyEvaluation = Readonly<{
   policySets: readonly Readonly<{
     id: string;
     name: string;
