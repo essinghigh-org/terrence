@@ -32,7 +32,7 @@ export type RunStatusType =
   | "needs_confirmation"
   | string;
 
-export function formatStatusLabel(status: string): string {
+function formatStatusLabel(status: string): string {
   if (status === "needs_confirmation") return "Needs Confirmation";
   return status
     .replace(/_/g, " ")

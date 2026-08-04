@@ -230,7 +230,7 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
   return data;
 }
 
-export function removeAuthToken(): void {
+function removeAuthToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_EXPIRY_KEY);
   localStorage.removeItem(REFRESHABLE_KEY);

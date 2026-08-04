@@ -28,5 +28,3 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
     <CardContent>{error !== "" && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}{loading ? <p className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{typeof version.attributes["created-at"] === "string" && version.attributes["created-at"] !== "" ? ` · ${new Date(version.attributes["created-at"]).toLocaleString()}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
   </Card>;
 }
-
-export function configurationVersionStatus(version: ConfigurationVersion): string { return version.attributes.status ?? "pending"; }

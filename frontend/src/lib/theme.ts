@@ -278,7 +278,7 @@ export function getThemeRevision(): number {
   return themeRevision;
 }
 
-export function getStoredThemeId(): ThemeId {
+function getStoredThemeId(): ThemeId {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (stored !== null) return getTheme(stored).id;
