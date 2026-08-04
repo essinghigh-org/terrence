@@ -518,6 +518,15 @@ type RunOrigin = Readonly<{
   triggeredByAvatarUrl?: string | null;
 }>;
 
+// Statuses that indicate the plan has completed past the "pending/queued"
+// phase, regardless of success. The same set gates both change detection and
+// the plan-resource status mapping below.
+const PLAN_REACHED_TERMINAL_STATUSES = [
+  "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
+  "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
+  "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
+];
+
 function runHasChanges(run: RunParam): boolean {
   const counts = [
     run.planResourceAdditions,
@@ -528,11 +537,7 @@ function runHasChanges(run: RunParam): boolean {
   if (counts.some((count): boolean => count !== null)) {
     return counts.reduce((total: number, count): number => total + (count ?? 0), 0) > 0;
   }
-  return [
-    "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
-    "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
-    "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
-  ].includes(run.status);
+  return PLAN_REACHED_TERMINAL_STATUSES.includes(run.status);
 }
 
 export function runResource(
@@ -677,11 +682,7 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
     ? "running"
     : run.status === "plan_queued" || run.status === "queuing"
       ? "queued"
-      : [
-          "planned", "cost_estimating", "cost_estimated", "policy_checking", "policy_override",
-          "policy_checked", "policy_soft_failed", "post_plan_running", "post_plan_completed",
-          "planned_and_finished", "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
-        ].includes(run.status)
+      : PLAN_REACHED_TERMINAL_STATUSES.includes(run.status)
         ? "finished"
         : run.status === "errored"
           ? planFinished ? "finished" : "errored"
