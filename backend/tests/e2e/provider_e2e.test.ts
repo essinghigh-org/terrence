@@ -61,10 +61,12 @@ async function startBackend(workDir: string): Promise<Backend> {
       ...process.env,
       NODE_ENV: "production",
       PORT: String(port),
-      TERRENCE_DATABASE_PATH: join(dbDir, "test.db"),
+      DATABASE_URL: `file:${join(dbDir, "test.db")}`,
+      STORAGE_DIR: dbDir,
       TERRENCE_JWT_SECRET: "provider-e2e-secret",
       TERRENCE_RUN_SANDBOX: "false",
       TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
+      SIMULATED_RUNS: "false",
     },
     stdout: openSync(logPath, "w"),
     stderr: openSync(logPath, "w"),
@@ -350,20 +352,21 @@ resource "null_resource" "probe" {
     status = r.json.data.attributes.status as string;
     if (status === "applied") break;
     if (["errored", "canceled", "discarded", "force_canceled"].includes(status)) {
-      const log = await api(port, "GET", `/api/v2/runs/${runId}/plan/log`, undefined, token);
-      throw new Error(`run ${runId} ended with status "${status}":\n${log.text}`);
+      const planLog = await api(port, "GET", `/api/v2/runs/${runId}/plan/log`, undefined, token);
+      const applyLog = await api(port, "GET", `/api/v2/runs/${runId}/apply/log`, undefined, token);
+      throw new Error(`run ${runId} ended with status "${status}":\n--- plan ---\n${planLog.text.slice(-1500)}\n--- apply ---\n${applyLog.text.slice(-1500)}`);
     }
   }
   expect(status, `run ${runId} did not reach applied`).toBe("applied");
 
-  // The state version is created before the run status is set to "applied",
-  // but under load there can be a small propagation delay. Retry a few times.
+  // The state version is committed together with the run status, but under
+  // full-suite load the request can still race the commit. Poll for it.
   let sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
-  for (let i = 0; i < 10 && sv.status !== 200; i++) {
+  for (let i = 0; i < 60 && sv.status !== 200; i++) {
     await sleep(500);
     sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
   }
-  expect(sv.status).toBe(200);
+  expect(sv.status, `current-state-version for workspace ${wsId} did not become available (last status ${sv.status}): ${sv.text.slice(0, 300)}`).toBe(200);
   const resources = sv.json.data.attributes.resources as Array<{ name: string; type: string }>;
   expect(resources.some((r): boolean => r.name === "probe" && r.type === "null_resource")).toBe(true);
 

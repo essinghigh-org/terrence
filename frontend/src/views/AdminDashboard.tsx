@@ -148,7 +148,7 @@ function SecurityOverview(props: Readonly<{
                     <ProviderStatusRow label="SAML SSO" enabled={samlEnabled} />
                     <ProviderStatusRow label="OpenID Connect" enabled={oidcEnabled} />
                     <ProviderStatusRow label="LDAP" enabled={ldapEnabled} />
-                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
+                    <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/auth"); }}>
                       Open authentication settings
                     </Button>
                   </CardContent>
@@ -214,7 +214,7 @@ function SecurityOverview(props: Readonly<{
                     {auditLogs[0]?.attributes.action !== undefined && (
                       <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
                     )}
-                    <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/audit"); }}>
+                    <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/audit"); }}>
                       Open audit log
                     </Button>
                   </CardContent>

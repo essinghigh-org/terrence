@@ -12,7 +12,7 @@ function isLogLevelEnabled(level: LogLevel): boolean {
  * request handler that called it). */
 function safeJsonStringify(value: unknown): string {
   const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, entry) => {
+  return JSON.stringify(value, (_key: string, entry: unknown) => {
     if (typeof entry === "bigint") return entry.toString();
     if (entry !== null && typeof entry === "object") {
       if (seen.has(entry)) return "[Circular]";
