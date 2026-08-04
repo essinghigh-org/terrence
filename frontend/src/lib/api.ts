@@ -1,4 +1,4 @@
-export const API_BASE_URL = "/api/v2";
+const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
 export const AUTH_EXPIRED_EVENT = "terrence:auth-expired";
 

@@ -1,4 +1,4 @@
-export type ThemeMode = "light" | "dark";
+type ThemeMode = "light" | "dark";
 export type ThemeId = string;
 
 export type ThemeDefinition = Readonly<{
