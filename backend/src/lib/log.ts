@@ -24,15 +24,16 @@ function safeJsonStringify(value: unknown): string {
 
 function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
   if (!isLogLevelEnabled(level)) return;
-  const entry: Record<string, unknown> = {
-    timestamp: new Date().toISOString(),
-    level,
-    message,
-    ...(meta !== undefined ? { ...meta } : {}),
-  };
-  const output = safeJsonStringify(entry);
-  // Logging is best-effort: a failing stream must not crash the process.
+  // Logging is best-effort: a failing stream or a meta serialization failure
+  // must never crash the process or propagate to the caller.
   try {
+    const entry: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+      ...(meta !== undefined ? { ...meta } : {}),
+    };
+    const output = safeJsonStringify(entry);
     if (level === "error") {
       console.error(output);
     } else if (level === "warn") {

@@ -254,13 +254,17 @@ describe("parseTerraformStatePayload", () => {
 
   it("rejects resources with invalid mode or missing fields", () => {
     expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], mode: "import" }] }))).toBeNull();
-    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [{ ...validState.resources[0], name: "" }] }))).toBeNull();
+    const { name: _name, ...resourceWithoutName } = validState.resources[0]!;
+    expect(parseTerraformStatePayload(JSON.stringify({ ...validState, resources: [resourceWithoutName] }))).toBeNull();
   });
 
   it("rejects instances with a non-integer schema_version", () => {
     expect(parseTerraformStatePayload(JSON.stringify({
       ...validState,
-      resources: [{ ...validState.resources[0], instances: [{ schema_version: "nope" }] }],
+      resources: [{
+        ...validState.resources[0]!,
+        instances: [{ ...validState.resources[0]!.instances[0], schema_version: "nope" }],
+      }],
     }))).toBeNull();
   });
 
@@ -273,5 +277,8 @@ describe("parseTerraformStatePayload", () => {
     expect(parseTerraformStatePayload("not-json")).toBeNull();
     expect(parseTerraformStatePayload(null)).toBeNull();
     expect(parseTerraformStatePayload("[]")).toBeNull();
+    expect(parseTerraformStatePayload("null")).toBeNull();
+    expect(parseTerraformStatePayload("1")).toBeNull();
+    expect(parseTerraformStatePayload('"state"')).toBeNull();
   });
 });

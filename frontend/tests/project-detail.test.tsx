@@ -92,8 +92,12 @@ await waitFor((): void => {
 });
 
 test("deletes a project from the project detail settings", async () => {
+  let deleteCalled = false;
   const fetchMock = baseFetchMock({
-    "DELETE /api/v2/projects/prj-1": () => new Response(null, { status: 204 }),
+    "DELETE /api/v2/projects/prj-1": (): Response => {
+      deleteCalled = true;
+      return new Response(null, { status: 204 });
+    },
   });
   globalThis.fetch = fetchMock as typeof fetch;
 
@@ -106,4 +110,5 @@ test("deletes a project from the project detail settings", async () => {
   fireEvent.click(confirmButtons[confirmButtons.length - 1]);
 
   await page.findByText("Project deleted");
+  expect(deleteCalled).toBe(true);
 });

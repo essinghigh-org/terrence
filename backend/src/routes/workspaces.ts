@@ -55,6 +55,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `(a+)+`) that could make regex evaluation catastrophic on untrusted Git tag
  * names. Also surfaced as a bounded validation for the tags-regex setting.
  */
+function isBraceQuantifierStart(pattern: string, index: number): boolean {
+  if (pattern[index] !== "{") return false;
+  const end = pattern.indexOf("}", index);
+  if (end === -1) return false;
+  return /^\d+(,\d*)?$/.test(pattern.slice(index + 1, end));
+}
+
+function isGroupQuantifier(pattern: string, index: number): boolean {
+  const char = pattern[index] ?? "";
+  return char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(pattern, index);
+}
+
 function hasNestedQuantifiers(pattern: string): boolean {
   const openGroups: boolean[] = [];
   let inClass = false;
@@ -71,8 +83,11 @@ function hasNestedQuantifiers(pattern: string): boolean {
     if (char === "(") { openGroups.push(false); continue; }
     if (char === ")") {
       const nested = openGroups.pop() ?? false;
-      const next = pattern[index + 1] ?? "";
-      if (nested && (next === "*" || next === "+" || next === "?")) return true;
+      if (nested && isGroupQuantifier(pattern, index + 1)) return true;
+      // The closed group's contents are fixed; if it held a quantifier,
+      // propagate that to its parent so cases like ((a+))+ are caught at the
+      // outer group's close instead of losing the nested state.
+      if (nested && openGroups.length > 0) openGroups[openGroups.length - 1] = true;
       continue;
     }
     if (char === "*" || char === "+" || char === "?" || char === "{") {

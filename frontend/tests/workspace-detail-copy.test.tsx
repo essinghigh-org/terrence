@@ -6,6 +6,7 @@ import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { Toaster } from "../src/components/ui/toast";
 
 const originalFetch = globalThis.fetch;
+const originalClipboard = navigator.clipboard;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
@@ -18,6 +19,7 @@ function urlOf(input: string | URL | Request): string {
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+  Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
 });
 
 function workspaceFetchMock(clipboard: { writeText: (text: string) => Promise<void> }): typeof fetch {

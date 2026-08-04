@@ -69,6 +69,7 @@ type ItemAttrs = {
   email?: string | null;
 
   "is-site-admin"?: boolean;
+  "is-suspended"?: boolean;
   name?: string;
 
   "iac-binary"?: string;
@@ -110,6 +111,16 @@ type SecuritySummary = Readonly<{
   sandboxReason: string | null;
 }>;
 
+function ProviderStatusRow(props: Readonly<{ label: string; enabled: boolean }>): React.JSX.Element {
+  const { label, enabled } = props;
+  return (
+    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+      <span>{label}</span>
+      <span className={enabled ? "font-medium text-green-700" : "text-gray-500"}>{enabled ? "Enabled" : "Disabled"}</span>
+    </div>
+  );
+}
+
 function SecurityOverview(props: Readonly<{
   navigate: (path: string) => void;
   samlEnabled: boolean;
@@ -134,18 +145,9 @@ function SecurityOverview(props: Readonly<{
                     <CardDescription>Configured sign-in paths for this instance.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>SAML SSO</span>
-                      <span className={samlEnabled ? "font-medium text-green-700" : "text-gray-500"}>{samlEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>OpenID Connect</span>
-                      <span className={oidcEnabled ? "font-medium text-green-700" : "text-gray-500"}>{oidcEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>LDAP</span>
-                      <span className={ldapEnabled ? "text-green-700 font-medium" : "text-gray-500"}>{ldapEnabled ? "Enabled" : "Disabled"}</span>
-                    </div>
+                    <ProviderStatusRow label="SAML SSO" enabled={samlEnabled} />
+                    <ProviderStatusRow label="OpenID Connect" enabled={oidcEnabled} />
+                    <ProviderStatusRow label="LDAP" enabled={ldapEnabled} />
                     <Button variant="outline" size="sm" onClick={(): void => { void navigate("/app/admin/auth"); }}>
                       Open authentication settings
                     </Button>
@@ -229,6 +231,11 @@ function UsersAdmin(props: Readonly<{
   loadAdminData: () => Promise<void>;
 }>): React.JSX.Element {
   const { users, setCreateDialogOpen, setDeleteUserId, loadAdminData } = props;
+  const runUserAction = (id: string, actionPath: string, successTitle: string, failureTitle: string): void => {
+    void fetchApi(`/api/v2/admin/users/${id}/actions/${actionPath}`, { method: "POST" })
+      .then((): void => { void loadAdminData(); toast.add({ title: successTitle, type: "success" }); })
+      .catch((err: unknown): void => { toast.add({ title: failureTitle, description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+  };
   return (
             <Card>
               <CardHeader>
@@ -299,12 +306,7 @@ function UsersAdmin(props: Readonly<{
                                     size="sm"
                                     variant="outline"
                                     className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/revoke_admin`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges revoked", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to revoke admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
+                                    onClick={(): void => { runUserAction(u.id, "revoke_admin", "Admin privileges revoked", "Failed to revoke admin"); }}
                                   >
                                     Demote
                                   </Button>
@@ -313,12 +315,7 @@ function UsersAdmin(props: Readonly<{
                                     size="sm"
                                     variant="outline"
                                     className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/grant_admin`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "Admin privileges granted", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to grant admin", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
+                                    onClick={(): void => { runUserAction(u.id, "grant_admin", "Admin privileges granted", "Failed to grant admin"); }}
                                   >
                                     Promote
                                   </Button>
@@ -329,12 +326,7 @@ function UsersAdmin(props: Readonly<{
                                     size="sm"
                                     variant="outline"
                                     className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/unsuspend`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "User unsuspended", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to unsuspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
+                                    onClick={(): void => { runUserAction(u.id, "unsuspend", "User unsuspended", "Failed to unsuspend"); }}
                                   >
                                     Unsuspend
                                   </Button>
@@ -343,12 +335,7 @@ function UsersAdmin(props: Readonly<{
                                     size="sm"
                                     variant="outline"
                                     className="h-7 text-xs"
-                                    onClick={(): void => {
-                                      const id = u.id;
-                                      void fetchApi(`/api/v2/admin/users/${id}/actions/suspend`, { method: "POST" })
-                                        .then((): void => { void loadAdminData(); toast.add({ title: "User suspended", type: "success" }); })
-                                        .catch((err: unknown): void => { toast.add({ title: "Failed to suspend", description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
-                                    }}
+                                    onClick={(): void => { runUserAction(u.id, "suspend", "User suspended", "Failed to suspend"); }}
                                   >
                                     Suspend
                                   </Button>
@@ -358,6 +345,7 @@ function UsersAdmin(props: Readonly<{
                                   size="sm"
                                   variant="destructive"
                                   className="h-7 text-xs"
+                                  aria-label="Delete user"
                                   onClick={(): void => { setDeleteUserId(u.id); }}
                                 >
                                   <Trash2 className="h-3 w-3" />
@@ -547,10 +535,9 @@ function VersionsAdmin(props: Readonly<{
   newSha: string;
   setNewSha: React.Dispatch<React.SetStateAction<string>>;
   tfVersions: DataItem[];
-  handleDeleteVersion: (id: string) => Promise<void>;
   setVersionToDelete: React.Dispatch<React.SetStateAction<string | null>>;
 }>): React.JSX.Element {
-  const { handleAddVersion, newVersion, setNewVersion, newUrl, setNewUrl, newSha, setNewSha, tfVersions, handleDeleteVersion, setVersionToDelete } = props;
+  const { handleAddVersion, newVersion, setNewVersion, newUrl, setNewUrl, newSha, setNewSha, tfVersions, setVersionToDelete } = props;
   return (
             <div className="space-y-6">
               <Card>
@@ -625,14 +612,8 @@ function VersionsAdmin(props: Readonly<{
                                 size="sm"
                                 variant="ghost"
                                 className="text-red-600 hover:text-red-700"
-                                onClick={(): void => {
-                                  const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
-                                  if (isTestEnv) {
-                                    void handleDeleteVersion(v.id);
-                                  } else {
-                                    setVersionToDelete(v.id);
-                                  }
-                                }}
+                                aria-label="Delete version"
+                                onClick={(): void => { setVersionToDelete(v.id); }}
                               >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -701,99 +682,207 @@ function AuditAdmin(props: Readonly<{ auditLogs: DataItem[]; }>): React.JSX.Elem
 }
 
 function AuthAdmin(props: Readonly<{
-  generalLoading: boolean;
-  handleSaveGeneral: (event: React.SyntheticEvent) => Promise<void>;
-  generalError: string | null;
-  localAuthEnabled: boolean;
-  setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  generalSaving: boolean;
-  persistedSamlEnabled: boolean | null;
-  persistedOidcEnabled: boolean | null;
-  persistedLdapEnabled: boolean | null;
-  samlLoading: boolean;
-  handleSaveSaml: (event: React.SyntheticEvent) => Promise<void>;
-  samlError: string | null;
-  samlEnabled: boolean;
-  setSamlEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  samlDebug: boolean;
-  setSamlDebug: React.Dispatch<React.SetStateAction<boolean>>;
-  samlLinkByEmail: boolean;
-  setSamlLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
-  samlSsoUrl: string;
-  setSamlSsoUrl: React.Dispatch<React.SetStateAction<string>>;
-  samlIdpEntityId: string;
-  setSamlIdpEntityId: React.Dispatch<React.SetStateAction<string>>;
-  samlSloUrl: string;
-  setSamlSloUrl: React.Dispatch<React.SetStateAction<string>>;
-  samlIdpCert: string;
-  setSamlIdpCert: React.Dispatch<React.SetStateAction<string>>;
-  samlAttrUsername: string;
-  setSamlAttrUsername: React.Dispatch<React.SetStateAction<string>>;
-  samlAttrGroups: string;
-  setSamlAttrGroups: React.Dispatch<React.SetStateAction<string>>;
-  samlAttrEmail: string;
-  setSamlAttrEmail: React.Dispatch<React.SetStateAction<string>>;
-  samlAttrSiteAdmin: string;
-  setSamlAttrSiteAdmin: React.Dispatch<React.SetStateAction<string>>;
-  samlSiteAdminRole: string;
-  setSamlSiteAdminRole: React.Dispatch<React.SetStateAction<string>>;
-  samlTimeout: number;
-  setSamlTimeout: React.Dispatch<React.SetStateAction<number>>;
-  samlAcsUrl: string;
-  samlMetadataUrl: string;
-  samlSaving: boolean;
-  oidcLoading: boolean;
-  handleSaveOidc: (event: React.SyntheticEvent) => Promise<void>;
-  oidcError: string | null;
-  oidcEnabled: boolean;
-  setOidcEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  oidcLinkByEmail: boolean;
-  setOidcLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
-  oidcIssuer: string;
-  setOidcIssuer: React.Dispatch<React.SetStateAction<string>>;
-  oidcClientId: string;
-  setOidcClientId: React.Dispatch<React.SetStateAction<string>>;
-  oidcClientSecret: string;
-  setOidcClientSecret: React.Dispatch<React.SetStateAction<string>>;
-  oidcClientSecretSet: boolean;
-  oidcScopes: string;
-  setOidcScopes: React.Dispatch<React.SetStateAction<string>>;
-  oidcPkceMethod: string;
-  setOidcPkceMethod: React.Dispatch<React.SetStateAction<string>>;
-  oidcSigningAlg: string;
-  setOidcSigningAlg: React.Dispatch<React.SetStateAction<string>>;
-  oidcSaving: boolean;
-  ldapLoading: boolean;
-  handleSaveLdap: (event: React.SyntheticEvent) => Promise<void>;
-  ldapError: string | null;
-  ldapEnabled: boolean;
-  setLdapEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  ldapLinkByEmail: boolean;
-  setLdapLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
-  ldapHost: string;
-  setLdapHost: React.Dispatch<React.SetStateAction<string>>;
-  ldapPort: number;
-  setLdapPort: React.Dispatch<React.SetStateAction<number>>;
-  ldapEncryption: string;
-  setLdapEncryption: React.Dispatch<React.SetStateAction<string>>;
-  ldapBaseDn: string;
-  setLdapBaseDn: React.Dispatch<React.SetStateAction<string>>;
-  ldapBindDn: string;
-  setLdapBindDn: React.Dispatch<React.SetStateAction<string>>;
-  ldapBindPassword: string;
-  setLdapBindPassword: React.Dispatch<React.SetStateAction<string>>;
-  ldapBindPasswordSet: boolean;
-  ldapUserFilter: string;
-  setLdapUserFilter: React.Dispatch<React.SetStateAction<string>>;
-  ldapAttrUsername: string;
-  setLdapAttrUsername: React.Dispatch<React.SetStateAction<string>>;
-  ldapAttrEmail: string;
-  setLdapAttrEmail: React.Dispatch<React.SetStateAction<string>>;
-  ldapAttrDisplayName: string;
-  setLdapAttrDisplayName: React.Dispatch<React.SetStateAction<string>>;
-  ldapSaving: boolean;
+  general: Readonly<{
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+    localAuthEnabled: boolean;
+    setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    persistedSamlEnabled: boolean | null;
+    persistedOidcEnabled: boolean | null;
+    persistedLdapEnabled: boolean | null;
+    handleSave: (event: React.SyntheticEvent) => Promise<void>;
+  }>;
+  saml: Readonly<{
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+    enabled: boolean;
+    setEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    debug: boolean;
+    setDebug: React.Dispatch<React.SetStateAction<boolean>>;
+    linkByEmail: boolean;
+    setLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+    ssoUrl: string;
+    setSsoUrl: React.Dispatch<React.SetStateAction<string>>;
+    idpEntityId: string;
+    setIdpEntityId: React.Dispatch<React.SetStateAction<string>>;
+    sloUrl: string;
+    setSloUrl: React.Dispatch<React.SetStateAction<string>>;
+    idpCert: string;
+    setIdpCert: React.Dispatch<React.SetStateAction<string>>;
+    attrUsername: string;
+    setAttrUsername: React.Dispatch<React.SetStateAction<string>>;
+    attrGroups: string;
+    setAttrGroups: React.Dispatch<React.SetStateAction<string>>;
+    attrEmail: string;
+    setAttrEmail: React.Dispatch<React.SetStateAction<string>>;
+    attrSiteAdmin: string;
+    setAttrSiteAdmin: React.Dispatch<React.SetStateAction<string>>;
+    siteAdminRole: string;
+    setSiteAdminRole: React.Dispatch<React.SetStateAction<string>>;
+    timeout: number;
+    setTimeout: React.Dispatch<React.SetStateAction<number>>;
+    acsUrl: string;
+    metadataUrl: string;
+    handleSave: (event: React.SyntheticEvent) => Promise<void>;
+  }>;
+  oidc: Readonly<{
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+    enabled: boolean;
+    setEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    linkByEmail: boolean;
+    setLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+    issuer: string;
+    setIssuer: React.Dispatch<React.SetStateAction<string>>;
+    clientId: string;
+    setClientId: React.Dispatch<React.SetStateAction<string>>;
+    clientSecret: string;
+    setClientSecret: React.Dispatch<React.SetStateAction<string>>;
+    clientSecretSet: boolean;
+    scopes: string;
+    setScopes: React.Dispatch<React.SetStateAction<string>>;
+    pkceMethod: string;
+    setPkceMethod: React.Dispatch<React.SetStateAction<string>>;
+    signingAlg: string;
+    setSigningAlg: React.Dispatch<React.SetStateAction<string>>;
+    handleSave: (event: React.SyntheticEvent) => Promise<void>;
+  }>;
+  ldap: Readonly<{
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+    enabled: boolean;
+    setEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    linkByEmail: boolean;
+    setLinkByEmail: React.Dispatch<React.SetStateAction<boolean>>;
+    host: string;
+    setHost: React.Dispatch<React.SetStateAction<string>>;
+    port: number;
+    setPort: React.Dispatch<React.SetStateAction<number>>;
+    encryption: string;
+    setEncryption: React.Dispatch<React.SetStateAction<string>>;
+    baseDn: string;
+    setBaseDn: React.Dispatch<React.SetStateAction<string>>;
+    bindDn: string;
+    setBindDn: React.Dispatch<React.SetStateAction<string>>;
+    bindPassword: string;
+    setBindPassword: React.Dispatch<React.SetStateAction<string>>;
+    bindPasswordSet: boolean;
+    userFilter: string;
+    setUserFilter: React.Dispatch<React.SetStateAction<string>>;
+    attrUsername: string;
+    setAttrUsername: React.Dispatch<React.SetStateAction<string>>;
+    attrEmail: string;
+    setAttrEmail: React.Dispatch<React.SetStateAction<string>>;
+    attrDisplayName: string;
+    setAttrDisplayName: React.Dispatch<React.SetStateAction<string>>;
+    handleSave: (event: React.SyntheticEvent) => Promise<void>;
+  }>;
 }>): React.JSX.Element {
-  const { generalLoading, handleSaveGeneral, generalError, localAuthEnabled, setLocalAuthEnabled, generalSaving, persistedSamlEnabled, persistedOidcEnabled, persistedLdapEnabled, samlLoading, handleSaveSaml, samlError, samlEnabled, setSamlEnabled, samlDebug, setSamlDebug, samlLinkByEmail, setSamlLinkByEmail, samlSsoUrl, setSamlSsoUrl, samlIdpEntityId, setSamlIdpEntityId, samlSloUrl, setSamlSloUrl, samlIdpCert, setSamlIdpCert, samlAttrUsername, setSamlAttrUsername, samlAttrGroups, setSamlAttrGroups, samlAttrEmail, setSamlAttrEmail, samlAttrSiteAdmin, setSamlAttrSiteAdmin, samlSiteAdminRole, setSamlSiteAdminRole, samlTimeout, setSamlTimeout, samlAcsUrl, samlMetadataUrl, samlSaving, oidcLoading, handleSaveOidc, oidcError, oidcEnabled, setOidcEnabled, oidcLinkByEmail, setOidcLinkByEmail, oidcIssuer, setOidcIssuer, oidcClientId, setOidcClientId, oidcClientSecret, setOidcClientSecret, oidcClientSecretSet, oidcScopes, setOidcScopes, oidcPkceMethod, setOidcPkceMethod, oidcSigningAlg, setOidcSigningAlg, oidcSaving, ldapLoading, handleSaveLdap, ldapError, ldapEnabled, setLdapEnabled, ldapLinkByEmail, setLdapLinkByEmail, ldapHost, setLdapHost, ldapPort, setLdapPort, ldapEncryption, setLdapEncryption, ldapBaseDn, setLdapBaseDn, ldapBindDn, setLdapBindDn, ldapBindPassword, setLdapBindPassword, ldapBindPasswordSet, ldapUserFilter, setLdapUserFilter, ldapAttrUsername, setLdapAttrUsername, ldapAttrEmail, setLdapAttrEmail, ldapAttrDisplayName, setLdapAttrDisplayName, ldapSaving } = props;
+  const {
+    general: {
+      loading: generalLoading,
+      saving: generalSaving,
+      error: generalError,
+      localAuthEnabled,
+      setLocalAuthEnabled,
+      persistedSamlEnabled,
+      persistedOidcEnabled,
+      persistedLdapEnabled,
+      handleSave: handleSaveGeneral,
+    },
+    saml: {
+      loading: samlLoading,
+      saving: samlSaving,
+      error: samlError,
+      enabled: samlEnabled,
+      setEnabled: setSamlEnabled,
+      debug: samlDebug,
+      setDebug: setSamlDebug,
+      linkByEmail: samlLinkByEmail,
+      setLinkByEmail: setSamlLinkByEmail,
+      ssoUrl: samlSsoUrl,
+      setSsoUrl: setSamlSsoUrl,
+      idpEntityId: samlIdpEntityId,
+      setIdpEntityId: setSamlIdpEntityId,
+      sloUrl: samlSloUrl,
+      setSloUrl: setSamlSloUrl,
+      idpCert: samlIdpCert,
+      setIdpCert: setSamlIdpCert,
+      attrUsername: samlAttrUsername,
+      setAttrUsername: setSamlAttrUsername,
+      attrGroups: samlAttrGroups,
+      setAttrGroups: setSamlAttrGroups,
+      attrEmail: samlAttrEmail,
+      setAttrEmail: setSamlAttrEmail,
+      attrSiteAdmin: samlAttrSiteAdmin,
+      setAttrSiteAdmin: setSamlAttrSiteAdmin,
+      siteAdminRole: samlSiteAdminRole,
+      setSiteAdminRole: setSamlSiteAdminRole,
+      timeout: samlTimeout,
+      setTimeout: setSamlTimeout,
+      acsUrl: samlAcsUrl,
+      metadataUrl: samlMetadataUrl,
+      handleSave: handleSaveSaml,
+    },
+    oidc: {
+      loading: oidcLoading,
+      saving: oidcSaving,
+      error: oidcError,
+      enabled: oidcEnabled,
+      setEnabled: setOidcEnabled,
+      linkByEmail: oidcLinkByEmail,
+      setLinkByEmail: setOidcLinkByEmail,
+      issuer: oidcIssuer,
+      setIssuer: setOidcIssuer,
+      clientId: oidcClientId,
+      setClientId: setOidcClientId,
+      clientSecret: oidcClientSecret,
+      setClientSecret: setOidcClientSecret,
+      clientSecretSet: oidcClientSecretSet,
+      scopes: oidcScopes,
+      setScopes: setOidcScopes,
+      pkceMethod: oidcPkceMethod,
+      setPkceMethod: setOidcPkceMethod,
+      signingAlg: oidcSigningAlg,
+      setSigningAlg: setOidcSigningAlg,
+      handleSave: handleSaveOidc,
+    },
+    ldap: {
+      loading: ldapLoading,
+      saving: ldapSaving,
+      error: ldapError,
+      enabled: ldapEnabled,
+      setEnabled: setLdapEnabled,
+      linkByEmail: ldapLinkByEmail,
+      setLinkByEmail: setLdapLinkByEmail,
+      host: ldapHost,
+      setHost: setLdapHost,
+      port: ldapPort,
+      setPort: setLdapPort,
+      encryption: ldapEncryption,
+      setEncryption: setLdapEncryption,
+      baseDn: ldapBaseDn,
+      setBaseDn: setLdapBaseDn,
+      bindDn: ldapBindDn,
+      setBindDn: setLdapBindDn,
+      bindPassword: ldapBindPassword,
+      setBindPassword: setLdapBindPassword,
+      bindPasswordSet: ldapBindPasswordSet,
+      userFilter: ldapUserFilter,
+      setUserFilter: setLdapUserFilter,
+      attrUsername: ldapAttrUsername,
+      setAttrUsername: setLdapAttrUsername,
+      attrEmail: ldapAttrEmail,
+      setAttrEmail: setLdapAttrEmail,
+      attrDisplayName: ldapAttrDisplayName,
+      setAttrDisplayName: setLdapAttrDisplayName,
+      handleSave: handleSaveLdap,
+    },
+  } = props;
   return (
             <div className="space-y-8">
               {/* LOCAL AUTHENTICATION */}
@@ -895,8 +984,9 @@ function AuthAdmin(props: Readonly<{
                         </label>
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
+                        <label htmlFor="saml-sso-url" className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
                         <Input
+                          id="saml-sso-url"
                           placeholder="https://idp.example.com/sso"
                           value={samlSsoUrl}
                           onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
@@ -904,8 +994,9 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">IdP Entity ID</label>
+                        <label htmlFor="saml-idp-entity-id" className="text-xs font-medium text-gray-700">IdP Entity ID</label>
                         <Input
+                          id="saml-idp-entity-id"
                           placeholder="https://idp.example.com/metadata"
                           value={samlIdpEntityId}
                           onChange={(e): void => { setSamlIdpEntityId(e.target.value); }}
@@ -913,8 +1004,9 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
+                        <label htmlFor="saml-slo-url" className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
                         <Input
+                          id="saml-slo-url"
                           placeholder="https://idp.example.com/slo"
                           value={samlSloUrl}
                           onChange={(e): void => { setSamlSloUrl(e.target.value); }}
@@ -922,8 +1014,9 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
+                        <label htmlFor="saml-idp-cert" className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
                         <Input
+                          id="saml-idp-cert"
                           placeholder="Paste IdP certificate"
                           value={samlIdpCert}
                           onChange={(e): void => { setSamlIdpCert(e.target.value); }}
@@ -933,37 +1026,42 @@ function AuthAdmin(props: Readonly<{
                         <p className="text-xs font-semibold text-gray-700 mb-3">Attribute mappings</p>
                         <div className="grid gap-4 sm:grid-cols-2">
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <label htmlFor="saml-attr-username" className="text-xs font-medium text-gray-700">Username attribute</label>
                             <Input
+                              id="saml-attr-username"
                               value={samlAttrUsername}
                               onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Groups attribute</label>
+                            <label htmlFor="saml-attr-groups" className="text-xs font-medium text-gray-700">Groups attribute</label>
                             <Input
+                              id="saml-attr-groups"
                               value={samlAttrGroups}
                               onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <label htmlFor="saml-attr-email" className="text-xs font-medium text-gray-700">Email attribute</label>
                             <Input
+                              id="saml-attr-email"
                               value={samlAttrEmail}
                               onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
                               aria-label="SAML email attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Site admin attribute</label>
+                            <label htmlFor="saml-attr-site-admin" className="text-xs font-medium text-gray-700">Site admin attribute</label>
                             <Input
+                              id="saml-attr-site-admin"
                               value={samlAttrSiteAdmin}
                               onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Site admin role value</label>
+                            <label htmlFor="saml-site-admin-role" className="text-xs font-medium text-gray-700">Site admin role value</label>
                             <Input
+                              id="saml-site-admin-role"
                               value={samlSiteAdminRole}
                               onChange={(e): void => { setSamlSiteAdminRole(e.target.value); }}
                             />
@@ -971,8 +1069,9 @@ function AuthAdmin(props: Readonly<{
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
+                        <label htmlFor="saml-timeout" className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
                         <Input
+                          id="saml-timeout"
                           type="number"
                           value={samlTimeout}
                           onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
@@ -1041,8 +1140,9 @@ function AuthAdmin(props: Readonly<{
                       </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Issuer URL</label>
+                          <label htmlFor="oidc-issuer" className="text-xs font-medium text-gray-700">Issuer URL</label>
                           <Input
+                            id="oidc-issuer"
                             placeholder="https://accounts.example.com"
                             value={oidcIssuer}
                             onChange={(e): void => { setOidcIssuer(e.target.value); }}
@@ -1050,16 +1150,18 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Client ID</label>
+                          <label htmlFor="oidc-client-id" className="text-xs font-medium text-gray-700">Client ID</label>
                           <Input
+                            id="oidc-client-id"
                             value={oidcClientId}
                             onChange={(e): void => { setOidcClientId(e.target.value); }}
                             aria-label="Client ID"
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Client Secret</label>
+                          <label htmlFor="oidc-client-secret" className="text-xs font-medium text-gray-700">Client Secret</label>
                           <Input
+                            id="oidc-client-secret"
                             type="password"
                             placeholder={oidcClientSecretSet ? "····· (leave blank to keep)" : undefined}
                             value={oidcClientSecret}
@@ -1067,23 +1169,26 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Scopes</label>
+                          <label htmlFor="oidc-scopes" className="text-xs font-medium text-gray-700">Scopes</label>
                           <Input
+                            id="oidc-scopes"
                             value={oidcScopes}
                             onChange={(e): void => { setOidcScopes(e.target.value); }}
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">PKCE Method</label>
+                          <label htmlFor="oidc-pkce-method" className="text-xs font-medium text-gray-700">PKCE Method</label>
                           <Input
+                            id="oidc-pkce-method"
                             placeholder="S256"
                             value={oidcPkceMethod}
                             onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
+                          <label htmlFor="oidc-signing-alg" className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
                           <select
+                            id="oidc-signing-alg"
                             value={oidcSigningAlg}
                             onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
                             className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
@@ -1144,8 +1249,9 @@ function AuthAdmin(props: Readonly<{
                       </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Host</label>
+                          <label htmlFor="ldap-host" className="text-xs font-medium text-gray-700">Host</label>
                           <Input
+                            id="ldap-host"
                             placeholder="ldap.example.com"
                             value={ldapHost}
                             onChange={(e): void => { setLdapHost(e.target.value); }}
@@ -1153,8 +1259,9 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Port</label>
+                          <label htmlFor="ldap-port" className="text-xs font-medium text-gray-700">Port</label>
                           <Input
+                            id="ldap-port"
                             type="number"
                             value={ldapPort}
                             onChange={(e): void => { setLdapPort(Number(e.target.value)); }}
@@ -1162,8 +1269,9 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Encryption</label>
+                          <label htmlFor="ldap-encryption" className="text-xs font-medium text-gray-700">Encryption</label>
                           <select
+                            id="ldap-encryption"
                             value={ldapEncryption}
                             onChange={(e): void => { setLdapEncryption(e.target.value); }}
                             className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
@@ -1181,8 +1289,9 @@ function AuthAdmin(props: Readonly<{
                           )}
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Base DN</label>
+                          <label htmlFor="ldap-base-dn" className="text-xs font-medium text-gray-700">Base DN</label>
                           <Input
+                            id="ldap-base-dn"
                             placeholder="dc=example,dc=com"
                             value={ldapBaseDn}
                             onChange={(e): void => { setLdapBaseDn(e.target.value); }}
@@ -1190,8 +1299,9 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
+                          <label htmlFor="ldap-bind-dn" className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
                           <Input
+                            id="ldap-bind-dn"
                             placeholder="cn=service,dc=example,dc=com"
                             value={ldapBindDn}
                             onChange={(e): void => { setLdapBindDn(e.target.value); }}
@@ -1199,8 +1309,9 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-700">Bind password</label>
+                          <label htmlFor="ldap-bind-password" className="text-xs font-medium text-gray-700">Bind password</label>
                           <Input
+                            id="ldap-bind-password"
                             type="password"
                             placeholder={ldapBindPasswordSet ? "····· (leave blank to keep)" : undefined}
                             value={ldapBindPassword}
@@ -1213,32 +1324,36 @@ function AuthAdmin(props: Readonly<{
                         <p className="text-xs font-semibold text-gray-700 mb-3">User mapping</p>
                         <div className="grid gap-4 sm:grid-cols-2">
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
+                            <label htmlFor="ldap-user-filter" className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
                             <Input
+                              id="ldap-user-filter"
                               value={ldapUserFilter}
                               onChange={(e): void => { setLdapUserFilter(e.target.value); }}
                               aria-label="LDAP user filter"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <label htmlFor="ldap-attr-username" className="text-xs font-medium text-gray-700">Username attribute</label>
                             <Input
+                              id="ldap-attr-username"
                               value={ldapAttrUsername}
                               onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
                               aria-label="LDAP username attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <label htmlFor="ldap-attr-email" className="text-xs font-medium text-gray-700">Email attribute</label>
                             <Input
+                              id="ldap-attr-email"
                               value={ldapAttrEmail}
                               onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
                               aria-label="LDAP email attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-700">Display name attribute</label>
+                            <label htmlFor="ldap-attr-display-name" className="text-xs font-medium text-gray-700">Display name attribute</label>
                             <Input
+                              id="ldap-attr-display-name"
                               value={ldapAttrDisplayName}
                               onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
                               aria-label="LDAP display name attribute"
@@ -1849,7 +1964,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             <p className="text-sm text-gray-500">Instance-wide governance, security, and version management</p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={loadAdminData} className="gap-2">
+        <Button variant="outline" size="sm" onClick={(): void => { void loadAdminData(); }} className="gap-2">
           <RefreshCw className="h-4 w-4" />
           Refresh
         </Button>
@@ -1915,7 +2030,6 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
               newSha={newSha}
               setNewSha={setNewSha}
               tfVersions={tfVersions}
-              handleDeleteVersion={handleDeleteVersion}
               setVersionToDelete={setVersionToDelete}
             />
           )}
@@ -1927,98 +2041,106 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
           {/* AUTHENTICATION TAB */}
           {section === "auth" && (
-            <AuthAdmin
-              generalLoading={generalLoading}
-              handleSaveGeneral={handleSaveGeneral}
-              generalError={generalError}
-              localAuthEnabled={localAuthEnabled}
-              setLocalAuthEnabled={setLocalAuthEnabled}
-              generalSaving={generalSaving}
-              persistedSamlEnabled={persistedSamlEnabled}
-              persistedOidcEnabled={persistedOidcEnabled}
-              persistedLdapEnabled={persistedLdapEnabled}
-              samlLoading={samlLoading}
-              handleSaveSaml={handleSaveSaml}
-              samlError={samlError}
-              samlEnabled={samlEnabled}
-              setSamlEnabled={setSamlEnabled}
-              samlDebug={samlDebug}
-              setSamlDebug={setSamlDebug}
-              samlLinkByEmail={samlLinkByEmail}
-              setSamlLinkByEmail={setSamlLinkByEmail}
-              samlSsoUrl={samlSsoUrl}
-              setSamlSsoUrl={setSamlSsoUrl}
-              samlIdpEntityId={samlIdpEntityId}
-              setSamlIdpEntityId={setSamlIdpEntityId}
-              samlSloUrl={samlSloUrl}
-              setSamlSloUrl={setSamlSloUrl}
-              samlIdpCert={samlIdpCert}
-              setSamlIdpCert={setSamlIdpCert}
-              samlAttrUsername={samlAttrUsername}
-              setSamlAttrUsername={setSamlAttrUsername}
-              samlAttrGroups={samlAttrGroups}
-              setSamlAttrGroups={setSamlAttrGroups}
-              samlAttrEmail={samlAttrEmail}
-              setSamlAttrEmail={setSamlAttrEmail}
-              samlAttrSiteAdmin={samlAttrSiteAdmin}
-              setSamlAttrSiteAdmin={setSamlAttrSiteAdmin}
-              samlSiteAdminRole={samlSiteAdminRole}
-              setSamlSiteAdminRole={setSamlSiteAdminRole}
-              samlTimeout={samlTimeout}
-              setSamlTimeout={setSamlTimeout}
-              samlAcsUrl={samlAcsUrl}
-              samlMetadataUrl={samlMetadataUrl}
-              samlSaving={samlSaving}
-              oidcLoading={oidcLoading}
-              handleSaveOidc={handleSaveOidc}
-              oidcError={oidcError}
-              oidcEnabled={oidcEnabled}
-              setOidcEnabled={setOidcEnabled}
-              oidcLinkByEmail={oidcLinkByEmail}
-              setOidcLinkByEmail={setOidcLinkByEmail}
-              oidcIssuer={oidcIssuer}
-              setOidcIssuer={setOidcIssuer}
-              oidcClientId={oidcClientId}
-              setOidcClientId={setOidcClientId}
-              oidcClientSecret={oidcClientSecret}
-              setOidcClientSecret={setOidcClientSecret}
-              oidcClientSecretSet={oidcClientSecretSet}
-              oidcScopes={oidcScopes}
-              setOidcScopes={setOidcScopes}
-              oidcPkceMethod={oidcPkceMethod}
-              setOidcPkceMethod={setOidcPkceMethod}
-              oidcSigningAlg={oidcSigningAlg}
-              setOidcSigningAlg={setOidcSigningAlg}
-              oidcSaving={oidcSaving}
-              ldapLoading={ldapLoading}
-              handleSaveLdap={handleSaveLdap}
-              ldapError={ldapError}
-              ldapEnabled={ldapEnabled}
-              setLdapEnabled={setLdapEnabled}
-              ldapLinkByEmail={ldapLinkByEmail}
-              setLdapLinkByEmail={setLdapLinkByEmail}
-              ldapHost={ldapHost}
-              setLdapHost={setLdapHost}
-              ldapPort={ldapPort}
-              setLdapPort={setLdapPort}
-              ldapEncryption={ldapEncryption}
-              setLdapEncryption={setLdapEncryption}
-              ldapBaseDn={ldapBaseDn}
-              setLdapBaseDn={setLdapBaseDn}
-              ldapBindDn={ldapBindDn}
-              setLdapBindDn={setLdapBindDn}
-              ldapBindPassword={ldapBindPassword}
-              setLdapBindPassword={setLdapBindPassword}
-              ldapBindPasswordSet={ldapBindPasswordSet}
-              ldapUserFilter={ldapUserFilter}
-              setLdapUserFilter={setLdapUserFilter}
-              ldapAttrUsername={ldapAttrUsername}
-              setLdapAttrUsername={setLdapAttrUsername}
-              ldapAttrEmail={ldapAttrEmail}
-              setLdapAttrEmail={setLdapAttrEmail}
-              ldapAttrDisplayName={ldapAttrDisplayName}
-              setLdapAttrDisplayName={setLdapAttrDisplayName}
-              ldapSaving={ldapSaving}
+<AuthAdmin
+              general={{
+                loading: generalLoading,
+                saving: generalSaving,
+                error: generalError,
+                localAuthEnabled,
+                setLocalAuthEnabled,
+                persistedSamlEnabled,
+                persistedOidcEnabled,
+                persistedLdapEnabled,
+                handleSave: handleSaveGeneral,
+              }}
+              saml={{
+                loading: samlLoading,
+                saving: samlSaving,
+                error: samlError,
+                enabled: samlEnabled,
+                setEnabled: setSamlEnabled,
+                debug: samlDebug,
+                setDebug: setSamlDebug,
+                linkByEmail: samlLinkByEmail,
+                setLinkByEmail: setSamlLinkByEmail,
+                ssoUrl: samlSsoUrl,
+                setSsoUrl: setSamlSsoUrl,
+                idpEntityId: samlIdpEntityId,
+                setIdpEntityId: setSamlIdpEntityId,
+                sloUrl: samlSloUrl,
+                setSloUrl: setSamlSloUrl,
+                idpCert: samlIdpCert,
+                setIdpCert: setSamlIdpCert,
+                attrUsername: samlAttrUsername,
+                setAttrUsername: setSamlAttrUsername,
+                attrGroups: samlAttrGroups,
+                setAttrGroups: setSamlAttrGroups,
+                attrEmail: samlAttrEmail,
+                setAttrEmail: setSamlAttrEmail,
+                attrSiteAdmin: samlAttrSiteAdmin,
+                setAttrSiteAdmin: setSamlAttrSiteAdmin,
+                siteAdminRole: samlSiteAdminRole,
+                setSiteAdminRole: setSamlSiteAdminRole,
+                timeout: samlTimeout,
+                setTimeout: setSamlTimeout,
+                acsUrl: samlAcsUrl,
+                metadataUrl: samlMetadataUrl,
+                handleSave: handleSaveSaml,
+              }}
+              oidc={{
+                loading: oidcLoading,
+                saving: oidcSaving,
+                error: oidcError,
+                enabled: oidcEnabled,
+                setEnabled: setOidcEnabled,
+                linkByEmail: oidcLinkByEmail,
+                setLinkByEmail: setOidcLinkByEmail,
+                issuer: oidcIssuer,
+                setIssuer: setOidcIssuer,
+                clientId: oidcClientId,
+                setClientId: setOidcClientId,
+                clientSecret: oidcClientSecret,
+                setClientSecret: setOidcClientSecret,
+                clientSecretSet: oidcClientSecretSet,
+                scopes: oidcScopes,
+                setScopes: setOidcScopes,
+                pkceMethod: oidcPkceMethod,
+                setPkceMethod: setOidcPkceMethod,
+                signingAlg: oidcSigningAlg,
+                setSigningAlg: setOidcSigningAlg,
+                handleSave: handleSaveOidc,
+              }}
+              ldap={{
+                loading: ldapLoading,
+                saving: ldapSaving,
+                error: ldapError,
+                enabled: ldapEnabled,
+                setEnabled: setLdapEnabled,
+                linkByEmail: ldapLinkByEmail,
+                setLinkByEmail: setLdapLinkByEmail,
+                host: ldapHost,
+                setHost: setLdapHost,
+                port: ldapPort,
+                setPort: setLdapPort,
+                encryption: ldapEncryption,
+                setEncryption: setLdapEncryption,
+                baseDn: ldapBaseDn,
+                setBaseDn: setLdapBaseDn,
+                bindDn: ldapBindDn,
+                setBindDn: setLdapBindDn,
+                bindPassword: ldapBindPassword,
+                setBindPassword: setLdapBindPassword,
+                bindPasswordSet: ldapBindPasswordSet,
+                userFilter: ldapUserFilter,
+                setUserFilter: setLdapUserFilter,
+                attrUsername: ldapAttrUsername,
+                setAttrUsername: setLdapAttrUsername,
+                attrEmail: ldapAttrEmail,
+                setAttrEmail: setLdapAttrEmail,
+                attrDisplayName: ldapAttrDisplayName,
+                setAttrDisplayName: setLdapAttrDisplayName,
+                handleSave: handleSaveLdap,
+              }}
             />
           )}
         </>
