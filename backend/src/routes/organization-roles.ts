@@ -65,5 +65,3 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
     await db.transaction(async (tx) => { await tx.delete(organizationMembershipRoles).where(eq(organizationMembershipRoles.membershipId, membership.id)); if (roles.length > 0) await tx.insert(organizationMembershipRoles).values(roles.map((role) => ({ membershipId: membership.id, roleId: role.id, createdAt: Date.now() }))); });
     return { data: roles.map(resource) };
   });
-
-export default organizationRoleRoutes;
