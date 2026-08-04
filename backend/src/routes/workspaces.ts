@@ -459,10 +459,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       // every run to the app (the runs(workspace_id, created_at) index from
       // migration 0059 serves the partition). rowid ASC tie-break preserves
       // the previous in-memory first-seen ordering for equal created_at.
-      const orgWorkspaceIdRows = await db.query.workspaces.findMany({
-        where: eq(workspaces.orgId, org.id),
-        columns: { id: true },
-      });
+      // When the access set is explicit we reuse it instead of re-reading the
+      // same workspace ids via a separate org-scoped query.
+      const orgWorkspaceIdRows = allowedWorkspaceIds === null
+        ? await db.query.workspaces.findMany({
+          where: eq(workspaces.orgId, org.id),
+          columns: { id: true },
+        })
+        : [...allowedWorkspaceIds].map((id: string): Readonly<{ id: string }> => ({ id }));
       const latestRunRows = orgWorkspaceIdRows.length === 0
         ? []
         : await db.all<{ workspaceId: string; status: string }>(sql`
@@ -708,6 +712,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         ws,
         org.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org.name },
       ),
     };
   })
@@ -723,6 +728,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         ws,
         org.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org.name },
       ),
     };
   })
@@ -740,6 +746,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
       body,
       set,
+      org.name,
     );
   })
   .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -778,6 +785,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         ws,
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org?.name ?? null },
       ),
     };
   })
@@ -935,6 +943,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       { userId: user?.id, principalOrgId: principalOrgId ?? null, teamId: teamId ?? null },
       body,
       set,
+      org?.name ?? null,
     );
   })
   .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -1199,6 +1208,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         { ...ws, locked: true, lockedReason: lockReason.reason },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org?.name ?? null },
       ),
     };
   })
@@ -1217,6 +1227,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         { ...ws, locked: false, lockedReason: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org?.name ?? null },
       ),
     };
   })
@@ -1232,6 +1243,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         { ...ws, locked: false, lockedReason: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org?.name ?? null },
       ),
     };
   })
@@ -1399,6 +1411,7 @@ async function updateWorkspaceResponse(
   }>,
   body: unknown,
   set: SetObj,
+  orgName?: string | null,
 ): Promise<unknown> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload.data as Record<string, unknown> | undefined;
@@ -1610,6 +1623,7 @@ async function updateWorkspaceResponse(
       saved,
       defaultIacBinary,
       await resourcePermissions(saved, principal.userId, principal.principalOrgId, principal.teamId),
+      { orgName: orgName ?? null },
     ),
   };
 }

@@ -309,7 +309,11 @@ export async function projectResource(
   workspaceCount = 0,
   teamCount = 0,
   permissions: Record<string, boolean> = { "can-update": true, "can-destroy": true, "can-create-workspace": true },
+  orgName?: string | null,
 ): Promise<Record<string, unknown>> {
+  const relationshipOrgName = orgName !== undefined
+    ? (orgName ?? null)
+    : await organizationName(project.orgId);
   return {
     id: project.id,
     type: "projects",
@@ -326,7 +330,7 @@ export async function projectResource(
     },
     relationships: {
       organization: {
-        data: { id: (await organizationName(project.orgId)) ?? project.orgId, type: "organizations" },
+        data: { id: relationshipOrgName ?? project.orgId, type: "organizations" },
       },
       "default-agent-pool": {
         data: project.defaultAgentPoolId === null

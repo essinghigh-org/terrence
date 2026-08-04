@@ -1,6 +1,7 @@
 // Benchmark seed: builds a realistic org (projects, workspaces, tags, teams,
-// runs, state versions, variable sets) inside the temp database so every
-// scenario exercises the same shapes the UI and TFE clients hit.
+// runs, state versions, variable sets, configuration versions, registry
+// modules, policy sets) inside the temp database so every scenario exercises
+// the same shapes the UI and TFE clients hit.
 //
 // Deliberately shaped to stress the expensive permission path: the bench user
 // is an org MEMBER via a team (not owner), so workspace authorization must
@@ -9,9 +10,18 @@ import { createHash, randomUUID } from "node:crypto";
 import { db } from "../src/db";
 import {
   apiTokens,
+  auditLogs,
+  configurationVersions,
+  logs,
   organizations,
   organizationMemberships,
+  policies,
+  policySets,
+  policySetWorkspaces,
   projects,
+  registryModuleVersions,
+  registryModules,
+  runComments,
   runs,
   stateVersions,
   teams,
@@ -30,6 +40,7 @@ export interface BenchContext {
   orgId: string;
   orgName: string;
   ownerUserId: string;
+  ownerToken: string;
   memberUserId: string;
   memberToken: string;
   // Reader principal: a separate team with read-varsets/read-projects grants
@@ -42,12 +53,21 @@ export interface BenchContext {
   workspaceIds: string[];
   runIds: string[];
   variableSetIds: string[];
+  stateVersionId: string;
+  configurationVersionId: string;
+  planId: string;
+  applyId: string;
+  moduleId: string;
+  policySetId: string;
+  policyId: string;
 }
 
 export const BENCH_ORG = "bench-org";
 export const WORKSPACE_COUNT = 50;
 export const RUNS_PER_WORKSPACE = 3;
 export const PROJECT_COUNT = 5;
+export const MODULE_COUNT = 5;
+export const POLICY_SET_COUNT = 3;
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
@@ -57,6 +77,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
   const ownerUserId = `user-${randomUUID()}`;
   const memberUserId = `user-${randomUUID()}`;
   const readerUserId = `user-${randomUUID()}`;
+  const ownerToken = `terrence-bench-${randomUUID()}`;
   const memberToken = `terrence-bench-${randomUUID()}`;
   const readerToken = `terrence-bench-${randomUUID()}`;
 
@@ -72,6 +93,18 @@ export async function seedBenchmark(): Promise<BenchContext> {
     { id: `om-${randomUUID()}`, userId: readerUserId, orgId, role: "member", status: "active" },
   ]);
   await db.insert(apiTokens).values([
+    {
+      id: `tok-${randomUUID()}`,
+      token: sha256(ownerToken),
+      userId: ownerUserId,
+      orgId: null,
+      teamId: null,
+      description: "benchmark owner token",
+      scopes: null,
+      createdAt: now,
+      expiresAt: null,
+      lastUsedAt: null,
+    },
     {
       id: `tok-${randomUUID()}`,
       token: sha256(memberToken),
@@ -104,6 +137,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
     orgId,
     name: `project-${index + 1}`,
     isDefault: index === 0,
+    createdAt: now,
   })));
 
   const workspaceIds = Array.from({ length: WORKSPACE_COUNT }, (): string => `ws-${randomUUID()}`);
@@ -133,11 +167,13 @@ export async function seedBenchmark(): Promise<BenchContext> {
     name: "bench-team",
     organizationAccess: {},
     visibility: "organization",
+    createdAt: now,
   });
   await db.insert(teamMemberships).values({
     id: `tm-${randomUUID()}`,
     teamId,
     userId: memberUserId,
+    createdAt: now,
   });
   await db.insert(teamWorkspaces).values(workspaceIds.map((id): typeof teamWorkspaces.$inferInsert => ({
     id: `tw-${randomUUID()}`,
@@ -156,12 +192,31 @@ export async function seedBenchmark(): Promise<BenchContext> {
     name: "bench-readers",
     organizationAccess: { "read-varsets": true, "read-projects": true },
     visibility: "organization",
+    createdAt: now,
   });
   await db.insert(teamMemberships).values({
     id: `tm-${randomUUID()}`,
     teamId: readerTeamId,
     userId: readerUserId,
+    createdAt: now,
   });
+
+  // Configuration versions: one per workspace, uploaded; the newest run of
+  // each workspace is linked to it so originsForRuns() has real data.
+  const configurationVersionIds = workspaceIds.map((workspaceId): string => {
+    const id = `cv-${randomUUID()}`;
+    void workspaceId;
+    return id;
+  });
+  await db.insert(configurationVersions).values(configurationVersionIds.map((id, index): typeof configurationVersions.$inferInsert => ({
+    id,
+    workspaceId: workspaceIds[index]!,
+    status: "uploaded",
+    autoQueueRuns: true,
+    source: "tfe-api",
+    createdAt: now - (index * RUNS_PER_WORKSPACE + 1) * 30_000,
+    statusTimestamps: { uploadedAt: new Date(now - (index * RUNS_PER_WORKSPACE + 1) * 30_000).toISOString(), archivedAt: new Date(now).toISOString() },
+  })));
 
   // Runs: 3 per workspace, newest first per workspace, terminal statuses so a
   // (disabled) worker would have nothing to do. Latest run gets an "applied"
@@ -169,6 +224,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
   const runIds: string[] = [];
   const runRows: (typeof runs.$inferInsert)[] = [];
   const stateRows: (typeof stateVersions.$inferInsert)[] = [];
+  let firstStateVersionId = "";
   workspaceIds.forEach((workspaceId, wsIndex): void => {
     for (let i = 0; i < RUNS_PER_WORKSPACE; i += 1) {
       const runId = `run-${randomUUID()}`;
@@ -176,6 +232,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
       runRows.push({
         id: runId,
         workspaceId,
+        configurationVersionId: i === 0 ? configurationVersionIds[wsIndex]! : null,
         status: i === 0 ? "applied" : "planned_and_finished",
         message: `bench run ${i + 1}`,
         createdBy: memberUserId,
@@ -185,9 +242,11 @@ export async function seedBenchmark(): Promise<BenchContext> {
     // The newest run of this workspace is the FIRST one pushed for it
     // (i === 0 has the largest createdAt), which sits RUNS_PER_WORKSPACE
     // entries before the end of runIds.
-    const latestRunId = runIds[runIds.length - RUNS_PER_WORKSPACE];
+    const latestRunId = runIds[runIds.length - RUNS_PER_WORKSPACE]!;
+    const stateVersionId = `sv-${randomUUID()}`;
+    if (wsIndex === 0) firstStateVersionId = stateVersionId;
     stateRows.push({
-      id: `sv-${randomUUID()}`,
+      id: stateVersionId,
       workspaceId,
       serial: 1,
       status: "finalized",
@@ -196,6 +255,8 @@ export async function seedBenchmark(): Promise<BenchContext> {
       createdAt: now - wsIndex * 30_000,
       jsonState: JSON.stringify({ resources: [{ type: "aws_instance", name: "bench", count: 3 }] }),
       statePayload: "state-payload-bytes",
+      jsonStateOutputs: JSON.stringify({ instance_id: { value: "i-abcdef123456789" } }),
+      terraformVersion: "1.9.0",
     });
   });
   // Chunk the bulk inserts so the seed scales if the workspace/run constants
@@ -209,23 +270,81 @@ export async function seedBenchmark(): Promise<BenchContext> {
   await insertInChunks((rows): Promise<unknown> => db.insert(runs).values(rows), runRows);
   await insertInChunks((rows): Promise<unknown> => db.insert(stateVersions).values(rows), stateRows);
 
+  // Logs + comments + audit events for the first run, so log/comment/event
+  // scenarios return real content.
+  const firstRunId = runIds[0]!;
+  const firstWorkspaceId = workspaceIds[0]!;
+  await db.insert(logs).values([
+    { id: `log-${randomUUID()}`, runId: firstRunId, phase: "plan", outputText: "Terraform will perform the following actions:\n  # aws_instance.bench\n  + resource \"aws_instance\" \"bench\" {\n      + ami = \"ami-123\"\n    }\nPlan: 1 to add, 0 to change, 0 to destroy.\n", createdAt: now },
+    { id: `log-${randomUUID()}`, runId: firstRunId, phase: "apply", outputText: "Apply complete! Resources: 1 added.\n", createdAt: now },
+  ]);
+  await db.insert(runComments).values([
+    { id: `rc-${randomUUID()}`, runId: firstRunId, userId: memberUserId, body: "Benchmark seed comment", createdAt: now },
+  ]);
+  await db.insert(auditLogs).values([
+    { id: `al-${randomUUID()}`, orgId, userId: memberUserId, action: "create", resourceType: "runs", resourceId: firstRunId, details: { fromStatus: undefined, toStatus: "applied", status: "applied", source: "tfe-api", triggerReason: "manual" }, createdAt: now },
+    { id: `al-${randomUUID()}`, orgId, userId: memberUserId, action: "update", resourceType: "runs", resourceId: firstRunId, details: { fromStatus: "pending", toStatus: "planning", status: "planning" }, createdAt: now + 1 },
+  ]);
+
+  // Registry modules + versions.
+  const moduleIds = Array.from({ length: MODULE_COUNT }, (): string => `mod-${randomUUID()}`);
+  await db.insert(registryModules).values(moduleIds.map((id, index): typeof registryModules.$inferInsert => ({
+    id,
+    orgId,
+    namespace: "bench-ns",
+    name: `module-${index + 1}`,
+    provider: "aws",
+    createdAt: now,
+  })));
+  const moduleVersionRows = moduleIds.map((id, index): typeof registryModuleVersions.$inferInsert => ({
+    id: `rmv-${randomUUID()}`,
+    moduleId: id,
+    version: `1.0.${index}`,
+    status: "ok",
+    createdAt: now,
+  }));
+  await insertInChunks((rows): Promise<unknown> => db.insert(registryModuleVersions).values(rows), moduleVersionRows);
+
+  // Policy sets + policies + workspace links.
+  const policySetIds = Array.from({ length: POLICY_SET_COUNT }, (): string => `ps-${randomUUID()}`);
+  await db.insert(policySets).values(policySetIds.map((id, index): typeof policySets.$inferInsert => ({
+    id,
+    orgId,
+    name: `policy-set-${index + 1}`,
+    kind: "sentinel",
+    global: false,
+    overridable: true,
+    createdAt: now,
+  })));
+  await db.insert(policySetWorkspaces).values(policySetIds.map((id, index): typeof policySetWorkspaces.$inferInsert => ({
+    id: `psw-${randomUUID()}`,
+    policySetId: id,
+    workspaceId: workspaceIds[index]!,
+  })));
+  const policyRows = policySetIds.flatMap((setId, setIndex): typeof policies.$inferInsert[] => [
+    { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-a`, enforcementLevel: "soft-mandatory", createdAt: now },
+    { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-b`, enforcementLevel: "advisory", createdAt: now },
+  ]);
+  await insertInChunks((rows): Promise<unknown> => db.insert(policies).values(rows), policyRows);
+  const firstPolicyId = policyRows[0]!.id;
+
   const variableSetIds = Array.from({ length: 3 }, (): string => `vs-${randomUUID()}`);
   const vsRows: (typeof variableSets.$inferInsert)[] = [
-    { id: variableSetIds[0], orgId, name: "global-vars", global: true, priority: false },
-    { id: variableSetIds[1], orgId, parentProjectId: projectIds[0], name: "project-one-vars", global: false, priority: false },
-    { id: variableSetIds[2], orgId, parentProjectId: projectIds[1], name: "project-two-vars", global: false, priority: false },
+    { id: variableSetIds[0]!, orgId, name: "global-vars", global: true, priority: false },
+    { id: variableSetIds[1]!, orgId, parentProjectId: projectIds[0], name: "project-one-vars", global: false, priority: false },
+    { id: variableSetIds[2]!, orgId, parentProjectId: projectIds[1], name: "project-two-vars", global: false, priority: false },
   ];
   await db.insert(variableSets).values(vsRows);
 
   await db.insert(variableSetWorkspaces).values(workspaceIds.map((id): typeof variableSetWorkspaces.$inferInsert => ({
     id: `vsw-${randomUUID()}`,
-    variableSetId: variableSetIds[0],
+    variableSetId: variableSetIds[0]!,
     workspaceId: id,
   })));
   await db.insert(variableSetProjects).values({
     id: `vsp-${randomUUID()}`,
-    variableSetId: variableSetIds[1],
-    projectId: projectIds[0],
+    variableSetId: variableSetIds[1]!,
+    projectId: projectIds[0]!,
   });
   const vsVariableRows = variableSetIds.flatMap((setId, setIndex): typeof variableSetVariables.$inferInsert[] =>
     ["region", "instance_type", "ami_id", "tags"].slice(0, 3 + setIndex).map((key): typeof variableSetVariables.$inferInsert => ({
@@ -242,6 +361,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
     orgId,
     orgName: BENCH_ORG,
     ownerUserId,
+    ownerToken,
     memberUserId,
     memberToken,
     readerToken,
@@ -250,5 +370,12 @@ export async function seedBenchmark(): Promise<BenchContext> {
     workspaceIds,
     runIds,
     variableSetIds,
+    stateVersionId: firstStateVersionId,
+    configurationVersionId: configurationVersionIds[0]!,
+    planId: `plan-${firstRunId}`,
+    applyId: `apply-${firstRunId}`,
+    moduleId: moduleIds[0]!,
+    policySetId: policySetIds[0]!,
+    policyId: firstPolicyId,
   };
 }

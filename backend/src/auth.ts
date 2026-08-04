@@ -3,6 +3,7 @@ import { db } from "./db";
 import { apiTokens, users, teams } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { setRequestSiteAdmin } from "./lib/request-scope";
 
 type AuthToken = {
   id: string;
@@ -56,10 +57,18 @@ export const authPlugin = new Elysia({ name: "auth" })
     const tokenString = authHeader.substring(7);
     const tokenHash = hashToken(tokenString);
 
-    // Lookup by hash
-    let token: AuthToken | undefined = await db.query.apiTokens.findFirst({
-      where: eq(apiTokens.token, tokenHash),
-    });
+    // Lookup by hash. The user row is JOINed in so the common user-token path
+    // costs ONE query instead of two (api_tokens + users).
+    const lookup = async (): Promise<{ token: AuthToken | undefined; user: (typeof users.$inferSelect) | null }> => {
+      const row = await db.select({ token: apiTokens, user: users })
+        .from(apiTokens)
+        .leftJoin(users, eq(users.id, apiTokens.userId))
+        .where(eq(apiTokens.token, tokenHash))
+        .get();
+      return { token: row?.token, user: row?.user ?? null };
+    };
+    let { token, user } = await lookup();
+
 
     // Legacy fallback: re-hash plaintext token on successful use
     if (token === undefined) {
@@ -71,6 +80,7 @@ export const authPlugin = new Elysia({ name: "auth" })
           .set({ token: tokenHash })
           .where(eq(apiTokens.id, legacyToken.id));
         token = { ...legacyToken, token: tokenHash };
+        user = null;
       }
     }
 
@@ -92,13 +102,16 @@ export const authPlugin = new Elysia({ name: "auth" })
     rememberRateLimitPrincipal(request, token);
 
     if (token.userId !== null) {
-      const user = await db.query.users.findFirst({
-        where: eq(users.id, token.userId),
-      });
-      if (user?.isSuspended === true) {
+      // The joined lookup already resolves the user for hashed tokens. Only
+      // tokens found via the plaintext legacy fallback re-query (rare).
+      const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
+      if (resolvedUser?.isSuspended === true) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" };
       }
-      return { user: user ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null };
+      if (resolvedUser !== undefined) {
+        setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
+      }
+      return { user: resolvedUser ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null };
     }
 
     if (token.teamId !== null) {

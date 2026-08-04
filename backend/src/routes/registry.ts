@@ -1595,7 +1595,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       canReadStateVersions: true,
       canReadVariables: true,
       canWriteVariables: true,
-    });
+    }, { orgName: details.org.name });
     return {
       data: {
         ...resource,

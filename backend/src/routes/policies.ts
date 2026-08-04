@@ -259,10 +259,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     ])].filter((policySetId: string): boolean => !excludedIds.has(policySetId));
     if (effectiveIds.length === 0) return { data: [] };
 
-    const [effectiveSets, effectivePolicies] = await Promise.all([
-      db.query.policySets.findMany({ where: inArray(policySets.id, effectiveIds) }),
+    // The org-global sets above were already loaded in full; only re-fetch the
+    // direct/project-bound ids so we don't read the same policy_sets rows twice.
+    const globalSetIds = new Set(globalSets.map((policySet: PsItem): string => policySet.id));
+    const reFetchIds = effectiveIds.filter((policySetId: string): boolean => !globalSetIds.has(policySetId));
+    const [reFetchedSets, effectivePolicies] = await Promise.all([
+      reFetchIds.length === 0
+        ? Promise.resolve([] as PsItem[])
+        : db.query.policySets.findMany({ where: inArray(policySets.id, reFetchIds) }),
       db.query.policies.findMany({ where: inArray(policies.policySetId, effectiveIds) }),
     ]);
+    const setsById = new Map<string, PsItem>();
+    for (const policySet of globalSets) setsById.set(policySet.id, policySet);
+    for (const policySet of reFetchedSets) setsById.set(policySet.id, policySet);
+    const effectiveSets = effectiveIds
+      .map((policySetId: string): PsItem | undefined => setsById.get(policySetId))
+      .filter((policySet: PsItem | undefined): policySet is PsItem => policySet !== undefined);
     const policyCounts = new Map<string, number>();
     for (const policy of effectivePolicies) {
       policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
@@ -285,13 +297,30 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
-    const data = await Promise.all(psList.map(async (ps: PsItem): Promise<Record<string, unknown>> => {
-      const [projLinks, exclLinks] = await Promise.all([
-        db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, ps.id) }),
-        db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, ps.id) }),
-      ]);
+    if (psList.length === 0) return { data: [] };
+    const psIds = psList.map((ps: PsItem): string => ps.id);
+    // Batch the per-set N+1 (2 queries per set) into two IN fetches.
+    const [projRows, exclRows] = await Promise.all([
+      db.query.policySetProjects.findMany({ where: inArray(policySetProjects.policySetId, psIds) }),
+      db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
+    ]);
+    const projBySet = new Map<string, Readonly<{ projectId: string }>[]>();
+    for (const link of projRows) {
+      const list = projBySet.get(link.policySetId) ?? [];
+      list.push(link);
+      projBySet.set(link.policySetId, list);
+    }
+    const exclBySet = new Map<string, Readonly<{ workspaceId: string }>[]>();
+    for (const link of exclRows) {
+      const list = exclBySet.get(link.policySetId) ?? [];
+      list.push(link);
+      exclBySet.set(link.policySetId, list);
+    }
+    const data = psList.map((ps: PsItem): Record<string, unknown> => {
+      const projLinks = projBySet.get(ps.id) ?? [];
+      const exclLinks = exclBySet.get(ps.id) ?? [];
       return { id: ps.id, type: "policy-sets", attributes: policySetAttributes(ps), relationships: { projects: { data: projLinks.map((l: LinkProjItem): Record<string, string> => ({ id: l.projectId, type: "projects" })) }, "workspace-exclusions": { data: exclLinks.map((l: LinkExclItem): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) } } };
-    }));
+    });
     return { data };
   })
   .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

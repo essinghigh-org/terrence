@@ -4,6 +4,7 @@
 // Usage:
 //   bun run bench/run.ts                    # table output
 //   bun run bench/run.ts --json /tmp/before.json --iterations 30
+//   bun run bench/run.ts --query-breakdown run.detail
 //
 // The environment is set BEFORE the app/db modules load (they read env at
 // import time). The worker poll loop is disabled so no background queries
@@ -23,7 +24,7 @@ const benchDir = mkdtempSync(join(tmpdir(), "terrence-bench-"));
 process.env.DATABASE_URL = `file:${join(benchDir, "bench.db")}`;
 process.env.STORAGE_DIR = join(benchDir, "storage");
 
-function parseArgs(): { iterations: number; warmup: number; jsonOut: string | null; filter: string | null } {
+function parseArgs(): { iterations: number; warmup: number; jsonOut: string | null; filter: string | null; queryBreakdown: string | null; memory: boolean } {
   const args = process.argv.slice(2);
   const get = (flag: string): string | null => {
     const index = args.indexOf(flag);
@@ -41,6 +42,8 @@ function parseArgs(): { iterations: number; warmup: number; jsonOut: string | nu
     warmup: getCount("--warmup", "5", 0),
     jsonOut: get("--json"),
     filter: get("--scenario"),
+    queryBreakdown: get("--query-breakdown"),
+    memory: args.includes("--memory"),
   };
 }
 
@@ -63,8 +66,21 @@ function percentile(sorted: readonly number[], p: number): number {
   return sorted[index];
 }
 
+/**
+ * Normalize a SQL statement into a stable shape (strip literal values) so
+ * repeated statements can be grouped regardless of the bound values. Table and
+ * column names are preserved so the breakdown stays readable; only string
+ * literals and bare numbers are masked (drizzle parameterizes its values, so
+ * this only matters for inline constants like LIMIT offsets).
+ */
+function normalizeSql(sql: string): string {
+  return sql
+    .replace(/'(?:''|[^'])*'/g, "'?'")
+    .replace(/\b[0-9]+\b/g, "?");
+}
+
 async function main(): Promise<void> {
-  const { iterations, warmup, jsonOut, filter } = parseArgs();
+  const { iterations, warmup, jsonOut, filter, queryBreakdown, memory } = parseArgs();
   const [{ app }, dbMod, { seedBenchmark }, { buildScenarios, tokenFor }] = await Promise.all([
     import("../src/app"),
     import("../src/db"),
@@ -79,11 +95,20 @@ async function main(): Promise<void> {
   }
   const ctx = await seedBenchmark();
 
-  const runOne = async (path: string, token: string): Promise<{ status: number; ms: number; queries: number }> => {
+  // Per-request helper: build the request, run it, force body serialization.
+  const runOne = async (scenario: (typeof scenarios)[number], iteration: number): Promise<{ status: number; ms: number; queries: number }> => {
+    const token = tokenFor(ctx, scenario.token);
+    const path = scenario.path(ctx, iteration);
+    const method = scenario.method ?? "GET";
+    const body = scenario.body?.(ctx, iteration);
     dbMod.resetQueryCount();
-    const request = new Request(`http://bench.local${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+    let init: string | undefined;
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/vnd.api+json";
+      init = JSON.stringify(body);
+    }
+    const request = new Request(`http://bench.local${path}`, { method, headers, body: init });
     const started = performance.now();
     const response = await app.handle(request);
     await response.text(); // force full body serialization
@@ -91,21 +116,65 @@ async function main(): Promise<void> {
     return { status: response.status, ms, queries: dbMod.getQueryCount() };
   };
 
+  // Query-log breakdown mode: run the scenario a handful of times with SQL
+  // capture enabled and report the most-repeated statements.
+  if (queryBreakdown !== null) {
+    const target = scenarios.find((s): boolean => s.name === queryBreakdown);
+    if (target === undefined) {
+      throw new Error(`No scenario matches --query-breakdown ${queryBreakdown}`);
+    }
+    dbMod.setQueryLogging(true);
+    const perStatement = new Map<string, number>();
+    for (let i = 0; i < Math.max(iterations, 10); i += 1) {
+      dbMod.resetQueryCount();
+      const body = target.body?.(ctx, i);
+      const request = new Request(`http://bench.local${target.path(ctx, i)}`, {
+        method: target.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${tokenFor(ctx, target.token)}`,
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const response = await app.handle(request);
+      await response.text();
+      for (const sql of dbMod.getQueryLog()) {
+        const key = normalizeSql(sql);
+        perStatement.set(key, (perStatement.get(key) ?? 0) + 1);
+      }
+    }
+    dbMod.setQueryLogging(false);
+    const total = [...perStatement.values()].reduce((sum, value): number => sum + value, 0);
+    console.log(`\nQuery breakdown for "${target.name}" (${total} statements over ${Math.max(iterations, 10)} runs)\n`);
+    console.log(`${"count".padStart(6)} ${"sql"}`);
+    console.log("-".repeat(120));
+    const sorted = [...perStatement.entries()].sort((a, b): number => b[1] - a[1]);
+    for (const [sql, count] of sorted) {
+      console.log(`${String(count).padStart(6)} ${sql}`);
+    }
+    console.log(`\n${String(total).padStart(6)} total`);
+    return;
+  }
+
   const results: ScenarioResult[] = [];
+  let peakRss = memory ? process.memoryUsage().rss : 0;
   for (const scenario of scenarios) {
-    const path = scenario.path(ctx);
-    const token = tokenFor(ctx, scenario.token);
+    const path = scenario.path(ctx, 0);
     for (let i = 0; i < warmup; i += 1) {
-      await runOne(path, token);
+      await runOne(scenario, i);
     }
     const latencies: number[] = [];
     const queryCounts: number[] = [];
     let status = 0;
     for (let i = 0; i < iterations; i += 1) {
-      const outcome = await runOne(path, token);
+      const outcome = await runOne(scenario, warmup + i);
       status = outcome.status;
       latencies.push(outcome.ms);
       queryCounts.push(outcome.queries);
+      if (memory) {
+        const rss = process.memoryUsage().rss;
+        peakRss = Math.max(peakRss, rss);
+      }
     }
     latencies.sort((a, b): number => a - b);
     const avgMs = latencies.reduce((sum, value): number => sum + value, 0) / latencies.length;
@@ -133,22 +202,24 @@ async function main(): Promise<void> {
       commit,
       timestamp: new Date().toISOString(),
       iterations,
+      ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
       results: results.map(({ queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
     }, null, 2));
     console.log(`Wrote ${jsonOut}`);
   }
 
   const pad = (value: string, width: number): string => value.padEnd(width);
-  console.log(`\n${"scenario".padEnd(32)} ${"status".padEnd(6)} ${"avg ms".padStart(9)} ${"p50".padStart(9)} ${"p95".padStart(9)} ${"max".padStart(9)} ${"rps".padStart(8)} ${"sql/req".padStart(8)}`);
-  console.log("-".repeat(100));
+  console.log(`\n${"scenario".padEnd(36)} ${"m".padEnd(4)} ${"status".padEnd(6)} ${"avg ms".padStart(9)} ${"p50".padStart(9)} ${"p95".padStart(9)} ${"max".padStart(9)} ${"rps".padStart(8)} ${"sql/req".padStart(8)}`);
+  console.log("-".repeat(110));
   for (const result of results) {
     console.log(
-      `${pad(result.name, 32)} ${pad(String(result.status), 6)} ${pad(result.avgMs.toFixed(2), 9)} `
+      `${pad(result.name, 36)} ${pad(scenarios.find((s): boolean => s.name === result.name)?.method ?? "GET", 4)} ${pad(String(result.status), 6)} ${pad(result.avgMs.toFixed(2), 9)} `
       + `${pad(result.p50Ms.toFixed(2), 9)} ${pad(result.p95Ms.toFixed(2), 9)} ${pad(result.maxMs.toFixed(2), 9)} `
       + `${pad(result.reqPerSec.toFixed(1), 8)} ${pad(result.queriesPerReq.toFixed(1), 8)}`,
     );
   }
-  console.log("-".repeat(100));
+  console.log("-".repeat(110));
+  if (memory) console.log(`peak RSS: ${Math.round(peakRss / 1024 / 1024)} MiB`);
 }
 
 void main().catch((error: unknown): void => {

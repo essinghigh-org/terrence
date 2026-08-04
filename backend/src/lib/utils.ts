@@ -15,7 +15,7 @@ import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
-import { currentTokenScopes, withoutTokenScopes } from "./request-scope";
+import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
 import {
   scopeGrants,
   scopeCoversOrg,
@@ -83,15 +83,10 @@ export async function checkOrgPermission(
   }
   if (tokenOrgId !== null) return tokenOrgId === orgId;
   if (userId === undefined) return false;
-  const [user, membership] = await Promise.all([
-    db.query.users.findFirst({ where: eq(users.id, userId), columns: { isSiteAdmin: true } }),
-    db.query.organizationMemberships.findFirst({
-      where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
-    }),
-  ]);
-  if (user?.isSiteAdmin === true) return true;
-  if (membership?.status !== "active") return false;
-  if (requiredRole === "owner" && membership.role !== "owner") return false;
+  const facts = await loadMembershipFacts(userId, orgId);
+  if (facts.isOwner) return true;
+  if (!facts.isMember) return false;
+  if (requiredRole === "owner" && facts.membership?.role !== "owner") return false;
   return true;
 }
 
@@ -218,28 +213,87 @@ interface OrgAccessDetails {
  * Read a user's org-membership facts in ONE pass (mirrors the owner/member
  * semantics of checkOrgPermission, which fetches the same two rows). Reads
  * are scope-independent, so this runs with token scopes suspended.
+ *
+ * Memoized per request: the same facts are needed by checkOrgPermission,
+ * checkOrganizationPermission, and workspacePermissionSets, which previously
+ * re-queried users + organization_memberships up to 3x per request.
  */
 async function loadMembershipFacts(
   userId: string,
   orgId: string,
 ): Promise<{ readonly isOwner: boolean; readonly isMember: boolean; readonly membership: (typeof organizationMemberships.$inferSelect) | undefined }> {
-  return withoutTokenScopes(async () => {
-    const [user, membership] = await Promise.all([
-      db.query.users.findFirst({ where: eq(users.id, userId), columns: { isSiteAdmin: true } }),
-      db.query.organizationMemberships.findFirst({
-        where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
-      }),
-    ]);
-    if (user?.isSiteAdmin === true) return { isOwner: true, isMember: true, membership: undefined };
-    if (membership?.status !== "active") return { isOwner: false, isMember: false, membership };
-    return { isOwner: membership.role === "owner", isMember: true, membership };
-  });
+  const key = `membership:${userId}:${orgId}`;
+  const cached = requestCacheGet<Promise<Awaited<ReturnType<typeof loadMembershipFactsUncached>>>>(key);
+  if (cached !== undefined) return cached;
+  // Cache the IN-FLIGHT promise so concurrent callers (e.g. permission levels
+  // evaluated inside a Promise.all) share one computation instead of racing.
+  const value = loadMembershipFactsUncached(userId, orgId);
+  requestCacheSet(key, value);
+  return value;
+}
+
+async function loadMembershipFactsUncached(
+  userId: string,
+  orgId: string,
+): Promise<{ readonly isOwner: boolean; readonly isMember: boolean; readonly membership: (typeof organizationMemberships.$inferSelect) | undefined }> {
+  // The auth derive already loaded the full user row (joined token lookup), so
+  // its site-admin flag is in the request cache — skip the duplicate users read.
+  const knownSiteAdmin = currentSiteAdmin(userId);
+  const [user, membership] = await Promise.all([
+    knownSiteAdmin !== undefined
+      ? Promise.resolve({ isSiteAdmin: knownSiteAdmin })
+      : db.query.users.findFirst({ where: eq(users.id, userId), columns: { isSiteAdmin: true } }),
+    db.query.organizationMemberships.findFirst({
+      where: and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)),
+    }),
+  ]);
+  if (user?.isSiteAdmin === true) return { isOwner: true, isMember: true, membership: undefined };
+  if (membership?.status !== "active") return { isOwner: false, isMember: false, membership };
+  return { isOwner: membership.role === "owner", isMember: true, membership };
 }
 
 /**
  * Load a user's teams + team workspaces within an org in 3 reads (shared by
- * the org-access and workspace-access loaders).
+ * the org-access and workspace-access loaders). Memoized per request for the
+ * same reason as loadMembershipFacts.
  */
+/**
+ * Load the user's team roster (membership -> team rows) WITHOUT workspace-level
+ * access. Org/project-only request paths call this so they never pay for the
+ * (potentially large) team_workspaces read that `loadWorkspaceAccessBase`
+ * needs and `loadOrgAccessDetails` discards.
+ */
+async function loadUserTeamRoster(
+  orgId: string,
+  userId: string,
+): Promise<{
+  readonly teamIds: readonly string[];
+  readonly userTeams: readonly (typeof teams.$inferSelect)[];
+}> {
+  const key = `teamRoster:${userId}:${orgId}`;
+  const cached = requestCacheGet<Promise<Awaited<ReturnType<typeof loadUserTeamRosterUncached>>>>(key);
+  if (cached !== undefined) return cached;
+  const value = loadUserTeamRosterUncached(orgId, userId);
+  requestCacheSet(key, value);
+  return value;
+}
+
+async function loadUserTeamRosterUncached(
+  orgId: string,
+  userId: string,
+): Promise<{
+  readonly teamIds: readonly string[];
+  readonly userTeams: readonly (typeof teams.$inferSelect)[];
+}> {
+  const memberships = await db.query.teamMemberships.findMany({
+    where: eq(teamMemberships.userId, userId),
+  });
+  const teamIds = memberships.map((membership): string => membership.teamId);
+  if (teamIds.length === 0) return { teamIds, userTeams: [] };
+  const userTeams = await db.query.teams.findMany({ where: and(eq(teams.orgId, orgId), inArray(teams.id, teamIds)) });
+  return { teamIds, userTeams };
+}
+
 async function loadUserTeamAccess(
   orgId: string,
   userId: string,
@@ -248,25 +302,44 @@ async function loadUserTeamAccess(
   readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
   readonly userTeams: readonly (typeof teams.$inferSelect)[];
 }> {
-  const memberships = await db.query.teamMemberships.findMany({
-    where: eq(teamMemberships.userId, userId),
-  });
-  const teamIds = memberships.map((membership): string => membership.teamId);
-  if (teamIds.length === 0) return { teamIds, teamWorkspaces: [], userTeams: [] };
-  const [accesses, userTeams] = await Promise.all([
-    db.query.teamWorkspaces.findMany({ where: inArray(teamWorkspaces.teamId, teamIds) }),
-    db.query.teams.findMany({ where: and(eq(teams.orgId, orgId), inArray(teams.id, teamIds)) }),
-  ]);
+  const key = `teamAccess:${userId}:${orgId}`;
+  const cached = requestCacheGet<Promise<Awaited<ReturnType<typeof loadUserTeamAccessUncached>>>>(key);
+  if (cached !== undefined) return cached;
+  const value = loadUserTeamAccessUncached(orgId, userId);
+  requestCacheSet(key, value);
+  return value;
+}
+
+async function loadUserTeamAccessUncached(
+  orgId: string,
+  userId: string,
+): Promise<{
+  readonly teamIds: readonly string[];
+  readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
+  readonly userTeams: readonly (typeof teams.$inferSelect)[];
+}> {
+  const { teamIds, userTeams } = await loadUserTeamRoster(orgId, userId);
+  if (teamIds.length === 0) return { teamIds, teamWorkspaces: [], userTeams };
+  const accesses = await db.query.teamWorkspaces.findMany({ where: inArray(teamWorkspaces.teamId, teamIds) });
   return { teamIds, teamWorkspaces: accesses, userTeams };
 }
 
 async function loadOrgAccessDetails(orgId: string, userId: string): Promise<OrgAccessDetails> {
+  const key = `orgAccess:${userId}:${orgId}`;
+  const cached = requestCacheGet<Promise<OrgAccessDetails>>(key);
+  if (cached !== undefined) return cached;
+  const value = loadOrgAccessDetailsUncached(orgId, userId);
+  requestCacheSet(key, value);
+  return value;
+}
+
+async function loadOrgAccessDetailsUncached(orgId: string, userId: string): Promise<OrgAccessDetails> {
   const facts = await loadMembershipFacts(userId, orgId);
   let directRoles: OrgAccessDetails["directRoles"] = [];
   let teamIds: OrgAccessDetails["teamIds"] = [];
   let userTeams: OrgAccessDetails["userTeams"] = [];
   if (!facts.isOwner && facts.isMember) {
-    const teamAccess = loadUserTeamAccess(orgId, userId);
+    const teamAccess = loadUserTeamRoster(orgId, userId);
     // Direct-role grants and the team roster are independent of each other.
     const roleResult = (async (): Promise<OrgAccessDetails["directRoles"]> => {
       if (facts.membership === undefined) return [];
@@ -544,6 +617,20 @@ interface WorkspaceAccessBase {
 }
 
 async function loadWorkspaceAccessBase(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<WorkspaceAccessBase> {
+  const key = `workspaceAccess:${orgId}:${userId ?? "-"}:${tokenOrgId ?? "-"}:${tokenTeamId ?? "-"}`;
+  const cached = requestCacheGet<Promise<WorkspaceAccessBase>>(key);
+  if (cached !== undefined) return cached;
+  const value = loadWorkspaceAccessBaseUncached(orgId, userId, tokenOrgId, tokenTeamId);
+  requestCacheSet(key, value);
+  return value;
+}
+
+async function loadWorkspaceAccessBaseUncached(
   orgId: string,
   userId: string | undefined,
   tokenOrgId: string | null,

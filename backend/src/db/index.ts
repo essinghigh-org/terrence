@@ -40,12 +40,12 @@ function getColumnNames(rows: readonly unknown[]): Set<string> {
 // TERRENCE_QUERY_LOG=1 alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
-const logQueries = process.env.TERRENCE_QUERY_LOG === "1";
+let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
 if (process.env.TERRENCE_QUERY_COUNT === "1") {
   const originalPrepare = client.prepare.bind(client);
   client.prepare = ((sql: string, ...params: unknown[]) => {
     queryCount += 1;
-    if (logQueries) queryLog.push(sql);
+    if (queryLogEnabled) queryLog.push(sql);
     return originalPrepare(sql, ...(params as [never]));
   }) as typeof client.prepare;
 }
@@ -61,6 +61,17 @@ export function getQueryCount(): number {
 
 export function getQueryLog(): readonly string[] {
   return queryLog.slice();
+}
+
+/**
+ * Toggle query-text capture at runtime (used by the benchmark runner's
+ * --query-breakdown mode). Disabling clears the log so stale statements never
+ * leak into a later breakdown. Zero cost while disabled: the hot path only
+ * reads a boolean.
+ */
+export function setQueryLogging(enabled: boolean): void {
+  queryLogEnabled = enabled;
+  if (!enabled) queryLog.length = 0;
 }
 
 export const db = drizzle(client, { schema });

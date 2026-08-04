@@ -6,7 +6,7 @@ import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
-import { setRequestTokenScopes } from "./lib/request-scope";
+import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -227,7 +227,7 @@ export const app = new Elysia()
       return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
     }
   })
-  .onBeforeHandle(({ token, set }: { readonly token: { readonly scopes?: string | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
+  .onBeforeHandle(({ token, user, set }: { readonly token: { readonly scopes?: string | null } | null; readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
     // Publish fine-grained token scopes into request-scoped storage BEFORE
     // handlers run, so permission helpers enforce them automatically. Legacy
     // tokens (scopes null/absent) resolve to null = full permissions.
@@ -245,6 +245,9 @@ export const app = new Elysia()
     } else {
       setRequestTokenScopes(null);
     }
+    // The auth derive already read the full user row; hand its site-admin flag
+    // to permission helpers so they skip a duplicate users read.
+    setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
     return undefined;
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {

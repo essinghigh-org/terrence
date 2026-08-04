@@ -244,7 +244,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const counts = await countsByProject(projList.map((p): string => p.id));
     return { data: await Promise.all(projList.map(async (project): Promise<Record<string, unknown>> => {
       const projectCounts = counts.get(project.id) ?? { workspaceCount: 0, teamCount: 0 };
-      return projectResource(project, projectCounts.workspaceCount, projectCounts.teamCount);
+      return projectResource(project, projectCounts.workspaceCount, projectCounts.teamCount, undefined, org.name);
     })), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

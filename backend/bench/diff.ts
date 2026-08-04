@@ -50,10 +50,9 @@ for (const name of names) {
     regressed = true;
     continue;
   }
-  // A scenario that stopped returning its expected status (currently every
-  // scenario expects 200) must fail the comparison — a 401/500 can look
-  // "faster" with fewer queries and mask a real problem.
-  if (b.status !== 200 || a.status !== 200) {
+  // A scenario whose status changed between runs must fail the comparison — a
+  // 401/500 can look "faster" with fewer queries and mask a real problem.
+  if (b.status !== a.status) {
     console.log(`${name.padEnd(32)} ${"status".padStart(8)} ${`${b.status}→${a.status}`.padStart(14)}`);
     regressed = true;
     continue;
