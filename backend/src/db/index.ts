@@ -43,11 +43,12 @@ const queryLog: string[] = [];
 let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
 if (process.env.TERRENCE_QUERY_COUNT === "1") {
   const originalPrepare = client.prepare.bind(client);
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
   client.prepare = ((sql: string, ...params: unknown[]) => {
     queryCount += 1;
     if (queryLogEnabled) queryLog.push(sql);
     return originalPrepare(sql, ...(params as [never]));
-  }) as typeof client.prepare;
+  });
 }
 
 export function resetQueryCount(): void {

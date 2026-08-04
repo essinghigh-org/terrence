@@ -142,7 +142,7 @@ export function AccountSettings(): React.JSX.Element {
     }
   }
 
-  async function handleCancelEnrollment(): Promise<void> {
+  function handleCancelEnrollment(): void {
     setMfaEnrollment(null);
     setMfaCode("");
   }
@@ -661,7 +661,7 @@ export function AccountSettings(): React.JSX.Element {
             ) : mfaEnrollment !== null ? (
               <>
                 <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
-                <Button type="button" variant="outline" disabled={mfaLoading} onClick={(): void => { void handleCancelEnrollment(); }}>Cancel</Button>
+                <Button type="button" variant="outline" disabled={mfaLoading} onClick={(): void => { handleCancelEnrollment(); }}>Cancel</Button>
               </>
             ) : (
               <Button type="button" disabled={mfaLoading} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
@@ -692,7 +692,7 @@ export function AccountSettings(): React.JSX.Element {
           <TokenScopeDialog
             open={tokenDialogOpen}
             onOpenChange={setTokenDialogOpen}
-            onCreated={(created): Promise<void> => handleTokenCreated(created)}
+            onCreated={async (created): Promise<void> => handleTokenCreated(created)}
           />
 
           {createdTokenSecret != null && (

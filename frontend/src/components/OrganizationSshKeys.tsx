@@ -204,7 +204,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
         title={`Deleting SSH key ${toDelete?.attributes.name ?? ""}`}
         description="Any workspaces configured with this SSH key will no longer use it to download Terraform modules. This operation cannot be undone. Are you sure?"
         confirmText={deleting ? "Deleting…" : "Delete SSH key"}
-        onConfirm={(): Promise<void> => remove()}
+        onConfirm={async (): Promise<void> => remove()}
       />
     </Card>
   );

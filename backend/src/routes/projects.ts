@@ -25,11 +25,13 @@ async function countsByProject(projectIds: readonly string[]): Promise<Map<strin
     result.set(projectId, { workspaceCount: 0, teamCount: 0 });
   }
   for (const row of workspaceRows) {
-    const current = result.get(row.projectId as string);
+    if (row.projectId === null) continue;
+    const current = result.get(row.projectId);
     if (current !== undefined) current.workspaceCount = row.total;
   }
   for (const row of teamRows) {
-    const current = result.get(row.projectId as string);
+    if (row.projectId === null) continue;
+    const current = result.get(row.projectId);
     if (current !== undefined) current.teamCount = row.total;
   }
   return result;

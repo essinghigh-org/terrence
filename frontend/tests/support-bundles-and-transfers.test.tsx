@@ -21,9 +21,9 @@ test("support bundle page lists bundles and starts a bundle", async () => {
   });
   globalThis.fetch = fetchMock as typeof fetch;
   const view = render(<MemoryRouter><SupportBundles /></MemoryRouter>);
-  await waitFor(() => expect(view.getByText("bundle-1")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("bundle-1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Create support bundle" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/support/bundle-requests", expect.objectContaining({ method: "POST" })));
+  await waitFor(() => { expect(fetchMock).toHaveBeenCalledWith("/api/v1/support/bundle-requests", expect.objectContaining({ method: "POST" })); });
 });
 
 test("workspace transfers renders transfers and submits a transfer", async () => {
@@ -34,11 +34,11 @@ test("workspace transfers renders transfers and submits a transfer", async () =>
   });
   globalThis.fetch = fetchMock as typeof fetch;
   const view = render(<MemoryRouter><WorkspaceTransfers /></MemoryRouter>);
-  await waitFor(() => expect(view.getByText("wt-1")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("wt-1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New workspace transfer" }));
   fireEvent.change(view.getByLabelText("Source workspace"), { target: { value: "ws-1" } });
   fireEvent.change(view.getByLabelText("Destination organization"), { target: { value: "org-1" } });
   fireEvent.click(view.getByRole("button", { name: "Create transfer" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v2/workspace-transfers", expect.objectContaining({ method: "POST" })));
+  await waitFor(() => { expect(fetchMock).toHaveBeenCalledWith("/api/v2/workspace-transfers", expect.objectContaining({ method: "POST" })); });
 });
 

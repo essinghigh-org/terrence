@@ -220,6 +220,19 @@ export default tseslint.config(
     },
   },
 
+  // ── Legacy/dense components: inline handler arrows return types are
+  //    verbose and defeat readability (same rationale as the block above).
+  {
+    files: [
+      'frontend/src/components/OrganizationCidrRanges.tsx',
+      'frontend/src/components/WorkspaceConfigurationVersions.tsx',
+      'frontend/src/views/OrganizationSettings.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+
   // ── Relax rules for tests ──────────────────────────────────────────────
   {
     files: [
@@ -262,6 +275,16 @@ export default tseslint.config(
     files: ['backend/src/routes/**/*.ts', 'backend/src/app.ts', 'backend/src/worker.ts'],
     rules: {
       '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+    },
+  },
+  // ── Benchmark scaffolding is dev tooling; index lookups on fixed-size
+  //    arrays and mutable ctx rely on `!`/template access. ──────────────
+  {
+    files: ['backend/bench/**/*.ts'],
+    rules: {
+      '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+      '@typescript-eslint/restrict-template-expressions': 'off',
+      '@typescript-eslint/no-non-null-assertion': 'off',
     },
   },
   // ── Backend route/lib/worker code uses practical patterns ───────────

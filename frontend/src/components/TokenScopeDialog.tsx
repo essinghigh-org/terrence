@@ -19,11 +19,11 @@ import { toast } from "../components/ui/toast";
  * counterpart in the picker (selectors are explicit), matching the backend's
  * grant model.
  */
-const PERMISSION_GROUPS: ReadonlyArray<{
+const PERMISSION_GROUPS: readonly {
   readonly id: string;
   readonly label: string;
-  readonly grants: ReadonlyArray<{ readonly key: string; readonly label: string }>;
-}> = [
+  readonly grants: readonly { readonly key: string; readonly label: string }[];
+}[] = [
   {
     id: "workspaces",
     label: "Workspaces",
@@ -170,7 +170,7 @@ function emptyGroup(): TagGroupNode {
  * filled in, which the caller maps to `tags: null`.
  */
 function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: unknown[] } | null {
-  const convert = (node: TagRuleNode): unknown | null => {
+  const convert = (node: TagRuleNode): unknown => {
     if (node.kind === "filter") {
       const key = node.key.trim();
       if (key === "") return null;
@@ -212,12 +212,12 @@ type ProjectOption = Readonly<{ id: string; name: string }>;
 type WorkspaceOption = Readonly<{ id: string; name: string }>;
 
 /** Extract an `id` + `name` pair from a JSON:API resource item. */
-function resourceOptions<T extends { id: string; attributes?: Record<string, unknown> }>(
-  data: T[],
+function resourceOptions(
+  data: { id: string; attributes?: Record<string, unknown> }[],
   nameKey = "name",
-): Array<{ id: string; name: string }> {
+): { id: string; name: string }[] {
   return data.map((item): { id: string; name: string } => {
-    const attributes = (item.attributes ?? {}) as Record<string, unknown>;
+    const attributes = (item.attributes ?? {});
     const rawName = attributes[nameKey];
     return { id: item.id, name: typeof rawName === "string" ? rawName : item.id };
   });
@@ -252,7 +252,7 @@ export function TokenScopeDialog({
     if (!open) return;
     setError("");
     void fetchApi("/organizations?page[size]=100").then((response: unknown): void => {
-      const data = (response as { data?: Array<{ id: string; attributes?: Record<string, unknown> }> }).data ?? [];
+      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       const parsed = data
         .map((item): OrgOption => ({
           id: typeof item.attributes?.["external-id"] === "string" ? item.attributes["external-id"] : item.id,
@@ -263,7 +263,7 @@ export function TokenScopeDialog({
       if (parsed.length > 0) {
         setOrgId((current): string => (current === "" ? (parsed[0]?.id ?? "") : current));
       }
-    }).catch(() => { setError("Could not load organizations"); });
+    }).catch((): void => { setError("Could not load organizations"); });
   }, [open]);
 
   // Load projects + workspaces for the selected org. The org name (not id) is
@@ -276,14 +276,14 @@ export function TokenScopeDialog({
     setWorkspaces([]);
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response: unknown): void => {
       if (cancelled) return;
-      const data = (response as { data?: Array<{ id: string; attributes?: Record<string, unknown> }> }).data ?? [];
+      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       setProjects(resourceOptions(data));
-    }).catch(() => { /* org may not expose projects */ });
+    }).catch((): void => { /* org may not expose projects */ });
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response: unknown): void => {
       if (cancelled) return;
-      const data = (response as { data?: Array<{ id: string; attributes?: Record<string, unknown> }> }).data ?? [];
+      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       setWorkspaces(resourceOptions(data));
-    }).catch(() => { /* workspaces may not be listable */ });
+    }).catch((): void => { /* workspaces may not be listable */ });
     return (): void => { cancelled = true; };
   }, [open, orgId, orgs]);
 
@@ -302,7 +302,11 @@ export function TokenScopeDialog({
     });
   };
   const toggleGrant = (key: string): void => {
-    setGranted((prev): Record<string, boolean> => ({ ...prev, [key]: !prev[key] }));
+    setGranted((prev): Record<string, boolean> => {
+      const next = { ...prev };
+      next[key] = !(prev[key] ?? false);
+      return next;
+    });
   };
 
   // --- Tag rule builder mutations (immutable tree updates) ---
@@ -315,7 +319,8 @@ export function TokenScopeDialog({
       }
       const updateAt = (rules: TagRuleNode[], rest: readonly number[]): TagRuleNode[] => {
         if (rest.length === 0) return rules;
-        const head = rest[0] as number;
+        const head = rest[0];
+        if (head === undefined) return rules;
         return rules.map((rule, i): TagRuleNode => {
           if (i !== head) return rule;
           if (rest.length === 1) return mutate(rule);
@@ -331,7 +336,8 @@ export function TokenScopeDialog({
     setTagTree((root): TagGroupNode => {
       const appendAt = (rules: TagRuleNode[], rest: readonly number[]): TagRuleNode[] => {
         if (rest.length === 0) return [...rules, node];
-        const head = rest[0] as number;
+        const head = rest[0];
+        if (head === undefined) return rules;
         return rules.map((rule, i): TagRuleNode => {
           if (i !== head || rule.kind !== "group") return rule;
           return { ...rule, rules: appendAt(rule.rules, rest.slice(1)) };
@@ -345,7 +351,8 @@ export function TokenScopeDialog({
     setTagTree((root): TagGroupNode => {
       const removeAt = (rules: TagRuleNode[], rest: readonly number[]): TagRuleNode[] => {
         if (rest.length === 0) return rules;
-        const head = rest[0] as number;
+        const head = rest[0];
+        if (head === undefined) return rules;
         if (rest.length === 1) return rules.filter((_, i): boolean => i !== head);
         return rules.map((rule, i): TagRuleNode => {
           if (i !== head || rule.kind !== "group") return rule;
@@ -595,7 +602,7 @@ export function TokenScopeDialog({
         </div>
         <DialogFooter className="mt-4">
           <Button type="button" variant="outline" disabled={saving} onClick={(): void => { onOpenChange(false); reset(); }}>Cancel</Button>
-          <Button type="button" disabled={saving || (fineGrained && orgId === "")} onClick={(): Promise<void> => create()}>
+          <Button type="button" disabled={saving || (fineGrained && orgId === "")} onClick={async (): Promise<void> => create()}>
             {saving ? "Creating…" : "Create token"}
           </Button>
         </DialogFooter>

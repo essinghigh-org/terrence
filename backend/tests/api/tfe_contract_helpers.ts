@@ -4,7 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizationMemberships, organizations, users } from "../../src/db/schema";
 
-export interface TfeSeed {
+export type TfeSeed = {
   suffix: string;
   userId: string;
   username: string;
@@ -56,7 +56,7 @@ export const jsonHeaders = (token: string): Record<string, string> => ({
   "Content-Type": "application/vnd.api+json",
 });
 
-export interface JsonApiResource {
+export type JsonApiResource = {
   id: string;
   type: string;
   attributes: Record<string, unknown>;

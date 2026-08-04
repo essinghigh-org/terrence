@@ -169,7 +169,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       membersByTeam.set(m.teamId, refs);
     }
     const mappingByTeam = new Map(mappingRows.map((m: Readonly<{ readonly teamId: string; readonly scimGroupId: string; readonly syncPaused: boolean | null; readonly updatedAt: number }>): [string, Readonly<{ scimGroupId: string; syncPaused: boolean; updatedAt: number }>] => [m.teamId, { scimGroupId: m.scimGroupId, syncPaused: m.syncPaused ?? false, updatedAt: m.updatedAt }]));
-    const data = teamList.map((t: TeamItem): Promise<Record<string, unknown>> => {
+    const data = teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
       const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
       const mapping = mappingByTeam.get(t.id);
       const scim = scimEnabled

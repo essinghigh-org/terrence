@@ -4,7 +4,7 @@
 // Usage: bun run bench/diff.ts /tmp/before.json /tmp/after.json
 import { readFileSync } from "node:fs";
 
-interface Report {
+type Report = {
   commit: string;
   iterations: number;
   results: { name: string; status: number; avgMs: number; p95Ms: number; reqPerSec: number; queriesPerReq: number }[];

@@ -36,7 +36,7 @@ import {
   workspaceTags,
 } from "../src/db/schema";
 
-export interface BenchContext {
+export type BenchContext = {
   orgId: string;
   orgName: string;
   ownerUserId: string;
@@ -267,13 +267,12 @@ export async function seedBenchmark(): Promise<BenchContext> {
       await insert(rows.slice(i, i + CHUNK_SIZE));
     }
   };
-  await insertInChunks((rows): Promise<unknown> => db.insert(runs).values(rows), runRows);
-  await insertInChunks((rows): Promise<unknown> => db.insert(stateVersions).values(rows), stateRows);
+  await insertInChunks(async (rows): Promise<unknown> => db.insert(runs).values(rows), runRows);
+  await insertInChunks(async (rows): Promise<unknown> => db.insert(stateVersions).values(rows), stateRows);
 
   // Logs + comments + audit events for the first run, so log/comment/event
   // scenarios return real content.
   const firstRunId = runIds[0]!;
-  const firstWorkspaceId = workspaceIds[0]!;
   await db.insert(logs).values([
     { id: `log-${randomUUID()}`, runId: firstRunId, phase: "plan", outputText: "Terraform will perform the following actions:\n  # aws_instance.bench\n  + resource \"aws_instance\" \"bench\" {\n      + ami = \"ami-123\"\n    }\nPlan: 1 to add, 0 to change, 0 to destroy.\n", createdAt: now },
     { id: `log-${randomUUID()}`, runId: firstRunId, phase: "apply", outputText: "Apply complete! Resources: 1 added.\n", createdAt: now },
@@ -303,7 +302,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
     status: "ok",
     createdAt: now,
   }));
-  await insertInChunks((rows): Promise<unknown> => db.insert(registryModuleVersions).values(rows), moduleVersionRows);
+  await insertInChunks(async (rows): Promise<unknown> => db.insert(registryModuleVersions).values(rows), moduleVersionRows);
 
   // Policy sets + policies + workspace links.
   const policySetIds = Array.from({ length: POLICY_SET_COUNT }, (): string => `ps-${randomUUID()}`);
@@ -325,7 +324,7 @@ export async function seedBenchmark(): Promise<BenchContext> {
     { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-a`, enforcementLevel: "soft-mandatory", createdAt: now },
     { id: `pol-${randomUUID()}`, policySetId: setId, name: `policy-${setIndex + 1}-b`, enforcementLevel: "advisory", createdAt: now },
   ]);
-  await insertInChunks((rows): Promise<unknown> => db.insert(policies).values(rows), policyRows);
+  await insertInChunks(async (rows): Promise<unknown> => db.insert(policies).values(rows), policyRows);
   const firstPolicyId = policyRows[0]!.id;
 
   const variableSetIds = Array.from({ length: 3 }, (): string => `vs-${randomUUID()}`);

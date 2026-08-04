@@ -44,7 +44,7 @@ function freePort(): Promise<number> {
     srv.once("error", rejectFn);
     srv.listen(0, "127.0.0.1", () => {
       const port = (srv.address() as { port: number }).port;
-      srv.close(() => resolveFn(port));
+      srv.close(() => { resolveFn(port); });
     });
   });
 }
@@ -367,7 +367,7 @@ resource "null_resource" "probe" {
     sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
   }
   expect(sv.status, `current-state-version for workspace ${wsId} did not become available (last status ${sv.status}): ${sv.text.slice(0, 300)}`).toBe(200);
-  const resources = sv.json.data.attributes.resources as Array<{ name: string; type: string }>;
+  const resources = sv.json.data.attributes.resources as { name: string; type: string }[];
   expect(resources.some((r): boolean => r.name === "probe" && r.type === "null_resource")).toBe(true);
 
   const apply = await api(port, "GET", `/api/v2/runs/${runId}/apply`, undefined, token);
@@ -407,7 +407,7 @@ describe("tfe provider e2e", () => {
 
           const cfgDir = join(workDir, "config");
           await mkdir(cfgDir, { recursive: true });
-          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port as number, auth.token));
+          await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
 
           cliOk(await cli(bin, ["init", "-input=false", "-no-color"], cfgDir, cliEnv), "init");
@@ -428,11 +428,11 @@ describe("tfe provider e2e", () => {
           cliOk(destroy, "destroy");
           expect(destroy.out).toContain("Destroy complete");
         } finally {
-          proxy.stop(true);
+          await proxy.stop(true);
         }
       } finally {
         backend.proc.kill();
-        await rm(workDir, { recursive: true, force: true }).catch(() => {});
+        await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
       }
     }, 900_000);
   }

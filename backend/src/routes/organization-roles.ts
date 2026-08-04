@@ -55,7 +55,11 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
     const membership = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, params.id ?? "") });
     if (membership === undefined || !(await checkOrganizationPermission(membership.orgId, user?.id, orgId, teamId, "manage-membership"))) return error(set, 404, "Membership not found");
     const ids = Array.isArray(object(body).data) ? object(body).data as unknown[] : [];
-    const roleIds = ids.map((item): string => typeof item === "string" ? item : String(object(item).id ?? "")).filter((id): id is string => typeof id === "string");
+    const roleIds = ids.map((item): string => {
+      if (typeof item === "string") return item;
+      const rawId = object(item).id;
+      return typeof rawId === "string" ? rawId : "";
+    }).filter((id): id is string => typeof id === "string");
     const roles = roleIds.length === 0 ? [] : await db.query.organizationRoles.findMany({ where: and(eq(organizationRoles.orgId, membership.orgId), inArray(organizationRoles.id, roleIds)) });
     if (roles.length !== new Set(roleIds).size) return error(set, 422, "All roles must belong to this organization");
     await db.transaction(async (tx) => { await tx.delete(organizationMembershipRoles).where(eq(organizationMembershipRoles.membershipId, membership.id)); if (roles.length > 0) await tx.insert(organizationMembershipRoles).values(roles.map((role) => ({ membershipId: membership.id, roleId: role.id, createdAt: Date.now() }))); });

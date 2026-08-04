@@ -219,7 +219,7 @@ export function ProjectDetail({
     try {
       await fetchApi(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
       toast.add({ title: "Project deleted", type: "success" });
-      navigate(`${orgPath}/projects`);
+      void navigate(`${orgPath}/projects`);
     } catch (error: unknown) {
       toast.add({
         title: "Could not delete project",
@@ -251,9 +251,10 @@ export function ProjectDetail({
           },
         }),
       }) as { data?: VariableSet };
-      if (response.data !== undefined) {
+      const created = response.data;
+      if (created !== undefined) {
         setVariableSets((current: VariableSet[]): VariableSet[] =>
-          [...current, response.data as VariableSet].sort((a, b): number =>
+          [...current, created].sort((a, b): number =>
             a.attributes.name.localeCompare(b.attributes.name)));
       }
       setCreateVsOpen(false);
@@ -315,7 +316,7 @@ export function ProjectDetail({
             <h1 className="truncate text-3xl font-bold tracking-tight text-foreground">
               {project === null ? "Project" : project.attributes.name}
             </h1>
-            {project !== null && project.attributes["workspace-count"] !== undefined && (
+            {project?.attributes["workspace-count"] !== undefined && (
               <Badge variant="secondary">{project.attributes["workspace-count"]} workspace{project.attributes["workspace-count"] === 1 ? "" : "s"}</Badge>
             )}
           </div>
@@ -343,8 +344,8 @@ export function ProjectDetail({
             <Button
               variant="outline"
               onClick={(): void => {
-                setName(project?.attributes.name ?? "");
-                setDescription(project?.attributes.description ?? "");
+                setName(project.attributes.name);
+                setDescription(project.attributes.description ?? "");
                 setFormError("");
                 setEditOpen(true);
               }}
@@ -688,7 +689,7 @@ export function ProjectDetail({
         title="Delete project"
         description={`Permanently delete "${project?.attributes.name ?? "this project"}"? Only empty projects can be deleted.`}
         confirmText={deleting ? "Deleting…" : "Delete project"}
-        onConfirm={(): Promise<void> => deleteProject()}
+        onConfirm={async (): Promise<void> => deleteProject()}
       />
 
       {/* Create project variable set dialog */}

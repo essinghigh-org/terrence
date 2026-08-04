@@ -8,7 +8,7 @@ async function api(
   token?: string,
 ): Promise<{ status: number; json: { data?: Record<string, unknown>; errors?: { status: string; title: string; detail?: string }[] } }> {
   const headers: Record<string, string> = {};
-  if (token !== undefined && token !== "") headers["Authorization"] = `Bearer ${token}`;
+  if (token !== undefined && token !== "") headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
   const res = await app.handle(new Request(`http://localhost${path}`, {
     method,

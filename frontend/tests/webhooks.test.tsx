@@ -48,7 +48,9 @@ test("loads workspace webhooks and creates a webhook using notification configur
   await waitFor((): void => { expect(view.getByText("Deploy alerts")).toBeTruthy(); });
   const postCall = fetchMock.mock.calls.find(([, options]) => options?.method === "POST");
   expect(postCall).toBeTruthy();
-  expect(JSON.parse((postCall?.[1] as RequestInit).body as string)).toEqual({
+  const postRequest = postCall?.[1];
+  expect(postRequest).toBeTruthy();
+  expect(JSON.parse(postRequest?.body as string)).toEqual({
     data: {
       type: "notification-configurations",
       attributes: {

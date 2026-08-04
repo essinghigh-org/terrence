@@ -3,7 +3,7 @@
 // for latency and SQL queries.
 import type { BenchContext } from "./seed";
 
-export interface BenchScenario {
+export type BenchScenario = {
   readonly name: string;
   readonly method?: "GET" | "POST" | "PATCH" | "DELETE";
   /** `iteration` is provided so create-style scenarios can target a fresh resource. */

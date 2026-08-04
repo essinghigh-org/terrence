@@ -23,7 +23,7 @@ afterEach((): void => {
 });
 
 test("enrolls MFA after verifying an authenticator code", async () => {
-  const calls: Array<[string, RequestInit | undefined]> = [];
+  const calls: [string, RequestInit | undefined][] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);
@@ -47,7 +47,7 @@ test("enrolls MFA after verifying an authenticator code", async () => {
 });
 
 test("completes an MFA login challenge without exposing the password again", async () => {
-  const calls: Array<[string, RequestInit | undefined]> = [];
+  const calls: [string, RequestInit | undefined][] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);

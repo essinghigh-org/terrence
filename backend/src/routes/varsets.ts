@@ -123,8 +123,8 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const global = typeof attributes.global === "boolean" ? attributes.global : false;
     const priority = typeof attributes.priority === "boolean" ? attributes.priority : false;
-    const parentProjectId = attributes["parent-project-id"] !== undefined && attributes["parent-project-id"] !== null
-      ? String(attributes["parent-project-id"])
+    const parentProjectId = typeof attributes["parent-project-id"] === "string"
+      ? attributes["parent-project-id"]
       : null;
     if (parentProjectId !== null) {
       const parent = await db.query.projects.findFirst({ where: eq(projects.id, parentProjectId) });

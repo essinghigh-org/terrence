@@ -30,13 +30,13 @@ const tokenScopesStorage = new AsyncLocalStorage<TokenScopes | null>();
  */
 const requestCacheStorage = new AsyncLocalStorage<Map<string, unknown>>();
 
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T drives the body's cast and call-site typing.
 export function requestCacheGet<T>(key: string): T | undefined {
   return requestCacheStorage.getStore()?.get(key) as T | undefined;
 }
 
-export function requestCacheSet<T>(key: string, value: T): T {
+export function requestCacheSet(key: string, value: unknown): void {
   requestCacheStorage.getStore()?.set(key, value);
-  return value;
 }
 
 /** Set the scopes for the current request. Called by the auth plugin. */

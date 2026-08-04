@@ -229,7 +229,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
         title="Delete reserved tag key"
         description={`Delete the reserved key "${toDelete?.attributes.key ?? ""}"?`}
         confirmText={deleting ? "Deleting…" : "Delete key"}
-        onConfirm={(): Promise<void> => remove()}
+        onConfirm={async (): Promise<void> => remove()}
       />
     </Card>
   );

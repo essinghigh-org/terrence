@@ -59,15 +59,15 @@ export const authPlugin = new Elysia({ name: "auth" })
 
     // Lookup by hash. The user row is JOINed in so the common user-token path
     // costs ONE query instead of two (api_tokens + users).
-    const lookup = async (): Promise<{ token: AuthToken | undefined; user: (typeof users.$inferSelect) | null }> => {
-      const row = await db.select({ token: apiTokens, user: users })
+    const lookup = (): { token: AuthToken | undefined; user: (typeof users.$inferSelect) | null } => {
+      const row = db.select({ token: apiTokens, user: users })
         .from(apiTokens)
         .leftJoin(users, eq(users.id, apiTokens.userId))
         .where(eq(apiTokens.token, tokenHash))
         .get();
       return { token: row?.token, user: row?.user ?? null };
     };
-    let { token, user } = await lookup();
+    let { token, user } = lookup();
 
 
     // Legacy fallback: re-hash plaintext token on successful use

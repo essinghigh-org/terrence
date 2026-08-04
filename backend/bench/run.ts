@@ -47,7 +47,7 @@ function parseArgs(): { iterations: number; warmup: number; jsonOut: string | nu
   };
 }
 
-interface ScenarioResult {
+type ScenarioResult = {
   name: string;
   path: string;
   status: number;
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
     dbMod.setQueryLogging(false);
     const total = [...perStatement.values()].reduce((sum, value): number => sum + value, 0);
     console.log(`\nQuery breakdown for "${target.name}" (${total} statements over ${Math.max(iterations, 10)} runs)\n`);
-    console.log(`${"count".padStart(6)} ${"sql"}`);
+    console.log(`${"count".padStart(6)} sql`);
     console.log("-".repeat(120));
     const sorted = [...perStatement.entries()].sort((a, b): number => b[1] - a[1]);
     for (const [sql, count] of sorted) {
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
       timestamp: new Date().toISOString(),
       iterations,
       ...(memory ? { peakRssMb: Math.round(peakRss / 1024 / 1024) } : {}),
-      results: results.map(({ queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
+      results: results.map(({ queryCounts: _queryCounts, ...rest }): Omit<ScenarioResult, "queryCounts"> => rest),
     }, null, 2));
     console.log(`Wrote ${jsonOut}`);
   }

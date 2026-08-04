@@ -469,7 +469,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         : [...allowedWorkspaceIds].map((id: string): Readonly<{ id: string }> => ({ id }));
       const latestRunRows = orgWorkspaceIdRows.length === 0
         ? []
-        : await db.all<{ workspaceId: string; status: string }>(sql`
+        : db.all<{ workspaceId: string; status: string }>(sql`
           SELECT workspace_id AS workspaceId, status
           FROM (
             SELECT workspace_id, status,

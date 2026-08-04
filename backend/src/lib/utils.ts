@@ -22,7 +22,6 @@ import {
   evaluateTagExpression,
   type WorkspacePermissionGrant,
   type TokenScopes,
-  type TokenScopeTags,
 } from "./token-scopes";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
@@ -201,7 +200,7 @@ function organizationPermissionGrant(required: OrganizationPermission): Workspac
  * permission evaluation so handlers that render many org permissions (org
  * detail evaluates ~9) read the base once and derive the rest in memory.
  */
-interface OrgAccessDetails {
+type OrgAccessDetails = {
   readonly isOwner: boolean;
   readonly isMember: boolean;
   readonly directRoles: readonly (typeof organizationRoles.$inferSelect)[];
@@ -360,6 +359,7 @@ async function loadOrgAccessDetailsUncached(orgId: string, userId: string): Prom
 }
 
 /** Evaluate one org permission against access details (pure). */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- access-facts types carry mutable element types but are treated as read-only here.
 function deriveOrgAccessAllows(details: OrgAccessDetails, required: OrganizationPermission): boolean {
   if (details.isOwner) return true;
   if (!details.isMember) return false;
@@ -561,7 +561,7 @@ async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string): Promi
       }
       // Evaluate every org workspace, including tagless ones (empty tag set).
       for (const workspaceId of orgWorkspaceIds) {
-        if (evaluateTagExpression(scope.tags as TokenScopeTags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
+        if (evaluateTagExpression(scope.tags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
           matching.add(workspaceId);
         }
       }
@@ -600,7 +600,7 @@ function workspacePermissionGrant(required: WorkspacePermission): readonly Works
  * 10-permission-level workspace handlers into one set of DB reads plus
  * in-memory derivations.
  */
-interface WorkspaceAccessBase {
+type WorkspaceAccessBase = {
   readonly orgId: string;
   readonly userId: string | undefined;
   readonly tokenOrgId: string | null;
@@ -707,6 +707,7 @@ async function loadWorkspaceAccessBaseUncached(
  * single-level implementation so behavior is unchanged.
  */
 function deriveWorkspaceIdsForRequired(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- access-base type carries mutable element types but is treated as read-only here.
   base: WorkspaceAccessBase,
   required: WorkspacePermission,
 ): readonly string[] | null {
@@ -792,7 +793,7 @@ export async function workspaceIdsForPermission(
 }
 
 /** The ten permission levels the workspace resource builders need. */
-export interface WorkspacePermissionSets {
+export type WorkspacePermissionSets = {
   read: ReadonlySet<string> | null;
   plan: ReadonlySet<string> | null;
   apply: ReadonlySet<string> | null;
@@ -863,6 +864,7 @@ export async function workspacePermissionSets(
 }
 
 /** Convenience: null (unrestricted) or the set contains the workspace. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule mis-flags it in a null-union.
 export function workspaceAllows(set: ReadonlySet<string> | null, workspaceId: string): boolean {
   return set === null || set.has(workspaceId);
 }

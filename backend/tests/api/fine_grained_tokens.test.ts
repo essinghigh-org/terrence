@@ -11,7 +11,7 @@ import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
 
 const AUTH_PREFIX = "Bea" + "rer ";
 
-interface ScopedSeed {
+type ScopedSeed = {
   suffix: string;
   userId: string;
   username: string;
@@ -175,7 +175,7 @@ async function createScopedToken(
   });
   expect(res.status).toBe(201);
   const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
-  return { id: body.data.id, secret: body.data.attributes.token as string };
+  return { id: body.data.id, secret: body.data.attributes.token! };
 }
 
 describe("fine-grained user tokens", () => {

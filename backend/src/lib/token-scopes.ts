@@ -329,7 +329,7 @@ export function parseTokenScopes(raw: unknown): TokenScopes | null {
     projects: (projects as string[] | null | undefined) ?? null,
     workspaces: (workspaces as string[] | null | undefined) ?? null,
     tags,
-    permissions: permissions as Partial<Record<WorkspacePermissionGrant, boolean>>,
+    permissions: permissions,
   };
   return scope;
 }
@@ -386,6 +386,7 @@ export function scopeCoversProject(scope: TokenScopes, projectId: string | null)
  * A leaf matches when the tag is present; a group matches when its rules
  * combine to true under its combinator (AND = all, OR = any).
  */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive readonly alias is flagged; the type is already immutable.
 export function evaluateTagRule(rule: TokenScopeTagRule, tags: ReadonlySet<string>): boolean {
   if ("combinator" in rule) {
     return rule.combinator === "AND"
@@ -396,6 +397,7 @@ export function evaluateTagRule(rule: TokenScopeTagRule, tags: ReadonlySet<strin
 }
 
 /** Evaluate a tag expression against a workspace's tags. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive readonly alias is flagged; the type is already immutable.
 export function evaluateTagExpression(expression: TokenScopeTags, tags: ReadonlySet<string>): boolean {
   return expression.combinator === "AND"
     ? expression.rules.every((rule): boolean => evaluateTagRule(rule, tags))

@@ -54,7 +54,7 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
       });
     }
     if (url === "/api/v2/tokens" && init?.method === "POST") {
-      posted = JSON.parse(String(init.body));
+      posted = JSON.parse(init.body as string);
       return json({ data: { id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } } });
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -72,7 +72,7 @@ function tagGroupQueries(dialog: HTMLElement): {
   nestedAddCondition: () => HTMLElement;
 } {
   const groups = (): HTMLElement[] => within(dialog).getAllByTestId("tag-group");
-  const root = (): HTMLElement => groups()[0] as HTMLElement;
+  const root = (): HTMLElement => groups()[0]!;
   const nested = (): HTMLElement | null => groups()[1] ?? null;
   const outsideNested = (els: HTMLElement[]): HTMLElement[] =>
     els.filter((el): boolean => !(nested()?.contains(el) ?? false));
@@ -83,10 +83,10 @@ function tagGroupQueries(dialog: HTMLElement): {
   return {
     rootKeys: (): HTMLElement[] => outsideNested(within(root()).getAllByLabelText("Tag key")),
     nestedKeys: inNested,
-    rootCombinator: (): HTMLElement => outsideNested(within(root()).getAllByLabelText("Combine with"))[0] as HTMLElement,
-    nestedCombinator: (): HTMLElement => (nested() as HTMLElement) ? within(nested() as HTMLElement).getByLabelText("Combine with") : (() => { throw new Error("no nested group"); })(),
-    rootAddCondition: (): HTMLElement => outsideNested(within(root()).getAllByRole("button", { name: "Add condition" }))[0] as HTMLElement,
-    nestedAddCondition: (): HTMLElement => (nested() as HTMLElement) ? within(nested() as HTMLElement).getByRole("button", { name: "Add condition" }) : (() => { throw new Error("no nested group"); })(),
+    rootCombinator: (): HTMLElement => outsideNested(within(root()).getAllByLabelText("Combine with"))[0]!,
+    nestedCombinator: (): HTMLElement => (nested()!) ? within(nested()!).getByLabelText("Combine with") : (() => { throw new Error("no nested group"); })(),
+    rootAddCondition: (): HTMLElement => outsideNested(within(root()).getAllByRole("button", { name: "Add condition" }))[0]!,
+    nestedAddCondition: (): HTMLElement => (nested()!) ? within(nested()!).getByRole("button", { name: "Add condition" }) : (() => { throw new Error("no nested group"); })(),
   };
 }
 
@@ -176,8 +176,8 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   const q = tagGroupQueries(dialog);
 
   // First condition: foo=bar at the root.
-  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "foo" } });
-  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0] as HTMLElement, { target: { value: "bar" } });
+  fireEvent.input(q.rootKeys()[0]!, { target: { value: "foo" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0]!, { target: { value: "bar" } });
 
   // Wrap it into a nested group, then switch that group to AND.
   fireEvent.click(within(dialog).getByRole("button", { name: "group" }));
@@ -191,8 +191,8 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   await waitFor((): void => {
     expect(q.nestedKeys().length).toBe(2);
   });
-  fireEvent.input(q.nestedKeys()[1] as HTMLElement, { target: { value: "baz" } });
-  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1] as HTMLElement, { target: { value: "bing" } });
+  fireEvent.input(q.nestedKeys()[1]!, { target: { value: "baz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1]!, { target: { value: "bing" } });
 
   // Add a sibling condition at the root: xyz=abc. (foo=bar was wrapped into
   // the nested group, so the root has exactly one key row again.)
@@ -200,8 +200,8 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   await waitFor((): void => {
     expect(q.rootKeys().length).toBe(1);
   });
-  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "xyz" } });
-  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[2] as HTMLElement, { target: { value: "abc" } });
+  fireEvent.input(q.rootKeys()[0]!, { target: { value: "xyz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[2]!, { target: { value: "abc" } });
 
   // Live label renders the nested expression.
   await waitFor((): void => {
@@ -243,8 +243,8 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
   // the ROOT to AND: the payload must show root AND + nested OR. If a bug
   // made nested groups follow the root combinator, the nested OR would
   // silently become AND and the assertion would fail.
-  fireEvent.input(q.rootKeys()[0] as HTMLElement, { target: { value: "foo" } });
-  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0] as HTMLElement, { target: { value: "bar" } });
+  fireEvent.input(q.rootKeys()[0]!, { target: { value: "foo" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[0]!, { target: { value: "bar" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "group" }));
   await waitFor((): void => {
     expect(within(dialog).getAllByTestId("tag-group").length).toBe(2);
@@ -253,8 +253,8 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
   await waitFor((): void => {
     expect(q.nestedKeys().length).toBe(2);
   });
-  fireEvent.input(q.nestedKeys()[1] as HTMLElement, { target: { value: "baz" } });
-  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1] as HTMLElement, { target: { value: "bing" } });
+  fireEvent.input(q.nestedKeys()[1]!, { target: { value: "baz" } });
+  fireEvent.input(within(dialog).getAllByLabelText("Tag value")[1]!, { target: { value: "bing" } });
 
   fireEvent.change(q.rootCombinator(), { target: { value: "AND" } });
 

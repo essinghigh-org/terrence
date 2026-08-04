@@ -13,12 +13,12 @@ export function generateTotpSecret(bytes = 20): string {
     value = (value << 8) | byte;
     bits += 8;
     while (bits >= 5) {
-      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31] ?? "";
       bits -= 5;
     }
   }
   if (bits > 0) {
-    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31] ?? "";
   }
   return output;
 }
@@ -53,6 +53,7 @@ export function otpauthUrl(secret: string, account: string, issuer = "Terrence")
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Buffer is the idiomatic HMAC key type and Readonly<Buffer> is rejected by node:crypto.
 function hotp(key: Buffer, counter: number): number {
   const counterBuffer = Buffer.alloc(8);
   counterBuffer.writeBigUInt64BE(BigInt(counter));

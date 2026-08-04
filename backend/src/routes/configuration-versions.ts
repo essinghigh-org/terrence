@@ -110,7 +110,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "auto-queue-runs must be boolean" }] };
     }
-    const autoQueueRuns = rawAutoQueueRuns === undefined ? true : rawAutoQueueRuns;
+    const autoQueueRuns = rawAutoQueueRuns ?? true;
     const createdAt = Date.now();
     const cv: ConfigurationVersion = {
       id,

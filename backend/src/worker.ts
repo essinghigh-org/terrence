@@ -1129,8 +1129,8 @@ export async function executeRun(runId: string): Promise<void> {
 
       // Check if the plan has drift that needs to be applied to state
       const hasDrift = planJson !== undefined
-        && Array.isArray((planJson as Record<string, unknown>)["resource_drift"])
-        && ((planJson as Record<string, unknown>)["resource_drift"] as unknown[]).length > 0;
+        && Array.isArray((planJson as Record<string, unknown>).resource_drift)
+        && ((planJson as Record<string, unknown>).resource_drift as unknown[]).length > 0;
 
       if (run.planOnly) {
         await updateRunStatus(runId, "planned_and_finished");

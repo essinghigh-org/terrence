@@ -198,7 +198,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess || newRoleName.trim() === "") return;
     setSavingRole(true);
     try {
-      await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`, { method: "POST", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: newRoleName.trim(), description: newRoleDescription.trim() || null, permissions: newRolePermissions } } }) });
+      await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`, { method: "POST", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: newRoleName.trim(), description: newRoleDescription.trim() === "" ? null : newRoleDescription.trim(), permissions: newRolePermissions } } }) });
       setNewRoleName(""); setNewRoleDescription(""); setNewRolePermissions({}); await loadRoles();
       toast.add({ title: "Role created", type: "success" });
     } catch (error: unknown) { toast.add({ title: "Could not create role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
@@ -343,7 +343,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess) return;
     setEditingTeamId(team.id);
     setTeamPermissions(teamOrganizationAccess(team));
-    setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string) ?? "organization" }));
+    setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string | undefined) ?? "organization" }));
     setTeamTokenMgmt((prev) => ({ ...prev, [team.id]: team.attributes["allow-member-token-management"] === true }));
     // Load team members via include=users (returns included user resources)
     void fetchApi(`/teams/${encodeURIComponent(team.id)}?include=users`).then((response: unknown): void => {
@@ -353,8 +353,8 @@ export function OrganizationSettings(): React.JSX.Element {
       };
       if (r.data !== undefined) {
         const d = r.data;
-        setTeamMemberCounts((prev) => ({ ...prev, [team.id]: (d.attributes["users-count"] as number) ?? 0 }));
-        const userRelations = ((d.relationships as Record<string, unknown> | undefined)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+        setTeamMemberCounts((prev) => ({ ...prev, [team.id]: (d.attributes["users-count"] as number | undefined) ?? 0 }));
+        const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
         const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
           u.id,
           { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" },
@@ -443,7 +443,7 @@ export function OrganizationSettings(): React.JSX.Element {
         const r = response as { data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] };
         if (r.data !== undefined) {
           const d = r.data;
-          const userRelations = ((d.relationships as Record<string, unknown> | undefined)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+          const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
           const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [u.id, { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" }]));
           const members = userRelations.map((u): { id: string; username: string; email: string } => userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
           setTeamMemberList((prev) => ({ ...prev, [teamId]: members }));
@@ -798,7 +798,7 @@ export function OrganizationSettings(): React.JSX.Element {
                   <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>{savingRole ? "Creating…" : "Create role"}</Button>
                 </form>
                 <div className="divide-y rounded-md border">
-                  {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description || "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void updateRolePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
+                  {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description ?? "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void updateRolePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
                   {roles.length === 0 && <p className="p-5 text-sm text-muted-foreground">No reusable roles yet.</p>}
                 </div>
               </CardContent>
@@ -1069,7 +1069,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                   <Button
                                     type="button"
                                     size="sm"
-                                    disabled={!addMemberTeam[team.id]}
+                                    disabled={addMemberTeam[team.id] === undefined || addMemberTeam[team.id] === ""}
                                     onClick={(): void => { void addTeamMember(team.id); }}
                                   >
                                     Add member

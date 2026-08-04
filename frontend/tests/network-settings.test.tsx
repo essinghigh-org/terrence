@@ -20,10 +20,10 @@ test("manages CIDR lists and ranges through the JSON API", async () => {
   });
   globalThis.fetch = fetchMock as typeof fetch;
   const view = render(<OrganizationCidrRanges orgName="acme" />);
-  await waitFor(() => expect(view.getByText("10.0.0.0/8")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("10.0.0.0/8")).toBeTruthy(); });
   fireEvent.input(view.getByLabelText("CIDR range"), { target: { value: "192.168.0.0/16" } });
   fireEvent.click(view.getByRole("button", { name: "Add range" }));
-  await waitFor(() => expect(view.getByText("192.168.0.0/16")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("192.168.0.0/16")).toBeTruthy(); });
   expect(fetchMock.mock.calls.some(([input]) => urlOf(input) === "/api/v2/cidr-ranges")).toBe(true);
 });
 
@@ -36,7 +36,7 @@ test("lists and creates workspace configuration versions", async () => {
   });
   globalThis.fetch = fetchMock as typeof fetch;
   const view = render(<WorkspaceConfigurationVersions workspaceId="ws-1" />);
-  await waitFor(() => expect(view.getByText("cv-1")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("cv-1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New version" }));
-  await waitFor(() => expect(view.getByText("cv-2")).toBeTruthy());
+  await waitFor(() => { expect(view.getByText("cv-2")).toBeTruthy(); });
 });

@@ -15,7 +15,7 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
     const response = await fetchApi(`/workspaces/${workspaceId}/configuration-versions?page[size]=50`) as { data?: ConfigurationVersion[] };
     setVersions(Array.isArray(response.data) ? response.data : []);
   };
-  useEffect(() => { void load().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Could not load configuration versions")).finally(() => setLoading(false)); }, [workspaceId]);
+  useEffect(() => { void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
   const createVersion = async (): Promise<void> => {
     setCreating(true); setError("");
     try {
@@ -25,8 +25,8 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
   };
   return <Card className="max-w-4xl">
     <CardHeader className="flex-row items-start justify-between gap-4"><div><CardTitle>Configuration versions</CardTitle><CardDescription>Prepare and track configuration archives for this workspace.</CardDescription></div><Button type="button" onClick={() => void createVersion()} disabled={creating}>{creating ? "Creating…" : "New version"}</Button></CardHeader>
-    <CardContent>{error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}{loading ? <p className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{version.attributes["created-at"] ? ` · ${new Date(version.attributes["created-at"] as string).toLocaleString()}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
+    <CardContent>{error !== "" && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}{loading ? <p className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{typeof version.attributes["created-at"] === "string" && version.attributes["created-at"] !== "" ? ` · ${new Date(version.attributes["created-at"]).toLocaleString()}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
   </Card>;
 }
 
-export function __configurationVersionStatus(version: ConfigurationVersion): string { return version.attributes.status ?? "pending"; }
+export function configurationVersionStatus(version: ConfigurationVersion): string { return version.attributes.status ?? "pending"; }
