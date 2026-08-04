@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import * as bcrypt from "bcryptjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
@@ -49,7 +48,7 @@ describe("Terraform login OAuth", () => {
     await db.insert(users).values({
       id: userId,
       username,
-      passwordHash: await bcrypt.hash(password, 10),
+      passwordHash: await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 }),
     });
   });
 

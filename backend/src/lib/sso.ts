@@ -1,7 +1,6 @@
 // Shared plumbing for SAML, OIDC, and LDAP authentication: settings reads,
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
-import * as bcrypt from "bcryptjs";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
@@ -246,8 +245,9 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   }
 
   const userId = `usr-${crypto.randomUUID()}`;
-  // Deliberately malformed bcrypt value: bcrypt.compare returns false without
-  // spending work deriving a password hash for an account that cannot use one.
+  // Deliberately malformed bcrypt value: Bun.password.verify rejects it, and
+  // passwordMatches' catch returns false without spending work deriving a
+  // password hash for an account that cannot use one.
   const unusableHash = `$disabled$${randomBytes(32).toString("base64url")}`;
   // Two parallel first logins can both pass the identity/username lookups and
   // both reach this insert; onConflictDoNothing makes the second one a no-op,
@@ -475,7 +475,7 @@ const DUMMY_PASSWORD_HASH = "$2b$10$./PtU.lbOie2J8A136xCHebbWWXw66h5mpFJQiXmWzmu
 /** Compare local passwords safely, including nonexistent and unusable accounts. */
 export async function passwordMatches(password: string, passwordHash = DUMMY_PASSWORD_HASH): Promise<boolean> {
   try {
-    return await bcrypt.compare(password, passwordHash);
+    return await Bun.password.verify(password, passwordHash).catch(() => false);
   } catch {
     return false;
   }

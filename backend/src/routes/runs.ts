@@ -104,6 +104,80 @@ function gravatarUrl(email: string | null | undefined): string {
   return `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
 }
 
+const RUN_VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
+const RUN_ADDRESS_PATTERN = /^[A-Za-z0-9_.,:\\[\]()"-]+$/;
+const RUN_CONTROL_CHARS = /[\x00-\x1F\x7F]/;
+const MAX_RUN_VARIABLE_VALUE_BYTES = 1024 * 1024;
+
+function invalidRunInput(set: SetObj, detail: string): { errors: { status: string; title: string; detail: string }[] } {
+  (set as { status: number }).status = 422;
+  return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
+}
+
+/**
+ * Validate the per-run Terraform inputs before they are stored and later
+ * forwarded to the CLI as `-var=` / `-target=` / `-replace=` arguments. These
+ * become single argv elements (no shell), so they cannot inject flags, but this
+ * guards against malformed shapes (which would otherwise throw in the worker)
+ * and rejects control characters so untrusted input never reaches the plan log,
+ * the tfvars file, or the database.
+ */
+function validateRunInputs(
+  variables: unknown,
+  targetAddrs: unknown,
+  replaceAddrs: unknown,
+  set: SetObj,
+): { errors: { status: string; title: string; detail: string }[] } | null {
+  if (targetAddrs !== null && targetAddrs !== undefined && !Array.isArray(targetAddrs)) return invalidRunInput(set, "target-addrs must be an array");
+  if (replaceAddrs !== null && replaceAddrs !== undefined && !Array.isArray(replaceAddrs)) return invalidRunInput(set, "replace-addrs must be an array");
+  if (variables !== null && variables !== undefined && !Array.isArray(variables)) return invalidRunInput(set, "variables must be an array");
+
+  for (const rawTarget of targetAddrs ?? []) {
+    if (
+      typeof rawTarget !== "string"
+      || rawTarget === ""
+      || rawTarget.length > 1024
+      || rawTarget.startsWith("-")
+      || RUN_CONTROL_CHARS.test(rawTarget)
+      || /\s/.test(rawTarget)
+      || !RUN_ADDRESS_PATTERN.test(rawTarget)
+    ) return invalidRunInput(set, "target-addrs contains an invalid address");
+  }
+  for (const rawReplacement of replaceAddrs ?? []) {
+    if (
+      typeof rawReplacement !== "string"
+      || rawReplacement === ""
+      || rawReplacement.length > 1024
+      || rawReplacement.startsWith("-")
+      || RUN_CONTROL_CHARS.test(rawReplacement)
+      || /\s/.test(rawReplacement)
+      || !RUN_ADDRESS_PATTERN.test(rawReplacement)
+    ) return invalidRunInput(set, "replace-addrs contains an invalid address");
+  }
+  for (const rawVariable of variables ?? []) {
+    if (rawVariable === null || typeof rawVariable !== "object" || Array.isArray(rawVariable)) {
+      return invalidRunInput(set, "variables must be an array of objects with a key and value");
+    }
+    const variable = rawVariable as Readonly<Record<string, unknown>>;
+    const key = variable.key;
+    const value = variable.value;
+    if (
+      typeof key !== "string"
+      || key === ""
+      || key.length > 256
+      || key.startsWith("-")
+      || RUN_CONTROL_CHARS.test(key)
+      || !RUN_VARIABLE_KEY_PATTERN.test(key)
+    ) return invalidRunInput(set, "variables contains an invalid variable key");
+    if (
+      typeof value !== "string"
+      || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
+      || RUN_CONTROL_CHARS.test(value)
+    ) return invalidRunInput(set, "variables contains an invalid variable value");
+  }
+  return null;
+}
+
 function actionComment(body: unknown): string {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
   const data = payload.data as Record<string, unknown> | undefined;
@@ -179,6 +253,13 @@ export async function createRun(
   if (terraformVersion !== undefined && !validateVersion(terraformVersion)) {
     (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
   }
+  const invalidInputs = validateRunInputs(
+    attributes.variables,
+    attributes["target-addrs"],
+    attributes["replace-addrs"],
+    set,
+  );
+  if (invalidInputs !== null) return invalidInputs;
   const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
   if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }

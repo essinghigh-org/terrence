@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
-import * as bcrypt from "bcryptjs";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, refreshSessions, users } from "../../src/db/schema";
@@ -66,7 +65,7 @@ describe("browser refresh sessions", () => {
   }));
 
   beforeAll(async () => {
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     await db.insert(users).values([
       { id: userId, username, passwordHash },
       { id: otherUserId, username: otherUsername, passwordHash },

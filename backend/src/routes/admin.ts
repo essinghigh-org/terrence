@@ -9,7 +9,6 @@ import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
-import * as bcrypt from "bcryptjs";
 import { createHash } from "node:crypto";
 import { invalidatePingSsoCache } from "./health";
 
@@ -385,7 +384,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const id = `user-${crypto.randomUUID()}`;
 
     try {

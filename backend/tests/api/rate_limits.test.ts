@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import * as bcrypt from "bcryptjs";
 import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -23,7 +22,7 @@ async function seedUser(tokenCount: number): Promise<SeededUser> {
   await db.insert(users).values({
     id,
     username,
-    passwordHash: await bcrypt.hash(password, 4),
+    passwordHash: await Bun.password.hash(password, { algorithm: "bcrypt", cost: 4 }),
   });
   if (tokens.length > 0) {
     await db.insert(apiTokens).values(tokens.map((token: string, index: number) => ({

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import { eq, inArray } from "drizzle-orm";
-import * as bcrypt from "bcryptjs";
 import * as ldap from "ldapjs";
 import type { Server } from "ldapjs";
 import { app } from "../../src/app";
@@ -160,7 +159,7 @@ describe("LDAP authentication", () => {
 
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
-      { id: localId, username: localUsername, email: `local-${localUsername}@example.com`, passwordHash: await bcrypt.hash("local-pass", 10) },
+      { id: localId, username: localUsername, email: `local-${localUsername}@example.com`, passwordHash: await Bun.password.hash("local-pass", { algorithm: "bcrypt", cost: 10 }) },
     ]);
     await db.insert(apiTokens).values({
       id: `api-ldap-${suffix}`,

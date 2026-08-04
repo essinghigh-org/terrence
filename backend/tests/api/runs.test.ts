@@ -262,4 +262,65 @@ describe("TFE API v2 - Runs", () => {
       isDestroy: true,
     });
   });
+
+  it("rejects malformed run variables and unsafe target/replace addresses", async () => {
+    const post = (attributes: Record<string, unknown>): Promise<Response> => app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`,
+        },
+        body: JSON.stringify({
+          data: {
+            attributes,
+            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+          },
+        }),
+      }),
+    );
+
+    // Variables must be objects with a string key and value.
+    for (const variables of [
+      [{ key: "foo" }],
+      [{ value: "bar" }],
+      [{ key: "foo", value: "bar" }, "not-an-object"],
+      [{ key: "foo", value: "bar" }, null],
+      [{ key: "", value: "bar" }],
+      [{ key: "-malicious", value: "bar" }],
+      [{ key: "foo", value: "bar\nevil" }],
+    ]) {
+      const response = await post({ variables });
+      expect(response.status).toBe(422);
+    }
+
+    // A control-character-free, well-formed variable must be accepted.
+    const validVariables = [{ key: "region", value: "us-east-1" }];
+    const ok = await post({ variables: validVariables });
+    expect(ok.status).toBe(201);
+
+    // Unsafe target/replace addresses must be rejected.
+    for (const attrs of [
+      { "target-addrs": ["-auto-approve"] },
+      { "target-addrs": ["aws_instance.foo bar"] },
+      { "target-addrs": ["aws_instance.foo\nbar"] },
+      { "target-addrs": "not-an-array" },
+      { "replace-addrs": ["--flag"] },
+    ]) {
+      const response = await post(attrs);
+      expect(response.status).toBe(422);
+    }
+
+    // A valid address must still be accepted.
+    const okAddr = await post({ "target-addrs": ["aws_instance.example"] });
+    expect(okAddr.status).toBe(201);
+
+    // Valid indexed for_each addresses (quoted string indexes) must be accepted.
+    const okIndexedAddr = await post({ "target-addrs": [`aws_instance.web["example"]`] });
+    expect(okIndexedAddr.status).toBe(201);
+
+    // A valid replacement address (indexed) must be accepted.
+    const okReplaceAddr = await post({ "replace-addrs": [`aws_instance.web["example"]`] });
+    expect(okReplaceAddr.status).toBe(201);
+  });
 });

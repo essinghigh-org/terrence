@@ -1,9 +1,8 @@
 import { db } from "./src/db";
 import { users, organizations, workspaces } from "./src/db/schema";
-import * as bcrypt from "bcryptjs";
 
 async function seed(): Promise<void> {
-    const passwordHash = await bcrypt.hash("testpass", 10);
+    const passwordHash = await Bun.password.hash("testpass", { algorithm: "bcrypt", cost: 10 });
     const userId = crypto.randomUUID();
     await db.insert(users).values({
         id: userId,
