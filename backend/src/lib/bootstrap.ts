@@ -1,4 +1,3 @@
-import * as bcrypt from "bcryptjs";
 import { count, eq } from "drizzle-orm";
 import { db } from "../db";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
@@ -23,7 +22,7 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
   if (organizationName === "") throw new Error("ADMIN_ORGANIZATION cannot be empty");
   const id = `user-${crypto.randomUUID()}`;
   const organizationId = `org-${crypto.randomUUID()}`;
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
 
   const created = await db.transaction(async (tx: unknown): Promise<{ created: boolean; organizationCreated: boolean }> => {
     const t = tx as typeof db;

@@ -1,7 +1,6 @@
 // Shared plumbing for SAML, OIDC, and LDAP authentication: settings reads,
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
-import * as bcrypt from "bcryptjs";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
@@ -475,7 +474,7 @@ const DUMMY_PASSWORD_HASH = "$2b$10$./PtU.lbOie2J8A136xCHebbWWXw66h5mpFJQiXmWzmu
 /** Compare local passwords safely, including nonexistent and unusable accounts. */
 export async function passwordMatches(password: string, passwordHash = DUMMY_PASSWORD_HASH): Promise<boolean> {
   try {
-    return await bcrypt.compare(password, passwordHash);
+    return await Bun.password.verify(password, passwordHash);
   } catch {
     return false;
   }

@@ -2,7 +2,6 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
 import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
-import * as bcrypt from "bcryptjs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -377,7 +376,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const configuredOrganizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
     const token = `user-${crypto.randomUUID()}`;
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
       const t = tx as typeof db;
       if (((await t.select({ value: count() }).from(users))[0]?.value ?? 0) !== 0) return null;
@@ -703,7 +702,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const id = crypto.randomUUID();
     const normalizedEmail = typeof email === "string" && email.trim() !== "" ? email.trim() : null;
 
@@ -879,7 +878,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.update(users)
