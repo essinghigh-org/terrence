@@ -102,7 +102,7 @@ function matchesConstraints(version: string, constraintExpr: string): boolean {
   return constraints.every((c: string): boolean => matchesConstraint(version, c));
 }
 
-export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string> {
+async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string> {
   try {
     if (tool === "tofu") {
       const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases/latest", {
@@ -192,7 +192,7 @@ export async function availableVersions(tool: "tofu" | "terraform"): Promise<str
   return fetchAvailableVersions(tool);
 }
 
-export async function resolveVersionConstraint(tool: "tofu" | "terraform", constraintExpr: string): Promise<string> {
+async function resolveVersionConstraint(tool: "tofu" | "terraform", constraintExpr: string): Promise<string> {
   if (constraintExpr === "latest") {
     return resolveLatestVersion(tool);
   }

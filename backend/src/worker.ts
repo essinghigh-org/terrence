@@ -1850,7 +1850,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
   return enqueued;
 }
 
-export async function executeAssessment(assessmentResultId: string): Promise<void> {
+async function executeAssessment(assessmentResultId: string): Promise<void> {
   assertRunSandboxAvailable();
   const assessment = await db.query.assessmentResults.findFirst({
     where: eq(assessmentResults.id, assessmentResultId),
