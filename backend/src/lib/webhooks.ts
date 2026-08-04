@@ -1144,7 +1144,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   await synchronizeVcsPolicySets("github", eventName === "pull_request" ? "pull_request" : "push", details);
 }
 
-export async function fetchAndSaveTarball(configurationVersionIds: readonly string[], token: string, repoFullName: string, commitSha: string): Promise<void> {
+async function fetchAndSaveTarball(configurationVersionIds: readonly string[], token: string, repoFullName: string, commitSha: string): Promise<void> {
   const repositoryParts = repoFullName.split("/");
   const owner = repositoryParts[0] ?? "";
   const repository = repositoryParts[1] ?? "";

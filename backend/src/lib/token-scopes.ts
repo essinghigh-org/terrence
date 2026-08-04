@@ -158,7 +158,7 @@ const GRANT_IMPLICATIONS: Readonly<Record<WorkspacePermissionGrant, readonly Wor
   "audit-logs:read": [],
 };
 
-export const ALL_PERMISSION_GRANTS: readonly WorkspacePermissionGrant[] = Object.keys(
+const ALL_PERMISSION_GRANTS: readonly WorkspacePermissionGrant[] = Object.keys(
   GRANT_IMPLICATIONS,
 ) as WorkspacePermissionGrant[];
 
@@ -334,11 +334,6 @@ export function parseTokenScopes(raw: unknown): TokenScopes | null {
   return scope;
 }
 
-/** Serialize a scope object for storage. */
-export function serializeTokenScopes(scope: TokenScopes): string {
-  return JSON.stringify(scope);
-}
-
 /**
  * True if the scope grants the given permission. Honors grant implications:
  * a granted catch-all grant (e.g. `settings:write`) counts for the
@@ -374,20 +369,13 @@ export function scopeCoversOrg(scope: TokenScopes, orgId: string): boolean {
   return scope.orgs.includes(orgId);
 }
 
-/** True if the scope covers the given project (null projects = all). */
-export function scopeCoversProject(scope: TokenScopes, projectId: string | null): boolean {
-  if (projectId === null) return scope.orgs.length > 0;
-  if (scope.projects === null) return true;
-  return scope.projects.includes(projectId);
-}
-
 /**
  * Evaluate a tag rule against a workspace's tags (as "key=value" strings).
  * A leaf matches when the tag is present; a group matches when its rules
  * combine to true under its combinator (AND = all, OR = any).
  */
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive readonly alias is flagged; the type is already immutable.
-export function evaluateTagRule(rule: TokenScopeTagRule, tags: ReadonlySet<string>): boolean {
+function evaluateTagRule(rule: TokenScopeTagRule, tags: ReadonlySet<string>): boolean {
   if ("combinator" in rule) {
     return rule.combinator === "AND"
       ? rule.rules.every((child): boolean => evaluateTagRule(child, tags))
@@ -402,16 +390,4 @@ export function evaluateTagExpression(expression: TokenScopeTags, tags: Readonly
   return expression.combinator === "AND"
     ? expression.rules.every((rule): boolean => evaluateTagRule(rule, tags))
     : expression.rules.some((rule): boolean => evaluateTagRule(rule, tags));
-}
-
-/** Render a tag rule as a human-readable string, e.g. "(foo=bar AND baz=bing)". */
-export function tagRuleLabel(rule: TokenScopeTagRule): string {
-  if (!("combinator" in rule)) return `${rule.key}=${rule.value}`;
-  const inner = rule.rules.map((child): string => tagRuleLabel(child)).join(` ${rule.combinator} `);
-  return `(${inner})`;
-}
-
-/** Render a tag expression as a human-readable string. */
-export function tagExpressionLabel(expression: TokenScopeTags): string {
-  return expression.rules.map((rule): string => tagRuleLabel(rule)).join(` ${expression.combinator} `);
 }

@@ -917,12 +917,6 @@ export async function checkRegistryReadPermission(
   return partnership !== undefined;
 }
 
-export async function findWorkspaceVar(workspaceId: string, varId: string): Promise<typeof workspaceVariables.$inferSelect | undefined> {
-  return db.query.workspaceVariables.findFirst({
-    where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)),
-  });
-}
-
 export async function findAuthorizedVariableSet(
   variableSetId: string,
   userId: string | undefined,
@@ -1248,7 +1242,7 @@ export const CAPACITY_RUNNING_STATUSES = [
   "policy_override", "policy_checked", "post_plan_running", "post_plan_completed",
   "applying",
 ];
-export const DISCARDABLE_RUN_STATUSES = [
+const DISCARDABLE_RUN_STATUSES = [
   "planned",
   "planned_and_saved",
   "cost_estimated",

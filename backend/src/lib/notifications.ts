@@ -261,7 +261,7 @@ export function queueAssessmentNotification(
   });
 }
 
-export async function deliverChangeRequestNotifications(
+async function deliverChangeRequestNotifications(
   changeRequestId: string,
 ): Promise<NotificationDelivery[]> {
   const changeRequest = await db.query.changeRequests.findFirst({
