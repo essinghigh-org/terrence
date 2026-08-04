@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
-import { eq, and, asc, desc, count, inArray, like, notInArray } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, like, notInArray, sql } from "drizzle-orm";
 import {
   workspaceResource,
   workspaceVariableResource,
@@ -331,7 +331,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const permSets = await workspacePermissionSets(org.id, user?.id, principalOrgId ?? null, teamId ?? null);
     const allowedWorkspaceIds = permSets.read;
     if (allowedWorkspaceIds !== null) {
-      conditions.push(allowedWorkspaceIds.length > 0
+      conditions.push(allowedWorkspaceIds.size > 0
         ? inArray(workspaces.id, [...allowedWorkspaceIds])
         : eq(workspaces.id, "__no_authorized_workspace__"));
     }
@@ -387,28 +387,32 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     const currentRunStatuses = csv("filter[current-run][status]");
     if (currentRunStatuses.length > 0) {
-      // Latest run per workspace by created_at; scoped to THIS org's
-      // workspaces (runs are per-workspace, so scoping cannot change which
-      // workspace matches — it only stops the scan crossing every org).
-      // Needs runs(workspace_id, created_at) to stay index-only (migration
-      // 0059); a window-function subquery would be the next step if the
-      // org's run history grows very deep.
+      // Latest run per workspace selected IN SQL (ROW_NUMBER window), scoped
+      // to this org's workspaces, so a deep org run history never transfers
+      // every run to the app (the runs(workspace_id, created_at) index from
+      // migration 0059 serves the partition). rowid ASC tie-break preserves
+      // the previous in-memory first-seen ordering for equal created_at.
       const orgWorkspaceIdRows = await db.query.workspaces.findMany({
         where: eq(workspaces.orgId, org.id),
         columns: { id: true },
       });
-      const runHistory = await db.query.runs.findMany({
-        columns: { workspaceId: true, status: true },
-        where: inArray(runs.workspaceId, orgWorkspaceIdRows.map((row): string => row.id)),
-        orderBy: [desc(runs.createdAt)],
-      });
-      const seen = new Set<string>();
-      const matchingWsIds: string[] = [];
-      for (const run of runHistory) {
-        if (seen.has(run.workspaceId)) continue;
-        seen.add(run.workspaceId);
-        if (currentRunStatuses.includes(run.status)) matchingWsIds.push(run.workspaceId);
-      }
+      const latestRunRows = orgWorkspaceIdRows.length === 0
+        ? []
+        : await db.all<{ workspaceId: string; status: string }>(sql`
+          SELECT workspace_id AS workspaceId, status
+          FROM (
+            SELECT workspace_id, status,
+              ROW_NUMBER() OVER (
+                PARTITION BY workspace_id ORDER BY created_at DESC, rowid ASC
+              ) AS rn
+            FROM runs
+            WHERE ${inArray(runs.workspaceId, orgWorkspaceIdRows.map((row): string => row.id))}
+          )
+          WHERE rn = 1
+        `);
+      const matchingWsIds = latestRunRows
+        .filter((row): boolean => currentRunStatuses.includes(row.status))
+        .map((row): string => row.workspaceId);
       conditions.push(matchingWsIds.length > 0
         ? inArray(workspaces.id, matchingWsIds)
         : eq(workspaces.id, "__no_matching_workspace__"));

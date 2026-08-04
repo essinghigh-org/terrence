@@ -41,9 +41,21 @@ let regressed = false;
 for (const name of names) {
   const b = beforeByName.get(name);
   const a = afterByName.get(name);
-  if (b === undefined || a === undefined) {
-    console.log(`${name.padEnd(32)} ${"new/missing".padStart(8)}`);
-    regressed = regressed || b !== undefined;
+  if (b === undefined) {
+    console.log(`${name.padEnd(32)} ${"new".padStart(8)}`);
+    continue;
+  }
+  if (a === undefined) {
+    console.log(`${name.padEnd(32)} ${"missing".padStart(8)}`);
+    regressed = true;
+    continue;
+  }
+  // A scenario that stopped returning its expected status (currently every
+  // scenario expects 200) must fail the comparison — a 401/500 can look
+  // "faster" with fewer queries and mask a real problem.
+  if (b.status !== 200 || a.status !== 200) {
+    console.log(`${name.padEnd(32)} ${"status".padStart(8)} ${`${b.status}→${a.status}`.padStart(14)}`);
+    regressed = true;
     continue;
   }
   const latencyDelta = pct(b.avgMs, a.avgMs);

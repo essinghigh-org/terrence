@@ -60,7 +60,7 @@ export function getQueryCount(): number {
 }
 
 export function getQueryLog(): readonly string[] {
-  return queryLog;
+  return queryLog.slice();
 }
 
 export const db = drizzle(client, { schema });

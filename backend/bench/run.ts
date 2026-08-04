@@ -29,9 +29,16 @@ function parseArgs(): { iterations: number; warmup: number; jsonOut: string | nu
     const index = args.indexOf(flag);
     return index >= 0 && index + 1 < args.length ? args[index + 1] : null;
   };
+  const getCount = (flag: string, fallback: string, minimum: number): number => {
+    const value = Number(get(flag) ?? fallback);
+    if (!Number.isSafeInteger(value) || value < minimum) {
+      throw new Error(`${flag} must be an integer greater than or equal to ${minimum}`);
+    }
+    return value;
+  };
   return {
-    iterations: Number(get("--iterations") ?? "30"),
-    warmup: Number(get("--warmup") ?? "5"),
+    iterations: getCount("--iterations", "30", 1),
+    warmup: getCount("--warmup", "5", 0),
     jsonOut: get("--json"),
     filter: get("--scenario"),
   };
@@ -64,8 +71,13 @@ async function main(): Promise<void> {
     import("./seed"),
     import("./scenarios"),
   ]);
-  const ctx = await seedBenchmark();
   const scenarios = buildScenarios().filter((s): boolean => filter === null || s.name === filter);
+  if (scenarios.length === 0) {
+    throw new Error(filter === null
+      ? "No benchmark scenarios are defined"
+      : `No benchmark scenario matches "${filter}"`);
+  }
+  const ctx = await seedBenchmark();
 
   const runOne = async (path: string, token: string): Promise<{ status: number; ms: number; queries: number }> => {
     dbMod.resetQueryCount();

@@ -179,10 +179,13 @@ export async function seedBenchmark(): Promise<BenchContext> {
         status: i === 0 ? "applied" : "planned_and_finished",
         message: `bench run ${i + 1}`,
         createdBy: memberUserId,
-        createdAt: now - (wsIndex * 3 + i) * 30_000,
+        createdAt: now - (wsIndex * RUNS_PER_WORKSPACE + i) * 30_000,
       });
     }
-    const latestRunId = runIds[runIds.length - 1];
+    // The newest run of this workspace is the FIRST one pushed for it
+    // (i === 0 has the largest createdAt), which sits RUNS_PER_WORKSPACE
+    // entries before the end of runIds.
+    const latestRunId = runIds[runIds.length - RUNS_PER_WORKSPACE];
     stateRows.push({
       id: `sv-${randomUUID()}`,
       workspaceId,
@@ -195,16 +198,23 @@ export async function seedBenchmark(): Promise<BenchContext> {
       statePayload: "state-payload-bytes",
     });
   });
-  await db.insert(runs).values(runRows);
-  await db.insert(stateVersions).values(stateRows);
+  // Chunk the bulk inserts so the seed scales if the workspace/run constants
+  // are raised (SQLite bound-parameter limit per statement).
+  const CHUNK_SIZE = 200;
+  const insertInChunks = async <T>(insert: (rows: T[]) => Promise<unknown>, rows: T[]): Promise<void> => {
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      await insert(rows.slice(i, i + CHUNK_SIZE));
+    }
+  };
+  await insertInChunks((rows): Promise<unknown> => db.insert(runs).values(rows), runRows);
+  await insertInChunks((rows): Promise<unknown> => db.insert(stateVersions).values(rows), stateRows);
 
-  const variableSetIds: string[] = [];
+  const variableSetIds = Array.from({ length: 3 }, (): string => `vs-${randomUUID()}`);
   const vsRows: (typeof variableSets.$inferInsert)[] = [
-    { id: `vs-${randomUUID()}`, orgId, name: "global-vars", global: true, priority: false },
-    { id: `vs-${randomUUID()}`, orgId, parentProjectId: projectIds[0], name: "project-one-vars", global: false },
-    { id: `vs-${randomUUID()}`, orgId, parentProjectId: projectIds[1], name: "project-two-vars", global: false },
+    { id: variableSetIds[0], orgId, name: "global-vars", global: true, priority: false },
+    { id: variableSetIds[1], orgId, parentProjectId: projectIds[0], name: "project-one-vars", global: false, priority: false },
+    { id: variableSetIds[2], orgId, parentProjectId: projectIds[1], name: "project-two-vars", global: false, priority: false },
   ];
-  vsRows.forEach((row): void => { variableSetIds.push(row.id as string); });
   await db.insert(variableSets).values(vsRows);
 
   await db.insert(variableSetWorkspaces).values(workspaceIds.map((id): typeof variableSetWorkspaces.$inferInsert => ({

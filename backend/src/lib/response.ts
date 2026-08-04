@@ -206,15 +206,17 @@ export async function workspaceResource(
   permissions: WorkspaceResourcePermissions,
   options?: WorkspaceResourceOptions,
 ): Promise<Record<string, unknown>> {
-  const tags = options?.tags !== undefined
-    ? options.tags
-    : await db.query.workspaceTags.findMany({
-      where: eq(workspaceTags.workspaceId, workspace.id),
-      orderBy: [asc(workspaceTags.key)],
-    });
-  const orgName = options?.orgName !== undefined
-    ? options.orgName
-    : await organizationName(workspace.orgId);
+  const [tags, orgName] = await Promise.all([
+    options?.tags !== undefined
+      ? options.tags
+      : db.query.workspaceTags.findMany({
+        where: eq(workspaceTags.workspaceId, workspace.id),
+        orderBy: [asc(workspaceTags.key)],
+      }),
+    options?.orgName !== undefined
+      ? options.orgName
+      : organizationName(workspace.orgId),
+  ]);
 
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "tofu";
 
@@ -427,23 +429,25 @@ export async function variableSetResource(
   variableSet: VarSetParam,
   options?: VariableSetResourceOptions,
 ): Promise<Record<string, unknown>> {
-  const [workspaceLinks, projectLinks, variables] = options !== undefined
-    ? [
-      options.workspaceLinks ?? [],
-      options.projectLinks ?? [],
-      options.variables ?? [],
-    ]
-    : await Promise.all([
-      db.query.variableSetWorkspaces.findMany({
+  // Each collection is loaded independently: callers may preload some or all
+  // of them (list handlers batch per page); anything omitted is fetched here.
+  const [workspaceLinks, projectLinks, variables] = await Promise.all([
+    options?.workspaceLinks !== undefined
+      ? options.workspaceLinks
+      : db.query.variableSetWorkspaces.findMany({
         where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
       }),
-      db.query.variableSetProjects.findMany({
+    options?.projectLinks !== undefined
+      ? options.projectLinks
+      : db.query.variableSetProjects.findMany({
         where: eq(variableSetProjects.variableSetId, variableSet.id),
       }),
-      db.query.variableSetVariables.findMany({
+    options?.variables !== undefined
+      ? options.variables
+      : db.query.variableSetVariables.findMany({
         where: eq(variableSetVariables.variableSetId, variableSet.id),
       }),
-    ]);
+  ]);
   const orgName = options?.orgName !== undefined
     ? options.orgName
     : await organizationName(variableSet.orgId);
