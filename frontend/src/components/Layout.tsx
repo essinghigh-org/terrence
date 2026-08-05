@@ -85,6 +85,8 @@ type OrganizationPermissions = Readonly<{
   "can-manage-vcs-settings"?: boolean;
   "can-manage-workspaces"?: boolean;
   "can-read-projects"?: boolean;
+  "can-manage-policies"?: boolean;
+  "can-read-policies"?: boolean;
 }>;
 
 type SidebarNavLinkProps = Readonly<{
@@ -336,6 +338,10 @@ export function Layout({
   const canManageAgentPools =
     hasCurrentOrganizationPermissions
     && organizationPermissions?.["can-manage-agent-pools"] === true;
+  const canManagePolicies =
+    hasCurrentOrganizationPermissions
+    && (organizationPermissions?.["can-manage-policies"] === true
+      || organizationPermissions?.["can-read-policies"] === true);
   const canReadProjects =
     hasCurrentOrganizationPermissions
     && organizationPermissions?.["can-read-projects"] === true;
@@ -855,10 +861,17 @@ export function Layout({
           label: "Agent pools",
           to: `${organizationSettingsPath}/agents`,
         },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets`),
+          icon: ShieldCheck,
+          label: "Policy sets",
+          to: `${organizationSettingsPath}/policy-sets`,
+        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
-        && (link.label !== "Agent pools" || canManageAgentPools));
+        && (link.label !== "Agent pools" || canManageAgentPools)
+        && (link.label !== "Policy sets" || canManagePolicies));
 
       return (
         <>

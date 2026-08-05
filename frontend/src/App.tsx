@@ -13,6 +13,8 @@ import { ProjectDetail } from "./views/ProjectDetail";
 import { Registry } from "./views/Registry";
 import { VcsIntegrations } from "./views/VcsIntegrations";
 import { AgentPools } from "./views/AgentPools";
+import { PolicySets } from "./views/PolicySets";
+import { PolicySetDetail } from "./views/PolicySetDetail";
 import { AdminDashboard } from "./views/AdminDashboard";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
 import {
@@ -120,6 +122,12 @@ function App(): JSX.Element {
             <Route path=":orgName/projects/:projectId/settings/variable-sets" element={<ProjectDetail section="variable-sets" />} />
             <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
             <Route path=":orgName/settings/agents" element={<AgentPools />} />
+            <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
+            <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
+            <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
+            <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />
+            <Route path=":orgName/settings/policy-sets/:policySetId/parameters" element={<PolicySetDetail section="parameters" />} />
+            <Route path=":orgName/settings/policy-sets/:policySetId/vcs" element={<PolicySetDetail section="vcs" />} />
             <Route path=":orgName/variable-sets" element={<VariableSets />} />
             <Route path=":orgName/settings" element={<OrganizationSettings />} />
 
