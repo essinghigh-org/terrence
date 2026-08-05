@@ -831,6 +831,14 @@ export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects
   uniqueIndex("agent_pool_allowed_projects_pool_project_idx").on(table.agentPoolId, table.projectId),
 ]);
 
+export const agentPoolExcludedWorkspaces = sqliteTable("agent_pool_excluded_workspaces", {
+  id: text("id").primaryKey(),
+  agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("agent_pool_excluded_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId),
+]);
+
 export const agentPoolTokens = sqliteTable("agent_pool_tokens", {
   id: text("id").primaryKey(),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),

@@ -70,6 +70,9 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_organization_run_task_global_settings.rgs",
   "tfe_project_settings.proj_settings",
   "tfe_provider_set.pset",
+  "tfe_agent_pool_allowed_workspaces.apaw",
+  "tfe_agent_pool_allowed_projects.apap",
+  "tfe_agent_pool_excluded_workspaces.apexw",
 ];
 
 function freePort(): Promise<number> {
@@ -517,6 +520,21 @@ resource "tfe_provider_set" "pset" {
   provider_config_hcl = <<-EOT
   version = "~> 5.0"
 EOT
+}
+
+resource "tfe_agent_pool_allowed_workspaces" "apaw" {
+  agent_pool_id        = tfe_agent_pool.pool.id
+  allowed_workspace_ids = [tfe_workspace.ws.id]
+}
+
+resource "tfe_agent_pool_allowed_projects" "apap" {
+  agent_pool_id     = tfe_agent_pool.pool.id
+  allowed_project_ids = [tfe_project.proj.id]
+}
+
+resource "tfe_agent_pool_excluded_workspaces" "apexw" {
+  agent_pool_id          = tfe_agent_pool.pool.id
+  excluded_workspace_ids = [tfe_workspace.ws2.id]
 }
 `;
 }

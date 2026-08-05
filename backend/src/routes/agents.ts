@@ -3,6 +3,7 @@ import { db } from "../db";
 import {
   agentPoolAllowedProjects,
   agentPoolAllowedWorkspaces,
+  agentPoolExcludedWorkspaces,
   agentPools,
   agents,
   agentPoolTokens,
@@ -55,7 +56,7 @@ function getRelationships(body: unknown): Record<string, unknown> {
 
 function parseScopeRelationship(
   body: unknown,
-  name: "allowed-workspaces" | "allowed-projects",
+  name: "allowed-workspaces" | "allowed-projects" | "excluded-workspaces",
   type: "workspaces" | "projects",
 ): ScopeRelationship {
   const relationships = getRelationships(body);
@@ -347,7 +348,7 @@ async function agentPoolResource(
   const orgName = orgNameOverride !== undefined
     ? orgNameOverride
     : await organizationName(pool.orgId);
-  const [agentList, workspaceList, allowedWorkspaceList, allowedProjectList] = await Promise.all([
+  const [agentList, workspaceList, allowedWorkspaceList, allowedProjectList, excludedWorkspaceList] = await Promise.all([
     db.query.agents.findMany({ where: eq(agents.agentPoolId, pool.id) }),
     db.query.workspaces.findMany({ where: eq(workspaces.agentPoolId, pool.id) }),
     db.query.agentPoolAllowedWorkspaces.findMany({
@@ -355,6 +356,9 @@ async function agentPoolResource(
     }),
     db.query.agentPoolAllowedProjects.findMany({
       where: eq(agentPoolAllowedProjects.agentPoolId, pool.id),
+    }),
+    db.query.agentPoolExcludedWorkspaces.findMany({
+      where: eq(agentPoolExcludedWorkspaces.agentPoolId, pool.id),
     }),
   ]);
   return {
@@ -394,6 +398,12 @@ async function agentPoolResource(
           .map((relationship): string => relationship.projectId)
           .sort()
           .map((id): Record<string, string> => ({ id, type: "projects" })),
+      },
+      "excluded-workspaces": {
+        data: excludedWorkspaceList
+          .map((relationship): string => relationship.workspaceId)
+          .sort()
+          .map((id): Record<string, string> => ({ id, type: "workspaces" })),
       },
     },
     links: { self: `/api/v2/agent-pools/${pool.id}` },
@@ -482,13 +492,19 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedWorkspacesResult.error }] };
     }
+    const allowedWorkspaces = allowedWorkspacesResult.value;
     const allowedProjectsResult = parseScopeRelationship(body, "allowed-projects", "projects");
     if ("error" in allowedProjectsResult) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: allowedProjectsResult.error }] };
     }
-    const allowedWorkspaces = allowedWorkspacesResult.value;
     const allowedProjects = allowedProjectsResult.value;
+    const excludedWorkspacesResult = parseScopeRelationship(body, "excluded-workspaces", "workspaces");
+    if ("error" in excludedWorkspacesResult) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: excludedWorkspacesResult.error }] };
+    }
+    const excludedWorkspaces = excludedWorkspacesResult.value;
     const [existingAllowedWorkspaces, existingAllowedProjects, assignedWorkspaces, defaultProjects] = await Promise.all([
       db.query.agentPoolAllowedWorkspaces.findMany({
         where: eq(agentPoolAllowedWorkspaces.agentPoolId, poolId),
@@ -547,6 +563,16 @@ export const agentRoutes = new Elysia({ name: "agents" })
             id: `apprj-${crypto.randomUUID()}`,
             agentPoolId: poolId,
             projectId,
+          })));
+        }
+      }
+      if (excludedWorkspaces.provided) {
+        await tx.delete(agentPoolExcludedWorkspaces).where(eq(agentPoolExcludedWorkspaces.agentPoolId, poolId));
+        if (excludedWorkspaces.ids.length > 0) {
+          await tx.insert(agentPoolExcludedWorkspaces).values(excludedWorkspaces.ids.map((workspaceId): typeof agentPoolExcludedWorkspaces.$inferInsert => ({
+            id: `apexws-${crypto.randomUUID()}`,
+            agentPoolId: poolId,
+            workspaceId,
           })));
         }
       }

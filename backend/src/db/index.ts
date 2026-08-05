@@ -351,6 +351,12 @@ runSql(`
     installation_url TEXT,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS agent_pool_excluded_workspaces (
+    id TEXT PRIMARY KEY,
+    agent_pool_id TEXT NOT NULL REFERENCES agent_pools(id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS agent_pool_excluded_workspaces_pool_workspace_idx ON agent_pool_excluded_workspaces (agent_pool_id, workspace_id);
   CREATE UNIQUE INDEX IF NOT EXISTS github_app_installations_org_installation_idx
     ON github_app_installations (org_id, installation_id);
   CREATE INDEX IF NOT EXISTS workspaces_vcs_repo_identifier_idx
