@@ -676,6 +676,7 @@ data "tfe_organization_tags" "d_tags" {
   organization = tfe_organization.org.name
   depends_on   = [tfe_organization.org]
 }
+data "tfe_ip_ranges" "d_ipr" {}
 
 output "ds_org_name"     { value = data.tfe_organization.d_org.name }
 output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
@@ -704,6 +705,7 @@ output "ds_regprov_name"   { value = data.tfe_registry_provider.d_regprov.name }
 output "ds_regprovs_count" { value = length(data.tfe_registry_providers.d_regprovs.providers) }
 output "ds_smtp_sender"     { value = data.tfe_admin_smtp_settings.d_smtp.sender }
 output "ds_tags_count"      { value = length(data.tfe_organization_tags.d_tags.tags) }
+output "ds_ipr_api_count"   { value = length(data.tfe_ip_ranges.d_ipr.api) }
 `;
 }
 
@@ -889,6 +891,7 @@ describe("tfe provider e2e", () => {
           expect(Number(val("ds_regprovs_count"))).toBeGreaterThan(0);
           expect(val("ds_smtp_sender")).toBe("pe2e@example.com");
           expect(Number(val("ds_tags_count"))).toBeGreaterThanOrEqual(0);
+          expect(Number(val("ds_ipr_api_count"))).toBeGreaterThan(0);
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 

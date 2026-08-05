@@ -240,4 +240,10 @@ export const healthRoutes = new Elysia({ name: "health" })
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
     version: process.env.BUILD_VERSION ?? "dev",
     build: process.env.BUILD_SHA ?? "unknown",
+  }))
+  .get("/api/meta/ip-ranges", (): { api: string[]; notifications: string[]; sentinel: string[]; vcs: string[] } => ({
+    api: ["203.0.113.0/24"],
+    notifications: ["203.0.113.1/32"],
+    sentinel: ["203.0.113.2/32"],
+    vcs: ["203.0.113.3/32"],
   }));

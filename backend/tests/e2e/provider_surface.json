@@ -4,7 +4,7 @@
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 48,
-  "data_sources_covered": 26,
+  "data_sources_covered": 27,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -322,7 +322,7 @@
     },
     {
       "name": "tfe_ip_ranges",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_no_code_module",
