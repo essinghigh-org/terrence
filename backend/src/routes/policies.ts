@@ -310,6 +310,17 @@ async function resolvePolicyOrgId(pol: { orgId: string | null; policySetId: stri
   return ps?.orgId ?? null;
 }
 
+// go-tfe's PolicySetParameter carries a pointer "policy-set" relationship;
+// omitting it makes the provider nil-deref in modelFromTFEPolicySetParameter.
+function policySetParameterResource(p: ParamItem, policySetId: string): Record<string, unknown> {
+  return {
+    id: p.id,
+    type: "vars",
+    attributes: { key: p.key, value: p.sensitive === true ? null : p.value, sensitive: p.sensitive, hcl: p.hcl },
+    relationships: { configurable: { data: { id: policySetId, type: "policy-sets" } } },
+  };
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
@@ -532,7 +543,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const name = typeof attributes.name === "string" ? attributes.name : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    const id = `polset-${crypto.randomUUID()}`;
+    const id = `polset-${Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b: number): string => b.toString(16).padStart(2, "0")).join("")}`;
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const kind = typeof attributes.kind === "string" ? attributes.kind : "sentinel";
     if (!["sentinel", "opa"].includes(kind)) {
@@ -1081,7 +1092,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const paramsList = await db.query.policySetParameters.findMany({ where: eq(policySetParameters.policySetId, policySetId) });
-    return { data: paramsList.map((p: ParamItem): Record<string, unknown> => ({ id: p.id, type: "vars", attributes: { key: p.key, value: p.sensitive === true ? null : p.value, sensitive: p.sensitive, hcl: p.hcl } })) };
+    return { data: paramsList.map((p: ParamItem): Record<string, unknown> => policySetParameterResource(p, policySetId)) };
   })
   .post("/api/v2/policy-sets/:policy_set_id/parameters", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
@@ -1098,7 +1109,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const hcl = typeof attrs.hcl === "boolean" ? attrs.hcl : false;
     await db.insert(policySetParameters).values({ id, policySetId, key, value, sensitive, hcl });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "vars", attributes: { key, value: sensitive ? null : value, sensitive, hcl } } };
+    return { data: policySetParameterResource({ id, policySetId, key, value, sensitive, hcl } as ParamItem, policySetId) };
+  })
+  .get("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const policySetId = params.policy_set_id ?? "";
+    const paramId = params.param_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)) });
+    if (param === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: policySetParameterResource(param, policySetId) };
   })
   .patch("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
@@ -1118,7 +1138,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (Object.keys(updates).length > 0) await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, paramId));
     const updated = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, paramId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "vars", attributes: { key: updated.key, value: updated.sensitive === true ? null : updated.value, sensitive: updated.sensitive, hcl: updated.hcl } } };
+    return { data: policySetParameterResource(updated, policySetId) };
   })
   .delete("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policySetId = params.policy_set_id ?? "";

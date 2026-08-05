@@ -57,6 +57,11 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_workspace_run_task.ws_task",
   "tfe_notification_configuration.nc",
   "tfe_project_notification_configuration.project_nc",
+  "tfe_policy_set_parameter.p_param",
+  "tfe_team_notification_configuration.tn",
+  "tfe_workspace_policy_set_exclusion.ws_excl",
+  "tfe_data_retention_policy.drp",
+  "tfe_organization_default_settings.ods",
 ];
 
 function freePort(): Promise<number> {
@@ -411,6 +416,39 @@ resource "tfe_project_notification_configuration" "project_nc" {
   destination_type = "generic"
   triggers         = ["run:completed"]
   token            = "pe2e-nc-token"
+}
+
+# --- coverage batch 2: org/platform resources with backend support ---
+
+resource "tfe_policy_set_parameter" "p_param" {
+  key           = "pe2e_param"
+  value         = "pe2e_param_value"
+  policy_set_id = tfe_policy_set.ps.id
+}
+
+resource "tfe_team_notification_configuration" "tn" {
+  team_id          = tfe_team.team.id
+  name             = "pe2e-team-nc-${suffix}"
+  destination_type = "generic"
+  url              = "https://pe2e.example.com/team-nc"
+  triggers         = ["change_request:created"]
+}
+
+resource "tfe_workspace_policy_set_exclusion" "ws_excl" {
+  policy_set_id = tfe_policy_set.ps.id
+  workspace_id  = tfe_workspace.ws2.id
+}
+
+resource "tfe_data_retention_policy" "drp" {
+  organization = tfe_organization.org.name
+  delete_older_than {
+    days = 30
+  }
+}
+
+resource "tfe_organization_default_settings" "ods" {
+  organization           = tfe_organization.org.name
+  default_execution_mode = "remote"
 }
 `;
 }

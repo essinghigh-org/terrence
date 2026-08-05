@@ -239,6 +239,38 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     });
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
   })
+  .post("/api/v2/teams/:team_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const teamId = params.team_id ?? "";
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+    if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) return notFound(set);
+    const attributes = attributesFrom(body);
+    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+    const url = typeof attributes.url === "string" ? attributes.url : "";
+    const destinationType = typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "";
+    if (name === "" || !isWebhookUrl(url) || !["generic", "slack", "microsoft-teams"].includes(destinationType)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+    }
+    const values = {
+      id: `nc-${crypto.randomUUID()}`,
+      workspaceId: null,
+      projectId: null,
+      teamId,
+      name,
+      destinationType,
+      url,
+      triggers: Array.isArray(attributes.triggers)
+        ? attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string")
+        : ["run:created", "run:completed"],
+      enabled: typeof attributes.enabled === "boolean" ? attributes.enabled : true,
+      token: typeof attributes.token === "string" ? attributes.token : null,
+      createdAt: Date.now(),
+    };
+    await db.insert(notificationConfigurations).values(values);
+    const created = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, values.id) });
+    (set as { status: number }).status = 201;
+    return { data: notificationResource(created ?? values as NcItem) };
+  })
   .get("/api/v2/notification-configurations/:nc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     return configuration === undefined ? notFound(set) : { data: notificationResource(configuration) };
