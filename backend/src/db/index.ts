@@ -320,6 +320,16 @@ runSql(`
     is_default INTEGER DEFAULT false,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS provider_sets (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    provider_source TEXT NOT NULL,
+    configuration_hcl TEXT,
+    global INTEGER DEFAULT false,
+    created_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     agent_pool_id TEXT NOT NULL REFERENCES agent_pools(id) ON DELETE CASCADE,

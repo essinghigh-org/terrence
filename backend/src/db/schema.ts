@@ -712,6 +712,19 @@ export const registryGpgKeys = sqliteTable("registry_gpg_keys", {
   uniqueIndex("registry_gpg_keys_namespace_key_idx").on(table.namespace, table.keyId),
 ]);
 
+export const providerSets = sqliteTable("provider_sets", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  providerSource: text("provider_source").notNull(),
+  configurationHcl: text("configuration_hcl"),
+  global: integer("global", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("provider_sets_org_name_idx").on(table.orgId, table.name),
+]);
+
 export const registryProviderVersions = sqliteTable("registry_provider_versions", {
   id: text("id").primaryKey(),
   providerId: text("provider_id").notNull().references(() => registryProviders.id, { onDelete: "cascade" }),

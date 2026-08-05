@@ -26,6 +26,7 @@ import { teamRoutes } from "./routes/teams";
 import { projectRoutes } from "./routes/projects";
 import { gpgKeyRoutes } from "./routes/gpg-keys";
 import { registryRoutes } from "./routes/registry";
+import { providerSetRoutes } from "./routes/provider-sets";
 import { adminRoutes } from "./routes/admin";
 import { scimAdminRoutes } from "./routes/scim-admin";
 import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
@@ -422,6 +423,7 @@ export const app = new Elysia()
   .use(projectRoutes)
   .use(gpgKeyRoutes)
   .use(registryRoutes)
+  .use(providerSetRoutes)
   .use(adminRoutes)
   .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)

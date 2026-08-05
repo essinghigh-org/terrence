@@ -69,6 +69,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_registry_provider.regprov",
   "tfe_organization_run_task_global_settings.rgs",
   "tfe_project_settings.proj_settings",
+  "tfe_provider_set.pset",
 ];
 
 function freePort(): Promise<number> {
@@ -506,6 +507,16 @@ resource "tfe_organization_run_task_global_settings" "rgs" {
 resource "tfe_project_settings" "proj_settings" {
   project_id             = tfe_project.proj.id
   default_execution_mode = "remote"
+}
+
+resource "tfe_provider_set" "pset" {
+  name            = "pe2e-pset-${suffix}"
+  organization    = tfe_organization.org.name
+  provider_source = "registry.terraform.io/hashicorp/aws"
+  global          = true
+  provider_config_hcl = <<-EOT
+  version = "~> 5.0"
+EOT
 }
 `;
 }
