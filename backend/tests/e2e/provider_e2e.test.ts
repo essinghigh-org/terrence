@@ -814,7 +814,10 @@ describe("tfe provider e2e", () => {
           const outs = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           cliOk(outs, "output");
           const o = JSON.parse(outs.out) as Record<string, { value: unknown }>;
-          const val = (key: string): unknown => o[key]!.value;
+          const val = (key: string): unknown => {
+            if (!(key in o)) throw new Error(`output ${key} missing; available: ${Object.keys(o).join(",")}`);
+            return o[key]!.value;
+          };
           expect(val("ds_org_name")).toBe(`pe2e-org-${suffix}`);
           expect(val("ds_orgs_names")).toEqual(expect.arrayContaining([`pe2e-org-${suffix}`]));
           expect(val("ds_ws_name")).toBe(`pe2e-ws-${suffix}`);
