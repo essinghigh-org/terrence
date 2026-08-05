@@ -98,6 +98,22 @@ type NoCodeItem = DeepReadonly<typeof noCodeModules.$inferSelect>;
 type NoCodeVariableOptionItem = DeepReadonly<typeof noCodeVariableOptions.$inferSelect>;
 type OrgItem = DeepReadonly<typeof organizations.$inferSelect>;
 type ProvItem = DeepReadonly<typeof registryProviders.$inferSelect>;
+
+// go-tfe RegistryProvider carries a pointer `organization` relationship;
+// omitting it makes the provider nil-deref v.Organization.Name.
+function registryProviderResource(value: ProvItem, orgName: string): Record<string, unknown> {
+  return {
+    id: value.id,
+    type: "registry-providers",
+    attributes: {
+      namespace: value.namespace,
+      name: value.type,
+      "registry-name": value.registryName,
+      "created-at": new Date(value.createdAt).toISOString(),
+    },
+    relationships: { organization: { data: { id: orgName, type: "organizations" } } },
+  };
+}
 type ProvVerItem = DeepReadonly<typeof registryProviderVersions.$inferSelect>;
 type PlatItem = DeepReadonly<typeof registryProviderPlatforms.$inferSelect>;
 
@@ -1912,29 +1928,64 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
-    return { data: provList.map((p: ProvItem): Record<string, unknown> => ({ id: p.id, type: "registry-providers", attributes: { namespace: p.namespace, name: p.type, "registry-name": p.registryName, "created-at": new Date(p.createdAt).toISOString() } })) };
-  })
-  .post("/api/v2/organizations/:org_name/registry-providers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name : "";
-    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] }; }
-    const id = `prov-${crypto.randomUUID()}`;
-    const namespace = typeof attributes.namespace === "string" ? attributes.namespace : org.name;
-    const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
-    await db.insert(registryProviders).values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-providers", attributes: { namespace, name, "registry-name": registryName, "created-at": new Date().toISOString() } } };
-  })
+        return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)) };
+      })
+      .get("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+        const providerId = params.provider_id ?? "";
+        const p = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+        if (p === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        const org = await db.query.organizations.findFirst({ where: eq(organizations.id, p.orgId) });
+        if (org === undefined || !(await checkRegistryManagementRead(user?.id, p.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+        }
+        return { data: registryProviderResource(p, org.name) };
+      })
+      .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+        const orgName = params.org_name ?? "";
+        const namespace = params.namespace ?? "";
+        const name = params.name ?? "";
+        const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+        if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        const p = await db.query.registryProviders.findFirst({
+          where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
+        });
+        if (p === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        return { data: registryProviderResource(p, org.name) };
+      })
+      .post("/api/v2/organizations/:org_name/registry-providers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+        const orgName = params.org_name ?? "";
+        const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+        if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+        const data = payload.data as Record<string, unknown> | undefined;
+        const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+        const name = typeof attributes.name === "string" ? attributes.name : "";
+        if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] }; }
+        const id = `prov-${crypto.randomUUID()}`;
+        const namespace = typeof attributes.namespace === "string" ? attributes.namespace : org.name;
+        const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
+        await db.insert(registryProviders).values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
+        (set as { status: number }).status = 201;
+        return { data: registryProviderResource({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() }, org.name) };
+      })
   .delete("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const providerId = params.provider_id ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
     if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(registryProviders).where(eq(registryProviders.id, providerId));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const orgName = params.org_name ?? "";
+    const namespace = params.namespace ?? "";
+    const name = params.name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const prov = await db.query.registryProviders.findFirst({
+      where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
+    });
+    if (prov === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(registryProviders).where(eq(registryProviders.id, prov.id));
     (set as { status: number }).status = 204;
     return {};
   })

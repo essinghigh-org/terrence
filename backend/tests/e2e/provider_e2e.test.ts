@@ -66,6 +66,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_sentinel_version.sentver",
   "tfe_opa_version.opaver",
   "tfe_admin_smtp_settings.smtp",
+  "tfe_registry_provider.regprov",
 ];
 
 function freePort(): Promise<number> {
@@ -484,6 +485,14 @@ resource "tfe_admin_smtp_settings" "smtp" {
   password = "pe2e-smtp-password"
   sender   = "pe2e@example.com"
   auth     = "login"
+}
+
+# --- coverage batch 4: private registry ---
+
+resource "tfe_registry_provider" "regprov" {
+  name          = "pe2e-prov-${suffix}"
+  organization  = tfe_organization.org.name
+  registry_name = "private"
 }
 `;
 }
