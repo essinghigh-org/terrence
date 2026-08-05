@@ -16,6 +16,9 @@ let tofuBin = "";
 // Iteration aid: TERRENCE_E2E_CLI=terraform (or tofu) runs only that CLI;
 // unset runs both.
 const e2eCliFilter: string | null = process.env.TERRENCE_E2E_CLI ?? null;
+if (e2eCliFilter !== null && !["terraform", "tofu"].includes(e2eCliFilter)) {
+  throw new Error(`Unsupported TERRENCE_E2E_CLI value: ${e2eCliFilter}`);
+}
 
 type CliResult = { code: number; out: string; err: string };
 type ApiResult = { status: number; json: Record<string, any>; text: string };

@@ -10,6 +10,7 @@ import {
   organizations,
   runTasks,
   runs,
+  stateVersions,
   teams,
   teamWorkspaces,
   workspaces,
@@ -164,6 +165,31 @@ describe("team token workspace authorization", () => {
       status: "planned",
       createdAt: Date.now() + index,
     })));
+    await db.insert(stateVersions).values({
+      id: `sv-outputs-${suffix}`,
+      workspaceId,
+      serial: 1,
+      status: "finalized",
+      statePayload: JSON.stringify({
+        version: 4,
+        serial: 1,
+        lineage: "team-auth",
+        resources: [],
+        outputs: {
+          probe_output: { type: "string", value: "visible-to-readers" },
+        },
+      }),
+      jsonState: JSON.stringify({
+        version: 4,
+        serial: 1,
+        lineage: "team-auth",
+        resources: [],
+        outputs: {
+          probe_output: { type: "string", value: "visible-to-readers" },
+        },
+      }),
+      createdAt: Date.now(),
+    });
     await db.insert(assessmentResults).values([
       {
         id: assessmentIds.assigned,
@@ -301,6 +327,8 @@ describe("team token workspace authorization", () => {
       .toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/resources`, tokens.noState)).status)
       .toBe(404);
+    expect((await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, tokens.noState)).status)
+      .toBe(404);
 
     const bindingBody = {
       data: {
@@ -313,6 +341,32 @@ describe("team token workspace authorization", () => {
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.custom, "POST", bindingBody)).status).toBe(404);
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.manager, "POST", bindingBody)).status).toBe(201);
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks/${runTaskId}`, tokens.manager, "DELETE")).status).toBe(204);
+  });
+
+  it("returns included workspace outputs to readers without state-read access", async () => {
+    for (const token of [tokens.read, tokens.noState]) {
+      const response = await request(`/api/v2/workspaces/${workspaceId}?include=outputs`, token);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const data = (body as { data: { id: string } }).data;
+      expect(data.id).toBe(workspaceId);
+      const relationships = (body as { data: { relationships: Record<string, unknown> } }).data.relationships;
+      expect(relationships.outputs).toMatchObject({
+        data: [
+          { id: expect.any(String), type: "workspace-outputs" },
+        ],
+        links: { related: `/api/v2/workspaces/${workspaceId}/current-state-version-outputs` },
+      });
+      const included = (body as { included?: { id: string; type: string; attributes: Record<string, unknown> }[] }).included ?? [];
+      expect(included.length).toBe(1);
+      expect(included[0]?.type).toBe("workspace-outputs");
+      expect(included[0]?.attributes).toMatchObject({
+        name: "probe_output",
+        value: "visible-to-readers",
+        sensitive: false,
+        "output-type": "string",
+      });
+    }
   });
 
   it("allows write and custom roles to plan/apply and lock, but not administer", async () => {

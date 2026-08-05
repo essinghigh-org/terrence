@@ -380,25 +380,15 @@ async function normalizeVcsRepo(
 // Attach the workspace's latest state outputs (type "workspace-outputs") to a
 // workspace resource when the caller requests ?include=outputs (go-tfe's
 // tfe_outputs data source). Returns the enriched resource plus included docs.
+// Callers must already enforce workspace read access; outputs ride along for
+// any reader without a separate state-read gate.
 async function maybeAttachOutputs(
   data: Record<string, unknown>,
   workspace: WsItem,
   includeParam: string,
-  principalOrgId: string | null,
-  teamId: string | null,
-  userId: string | undefined,
 ): Promise<{ data: Record<string, unknown>; included?: Record<string, unknown>[] }> {
   const includes = includeParam.split(",").map((s): string => s.trim());
   if (!includes.includes("outputs")) return { data };
-  // Check state-read permission before attaching outputs
-  const canReadState = await checkWorkspacePermission(
-    workspace,
-    userId,
-    principalOrgId,
-    teamId,
-    "state-read",
-  );
-  if (!canReadState) return { data };
   const sv = await db.query.stateVersions.findFirst({
     where: and(
       eq(stateVersions.workspaceId, workspace.id),
@@ -773,7 +763,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
       { orgName: org.name },
     );
-    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "", principalOrgId ?? null, teamId ?? null, user?.id);
+    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
   .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -829,7 +819,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
       { orgName: org?.name ?? null },
     );
-    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "", principalOrgId ?? null, teamId ?? null, user?.id);
+    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
   .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

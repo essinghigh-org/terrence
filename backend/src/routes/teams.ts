@@ -289,9 +289,11 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const organizationAccess = parseOrganizationAccess(rawOrgAccess);
       if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
       updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
-      // The provider carries visibility / sso-team-id inside organization-access.
-      if (typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
-      if (rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
+      // The provider carries visibility / sso-team-id inside organization-access,
+      // but the top-level attribute takes precedence when present (matching the
+      // create handler), and sso-team-id is gated by the linked-team guard.
+      if (attributes.visibility === undefined && typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
+      if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });

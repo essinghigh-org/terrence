@@ -9,7 +9,7 @@ import {
   type users,
   type workspaces,
 } from "../db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, or } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
@@ -83,8 +83,8 @@ function taskResultResource(result: ResultItem): Record<string, unknown> {
 
 type RunTaskRow = typeof runTasks.$inferSelect;
 
-const runTaskResource = async (t: RunTaskRow): Promise<Record<string, unknown>> => {
-  const orgName = await organizationName(t.orgId);
+const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): Promise<Record<string, unknown>> => {
+  const orgName = orgNameOverride !== undefined ? orgNameOverride : await organizationName(t.orgId);
   return {
     id: t.id,
     // TFE's JSON:API type for an organization run task is "tasks" (go-tfe
@@ -117,7 +117,7 @@ const listOrgRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenT
   const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
-  return { data: await Promise.all(tasksList.map((t): Promise<Record<string, unknown>> => runTaskResource(t))) };
+  return { data: await Promise.all(tasksList.map((t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))) };
 };
 
 const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -138,9 +138,10 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
     ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
     : null;
-  await db.insert(runTasks).values({ id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() });
+  const rowData = { id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
+  await db.insert(runTasks).values(rowData);
   (set as { status: number }).status = 201;
-  return { data: await runTaskResource({ id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() }) };
+  return { data: await runTaskResource(rowData) };
 };
 
 const getRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -161,6 +162,8 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   if (typeof attrs.name === "string") updates.name = attrs.name;
   if (attrs.description !== undefined) updates.description = typeof attrs.description === "string" ? attrs.description : null;
   if (typeof attrs.url === "string") updates.url = attrs.url;
+  if (typeof attrs.category === "string" && attrs.category.trim() !== "") updates.category = attrs.category;
+  if (attrs["hmac-key"] !== undefined) updates.hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
   if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
   if (attrs["global-configuration"] !== undefined) {
     updates.globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
@@ -222,7 +225,10 @@ const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: to
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const binding = await db.query.workspaceRunTasks.findFirst({
-    where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)),
+    where: and(
+      eq(workspaceRunTasks.workspaceId, workspaceId),
+      or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
+    ),
   });
   if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, binding.runTaskId) });
@@ -262,8 +268,11 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
   const taskId = typeof runTaskData.id === "string" ? runTaskData.id : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
   if (taskId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
   const requestedStages = Array.isArray(attrs.stages) ? (attrs.stages as unknown[]).filter((s): s is string => typeof s === "string") : [];
+  if (requestedStages.length > 1) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Only a single stage is supported" }] };
+  }
   const stage = typeof attrs.stage === "string" && attrs.stage !== "" ? attrs.stage : (requestedStages[0] ?? "post_plan");
-  const stages = requestedStages.length > 0 ? requestedStages : [stage];
   const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
   if (task?.orgId !== ws.orgId) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -273,8 +282,12 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
   }
   const id = `wrt-${crypto.randomUUID()}`;
   await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel }).onConflictDoNothing();
+  const persisted = await db.query.workspaceRunTasks.findFirst({
+    where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)),
+  });
+  if (persisted === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
   (set as { status: number }).status = 201;
-  return { data: { id, type: "workspace-tasks", attributes: { stage, stages, "enforcement-level": enforcementLevel }, relationships: { "task": { data: { id: taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+  return { data: { id: persisted.id, type: "workspace-tasks", attributes: { stage: persisted.stage, stages: [persisted.stage], "enforcement-level": persisted.enforcementLevel }, relationships: { "task": { data: { id: taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
 };
 
 const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -282,7 +295,10 @@ const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId:
   const taskId = params.task_id ?? "";
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)));
+  await db.delete(workspaceRunTasks).where(and(
+    eq(workspaceRunTasks.workspaceId, workspaceId),
+    or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
+  ));
   (set as { status: number }).status = 204;
   return {};
 };

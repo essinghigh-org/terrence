@@ -390,12 +390,16 @@ async function replaceProjectScope(oauthClientId: string, projectIds: readonly s
   });
 }
 
-async function oauthClientResource(oc: OcItem, request: Readonly<{ url: string }>): Promise<Record<string, unknown>> {
+async function oauthClientResource(
+  oc: OcItem,
+  request: Readonly<{ url: string }>,
+  orgNameOverride?: string | null,
+): Promise<Record<string, unknown>> {
   const [projectLinks, orgName] = await Promise.all([
     db.query.oauthClientProjects.findMany({
       where: eq(oauthClientProjects.oauthClientId, oc.id),
     }),
-    organizationName(oc.orgId),
+    orgNameOverride !== undefined ? Promise.resolve(orgNameOverride) : organizationName(oc.orgId),
   ]);
   return {
     id: oc.id,
@@ -503,7 +507,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
-    return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request))) };
+    return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request, org.name))) };
   })
   .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
