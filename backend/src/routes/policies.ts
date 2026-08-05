@@ -337,8 +337,12 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // reports "sentinel", so silently accepting "opa" would be a lie.
     const kind = typeof attributes.kind === "string" ? attributes.kind : "sentinel";
     if (kind !== "sentinel") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel" }] }; }
-    const query = typeof attributes.policy === "string" ? attributes.policy : null;
+    const query = typeof attributes.policy === "string" ? attributes.policy : (typeof attributes.query === "string" ? attributes.query : null);
     const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : (typeof attributes["enforce_mode"] === "string" ? attributes["enforce_mode"] : "soft-mandatory");
+    if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(enforcementLevel)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
+    }
     const id = `pol-${crypto.randomUUID()}`;
     // Optional policy_sets relationship attaches this standalone policy to a set.
     let policySetId: string | null = null;
@@ -364,6 +368,12 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    // VCS-backed policy sets own their policy content in the repository.
+    const parentSet = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+    if (parentSet !== undefined && parentSet.vcsRepo !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content is managed by VCS" }] };
+    }
     // Elysia has already consumed the raw request body into `body`; coerce it
     // to text without touching request.arrayBuffer() (would throw "already used").
     const content = typeof body === "string"
@@ -671,7 +681,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (Object.keys(updates).length > 0) await db.update(policySets).set(updates).where(eq(policySets.id, policySetId));
     const updated = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "policy-sets", attributes: policySetAttributes(updated) } };
+    return { data: { id: updated.id, type: "policy-sets", attributes: policySetAttributes(updated), relationships: await policySetRelationships(updated) } };
   })
   .delete("/api/v2/policy-sets/:policy_set_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policySetId = params.policy_set_id ?? "";
@@ -781,6 +791,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ps.vcsRepo !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
     const policyIds = extractPolicyRefIds(body);
     if (policyIds.length > 0) {
       await db.update(policies).set({ policySetId })
@@ -938,7 +952,11 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const id = `pol-${crypto.randomUUID()}`;
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : "soft-mandatory";
-    const query = typeof attributes.query === "string" ? attributes.query : null;
+    if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(enforcementLevel)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
+    }
+    const query = typeof attributes.query === "string" ? attributes.query : (typeof attributes.policy === "string" ? attributes.policy : null);
     const createdAt = Date.now();
     await db.insert(policies).values({ id, orgId: ps.orgId, policySetId, name, description, enforcementLevel, query, createdAt });
     (set as { status: number }).status = 201;
@@ -973,11 +991,18 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const updates: Partial<typeof policies.$inferInsert> = {};
     if (typeof attributes.name === "string") updates.name = attributes.name;
     if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
-    if (typeof attributes["enforcement-level"] === "string") updates.enforcementLevel = attributes["enforcement-level"];
     if (attributes.policy !== undefined) updates.query = typeof attributes.policy === "string" ? attributes.policy : null;
+    if (typeof attributes["enforcement-level"] === "string") {
+      const lev = attributes["enforcement-level"];
+      if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(lev)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
+      }
+      updates.enforcementLevel = lev;
+    }
     if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
     const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (updated === undefined || updated.orgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await policyResource(updated as unknown as PolicyRow, org.name) };
   })
   .delete("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {

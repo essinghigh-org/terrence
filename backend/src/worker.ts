@@ -1560,9 +1560,11 @@ async function runPolicyChecks(
         // Use the Landlock sandbox if available for policy evaluation.
 // In simulated mode (tests) or when disabled, run unsandboxed.
         const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true";
-        const runSandbox = !isSimulatedAllowed && runSandboxRequired() && RunSandbox.isUsable() && RunSandbox.hasRunner()
-          ? new RunSandbox()
-          : null;
+        const sandboxRequired = !isSimulatedAllowed && runSandboxRequired();
+        if (sandboxRequired && (!RunSandbox.isUsable() || !RunSandbox.hasRunner())) {
+          throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
+        }
+        const runSandbox = sandboxRequired ? new RunSandbox() : null;
         const sentinelProc = runSandbox !== null
           ? runSandbox.spawnGeneric(args, {
               cwd: workDir,

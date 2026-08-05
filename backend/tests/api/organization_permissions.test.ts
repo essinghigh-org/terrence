@@ -249,6 +249,8 @@ describe("granular organization permissions", () => {
       "can-manage-projects": boolean;
       "can-manage-vcs-settings": boolean;
       "can-manage-agent-pools": boolean;
+      "can-manage-policies": boolean;
+      "can-read-policies": boolean;
     }>;
     const permissionsFor = async (auth: string): Promise<Permissions> => {
       const response = await request(`/api/v2/organizations/${orgName}`, auth);
@@ -270,6 +272,8 @@ describe("granular organization permissions", () => {
       "can-manage-projects": false,
       "can-manage-vcs-settings": false,
       "can-manage-agent-pools": false,
+      "can-manage-policies": false,
+      "can-read-policies": false,
     });
     expect(await permissionsFor(tokens.manageWorkspaces)).toMatchObject({
       "can-update": false,
@@ -318,6 +322,8 @@ describe("granular organization permissions", () => {
       "can-manage-projects": true,
       "can-manage-vcs-settings": true,
       "can-manage-agent-pools": true,
+      "can-manage-policies": true,
+      "can-read-policies": true,
     });
   });
 

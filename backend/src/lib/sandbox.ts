@@ -1,6 +1,6 @@
-import { isAbsolute, join, dirname } from "path";
+import { isAbsolute, join, dirname, resolve } from "path";
 import { mkdir, rm } from "fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "os";
 import type { Subprocess } from "bun";
 
@@ -60,16 +60,27 @@ function findRunner(): string | null {
   return null;
 }
 
-/** Resolve a bare command to an absolute path via PATH. Returns null if not found. */
+/** Resolve a bare command to an absolute executable path via PATH.
+ * Returns null if not found or not executable. */
 function findExecutable(name: string): string | null {
   if (name === "") return null;
-  if (isAbsolute(name)) return existsSync(name) ? name : null;
+  if (isAbsolute(name)) return (existsSync(name) && statIsExecutable(name)) ? name : null;
   const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
   for (const dir of pathDirs) {
-    const candidate = join(dir, name);
-    if (existsSync(candidate)) return candidate;
+    if (dir === "") continue;
+    const candidate = join(resolve(dir), name);
+    if (existsSync(candidate) && statIsExecutable(candidate)) return candidate;
   }
   return null;
+}
+
+const EXECUTABLE_BITS = 0o111;
+function statIsExecutable(path: string): boolean {
+  try {
+    return (statSync(path).mode & EXECUTABLE_BITS) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 let cachedAbi: number | null = null;
@@ -175,6 +186,7 @@ export class RunSandbox {
         }
         binaryPath = found;
       }
+      const resolvedArgs = [binaryPath, ...args.slice(1)];
 
       const workDir = this.workDirForRunCwd(opts.cwd);
       const binaryDir = dirname(binaryPath);
@@ -199,7 +211,7 @@ export class RunSandbox {
         ...extraRwArgs(),
         `--cwd=${opts.cwd}`,
         "--",
-        ...args,
+        ...resolvedArgs,
       ];
 
       return Bun.spawn(runnerArgs, { env, stdout: "pipe", stderr: "pipe" });

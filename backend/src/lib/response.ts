@@ -809,7 +809,10 @@ export function workspaceOutputResources(state: StateParam): Record<string, unkn
       type: "workspace-outputs",
       attributes: {
         name: attributes.name,
-        value: attributes.value,
+        // Sensitive output values are never exposed through the workspace
+        // include=outputs path; authorized clients fetch them via the
+        // state-version-outputs endpoint instead.
+        value: attributes.sensitive === true ? null : attributes.value,
         sensitive: attributes.sensitive,
         "output-type": attributes.type,
       },

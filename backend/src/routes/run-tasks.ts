@@ -159,9 +159,15 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   const data = payload.data as Record<string, unknown> | undefined;
   const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
   const updates: Partial<typeof runTasks.$inferInsert> = {};
-  if (typeof attrs.name === "string") updates.name = attrs.name;
+  if (typeof attrs.name === "string") {
+    if (attrs.name.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    updates.name = attrs.name.trim();
+  }
   if (attrs.description !== undefined) updates.description = typeof attrs.description === "string" ? attrs.description : null;
-  if (typeof attrs.url === "string") updates.url = attrs.url;
+  if (typeof attrs.url === "string") {
+    if (attrs.url.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL is required" }] }; }
+    updates.url = attrs.url.trim();
+  }
   if (typeof attrs.category === "string" && attrs.category.trim() !== "") updates.category = attrs.category;
   if (attrs["hmac-key"] !== undefined) updates.hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
   if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
@@ -241,10 +247,61 @@ const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: to
                 stages: [binding.stage],
                 "enforcement-level": binding.enforcementLevel,
                 "run-task-name": task?.name ?? binding.runTaskId,
+                "run-task-description": task?.description ?? null,
                 "run-task-enabled": task?.enabled ?? false,
               },
       relationships: {
         "task": { data: { id: binding.runTaskId, type: "tasks" } },
+        workspace: { data: { id: workspaceId, type: "workspaces" } },
+      },
+    },
+  };
+};
+
+const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const workspaceId = params.workspace_id ?? "";
+  const taskId = params.task_id ?? "";
+  const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const binding = await db.query.workspaceRunTasks.findFirst({
+    where: and(
+      eq(workspaceRunTasks.workspaceId, workspaceId),
+      or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
+    ),
+  });
+  if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+  const updates: Partial<typeof workspaceRunTasks.$inferInsert> = {};
+  if (typeof attrs["enforcement-level"] === "string") {
+    const level = attrs["enforcement-level"];
+    if (!["advisory", "mandatory", "must_pass"].includes(level)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, mandatory, or must_pass" }] };
+    }
+    updates.enforcementLevel = level;
+  }
+  const requestedStages = Array.isArray(attrs.stages) ? (attrs.stages as unknown[]).filter((s): s is string => typeof s === "string") : [];
+  if (requestedStages.length > 0) updates.stage = requestedStages[0] ?? "post_plan";
+  if (Object.keys(updates).length > 0) await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, binding.id));
+  const updated = await db.query.workspaceRunTasks.findFirst({ where: eq(workspaceRunTasks.id, binding.id) });
+  if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, updated.runTaskId) });
+  return {
+    data: {
+      id: updated.id,
+      type: "workspace-tasks",
+      attributes: {
+        stage: updated.stage,
+        stages: [updated.stage],
+        "enforcement-level": updated.enforcementLevel,
+        "run-task-name": task?.name ?? updated.runTaskId,
+        "run-task-description": task?.description ?? null,
+        "run-task-enabled": task?.enabled ?? false,
+      },
+      relationships: {
+        "task": { data: { id: updated.runTaskId, type: "tasks" } },
         workspace: { data: { id: workspaceId, type: "workspaces" } },
       },
     },
@@ -439,5 +496,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
   .get("/api/v2/workspaces/:workspace_id/tasks/:task_id", getWorkspaceRunTask)
   .post("/api/v2/workspaces/:workspace_id/run-tasks", attachWorkspaceRunTask)
   .post("/api/v2/workspaces/:workspace_id/tasks", attachWorkspaceRunTask)
+  .patch("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", updateWorkspaceRunTask)
+  .patch("/api/v2/workspaces/:workspace_id/tasks/:task_id", updateWorkspaceRunTask)
   .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", detachWorkspaceRunTask)
   .delete("/api/v2/workspaces/:workspace_id/tasks/:task_id", detachWorkspaceRunTask);

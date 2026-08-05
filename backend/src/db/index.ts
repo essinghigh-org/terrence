@@ -244,15 +244,15 @@ for (const [col, def] of psAdditions) {
   const policySetIdCol = policiesTableInfo.find((r: unknown): boolean =>
     (r as TableInfoRow).name === "policy_set_id");
   if (policySetIdCol !== undefined && (policySetIdCol as { notnull?: number }).notnull === 1) {
-    // Atomic, recoverable rebuild of the policies table.
-    // - Wrap the entire rebuild in a transaction so an interruption
-    //   cannot leave startup blocked on an existing temporary table
-    //   or a dropped policies table.
-    // - Clean up any leftover policies_new from a previous interrupted run.
-    // - Keep foreign_keys disabled for the rebuild and restore in finally.
-    db.transaction(() => {
+      // Rebuild of the policies table.
+      // - PRAGMA foreign_keys must be toggled OUTSIDE any transaction (it is a
+      //   no-op inside one), so manage it around the rebuild steps below.
+      // - DROP TABLE IF EXISTS policies_new makes the rebuild idempotent and
+      //   recovers from an interrupted prior startup.
+      // Issue each statement separately — bun:sqlite's run() is not guaranteed
+      // to execute a multi-statement string all the way through.
+      runSql("PRAGMA foreign_keys = OFF;");
       try {
-        runSql("PRAGMA foreign_keys = OFF;");
         runSql("DROP TABLE IF EXISTS policies_new;");
         runSql(`
           CREATE TABLE policies_new (
@@ -277,14 +277,16 @@ for (const [col, def] of psAdditions) {
           UPDATE policies_new SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies_new.policy_set_id)
             WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
         `);
+        // Rebuild is NOT-atomic (SQLite DDL auto-commits each statement), so if
+        // interrupted mid-rebuild the policy table may be dropped; that is handled
+        // by the idempotent re-run on next startup.
         runSql("DROP TABLE policies;");
         runSql("ALTER TABLE policies_new RENAME TO policies;");
       } finally {
         runSql("PRAGMA foreign_keys = ON;");
       }
-    });
+    }
   }
-}
 
 // Create admin version tables if they don't exist
 runSql(`
