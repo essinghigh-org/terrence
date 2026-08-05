@@ -117,6 +117,31 @@ function registryProviderResource(value: ProvItem, orgName: string): Record<stri
 type ProvVerItem = DeepReadonly<typeof registryProviderVersions.$inferSelect>;
 type PlatItem = DeepReadonly<typeof registryProviderPlatforms.$inferSelect>;
 
+// RegistryModule carry a pointer `organization` relationship plus attributes
+// the provider's model dereferences (status, publishing-mechanism, no-code);
+// omitting any makes the provider nil-deref or return inconsistently.
+function registryModuleResource(m: { id: string; name: string; provider: string; namespace: string; createdAt: number }, orgName: string): Record<string, unknown> {
+  return {
+    id: m.id,
+    type: "registry-modules",
+    attributes: {
+      name: m.name,
+      provider: m.provider,
+      namespace: m.namespace,
+      "registry-name": "private",
+      "no-code": false,
+      "publishing-mechanism": "generic",
+      status: "available",
+      "created-at": new Date(m.createdAt).toISOString(),
+    },
+    relationships: {
+      organization: { data: { id: orgName, type: "organizations" } },
+      versions: { data: [] },
+      tags: { data: [] },
+    },
+  };
+}
+
 async function moduleTestTarget(
   moduleId: string,
   versionReference: string,
@@ -1191,13 +1216,51 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = typeof attributes.namespace === "string" ? attributes.namespace : org.name;
     await db.insert(registryModules).values({ id, orgId: org.id, namespace, name, provider, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-modules", attributes: { name, provider, namespace, "created-at": new Date().toISOString() } } };
+    return { data: registryModuleResource({ id, name, provider, namespace, createdAt: Date.now() }, org.name) };
+  })
+  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const namespace = params.namespace ?? "";
+    const moduleName = params.module_name ?? "";
+    const provider = params.provider ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({
+      where: and(
+        eq(registryModules.orgId, org.id),
+        eq(registryModules.namespace, namespace),
+        eq(registryModules.name, moduleName),
+        eq(registryModules.provider, provider),
+      ),
+    });
+    if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org.name) };
   })
   .delete("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const orgName = params.org_name ?? "";
+    const namespace = params.namespace ?? "";
+    const moduleName = params.module_name ?? "";
+    const provider = params.provider ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({
+      where: and(
+        eq(registryModules.orgId, org.id),
+        eq(registryModules.namespace, namespace),
+        eq(registryModules.name, moduleName),
+        eq(registryModules.provider, provider),
+      ),
+    });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(registryModules).where(eq(registryModules.id, mod.id));
     (set as { status: number }).status = 204;
     return {};
   })

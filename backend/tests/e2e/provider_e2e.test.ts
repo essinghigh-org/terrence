@@ -74,6 +74,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool_allowed_projects.apap",
   "tfe_agent_pool_excluded_workspaces.apexw",
   "tfe_org_max_token_ttl_policy.ottl",
+  "tfe_registry_module.regmod",
 ];
 
 function freePort(): Promise<number> {
@@ -544,6 +545,13 @@ resource "tfe_org_max_token_ttl_policy" "ottl" {
   team_token_max_ttl       = "2d"
   user_token_max_ttl       = "1w"
   audit_trail_token_max_ttl = "2w"
+}
+
+resource "tfe_registry_module" "regmod" {
+  name            = "pe2e-mod-${suffix}"
+  organization    = tfe_organization.org.name
+  registry_name   = "private"
+  module_provider = "aws"
 }
 `;
 }
