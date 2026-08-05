@@ -1,4 +1,4 @@
-import { join, dirname } from "path";
+import { isAbsolute, join, dirname } from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "os";
@@ -55,6 +55,18 @@ function runnerCandidates(): string[] {
 
 function findRunner(): string | null {
   for (const candidate of runnerCandidates()) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Resolve a bare command to an absolute path via PATH. Returns null if not found. */
+function findExecutable(name: string): string | null {
+  if (name === "") return null;
+  if (isAbsolute(name)) return existsSync(name) ? name : null;
+  const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, name);
     if (existsSync(candidate)) return candidate;
   }
   return null;
@@ -148,9 +160,20 @@ export class RunSandbox {
       args: readonly string[],
       opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
     ): Subprocess<"ignore", "pipe", "pipe"> {
-      const binaryPath = args[0] ?? "";
+      let binaryPath = args[0] ?? "";
       if (this.runner === null) {
         throw new Error("landlock-runner binary not found; cannot sandbox run");
+      }
+
+      // Resolve bare commands (e.g. "sentinel") to absolute paths before
+      // constructing Landlock rules. If unresolved, fail fast instead of
+      // treating as current directory.
+      if (binaryPath === "" || !isAbsolute(binaryPath)) {
+        const found = findExecutable(binaryPath);
+        if (found === null) {
+          throw new Error(`executable not found: ${binaryPath}`);
+        }
+        binaryPath = found;
       }
 
       const workDir = this.workDirForRunCwd(opts.cwd);

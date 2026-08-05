@@ -1560,7 +1560,7 @@ async function runPolicyChecks(
         // Use the Landlock sandbox if available for policy evaluation.
 // In simulated mode (tests) or when disabled, run unsandboxed.
         const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true";
-        const runSandbox = !isSimulatedAllowed && runSandboxRequired() && RunSandbox.isUsable()
+        const runSandbox = !isSimulatedAllowed && runSandboxRequired() && RunSandbox.isUsable() && RunSandbox.hasRunner()
           ? new RunSandbox()
           : null;
         const sentinelProc = runSandbox !== null
