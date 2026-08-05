@@ -357,6 +357,15 @@ runSql(`
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE
   );
   CREATE UNIQUE INDEX IF NOT EXISTS agent_pool_excluded_workspaces_pool_workspace_idx ON agent_pool_excluded_workspaces (agent_pool_id, workspace_id);
+  CREATE TABLE IF NOT EXISTS org_token_ttl_policies (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    token_type TEXT NOT NULL,
+    max_ttl_ms INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS org_token_ttl_policies_org_type_idx ON org_token_ttl_policies (org_id, token_type);
   CREATE UNIQUE INDEX IF NOT EXISTS github_app_installations_org_installation_idx
     ON github_app_installations (org_id, installation_id);
   CREATE INDEX IF NOT EXISTS workspaces_vcs_repo_identifier_idx

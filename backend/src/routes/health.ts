@@ -113,6 +113,9 @@ export const healthRoutes = new Elysia({ name: "health" })
     const headers = set.headers as Record<string, string | number>;
     headers["TFP-API-Version"] = "2.5";
     headers["TFP-AppName"] = "Terraform Enterprise";
+    headers["TFE-Version"] = "2.4.0";
+    headers["X-TFE-Version"] = "v202410-1";
+    headers["X-TFE-Current-Version"] = "2.4.0";
     let sso;
     try {
       sso = await pingSsoSnapshot();

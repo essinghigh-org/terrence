@@ -823,6 +823,17 @@ export const agentPoolAllowedWorkspaces = sqliteTable("agent_pool_allowed_worksp
   uniqueIndex("agent_pool_allowed_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId),
 ]);
 
+export const orgTokenTTLPolicies = sqliteTable("org_token_ttl_policies", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  tokenType: text("token_type").notNull(),
+  maxTtlMs: integer("max_ttl_ms").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("org_token_ttl_policies_org_type_idx").on(table.orgId, table.tokenType),
+]);
+
 export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects", {
   id: text("id").primaryKey(),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
