@@ -68,6 +68,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_admin_smtp_settings.smtp",
   "tfe_registry_provider.regprov",
   "tfe_organization_run_task_global_settings.rgs",
+  "tfe_project_settings.proj_settings",
 ];
 
 function freePort(): Promise<number> {
@@ -500,6 +501,11 @@ resource "tfe_organization_run_task_global_settings" "rgs" {
   task_id           = tfe_organization_run_task.task.id
   enforcement_level = "advisory"
   stages            = ["pre_plan", "post_plan"]
+}
+
+resource "tfe_project_settings" "proj_settings" {
+  project_id             = tfe_project.proj.id
+  default_execution_mode = "remote"
 }
 `;
 }
