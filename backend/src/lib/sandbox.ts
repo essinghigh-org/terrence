@@ -60,11 +60,12 @@ function findRunner(): string | null {
   return null;
 }
 
-/** Resolve a bare command to an absolute executable path via PATH.
- * Returns null if not found or not executable. */
+/** Resolve a bare command name to an absolute regular executable file via
+ * PATH. Returns null if not found, a directory, or not executable. */
 function findExecutable(name: string): string | null {
   if (name === "") return null;
   if (isAbsolute(name)) return (existsSync(name) && statIsExecutable(name)) ? name : null;
+  if (name.includes("/")) return null;
   const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
   for (const dir of pathDirs) {
     if (dir === "") continue;
@@ -77,7 +78,8 @@ function findExecutable(name: string): string | null {
 const EXECUTABLE_BITS = 0o111;
 function statIsExecutable(path: string): boolean {
   try {
-    return (statSync(path).mode & EXECUTABLE_BITS) !== 0;
+    const stat = statSync(path);
+    return stat.isFile() && (stat.mode & EXECUTABLE_BITS) !== 0;
   } catch {
     return false;
   }

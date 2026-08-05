@@ -351,7 +351,11 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const psData = Array.isArray(psRel.data) ? (psRel.data as Record<string, string>[]) : [];
     if (psData.length > 0 && typeof psData[0]?.id === "string") {
       const targetSet = await db.query.policySets.findFirst({ where: eq(policySets.id, psData[0].id) });
-      if (targetSet !== undefined && targetSet.orgId === org.id) policySetId = targetSet.id;
+      if (targetSet === undefined || targetSet.orgId !== org.id) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-sets relationship must reference a policy set in this organization" }] };
+      }
+      policySetId = targetSet.id;
     }
     const createdAt = Date.now();
     await db.insert(policies).values({ id, orgId: org.id, policySetId, name, description, enforcementLevel, query, createdAt });
@@ -807,6 +811,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ps.vcsRepo !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+    }
     const policyIds = extractPolicyRefIds(body);
     if (policyIds.length === 0) {
       // go-tfe's RemovePolicies with a set detaches everything when no ids given.
@@ -991,7 +999,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const updates: Partial<typeof policies.$inferInsert> = {};
     if (typeof attributes.name === "string") updates.name = attributes.name;
     if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
-    if (attributes.policy !== undefined) updates.query = typeof attributes.policy === "string" ? attributes.policy : null;
+    if (attributes.policy !== undefined || attributes.query !== undefined) {
+      updates.query = typeof attributes.policy === "string" ? attributes.policy : (typeof attributes.query === "string" ? attributes.query : null);
+    }
     if (typeof attributes["enforcement-level"] === "string") {
       const lev = attributes["enforcement-level"];
       if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(lev)) {
