@@ -2,7 +2,6 @@ import { join, dirname } from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "os";
-import { spawn } from "bun";
 import type { Subprocess } from "bun";
 
 /**
@@ -143,49 +142,57 @@ export class RunSandbox {
     return workDir;
   }
 
-  /**
-   * Spawn a terraform/tofu command under the Landlock allow-list.
-   * `args[0]` is the host binary path; `opts.cwd` is the host execution dir
-   * (inside the run workdir). The helper applies the rules to itself, chdirs,
-   * then execs — restrictions flow to provider and provisioner children.
-   */
-  public spawn(
-    args: readonly string[],
-    opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
-  ): Subprocess<"ignore", "pipe", "pipe"> {
-    const binaryPath = args[0] ?? "";
-    if (this.runner === null) {
-      throw new Error("landlock-runner binary not found; cannot sandbox run");
+  /** Spawn a generic command (sentinel, etc.) under the Landlock allow-list.
+     * Uses the same rules as terraform/tofu but with a custom binary. */
+    public spawnGeneric(
+      args: readonly string[],
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+    ): Subprocess<"ignore", "pipe", "pipe"> {
+      const binaryPath = args[0] ?? "";
+      if (this.runner === null) {
+        throw new Error("landlock-runner binary not found; cannot sandbox run");
+      }
+
+      const workDir = this.workDirForRunCwd(opts.cwd);
+      const binaryDir = dirname(binaryPath);
+      const resolvDir = resolvConfDir();
+
+      const env: Record<string, string> = {
+        ...opts.env,
+        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: workDir,
+        TMPDIR: join(workDir, "tmp"),
+        USER: process.env.USER ?? "nobody",
+      };
+
+      const runnerArgs = [
+        this.runner,
+        `--rwx=${workDir}`,
+        `--rx=${binaryDir}`,
+        ...systemRuleArgs(),
+        "--ro=/etc",
+        `--rw-files=/dev`,
+        ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
+        ...extraRwArgs(),
+        `--cwd=${opts.cwd}`,
+        "--",
+        ...args,
+      ];
+
+      return Bun.spawn(runnerArgs, { env, stdout: "pipe", stderr: "pipe" });
     }
 
-    const workDir = this.workDirForRunCwd(opts.cwd);
-    const binaryDir = dirname(binaryPath);
-    const resolvDir = resolvConfDir();
-
-    const env: Record<string, string> = {
-      ...opts.env,
-      PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      HOME: workDir,
-      TMPDIR: join(workDir, "tmp"),
-      USER: process.env.USER ?? "nobody",
-    };
-
-    const runnerArgs = [
-      this.runner,
-      `--rwx=${workDir}`,
-      `--rx=${binaryDir}`,
-      ...systemRuleArgs(),
-      "--ro=/etc",
-      `--rw-files=/dev`,
-      ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
-      ...extraRwArgs(),
-      `--cwd=${opts.cwd}`,
-      "--",
-      ...args,
-    ];
-
-    return spawn(runnerArgs, { env, stdout: "pipe", stderr: "pipe" });
-  }
+    /** Spawn a terraform/tofu command under the Landlock allow-list.
+     * `args[0]` is the host binary path; `opts.cwd` is the host execution dir
+     * (inside the run workdir). The helper applies the rules to itself, chdirs,
+     * then execs — restrictions flow to provider and provisioner children.
+     */
+    public spawn(
+      args: readonly string[],
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+    ): Subprocess<"ignore", "pipe", "pipe"> {
+      return this.spawnGeneric(args, opts);
+    }
 
   /** Resolve the run workdir containing a cwd (execution dir). */
   private workDirForRunCwd(cwd: string): string {

@@ -1556,12 +1556,24 @@ async function runPolicyChecks(
           );
         }
         args.push(policyPath);
-        const sentinelProc = spawn(args, {
-          cwd: workDir,
-          env: { PATH: process.env.PATH ?? "" },
-          stdout: "pipe",
-          stderr: "pipe",
-        });
+
+        // Use the Landlock sandbox if available for policy evaluation.
+// In simulated mode (tests) or when disabled, run unsandboxed.
+        const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true";
+        const runSandbox = !isSimulatedAllowed && runSandboxRequired() && RunSandbox.isUsable()
+          ? new RunSandbox()
+          : null;
+        const sentinelProc = runSandbox !== null
+          ? runSandbox.spawnGeneric(args, {
+              cwd: workDir,
+              env: { PATH: process.env.PATH ?? "" },
+            })
+          : spawn(args, {
+              cwd: workDir,
+              env: { PATH: process.env.PATH ?? "" },
+              stdout: "pipe",
+              stderr: "pipe",
+            });
         const [sentinelExit, sentinelStdout, sentinelStderr] = await Promise.all([
           sentinelProc.exited,
           new Response(sentinelProc.stdout).text(),
