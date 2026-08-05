@@ -1,8 +1,9 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, isNull, asc } from "drizzle-orm";
 import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL } from "../lib/utils";
+import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -29,8 +30,6 @@ type DeepReadonly<T> = T extends (infer R)[]
   : T;
 
 type PsItem = DeepReadonly<typeof policySets.$inferSelect>;
-type LinkProjItem = Readonly<{ readonly projectId: string }>;
-type LinkExclItem = Readonly<{ readonly workspaceId: string }>;
 type PolItem = DeepReadonly<typeof policies.$inferSelect>;
 type PcItem = DeepReadonly<typeof policyChecks.$inferSelect>;
 type ParamItem = DeepReadonly<typeof policySetParameters.$inferSelect>;
@@ -65,6 +64,25 @@ function vcsRepoResource(vcsRepo: DeepReadonly<PolicySetVcsRepo> | null): Record
   };
 }
 
+// Extract policy reference ids from a policy-set relationships payload. Accepts
+// both go-tfe's Policies.Add shape ({ "policies": [{id}] }) and the standard
+// { data: { relationships: { policies: { data: [{id}] } } } } shape.
+function extractPolicyRefIds(body: unknown): string[] {
+  const b = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const collect = (refs: unknown): string[] => {
+    const arr = Array.isArray(refs) ? refs : [];
+    return arr.map((r): string => (typeof (r as { id?: unknown })?.id === "string" ? (r as { id: string }).id : "")).filter((id: string): boolean => id !== "");
+  };
+  if (Array.isArray(b.policies)) return collect(b.policies);
+  const data = b.data as Record<string, unknown> | undefined;
+  if (data !== null && typeof data === "object") {
+    const rels = data.relationships as Record<string, unknown> | undefined;
+    const pr = rels?.policies as Record<string, unknown> | undefined;
+    if (pr !== null && typeof pr === "object" && Array.isArray(pr.data)) return collect(pr.data);
+  }
+  return [];
+}
+
 function policySetAttributes(policySet: PsItem): Record<string, unknown> {
   return {
     name: policySet.name,
@@ -77,6 +95,26 @@ function policySetAttributes(policySet: PsItem): Record<string, unknown> {
     "policies-path": policySet.policiesPath,
     "policy-update-patterns": policySet.policyUpdatePatterns,
     "vcs-repo": vcsRepoResource(policySet.vcsRepo),
+  };
+}
+
+// Full TFE policy-set relationship shape. The provider's workspace/project
+// policy-set resources read the attached workspaces/projects back from the
+// policy-set resource, so these must be populated.
+async function policySetRelationships(policySet: PsItem): Promise<Record<string, unknown>> {
+  const [workspaceLinks, projLinks, exclLinks, policyRows] = await Promise.all([
+    db.query.policySetWorkspaces.findMany({ where: eq(policySetWorkspaces.policySetId, policySet.id) }),
+    db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, policySet.id) }),
+    db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, policySet.id) }),
+    db.query.policies.findMany({ where: eq(policies.policySetId, policySet.id), columns: { id: true } }),
+  ]);
+  const orgName = await organizationName(policySet.orgId);
+  return {
+    organization: { data: { id: orgName ?? policySet.orgId, type: "organizations" } },
+    workspaces: { data: workspaceLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+    projects: { data: projLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
+    "workspace-exclusions": { data: exclLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+    policies: { data: policyRows.map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
   };
 }
 
@@ -231,8 +269,125 @@ function policySetVersionResource(version: PolicySetVersionItem, request: Readon
 }
 
 
+type PolicyRow = Readonly<{
+  id: string; orgId: string | null; policySetId: string | null; policySetVersionId: string | null;
+  name: string; description: string | null; enforcementLevel: string | null; query: string | null;
+  source: string | null; sourcePath: string | null; createdAt: number;
+}>;
+
+async function policyResource(pol: PolicyRow, orgName: string | null): Promise<Record<string, unknown>> {
+  return {
+    id: pol.id,
+    type: "policies",
+    attributes: {
+      name: pol.name,
+      description: pol.description,
+      // Terrence stores the policy content in `query` and only supports
+      // Sentinel policies today.
+      kind: "sentinel",
+      policy: pol.query ?? "",
+      "enforcement-level": pol.enforcementLevel ?? "soft-mandatory",
+      "created-at": new Date(pol.createdAt).toISOString(),
+      "updated-at": new Date(pol.createdAt).toISOString(),
+    },
+    relationships: {
+      organization: { data: { id: orgName ?? pol.orgId ?? "", type: "organizations" } },
+      "policy-sets": {
+        data: pol.policySetId === null ? [] : [{ id: pol.policySetId, type: "policy-sets" }],
+      },
+    },
+    links: { self: `/api/v2/policies/${pol.id}` },
+  };
+}
+
+// Policies historically created attached to a policy set may have a null
+// org_id (the org is derivable from the set). Resolve org id through the set
+// when the direct org_id column is absent.
+async function resolvePolicyOrgId(pol: { orgId: string | null; policySetId: string | null }): Promise<string | null> {
+  if (pol.orgId !== null) return pol.orgId;
+  if (pol.policySetId === null) return null;
+  const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
+  return ps?.orgId ?? null;
+}
+
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
+  // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
+  .get("/api/v2/organizations/:org_name/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const polList = (await db.query.policies.findMany({
+      where: and(eq(policies.orgId, org.id), isNull(policies.policySetId)),
+      orderBy: [asc(policies.name)],
+    })) as unknown as PolicyRow[];
+    return { data: await Promise.all(polList.map((pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))) };
+  })
+  .post("/api/v2/organizations/:org_name/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const name = typeof attributes.name === "string" ? attributes.name : "";
+    if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
+    const description = typeof attributes.description === "string" ? attributes.description : null;
+    const kind = typeof attributes.kind === "string" ? attributes.kind : "sentinel";
+    if (kind !== "sentinel" && kind !== "opa") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel or opa" }] }; }
+    const query = typeof attributes.policy === "string" ? attributes.policy : null;
+    const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : (typeof attributes["enforce_mode"] === "string" ? attributes["enforce_mode"] : (kind === "opa" ? "mandatory" : "soft-mandatory"));
+    const id = `pol-${crypto.randomUUID()}`;
+    // Optional policy_sets relationship attaches this standalone policy to a set.
+    let policySetId: string | null = null;
+    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+    const psRel = typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null ? (rels["policy-sets"] as Record<string, unknown>) : {};
+    const psData = Array.isArray(psRel.data) ? (psRel.data as Record<string, string>[]) : [];
+    if (psData.length > 0 && typeof psData[0]?.id === "string") {
+      const targetSet = await db.query.policySets.findFirst({ where: eq(policySets.id, psData[0].id) });
+      if (targetSet !== undefined && targetSet.orgId === org.id) policySetId = targetSet.id;
+    }
+    await db.insert(policies).values({ id, orgId: org.id, policySetId, name, description, enforcementLevel, query, createdAt: Date.now() });
+    (set as { status: number }).status = 201;
+    return { data: await policyResource({ id, orgId: org.id, policySetId, policySetVersionId: null, name, description, enforcementLevel, query, source: null, sourcePath: null, createdAt: Date.now() }, org.name) };
+  })
+  .put("/api/v2/policies/:policy_id/upload", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    // go-tfe Policies.Upload PUTs the raw policy content to
+    // /policies/:id/upload; store it as the policy body (`query`).
+    const policyId = params.policy_id ?? "";
+    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolvedOrgId = await resolvePolicyOrgId(pol);
+    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    // Elysia has already consumed the raw request body into `body`; coerce it
+    // to text without touching request.arrayBuffer() (would throw "already used").
+    const content = typeof body === "string"
+      ? body
+      : body instanceof Uint8Array
+        ? new TextDecoder().decode(body)
+        : ArrayBuffer.isView(body)
+          ? new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength))
+          : body instanceof ArrayBuffer
+            ? new TextDecoder().decode(body)
+            : body === null || body === undefined ? "" : String(body);
+    await db.update(policies).set({ query: content.trim() === "" ? null : content }).where(eq(policies.id, policyId));
+    (set as { status: number }).status = 200;
+    return {};
+  })
+  .get("/api/v2/policies/:policy_id/download", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Response | { errors: { status: string; title: string }[] }> => {
+    // go-tfe Policies.Download GETs the raw policy content from
+    // /policies/:id/download.
+    const policyId = params.policy_id ?? "";
+    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const resolvedOrgId = await resolvePolicyOrgId(pol);
+    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return new Response(pol.query ?? "", { status: 200, headers: { "Content-Type": "application/octet-stream" } });
+  })
   .get("/api/v2/workspaces/:workspace_id/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
@@ -277,7 +432,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       .filter((policySet: PsItem | undefined): policySet is PsItem => policySet !== undefined);
     const policyCounts = new Map<string, number>();
     for (const policy of effectivePolicies) {
-      policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
+      if (policy.policySetId !== null) policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
     }
 
     return {
@@ -299,10 +454,12 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
     if (psList.length === 0) return { data: [] };
     const psIds = psList.map((ps: PsItem): string => ps.id);
-    // Batch the per-set N+1 (2 queries per set) into two IN fetches.
-    const [projRows, exclRows] = await Promise.all([
+    // Batch the per-set relationships (workspaces/projects/exclusions/policies).
+    const [wsRows, projRows, exclRows, policyRows] = await Promise.all([
+      db.query.policySetWorkspaces.findMany({ where: inArray(policySetWorkspaces.policySetId, psIds) }),
       db.query.policySetProjects.findMany({ where: inArray(policySetProjects.policySetId, psIds) }),
       db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
+      db.query.policies.findMany({ where: inArray(policies.policySetId, psIds), columns: { id: true, policySetId: true } }),
     ]);
     const projBySet = new Map<string, Readonly<{ projectId: string }>[]>();
     for (const link of projRows) {
@@ -316,11 +473,30 @@ export const policyRoutes = new Elysia({ name: "policies" })
       list.push(link);
       exclBySet.set(link.policySetId, list);
     }
-    const data = psList.map((ps: PsItem): Record<string, unknown> => {
-      const projLinks = projBySet.get(ps.id) ?? [];
-      const exclLinks = exclBySet.get(ps.id) ?? [];
-      return { id: ps.id, type: "policy-sets", attributes: policySetAttributes(ps), relationships: { projects: { data: projLinks.map((l: LinkProjItem): Record<string, string> => ({ id: l.projectId, type: "projects" })) }, "workspace-exclusions": { data: exclLinks.map((l: LinkExclItem): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) } } };
-    });
+    const wsBySet = new Map<string, Readonly<{ workspaceId: string }>[]>();
+    for (const link of wsRows) {
+      const list = wsBySet.get(link.policySetId) ?? [];
+      list.push(link);
+      wsBySet.set(link.policySetId, list);
+    }
+    const polBySet = new Map<string, Readonly<{ id: string }>[]>();
+    for (const pol of policyRows) {
+      if (pol.policySetId === null) continue;
+      const list = polBySet.get(pol.policySetId) ?? [];
+      list.push(pol);
+      polBySet.set(pol.policySetId, list);
+    }
+    const data = psList.map((ps: PsItem): Record<string, unknown> => ({
+      id: ps.id,
+      type: "policy-sets",
+      attributes: policySetAttributes(ps),
+      relationships: {
+        workspaces: { data: (wsBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+        projects: { data: (projBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
+        "workspace-exclusions": { data: (exclBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+        policies: { data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
+      },
+    }));
     return { data };
   })
   .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -392,6 +568,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
     });
     const created = await db.query.policySets.findFirst({ where: eq(policySets.id, id) });
     if (created === undefined) throw new Error("Policy set disappeared after creation");
+    // Attach any policy_ids supplied at create so the policies relationship
+    // round-trips (otherwise the provider sees drift on every re-apply).
+    if (Array.isArray(policyRelationship.data)) {
+      for (const ref of policyRelationship.data as unknown[]) {
+        const pid = typeof (ref as { id?: unknown })?.id === "string" ? (ref as { id: string }).id : "";
+        if (pid === "") continue;
+        const pol = await db.query.policies.findFirst({ where: and(eq(policies.id, pid), eq(policies.orgId, org.id)) });
+        if (pol !== undefined) await db.update(policies).set({ policySetId: id }).where(eq(policies.id, pid));
+      }
+    }
     (set as { status: number }).status = 201;
     return { data: { id, type: "policy-sets", attributes: policySetAttributes(created) } };
   })
@@ -399,11 +585,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [projLinks, exclLinks] = await Promise.all([
-      db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, policySetId) }),
-      db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, policySetId) }),
-    ]);
-    return { data: { id: ps.id, type: "policy-sets", attributes: policySetAttributes(ps), relationships: { projects: { data: projLinks.map((l: LinkProjItem): Record<string, string> => ({ id: l.projectId, type: "projects" })) }, "workspace-exclusions": { data: exclLinks.map((l: LinkExclItem): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) } } } };
+    return { data: { id: ps.id, type: "policy-sets", attributes: policySetAttributes(ps), relationships: await policySetRelationships(ps) } };
   })
   .patch("/api/v2/policy-sets/:policy_set_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
@@ -581,6 +763,32 @@ export const policyRoutes = new Elysia({ name: "policies" })
     return { data: policySetVersionResource(updated, request) };
   })
   // --- Policy Set Relationships ---
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const policyIds = extractPolicyRefIds(body);
+    for (const pid of policyIds) {
+      const pol = await db.query.policies.findFirst({ where: and(eq(policies.id, pid), eq(policies.orgId, ps.orgId)) });
+      if (pol !== undefined) await db.update(policies).set({ policySetId }).where(eq(policies.id, pid));
+    }
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const policyIds = extractPolicyRefIds(body);
+    if (policyIds.length === 0) {
+      // go-tfe's RemovePolicies with a set detaches everything when no ids given.
+      await db.update(policies).set({ policySetId: null }).where(eq(policies.policySetId, policySetId));
+    } else {
+      await db.update(policies).set({ policySetId: null }).where(and(eq(policies.policySetId, policySetId), inArray(policies.id, policyIds)));
+    }
+    (set as { status: number }).status = 204;
+    return {};
+  })
   .post("/api/v2/policy-sets/:policy_set_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
@@ -717,25 +925,30 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : "soft-mandatory";
     const query = typeof attributes.query === "string" ? attributes.query : null;
-    await db.insert(policies).values({ id, policySetId, name, description, enforcementLevel, query, createdAt: Date.now() });
+    await db.insert(policies).values({ id, orgId: ps.orgId, policySetId, name, description, enforcementLevel, query, createdAt: Date.now() });
     (set as { status: number }).status = 201;
     return { data: { id, type: "policies", attributes: { name, description, "enforcement-level": enforcementLevel, query } } };
   })
   .get("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policyId = params.policy_id ?? "";
-    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: pol.id, type: "policies", attributes: { name: pol.name, description: pol.description, "enforcement-level": pol.enforcementLevel, query: pol.query } } };
+        const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+        if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        const resolvedOrgId = await resolvePolicyOrgId(pol);
+        if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+        if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+        return { data: await policyResource(pol, org.name) };
   })
   .patch("/api/v2/policies/:policy_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policyId = params.policy_id ?? "";
     const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
     if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ps.vcsRepo !== null) {
+    const resolvedOrgId = await resolvePolicyOrgId(pol);
+    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+    if (ps !== undefined && ps.vcsRepo !== null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
@@ -746,19 +959,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (typeof attributes.name === "string") updates.name = attributes.name;
     if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
     if (typeof attributes["enforcement-level"] === "string") updates.enforcementLevel = attributes["enforcement-level"];
-    if (attributes.query !== undefined) updates.query = typeof attributes.query === "string" ? attributes.query : null;
+    if (attributes.policy !== undefined) updates.query = typeof attributes.policy === "string" ? attributes.policy : null;
     if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
     const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "policies", attributes: { name: updated.name, description: updated.description, "enforcement-level": updated.enforcementLevel, query: updated.query } } };
+    if (updated === undefined || updated.orgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: await policyResource(updated as unknown as PolicyRow, org.name) };
   })
   .delete("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policyId = params.policy_id ?? "";
     const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
     if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ps.vcsRepo !== null) {
+    const resolvedOrgId = await resolvePolicyOrgId(pol);
+    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+    if (ps !== undefined && ps.vcsRepo !== null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }

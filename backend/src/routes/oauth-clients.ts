@@ -4,6 +4,7 @@ import { db } from "../db";
 import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { encryptSecret } from "../lib/secrets";
+import { organizationName } from "../lib/response";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
@@ -390,9 +391,12 @@ async function replaceProjectScope(oauthClientId: string, projectIds: readonly s
 }
 
 async function oauthClientResource(oc: OcItem, request: Readonly<{ url: string }>): Promise<Record<string, unknown>> {
-  const projectLinks = await db.query.oauthClientProjects.findMany({
-    where: eq(oauthClientProjects.oauthClientId, oc.id),
-  });
+  const [projectLinks, orgName] = await Promise.all([
+    db.query.oauthClientProjects.findMany({
+      where: eq(oauthClientProjects.oauthClientId, oc.id),
+    }),
+    organizationName(oc.orgId),
+  ]);
   return {
     id: oc.id,
     type: "oauth-clients",
@@ -408,6 +412,9 @@ async function oauthClientResource(oc: OcItem, request: Readonly<{ url: string }
       "connect-path": `/api/v2/oauth-clients/${oc.id}/connect`,
     },
     relationships: {
+      // go-tfe unmarshals OAuthClient.Organization from this relationship;
+      // without it the provider's tfe_oauth_client read dereferences nil.
+      organization: { data: { id: orgName ?? oc.orgId, type: "organizations" } },
       projects: { data: projectLinks.map((link): Record<string, string> => ({ id: link.projectId, type: "projects" })) },
       "oauth-tokens": { links: { related: `/api/v2/oauth-clients/${oc.id}/oauth-tokens` } },
       "agent-pool": {

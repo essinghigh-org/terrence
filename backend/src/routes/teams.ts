@@ -43,22 +43,39 @@ const organizationAccessKeys = [
   "manage-workspaces", "manage-vcs-settings", "manage-agent-pools", "manage-providers",
   "manage-modules", "manage-projects", "read-projects", "read-workspaces",
   "manage-membership", "manage-teams", "manage-organization-access",
+  "access-secret-teams", "allow-member-token-management",
 ] as const;
+// The TFE team organization-access object also carries these string keys; they
+// are stored on dedicated columns, not in the boolean JSON blob.
+const organizationAccessStringKeys = new Set(["visibility", "sso-team-id"]);
 
 function parseOrganizationAccess(input: unknown): Readonly<{ value: Record<string, boolean> }> | Readonly<{ error: string }> {
   if (input === undefined) return { value: {} };
   if (input === null || typeof input !== "object" || Array.isArray(input)) return { error: "organization-access must be an object" };
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key, value]): boolean => !organizationAccessKeys.includes(key as typeof organizationAccessKeys[number]) || typeof value !== "boolean")) {
-    return { error: "organization-access contains an unknown or non-boolean permission" };
+  const booleans: Record<string, boolean> = {};
+  for (const [key, value] of entries) {
+    if (!organizationAccessKeys.includes(key as typeof organizationAccessKeys[number]) && !organizationAccessStringKeys.has(key)) {
+      return { error: "organization-access contains an unknown permission" };
+    }
+    if (organizationAccessStringKeys.has(key)) {
+      if (value !== null && typeof value !== "string") return { error: `organization-access.${key} must be a string or null` };
+    } else {
+      if (typeof value !== "boolean") return { error: "organization-access contains a non-boolean permission" };
+      booleans[key] = value;
+    }
   }
-  return { value: Object.fromEntries(entries) as Record<string, boolean> };
+  return { value: booleans };
 }
 
-function organizationAccessResource(access: Readonly<Record<string, boolean>>): Record<string, boolean> {
+function organizationAccessResource(team: TeamItem): Record<string, boolean | string | null> {
+  const boolDefaults = Object.fromEntries(organizationAccessKeys.map((key): [string, boolean] => [key, false]));
   return {
-    ...Object.fromEntries(organizationAccessKeys.map((key): [string, boolean] => [key, false])),
-    ...access,
+    ...boolDefaults,
+    ...team.organizationAccess,
+    visibility: team.visibility,
+    "sso-team-id": team.ssoTeamId,
+    "allow-member-token-management": team.allowMemberTokenManagement === true,
   };
 }
 
@@ -101,7 +118,7 @@ async function teamResource(team: TeamItem, userCount: number, linkage?: TeamLin
       description: team.description,
       visibility: team.visibility,
       "sso-team-id": team.ssoTeamId,
-      "organization-access": organizationAccessResource(team.organizationAccess),
+      "organization-access": organizationAccessResource(team),
       "allow-member-token-management": team.allowMemberTokenManagement === true,
       "users-count": userCount,
       permissions: { "can-update": true, "can-destroy": true },
@@ -190,10 +207,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const name = typeof attributes.name === "string" ? attributes.name : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `team-${crypto.randomUUID()}`;
+    const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
+      ? attributes["organization-access"] as Record<string, unknown>
+      : {};
     const description = typeof attributes.description === "string" ? attributes.description : null;
-    const visibility = typeof attributes.visibility === "string" ? attributes.visibility : "organization";
-    const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
-    const organizationAccess = parseOrganizationAccess(attributes["organization-access"]);
+    const visibility = typeof attributes.visibility === "string" ? attributes.visibility : (typeof rawOrgAccess.visibility === "string" ? rawOrgAccess.visibility : "organization");
+    const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
+    const organizationAccess = parseOrganizationAccess(rawOrgAccess);
     if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
     if (
       attributes["organization-access"] !== undefined
@@ -265,9 +285,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
       if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
         (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const organizationAccess = parseOrganizationAccess(attributes["organization-access"]);
+      const rawOrgAccess = attributes["organization-access"] as Record<string, unknown> | null;
+      const organizationAccess = parseOrganizationAccess(rawOrgAccess);
       if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
       updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
+      // The provider carries visibility / sso-team-id inside organization-access.
+      if (typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
+      if (rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });

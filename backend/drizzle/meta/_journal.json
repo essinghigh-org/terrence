@@ -414,6 +414,13 @@
       "when": 1787054000000,
       "tag": "0059_perf_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1787055000000,
+      "tag": "0060_org_scoped_policies",
+      "breakpoints": true
     }
   ]
 }

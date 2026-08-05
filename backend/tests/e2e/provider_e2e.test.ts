@@ -13,6 +13,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeo
 let terraformBin = "";
 let tofuBin = "";
 
+// Iteration aid: TERRENCE_E2E_CLI=terraform (or tofu) runs only that CLI;
+// unset runs both.
+const e2eCliFilter: string | null = process.env.TERRENCE_E2E_CLI ?? null;
+
 type CliResult = { code: number; out: string; err: string };
 type ApiResult = { status: number; json: Record<string, any>; text: string };
 
@@ -36,6 +40,20 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_run_trigger.trigger",
   "tfe_ssh_key.ssh",
   "tfe_workspace_settings.ws_settings",
+  "tfe_organization_token.org_tok",
+  "tfe_team_members.team_members",
+  "tfe_team_organization_members.team_org_members",
+  "tfe_agent_pool.pool",
+  "tfe_agent_token.agent_tok",
+  "tfe_oauth_client.client",
+  "tfe_policy.policy",
+  "tfe_policy_set.ps",
+  "tfe_workspace_policy_set.ws_ps",
+  "tfe_project_policy_set.project_ps",
+  "tfe_organization_run_task.task",
+  "tfe_workspace_run_task.ws_task",
+  "tfe_notification_configuration.nc",
+  "tfe_project_notification_configuration.project_nc",
 ];
 
 function freePort(): Promise<number> {
@@ -98,9 +116,20 @@ async function startTlsProxy(backendPort: number): Promise<Awaited<ReturnType<ty
     tls: { cert, key },
     fetch: (req): Promise<Response> => {
       const url = new URL(req.url);
-      url.protocol = "http:";
+      url.protocol = "http";
       url.host = `127.0.0.1:${backendPort}`;
-      return fetch(new Request(url, req));
+      if (process.env.TERRENCE_E2E_PROXY_LOG === "1") {
+        console.log(`[proxy] ${req.method} ${req.url}`);
+      }
+      return fetch(new Request(url, req)).then((res) => {
+        if (process.env.TERRENCE_E2E_PROXY_LOG === "1") {
+          console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
+        }
+        return res;
+      }).catch((err: unknown) => {
+        console.error(`[proxy] ERROR ${req.method} ${req.url}: ${String(err)}`);
+        return new Response("proxy error", { status: 502 });
+      });
     },
   });
 }
@@ -289,6 +318,245 @@ resource "tfe_workspace_settings" "ws_settings" {
   workspace_id        = tfe_workspace.ws.id
   global_remote_state = true
 }
+
+# --- coverage additions beyond the original smoke test ---
+
+resource "tfe_organization_token" "org_tok" {
+  organization = tfe_organization.org.name
+}
+
+resource "tfe_team_members" "team_members" {
+  team_id   = tfe_team.team.id
+  usernames = ["${username}"]
+}
+
+resource "tfe_team_organization_members" "team_org_members" {
+  team_id                     = tfe_team.team.id
+  organization_membership_ids = [tfe_organization_membership.member.id]
+}
+
+resource "tfe_agent_pool" "pool" {
+  organization = tfe_organization.org.name
+  name         = "pe2e-pool-${suffix}"
+}
+
+resource "tfe_agent_token" "agent_tok" {
+  agent_pool_id = tfe_agent_pool.pool.id
+  description   = "pe2e agent token ${suffix}"
+}
+
+resource "tfe_oauth_client" "client" {
+  organization     = tfe_organization.org.name
+  name             = "pe2e-oauth-${suffix}"
+  api_url          = "https://api.github.com"
+  http_url         = "https://github.com"
+  oauth_token      = "ghp_pe2e_${suffix}"
+  service_provider = "github"
+}
+
+resource "tfe_policy" "policy" {
+  organization = tfe_organization.org.name
+  name         = "pe2e-policy-${suffix}"
+  kind         = "sentinel"
+  enforce_mode = "advisory"
+  policy       = "main = rule { true }"
+}
+
+resource "tfe_policy_set" "ps" {
+  organization = tfe_organization.org.name
+  name         = "pe2e-ps-${suffix}"
+  policy_ids   = [tfe_policy.policy.id]
+}
+
+resource "tfe_workspace_policy_set" "ws_ps" {
+  policy_set_id = tfe_policy_set.ps.id
+  workspace_id  = tfe_workspace.ws.id
+}
+
+resource "tfe_project_policy_set" "project_ps" {
+  policy_set_id = tfe_policy_set.ps.id
+  project_id    = tfe_project.proj.id
+}
+
+resource "tfe_organization_run_task" "task" {
+  organization = tfe_organization.org.name
+  name         = "pe2e-task-${suffix}"
+  url          = "https://pe2e.example.com/task"
+  category     = "task"
+}
+
+resource "tfe_workspace_run_task" "ws_task" {
+  workspace_id      = tfe_workspace.ws.id
+  task_id           = tfe_organization_run_task.task.id
+  enforcement_level = "advisory"
+  stages            = ["pre_plan"]
+}
+
+resource "tfe_notification_configuration" "nc" {
+  workspace_id     = tfe_workspace.ws.id
+  name             = "pe2e-nc-${suffix}"
+  url              = "https://pe2e.example.com/nc"
+  destination_type = "generic"
+  triggers         = ["run:completed"]
+  token            = "pe2e-nc-token"
+}
+
+resource "tfe_project_notification_configuration" "project_nc" {
+  project_id       = tfe_project.proj.id
+  name             = "pe2e-prj-nc-${suffix}"
+  url              = "https://pe2e.example.com/nc"
+  destination_type = "generic"
+  triggers         = ["run:completed"]
+  token            = "pe2e-nc-token"
+}
+`;
+}
+
+// Every data source the tfe provider exposes whose backing object the main
+// config creates (i.e. every data source Terrence can serve). Each depends_on
+// the resource(s) it reads, so Terraform defers the read until AFTER that
+// resource is created in apply (a data source referencing a same-apply
+// resource is otherwise read at plan time, before anything exists).
+function outputsTf(): string {
+  return `data "tfe_organizations" "d_orgs" {
+  depends_on = [tfe_organization.org]
+}
+data "tfe_organization" "d_org" {
+  name       = tfe_organization.org.name
+  depends_on = [tfe_organization.org]
+}
+data "tfe_workspace" "d_ws" {
+  name         = tfe_workspace.ws.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_workspace.ws]
+}
+data "tfe_workspace" "d_ws2" {
+  name         = tfe_workspace.ws2.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_workspace.ws2]
+}
+data "tfe_workspace_ids" "d_wsids" {
+  organization = tfe_organization.org.name
+  names        = [tfe_workspace.ws.name, tfe_workspace.ws2.name]
+  depends_on   = [tfe_organization.org, tfe_workspace.ws, tfe_workspace.ws2]
+}
+data "tfe_project" "d_proj" {
+  name         = tfe_project.proj.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_project.proj]
+}
+data "tfe_projects" "d_projs" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_organization.org, tfe_project.proj]
+}
+data "tfe_team" "d_team" {
+  name         = tfe_team.team.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_team.team]
+}
+data "tfe_teams" "d_teams" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_organization.org, tfe_team.team]
+}
+data "tfe_variable_set" "d_vs" {
+  name         = tfe_variable_set.vs.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_variable_set.vs]
+}
+data "tfe_variables" "d_vars_vs" {
+  variable_set_id = tfe_variable_set.vs.id
+  depends_on      = [tfe_variable_set.vs, tfe_variable.vs_var]
+}
+data "tfe_variables" "d_vars_ws" {
+  workspace_id = tfe_workspace.ws.id
+  depends_on   = [tfe_workspace.ws, tfe_variable.var, tfe_variable.var_env]
+}
+data "tfe_ssh_key" "d_ssh" {
+  name         = tfe_ssh_key.ssh.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_ssh_key.ssh]
+}
+data "tfe_organization_membership" "d_member" {
+  organization = tfe_organization.org.name
+  email        = tfe_organization_membership.member.email
+  depends_on   = [tfe_organization_membership.member]
+}
+data "tfe_organization_members" "d_members" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_organization.org]
+}
+data "tfe_team_access" "d_access" {
+  team_id      = tfe_team.team.id
+  workspace_id = tfe_workspace.ws.id
+  depends_on   = [tfe_team_access.team_ws_access]
+}
+data "tfe_team_project_access" "d_proj_access" {
+  team_id    = tfe_team.team.id
+  project_id = tfe_project.proj.id
+  depends_on = [tfe_team_project_access.team_proj_access]
+}
+data "tfe_policy_set" "d_ps" {
+  name         = tfe_policy_set.ps.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_policy_set.ps]
+}
+data "tfe_oauth_client" "d_oc" {
+  organization     = tfe_organization.org.name
+  name             = tfe_oauth_client.client.name
+  service_provider = "github"
+  depends_on       = [tfe_oauth_client.client]
+}
+data "tfe_agent_pool" "d_pool" {
+  name         = tfe_agent_pool.pool.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_agent_pool.pool]
+}
+data "tfe_current_user" "d_me" {}
+data "tfe_organization_run_task" "d_task" {
+  name         = tfe_organization_run_task.task.name
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_organization_run_task.task]
+}
+data "tfe_workspace_run_task" "d_ws_task" {
+  workspace_id = tfe_workspace.ws.id
+  task_id      = tfe_organization_run_task.task.id
+  depends_on   = [tfe_workspace_run_task.ws_task]
+}
+
+output "ds_org_name"     { value = data.tfe_organization.d_org.name }
+output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
+output "ds_ws_name"      { value = data.tfe_workspace.d_ws.name }
+output "ds_ws2_name"     { value = data.tfe_workspace.d_ws2.name }
+output "ds_wsids_full"   { value = data.tfe_workspace_ids.d_wsids.full_names }
+output "ds_proj_name"    { value = data.tfe_project.d_proj.name }
+output "ds_projs_names"  { value = [for p in data.tfe_projects.d_projs.projects : p.name] }
+output "ds_team_name"    { value = data.tfe_team.d_team.name }
+output "ds_teams_names"  { value = data.tfe_teams.d_teams.names }
+output "ds_vs_name"      { value = data.tfe_variable_set.d_vs.name }
+output "ds_vars_vs_count" { value = length(data.tfe_variables.d_vars_vs.terraform) }
+output "ds_vars_ws_count" { value = length(data.tfe_variables.d_vars_ws.terraform) }
+output "ds_ssh_name"     { value = data.tfe_ssh_key.d_ssh.name }
+output "ds_member_email" { value = data.tfe_organization_membership.d_member.email }
+output "ds_members_count" { value = length(data.tfe_organization_members.d_members.members) }
+output "ds_access"       { value = data.tfe_team_access.d_access.access }
+output "ds_proj_access"  { value = data.tfe_team_project_access.d_proj_access.access }
+output "ds_ps_name"      { value = data.tfe_policy_set.d_ps.name }
+output "ds_oc_name"      { value = data.tfe_oauth_client.d_oc.name }
+output "ds_pool_name"    { value = data.tfe_agent_pool.d_pool.name }
+output "ds_me_username"  { value = data.tfe_current_user.d_me.username }
+output "ds_task_name"    { value = data.tfe_organization_run_task.d_task.name }
+output "ds_ws_task_level" { value = data.tfe_workspace_run_task.d_ws_task.enforcement_level }
+`;
+}
+
+// Reads the real run's outputs from the workspace state (tfe_outputs),
+// written into the workspace only after planAndApply commits a state version.
+function stateOutputsTf(suffix: string): string {
+  return `data "tfe_outputs" "d_out" {
+  workspace    = "pe2e-ws-${suffix}"
+  organization = "pe2e-org-${suffix}"
+}
+output "run_output_value" { value = data.tfe_outputs.d_out.nonsensitive_values["probe_output"] }
 `;
 }
 
@@ -317,6 +585,10 @@ resource "null_resource" "probe" {
   provisioner "local-exec" {
     command = "echo PROVIDER_E2E_OK && uname -a"
   }
+}
+
+output "probe_output" {
+  value = "probe-value-pe2e"
 }
 `);
   const tarProc = Bun.spawn(["tar", "-czf", join(workDir, "config.tar.gz"), "-C", cfgDir, "."]);
@@ -389,6 +661,7 @@ describe("tfe provider e2e", () => {
   }, 300_000);
 
   for (const cliName of ["terraform", "tofu"] as const) {
+    if (e2eCliFilter !== null && cliName !== e2eCliFilter) continue;
     test(`latest hashicorp/tfe provider: full lifecycle against Terrence via ${cliName} CLI`, async () => {
       const bin = cliName === "terraform" ? terraformBin : tofuBin;
       const suffix = `${cliName}${Date.now().toString(36)}`;
@@ -409,6 +682,7 @@ describe("tfe provider e2e", () => {
           await mkdir(cfgDir, { recursive: true });
           await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
+          await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
 
           cliOk(await cli(bin, ["init", "-input=false", "-no-color"], cfgDir, cliEnv), "init");
           cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], cfgDir, cliEnv), "plan");
@@ -422,7 +696,46 @@ describe("tfe provider e2e", () => {
             expect(stateList.out, `missing ${addr} in state`).toContain(addr);
           }
 
+          // Every data source must resolve and produce its expected value.
+          const outs = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
+          cliOk(outs, "output");
+          const o = JSON.parse(outs.out) as Record<string, { value: unknown }>;
+          const val = (key: string): unknown => o[key]!.value;
+          expect(val("ds_org_name")).toBe(`pe2e-org-${suffix}`);
+          expect(val("ds_orgs_names")).toEqual(expect.arrayContaining([`pe2e-org-${suffix}`]));
+          expect(val("ds_ws_name")).toBe(`pe2e-ws-${suffix}`);
+          expect(val("ds_ws2_name")).toBe(`pe2e-ws2-${suffix}`);
+          expect(Object.values(val("ds_wsids_full") as Record<string, string>)).toEqual(expect.arrayContaining([`pe2e-org-${suffix}/pe2e-ws-${suffix}`]));
+          expect(val("ds_proj_name")).toBe(`pe2e-proj-${suffix}`);
+          expect(val("ds_projs_names")).toEqual(expect.arrayContaining([`pe2e-proj-${suffix}`]));
+          expect(val("ds_team_name")).toBe(`pe2e-team-${suffix}`);
+          expect(val("ds_teams_names")).toEqual(expect.arrayContaining([`pe2e-team-${suffix}`]));
+          expect(val("ds_vs_name")).toBe(`pe2e-vs-${suffix}`);
+          expect(val("ds_vars_vs_count")).toBeGreaterThan(0);
+          expect(val("ds_vars_ws_count")).toBeGreaterThan(0);
+          expect(val("ds_ssh_name")).toBe(`pe2e-ssh-${suffix}`);
+          expect(val("ds_member_email")).toBe(`pe2e+${suffix}@example.com`);
+          expect(Number(val("ds_members_count"))).toBeGreaterThan(0);
+          expect(val("ds_access")).toBe("plan");
+          expect(val("ds_proj_access")).toBe("write");
+          expect(val("ds_ps_name")).toBe(`pe2e-ps-${suffix}`);
+          expect(val("ds_oc_name")).toBe(`pe2e-oauth-${suffix}`);
+          expect(val("ds_pool_name")).toBe(`pe2e-pool-${suffix}`);
+          expect(val("ds_me_username")).toBe(auth.username);
+          expect(val("ds_task_name")).toBe(`pe2e-task-${suffix}`);
+          expect(val("ds_ws_task_level")).toBe("advisory");
+
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
+
+          // tfe_outputs reads the real run's state outputs (available only
+          // after planAndApply committed a state version).
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix));
+          const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
+          cliOk(outApply, "build outputs apply");
+          const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
+          const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
+          expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
+          await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
           const destroy = await cli(bin, ["destroy", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(destroy, "destroy");
@@ -432,7 +745,21 @@ describe("tfe provider e2e", () => {
         }
       } finally {
         backend.proc.kill();
-        await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+        // The backend's temp dir (db + downloaded terraform/tofu binaries,
+        // ~300 MB) is on tmpfs (/tmp) and is otherwise never cleaned up;
+        // leaving it behind fills the container's 8 GB cgroup RAM and OOM-kills
+        // unrelated processes (the Hermes gateway), so remove it unless a debug
+        // flag asks to keep it.
+        if (process.env.TERRENCE_E2E_KEEP_BACKEND_DIR === "1") {
+          console.log(`[e2e] backend kept: ${backend.storageDir}`);
+        } else {
+          await rm(backend.storageDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+        if (process.env.TERRENCE_E2E_KEEP_WORKDIR === "1") {
+          console.log(`[e2e] workdir kept: ${workDir}`);
+        } else {
+          await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+        }
       }
     }, 900_000);
   }

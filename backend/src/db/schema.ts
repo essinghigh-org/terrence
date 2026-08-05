@@ -594,7 +594,12 @@ export const policySetWorkspaces = sqliteTable("policy_set_workspaces", {
 
 export const policies = sqliteTable("policies", {
   id: text("id").primaryKey(),
-  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  // A policy belongs to an organization. It may be standalone (org-scoped,
+  // org_id set, policy_set_id null) or attached to a policy set (policy_set_id
+  // set, org_id also set for direct org lookups). TFE lets policies exist in
+  // either form; go-tfe's Policies.Create posts to /organizations/:org/policies.
+  orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "cascade" }),
   policySetVersionId: text("policy_set_version_id").references(() => policySetVersions.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   description: text("description"),

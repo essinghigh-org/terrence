@@ -226,6 +226,56 @@ for (const [col, def] of psAdditions) {
   }
 }
 
+// Org-scoped (standalone) policies: go-tfe Policies.Create posts to
+// /organizations/:org/policies, so a policy must be able to exist without a
+// policy set. Add policies.org_id and make policy_set_id nullable. SQLite
+// cannot drop NOT NULL via ALTER, so rebuild the table when needed (run
+// outside any transaction so PRAGMA foreign_keys takes effect). Idempotent.
+// Ran AFTER the policy_sets column adds above so the vcs_repo reference-check
+// triggers (0048) see a complete policy_sets row shape.
+// Mirrored in migration 0060 (which adds org_id only; the rebuild here is
+// the source of truth for dropping NOT NULL).
+{
+  const policiesTableInfo = tableRows("PRAGMA table_info(policies)");
+  const policiesColumns = getColumnNames(policiesTableInfo);
+  if (!policiesColumns.has("org_id")) {
+    runSql("ALTER TABLE policies ADD COLUMN org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE;");
+  }
+  const policySetIdCol = policiesTableInfo.find((r: unknown): boolean =>
+    (r as TableInfoRow).name === "policy_set_id");
+  if (policySetIdCol !== undefined && (policySetIdCol as { notnull?: number }).notnull === 1) {
+    // Issue each statement separately — bun:sqlite's run() is not guaranteed
+    // to execute a multi-statement string all the way through.
+    runSql("PRAGMA foreign_keys = OFF;");
+    runSql(`
+      CREATE TABLE policies_new (
+        id TEXT PRIMARY KEY NOT NULL,
+        org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+        policy_set_id TEXT REFERENCES policy_sets(id) ON DELETE CASCADE,
+        policy_set_version_id TEXT REFERENCES policy_set_versions(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        enforcement_level TEXT DEFAULT 'soft-mandatory' NOT NULL,
+        query TEXT,
+        source TEXT,
+        source_path TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    runSql(`
+      INSERT INTO policies_new (id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at)
+        SELECT id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at FROM policies;
+    `);
+    runSql(`
+      UPDATE policies_new SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies_new.policy_set_id)
+        WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
+    `);
+    runSql("DROP TABLE policies;");
+    runSql("ALTER TABLE policies_new RENAME TO policies;");
+    runSql("PRAGMA foreign_keys = ON;");
+  }
+}
+
 // Create admin version tables if they don't exist
 runSql(`
   CREATE TABLE IF NOT EXISTS admin_terraform_versions (

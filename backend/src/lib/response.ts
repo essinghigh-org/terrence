@@ -798,6 +798,26 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
 
 type OutputResourceRef = { id: string; type: string };
 
+// go-tfe reads a workspace's outputs via GET /workspaces/:id?include=outputs,
+// where the included resources are type "workspace-outputs" with a
+// name/sensitive/output-type/value shape (see tfe.WorkspaceOutputs).
+export function workspaceOutputResources(state: StateParam): Record<string, unknown>[] {
+  return stateOutputResources(state).map((resource: Record<string, unknown>): Record<string, unknown> => {
+    const attributes = (resource.attributes ?? {}) as Record<string, unknown>;
+    return {
+      id: resource.id,
+      type: "workspace-outputs",
+      attributes: {
+        name: attributes.name,
+        value: attributes.value,
+        sensitive: attributes.sensitive,
+        "output-type": attributes.type,
+      },
+      links: { self: `/api/v2/state-version-outputs/${String(resource.id)}` },
+    };
+  });
+}
+
 export function stateVersionResource(
   state: StateParam,
   request: Readonly<{ url: string }>,

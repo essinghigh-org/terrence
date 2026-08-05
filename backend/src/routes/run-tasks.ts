@@ -12,6 +12,7 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { organizationName } from "../lib/response";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -79,6 +80,212 @@ function taskResultResource(result: ResultItem): Record<string, unknown> {
     },
   };
 }
+
+type RunTaskRow = typeof runTasks.$inferSelect;
+
+const runTaskResource = async (t: RunTaskRow): Promise<Record<string, unknown>> => {
+  const orgName = await organizationName(t.orgId);
+  return {
+    id: t.id,
+    // TFE's JSON:API type for an organization run task is "tasks" (go-tfe
+    // v1.109's RunTask unmarshal rejects "run-tasks").
+    type: "tasks",
+    attributes: {
+      name: t.name,
+      description: t.description,
+      url: t.url,
+      category: t.category,
+      enabled: t.enabled,
+      "hmac-key": null,
+      "global-configuration": t.globalConfiguration ?? null,
+    },
+    relationships: {
+      // go-tfe requires the organization relationship — the framework
+      // resource dereferences RunTask.Organization.Name.
+      organization: { data: { id: orgName ?? t.orgId, type: "organizations" } },
+    },
+  };
+};
+
+// The org/workspace run-task handlers are registered under BOTH the /run-tasks
+// paths (previous Terrence routes) and the TFE-canonical /tasks paths —
+// go-tfe's RunTasks service (used by the framework tfe_organization_run_task /
+// tfe_workspace_run_task resources) calls /organizations/:org/tasks and
+// /workspaces/:ws/tasks.
+const listOrgRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const orgName = params.org_name ?? "";
+  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
+  return { data: await Promise.all(tasksList.map((t): Promise<Record<string, unknown>> => runTaskResource(t))) };
+};
+
+const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const orgName = params.org_name ?? "";
+  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+  const name = typeof attrs.name === "string" ? attrs.name : "";
+  const url = typeof attrs.url === "string" ? attrs.url : "";
+  if (name === "" || url === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+  const id = `task-${crypto.randomUUID()}`;
+  const description = typeof attrs.description === "string" ? attrs.description : null;
+  const category = typeof attrs.category === "string" && attrs.category.trim() !== "" ? attrs.category : "general";
+  const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
+  const hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
+  const globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
+    ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
+    : null;
+  await db.insert(runTasks).values({ id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() });
+  (set as { status: number }).status = 201;
+  return { data: await runTaskResource({ id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() }) };
+};
+
+const getRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const taskId = params.task_id ?? "";
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  return { data: await runTaskResource(task) };
+};
+
+const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const taskId = params.task_id ?? "";
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+  const updates: Partial<typeof runTasks.$inferInsert> = {};
+  if (typeof attrs.name === "string") updates.name = attrs.name;
+  if (attrs.description !== undefined) updates.description = typeof attrs.description === "string" ? attrs.description : null;
+  if (typeof attrs.url === "string") updates.url = attrs.url;
+  if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
+  if (attrs["global-configuration"] !== undefined) {
+    updates.globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
+      ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
+      : null;
+  }
+  if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
+  const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  return { data: await runTaskResource(updated) };
+};
+
+const deleteRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  const taskId = params.task_id ?? "";
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  await db.delete(runTasks).where(eq(runTasks.id, taskId));
+  (set as { status: number }).status = 204;
+  return {};
+};
+
+const listWorkspaceRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const workspaceId = params.workspace_id ?? "";
+  const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspaceId) });
+  const attachedTasks = bindings.length === 0
+    ? []
+    : await db.query.runTasks.findMany({
+        where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
+      });
+  const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
+  return {
+    data: bindings.map((binding: BindingItem): Record<string, unknown> => {
+      const task = tasksById.get(binding.runTaskId);
+      return {
+        id: binding.id,
+        type: "workspace-tasks",
+        attributes: {
+          stage: binding.stage,
+          stages: [binding.stage],
+          "enforcement-level": binding.enforcementLevel,
+          "run-task-name": task?.name ?? binding.runTaskId,
+          "run-task-description": task?.description ?? null,
+          "run-task-enabled": task?.enabled ?? false,
+        },
+        relationships: {
+          "task": { data: { id: binding.runTaskId, type: "tasks" } },
+          workspace: { data: { id: workspaceId, type: "workspaces" } },
+        },
+      };
+    }),
+  };
+};
+
+const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const workspaceId = params.workspace_id ?? "";
+  const taskId = params.task_id ?? "";
+  const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const binding = await db.query.workspaceRunTasks.findFirst({
+    where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)),
+  });
+  if (binding === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, binding.runTaskId) });
+  return {
+    data: {
+      id: binding.id,
+      type: "workspace-tasks",
+      attributes: {
+                stage: binding.stage,
+                stages: [binding.stage],
+                "enforcement-level": binding.enforcementLevel,
+                "run-task-name": task?.name ?? binding.runTaskId,
+                "run-task-enabled": task?.enabled ?? false,
+              },
+      relationships: {
+        "task": { data: { id: binding.runTaskId, type: "tasks" } },
+        workspace: { data: { id: workspaceId, type: "workspaces" } },
+      },
+    },
+  };
+};
+
+const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const workspaceId = params.workspace_id ?? "";
+  const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data = payload.data as Record<string, unknown> | undefined;
+  const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+  const runTaskRel = typeof rels["task"] === "object" && rels["task"] !== null
+    ? (rels["task"] as Record<string, unknown>)
+    : typeof rels["run-task"] === "object" && rels["run-task"] !== null
+      ? (rels["run-task"] as Record<string, unknown>)
+      : {};
+  const runTaskData = typeof runTaskRel.data === "object" && runTaskRel.data !== null ? (runTaskRel.data as Record<string, unknown>) : {};
+  const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+  const taskId = typeof runTaskData.id === "string" ? runTaskData.id : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
+  if (taskId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+  const requestedStages = Array.isArray(attrs.stages) ? (attrs.stages as unknown[]).filter((s): s is string => typeof s === "string") : [];
+  const stage = typeof attrs.stage === "string" && attrs.stage !== "" ? attrs.stage : (requestedStages[0] ?? "post_plan");
+  const stages = requestedStages.length > 0 ? requestedStages : [stage];
+  const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
+  const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
+  if (task?.orgId !== ws.orgId) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage) || !["advisory", "mandatory", "must_pass"].includes(enforcementLevel)) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+  }
+  const id = `wrt-${crypto.randomUUID()}`;
+  await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel }).onConflictDoNothing();
+  (set as { status: number }).status = 201;
+  return { data: { id, type: "workspace-tasks", attributes: { stage, stages, "enforcement-level": enforcementLevel }, relationships: { "task": { data: { id: taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
+};
+
+const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  const workspaceId = params.workspace_id ?? "";
+  const taskId = params.task_id ?? "";
+  const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)));
+  (set as { status: number }).status = 204;
+  return {};
+};
 
 export const runTaskRoutes = new Elysia({ name: "runTasks" })
   .patch("/api/v2/task-results/:task_result_id/callback", async ({ params, body, request, set }: CallbackCtx): Promise<unknown> => {
@@ -199,190 +406,22 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       },
     };
   })
-  .get("/api/v2/organizations/:org_name/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
-    return {
-      data: tasksList.map((t): Record<string, unknown> => ({
-        id: t.id,
-        type: "run-tasks",
-        attributes: {
-          name: t.name,
-          description: t.description,
-          url: t.url,
-          category: t.category,
-          enabled: t.enabled,
-          "hmac-key": null,
-          "global-configuration": t.globalConfiguration ?? null,
-        },
-      })),
-    };
-  })
-  .post("/api/v2/organizations/:org_name/run-tasks", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attrs.name === "string" ? attrs.name : "";
-    const url = typeof attrs.url === "string" ? attrs.url : "";
-    if (name === "" || url === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = `task-${crypto.randomUUID()}`;
-    const description = typeof attrs.description === "string" ? attrs.description : null;
-    const category = typeof attrs.category === "string" && attrs.category.trim() !== "" ? attrs.category : "general";
-    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
-    const hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
-    const globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
-      ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
-      : null;
-    await db.insert(runTasks).values({ id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() });
-    (set as { status: number }).status = 201;
-    return {
-      data: {
-        id,
-        type: "run-tasks",
-        attributes: {
-          name,
-          description,
-          url,
-          category,
-          enabled,
-          "hmac-key": null,
-          "global-configuration": globalConfiguration,
-        },
-      },
-    };
-  })
-  .get("/api/v2/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params.task_id ?? "";
-    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return {
-      data: {
-        id: task.id,
-        type: "run-tasks",
-        attributes: {
-          name: task.name,
-          description: task.description,
-          url: task.url,
-          category: task.category,
-          enabled: task.enabled,
-          "hmac-key": null,
-          "global-configuration": task.globalConfiguration ?? null,
-        },
-      },
-    };
-  })
-  .patch("/api/v2/run-tasks/:task_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const taskId = params.task_id ?? "";
-    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const updates: Partial<typeof runTasks.$inferInsert> = {};
-    if (typeof attrs.name === "string") updates.name = attrs.name;
-    if (attrs.description !== undefined) updates.description = typeof attrs.description === "string" ? attrs.description : null;
-    if (typeof attrs.url === "string") updates.url = attrs.url;
-    if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
-    if (attrs["global-configuration"] !== undefined) {
-      updates.globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
-        ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
-        : null;
-    }
-    if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
-    const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return {
-      data: {
-        id: updated.id,
-        type: "run-tasks",
-        attributes: {
-          name: updated.name,
-          description: updated.description,
-          url: updated.url,
-          category: updated.category,
-          enabled: updated.enabled,
-          "hmac-key": null,
-          "global-configuration": updated.globalConfiguration ?? null,
-        },
-      },
-    };
-  })
-  .delete("/api/v2/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const taskId = params.task_id ?? "";
-    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(runTasks).where(eq(runTasks.id, taskId));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+  .get("/api/v2/organizations/:org_name/run-tasks", listOrgRunTasks)
+  .get("/api/v2/organizations/:org_name/tasks", listOrgRunTasks)
+  .post("/api/v2/organizations/:org_name/run-tasks", createOrgRunTask)
+  .post("/api/v2/organizations/:org_name/tasks", createOrgRunTask)
+  .get("/api/v2/run-tasks/:task_id", getRunTask)
+  .get("/api/v2/tasks/:task_id", getRunTask)
+  .patch("/api/v2/run-tasks/:task_id", updateRunTask)
+  .patch("/api/v2/tasks/:task_id", updateRunTask)
+  .delete("/api/v2/run-tasks/:task_id", deleteRunTask)
+  .delete("/api/v2/tasks/:task_id", deleteRunTask)
   // --- Workspace Run Tasks ---
-  .get("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspaceId) });
-    const attachedTasks = bindings.length === 0
-      ? []
-      : await db.query.runTasks.findMany({
-          where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
-        });
-    const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
-    return {
-      data: bindings.map((binding: BindingItem): Record<string, unknown> => {
-        const task = tasksById.get(binding.runTaskId);
-        return {
-          id: binding.id,
-          type: "workspace-run-tasks",
-          attributes: {
-            stage: binding.stage,
-            "enforcement-level": binding.enforcementLevel,
-            "run-task-name": task?.name ?? binding.runTaskId,
-            "run-task-description": task?.description ?? null,
-            "run-task-enabled": task?.enabled ?? false,
-          },
-          relationships: {
-            "run-task": { data: { id: binding.runTaskId, type: "run-tasks" } },
-          },
-        };
-      }),
-    };
-  })
-  .post("/api/v2/workspaces/:workspace_id/run-tasks", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
-    const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const runTaskRel = typeof rels["run-task"] === "object" && rels["run-task"] !== null ? (rels["run-task"] as Record<string, unknown>) : {};
-    const runTaskData = typeof runTaskRel.data === "object" && runTaskRel.data !== null ? (runTaskRel.data as Record<string, unknown>) : {};
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const taskId = typeof runTaskData.id === "string" ? runTaskData.id : (typeof attrs["run-task-id"] === "string" ? attrs["run-task-id"] : "");
-    if (taskId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const stage = typeof attrs.stage === "string" && attrs.stage !== "" ? attrs.stage : "post_plan";
-    const enforcementLevel = typeof attrs["enforcement-level"] === "string" && attrs["enforcement-level"] !== "" ? attrs["enforcement-level"] : "advisory";
-    const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
-    if (task?.orgId !== ws.orgId) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage) || !["advisory", "mandatory", "must_pass"].includes(enforcementLevel)) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    const id = `wrt-${crypto.randomUUID()}`;
-    await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel }).onConflictDoNothing();
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "workspace-run-tasks", attributes: { stage, "enforcement-level": enforcementLevel } } };
-  })
-  .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params.workspace_id ?? "";
-    const taskId = params.task_id ?? "";
-    const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(workspaceRunTasks).where(and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)));
-    (set as { status: number }).status = 204;
-    return {};
-  });
+  .get("/api/v2/workspaces/:workspace_id/run-tasks", listWorkspaceRunTasks)
+  .get("/api/v2/workspaces/:workspace_id/tasks", listWorkspaceRunTasks)
+  .get("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", getWorkspaceRunTask)
+  .get("/api/v2/workspaces/:workspace_id/tasks/:task_id", getWorkspaceRunTask)
+  .post("/api/v2/workspaces/:workspace_id/run-tasks", attachWorkspaceRunTask)
+  .post("/api/v2/workspaces/:workspace_id/tasks", attachWorkspaceRunTask)
+  .delete("/api/v2/workspaces/:workspace_id/run-tasks/:task_id", detachWorkspaceRunTask)
+  .delete("/api/v2/workspaces/:workspace_id/tasks/:task_id", detachWorkspaceRunTask);

@@ -1485,7 +1485,7 @@ async function runPolicyChecks(
 
     try {
       // For OPA policies, attempt to run opa eval
-      const policySet = policySetsById.get(policy.policySetId);
+      const policySet = policy.policySetId !== null ? policySetsById.get(policy.policySetId) : undefined;
       const isOpa = policySet?.kind === "opa";
       const isSentinel = policySet?.kind === "sentinel";
       const policySource = typeof policy.source === "string" && policy.source !== ""
@@ -1549,7 +1549,7 @@ async function runPolicyChecks(
           "-global",
           `tfplan=${planJsonPayload ?? "{}"}`,
         ];
-        for (const parameter of parametersBySet.get(policy.policySetId) ?? []) {
+        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
           args.push(
             "-param",
             `${parameter.key}=${parameter.hcl === true ? parameter.value : JSON.stringify(parameter.value)}`,

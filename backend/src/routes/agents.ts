@@ -14,6 +14,7 @@ import {
 } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/utils";
+import { organizationName } from "../lib/response";
 import { createHash } from "node:crypto";
 import { authPlugin } from "../auth";
 import {
@@ -341,7 +342,11 @@ async function canRegisterAgent(
 
 async function agentPoolResource(
   pool: Readonly<typeof agentPools.$inferSelect>,
+  orgNameOverride?: string | null,
 ): Promise<Record<string, unknown>> {
+  const orgName = orgNameOverride !== undefined
+    ? orgNameOverride
+    : await organizationName(pool.orgId);
   const [agentList, workspaceList, allowedWorkspaceList, allowedProjectList] = await Promise.all([
     db.query.agents.findMany({ where: eq(agents.agentPoolId, pool.id) }),
     db.query.workspaces.findMany({ where: eq(workspaces.agentPoolId, pool.id) }),
@@ -362,6 +367,10 @@ async function agentPoolResource(
       "agent-count": agentList.length,
     },
     relationships: {
+      // go-tfe unmarshals AgentPool.Organization from this relationship (the
+      // JSON:API convention: organizations are identified by NAME in data.id);
+      // without it the provider's tfe_agent_pool read dereferences nil.
+      organization: { data: { id: orgName ?? pool.orgId, type: "organizations" } },
       agents: {
         links: { related: `/api/v2/agent-pools/${pool.id}/agents` },
       },
@@ -398,7 +407,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
-    const poolData = await Promise.all(pools.map(agentPoolResource));
+    const poolData = await Promise.all(pools.map((p): Promise<Record<string, unknown>> => agentPoolResource(p, org.name)));
     return { data: poolData };
   })
   .post("/api/v2/organizations/:org_name/agent-pools", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -451,7 +460,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const created = await db.query.agentPools.findFirst({ where: eq(agentPools.id, id) });
     if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     (set as { status: number }).status = 201;
-    return { data: await agentPoolResource(created) };
+    return { data: await agentPoolResource(created, org.name) };
   })
   .get("/api/v2/agent-pools/:pool_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const poolId = params.pool_id ?? "";

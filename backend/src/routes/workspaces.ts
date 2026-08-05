@@ -4,6 +4,7 @@ import { agentPools, projects, workspaces, workspaceTags, projectTags, workspace
 import { eq, and, asc, desc, count, inArray, like, notInArray, sql } from "drizzle-orm";
 import {
   workspaceResource,
+  workspaceOutputResources,
   workspaceVariableResource,
   tagBindingResource,
   type WorkspaceResourcePermissions,
@@ -376,6 +377,34 @@ async function normalizeVcsRepo(
   return { value };
 }
 
+// Attach the workspace's latest state outputs (type "workspace-outputs") to a
+// workspace resource when the caller requests ?include=outputs (go-tfe's
+// tfe_outputs data source). Returns the enriched resource plus included docs.
+async function maybeAttachOutputs(
+  data: Record<string, unknown>,
+  workspace: WsItem,
+  includeParam: string,
+): Promise<{ data: Record<string, unknown>; included?: Record<string, unknown>[] }> {
+  const includes = includeParam.split(",").map((s): string => s.trim());
+  if (!includes.includes("outputs")) return { data };
+  const sv = await db.query.stateVersions.findFirst({
+    where: and(
+      eq(stateVersions.workspaceId, workspace.id),
+      eq(stateVersions.status, "finalized"),
+      eq(stateVersions.intermediate, false),
+    ),
+    orderBy: [desc(stateVersions.serial)],
+  });
+  if (sv === undefined) return { data };
+  const outputs = workspaceOutputResources(sv);
+  const dataWithRels = data as { relationships?: Record<string, unknown> };
+  dataWithRels.relationships = {
+    ...(dataWithRels.relationships ?? {}),
+    outputs: { data: outputs.map((o: Record<string, unknown>): Record<string, string> => ({ id: String(o.id), type: "workspace-outputs" })) },
+  };
+  return { data: dataWithRels, included: outputs };
+}
+
 export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
   .use(authPlugin)
@@ -716,21 +745,20 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       ),
     };
   })
-  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return {
-      data: await workspaceResource(
-        ws,
-        org.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org.name },
-      ),
-    };
+    const data = await workspaceResource(
+      ws,
+      org.defaultIacBinary,
+      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      { orgName: org.name },
+    );
+    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
   .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -775,19 +803,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
-    return {
-      data: await workspaceResource(
-        ws,
-        org?.defaultIacBinary,
-        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-        { orgName: org?.name ?? null },
-      ),
-    };
+    const data = await workspaceResource(
+      ws,
+      org?.defaultIacBinary,
+      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      { orgName: org?.name ?? null },
+    );
+    return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
   .get("/api/v2/workspaces/:workspace_id/resources", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
