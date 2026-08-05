@@ -3,7 +3,7 @@
   "provider": "hashicorp/tfe v0.79.0",
   "resource_count": 72,
   "data_source_count": 43,
-  "resources_covered": 48,
+  "resources_covered": 49,
   "data_sources_covered": 27,
   "resources": [
     {
@@ -156,7 +156,7 @@
     },
     {
       "name": "tfe_registry_module",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_registry_provider",
