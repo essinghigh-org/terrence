@@ -62,6 +62,10 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_workspace_policy_set_exclusion.ws_excl",
   "tfe_data_retention_policy.drp",
   "tfe_organization_default_settings.ods",
+  "tfe_terraform_version.tfver",
+  "tfe_sentinel_version.sentver",
+  "tfe_opa_version.opaver",
+  "tfe_admin_smtp_settings.smtp",
 ];
 
 function freePort(): Promise<number> {
@@ -449,6 +453,37 @@ resource "tfe_data_retention_policy" "drp" {
 resource "tfe_organization_default_settings" "ods" {
   organization           = tfe_organization.org.name
   default_execution_mode = "remote"
+}
+
+# --- coverage batch 3: admin/version/platform resources (site-admin token) ---
+
+resource "tfe_terraform_version" "tfver" {
+  version = "1.15.8-pe2e-${suffix}"
+  url     = "https://releases.hashicorp.com/terraform/1.15.8/terraform_1.15.8_linux_amd64.zip"
+  sha     = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+  beta    = false
+}
+
+resource "tfe_sentinel_version" "sentver" {
+  version = "0.41.0-pe2e-${suffix}"
+  url     = "https://releases.hashicorp.com/sentinel/0.41.0/sentinel_0.41.0_linux_amd64.zip"
+  sha     = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c"
+}
+
+resource "tfe_opa_version" "opaver" {
+  version = "0.60.0-pe2e-${suffix}"
+  url     = "https://github.com/open-policy-agent/opa/releases/download/v0.60.0/opa_linux_amd64_static"
+  sha     = "c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e"
+}
+
+resource "tfe_admin_smtp_settings" "smtp" {
+  enabled  = true
+  host     = "smtp.pe2e.example.com"
+  port     = 587
+  username = "pe2e-smtp-user"
+  password = "pe2e-smtp-password"
+  sender   = "pe2e@example.com"
+  auth     = "login"
 }
 `;
 }

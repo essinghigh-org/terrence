@@ -39,8 +39,27 @@ type VerItem = Readonly<{
   readonly url: string | null;
   readonly sha: string | null;
   readonly isDefault: boolean | null;
+  readonly enabled: boolean | null;
   readonly deprecated: boolean | null;
 }>;
+
+// The tfe provider reads "enabled" on Terraform/Sentinel/OPA version resources
+// (defaults to true); omitting it makes the provider throw an "inconsistent
+// result after apply" error, so it is surfaced on every read path.
+function versionResource(value: VerItem, type: string): Record<string, unknown> {
+  return {
+    id: value.id,
+    type,
+    attributes: {
+      version: value.version,
+      url: value.url,
+      sha: value.sha,
+      default: value.isDefault === true,
+      deprecated: value.deprecated === true,
+      enabled: value.enabled !== false,
+    },
+  };
+}
 type SamlSettings = Readonly<typeof samlSettings.$inferSelect>;
 
 const SAML_SETTINGS_ID = "saml";
@@ -86,7 +105,9 @@ async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> 
 async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
   const current = await getSettings(group);
   const values = { ...current };
-  for (const key of Object.keys(attrs)) if (key in current) values[key] = attrs[key];
+  for (const key of Object.keys(attrs)) {
+    if (attrs[key] !== undefined) values[key] = attrs[key];
+  }
   await db.insert(adminSettings).values({ id: group, values, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
   invalidateSettingsCache();
   return values;
@@ -674,7 +695,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       db.select({ total: count() }).from(adminTerraformVersions),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: versions.map((v: VerItem): Record<string, unknown> => ({ id: v.id, type: "terraform-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } })), ...pagination(request, number, size, totalCount) };
+    return { data: versions.map((v: VerItem): Record<string, unknown> => (versionResource(v, "terraform-versions"))), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/admin/terraform-versions", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -688,16 +709,17 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const sha = typeof attrs.sha === "string" ? attrs.sha : null;
     const deprecated = typeof attrs.deprecated === "boolean" ? attrs.deprecated : false;
     const isDefault = typeof attrs.default === "boolean" ? attrs.default : false;
-    await db.insert(adminTerraformVersions).values({ id, version, url, sha, deprecated, isDefault, createdAt: Date.now() });
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
+    await db.insert(adminTerraformVersions).values({ id, version, url, sha, deprecated, enabled, isDefault, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "terraform-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
+    return { data: versionResource({ id, version, url, sha, isDefault, enabled, deprecated }, "terraform-versions") };
   })
   .get("/api/v2/admin/terraform-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: v.id, type: "terraform-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+    return { data: versionResource(v, "terraform-versions") };
   })
   .patch("/api/v2/admin/terraform-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
@@ -713,10 +735,11 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (attrs.sha !== undefined) updates.sha = typeof attrs.sha === "string" ? attrs.sha : null;
     if (typeof attrs.deprecated === "boolean") updates.deprecated = attrs.deprecated;
     if (typeof attrs.default === "boolean") updates.isDefault = attrs.default;
+    if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
     if (Object.keys(updates).length > 0) await db.update(adminTerraformVersions).set(updates).where(eq(adminTerraformVersions.id, versionId));
     const updated = await db.query.adminTerraformVersions.findFirst({ where: eq(adminTerraformVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "terraform-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+    return { data: versionResource(updated, "terraform-versions") };
   })
   .delete("/api/v2/admin/terraform-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const versionId = params.version_id ?? "";
@@ -736,7 +759,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       db.select({ total: count() }).from(adminSentinelVersions),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: versions.map((v: VerItem): Record<string, unknown> => ({ id: v.id, type: "sentinel-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } })), ...pagination(request, number, size, totalCount) };
+    return { data: versions.map((v: VerItem): Record<string, unknown> => (versionResource(v, "sentinel-versions"))), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/admin/sentinel-versions", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -750,16 +773,17 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const sha = typeof attrs.sha === "string" ? attrs.sha : null;
     const deprecated = typeof attrs.deprecated === "boolean" ? attrs.deprecated : false;
     const isDefault = typeof attrs.default === "boolean" ? attrs.default : false;
-    await db.insert(adminSentinelVersions).values({ id, version, url, sha, deprecated, isDefault, createdAt: Date.now() });
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
+    await db.insert(adminSentinelVersions).values({ id, version, url, sha, deprecated, enabled, isDefault, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "sentinel-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
+    return { data: versionResource({ id, version, url, sha, isDefault, enabled, deprecated }, "sentinel-versions") };
   })
   .get("/api/v2/admin/sentinel-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: v.id, type: "sentinel-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+    return { data: versionResource(v, "sentinel-versions") };
   })
   .patch("/api/v2/admin/sentinel-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
@@ -775,10 +799,11 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (attrs.sha !== undefined) updates.sha = typeof attrs.sha === "string" ? attrs.sha : null;
     if (typeof attrs.deprecated === "boolean") updates.deprecated = attrs.deprecated;
     if (typeof attrs.default === "boolean") updates.isDefault = attrs.default;
+    if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
     if (Object.keys(updates).length > 0) await db.update(adminSentinelVersions).set(updates).where(eq(adminSentinelVersions.id, versionId));
     const updated = await db.query.adminSentinelVersions.findFirst({ where: eq(adminSentinelVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "sentinel-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+    return { data: versionResource(updated, "sentinel-versions") };
   })
   .delete("/api/v2/admin/sentinel-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const versionId = params.version_id ?? "";
@@ -798,7 +823,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       db.select({ total: count() }).from(adminOpaVersions),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    return { data: versions.map((v: VerItem): Record<string, unknown> => ({ id: v.id, type: "opa-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } })), ...pagination(request, number, size, totalCount) };
+    return { data: versions.map((v: VerItem): Record<string, unknown> => (versionResource(v, "opa-versions"))), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/admin/opa-versions", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -812,16 +837,17 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const sha = typeof attrs.sha === "string" ? attrs.sha : null;
     const deprecated = typeof attrs.deprecated === "boolean" ? attrs.deprecated : false;
     const isDefault = typeof attrs.default === "boolean" ? attrs.default : false;
-    await db.insert(adminOpaVersions).values({ id, version, url, sha, deprecated, isDefault, createdAt: Date.now() });
+    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
+    await db.insert(adminOpaVersions).values({ id, version, url, sha, deprecated, enabled, isDefault, createdAt: Date.now() });
     (set as { status: number }).status = 201;
-    return { data: { id, type: "opa-versions", attributes: { version, url, sha, default: isDefault, deprecated } } };
+    return { data: versionResource({ id, version, url, sha, isDefault, enabled, deprecated }, "opa-versions") };
   })
   .get("/api/v2/admin/opa-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const v = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (v === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: v.id, type: "opa-versions", attributes: { version: v.version, url: v.url, sha: v.sha, default: v.isDefault, deprecated: v.deprecated } } };
+    return { data: versionResource(v, "opa-versions") };
   })
   .patch("/api/v2/admin/opa-versions/:version_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
@@ -837,10 +863,11 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (attrs.sha !== undefined) updates.sha = typeof attrs.sha === "string" ? attrs.sha : null;
     if (typeof attrs.deprecated === "boolean") updates.deprecated = attrs.deprecated;
     if (typeof attrs.default === "boolean") updates.isDefault = attrs.default;
+    if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
     if (Object.keys(updates).length > 0) await db.update(adminOpaVersions).set(updates).where(eq(adminOpaVersions.id, versionId));
     const updated = await db.query.adminOpaVersions.findFirst({ where: eq(adminOpaVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "opa-versions", attributes: { version: updated.version, url: updated.url, sha: updated.sha, default: updated.isDefault, deprecated: updated.deprecated } } };
+    return { data: versionResource(updated, "opa-versions") };
   })
   .delete("/api/v2/admin/opa-versions/:version_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const versionId = params.version_id ?? "";

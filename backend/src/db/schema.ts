@@ -953,6 +953,7 @@ export const adminTerraformVersions = sqliteTable("admin_terraform_versions", {
   url: text("url"),
   sha: text("sha"),
   deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
   isDefault: integer("is_default", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
@@ -963,6 +964,7 @@ export const adminSentinelVersions = sqliteTable("admin_sentinel_versions", {
   url: text("url"),
   sha: text("sha"),
   deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
   isDefault: integer("is_default", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
@@ -973,6 +975,7 @@ export const adminOpaVersions = sqliteTable("admin_opa_versions", {
   url: text("url"),
   sha: text("sha"),
   deprecated: integer("deprecated", { mode: "boolean" }).default(false),
+  enabled: integer("enabled", { mode: "boolean" }).default(true),
   isDefault: integer("is_default", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

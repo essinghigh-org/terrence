@@ -296,6 +296,7 @@ runSql(`
     url TEXT,
     sha TEXT,
     deprecated INTEGER DEFAULT false,
+    enabled INTEGER DEFAULT true,
     is_default INTEGER DEFAULT false,
     created_at INTEGER NOT NULL
   );
@@ -305,6 +306,7 @@ runSql(`
     url TEXT,
     sha TEXT,
     deprecated INTEGER DEFAULT false,
+    enabled INTEGER DEFAULT true,
     is_default INTEGER DEFAULT false,
     created_at INTEGER NOT NULL
   );
@@ -314,6 +316,7 @@ runSql(`
     url TEXT,
     sha TEXT,
     deprecated INTEGER DEFAULT false,
+    enabled INTEGER DEFAULT true,
     is_default INTEGER DEFAULT false,
     created_at INTEGER NOT NULL
   );
