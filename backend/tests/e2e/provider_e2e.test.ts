@@ -607,6 +607,24 @@ data "tfe_workspace_run_task" "d_ws_task" {
   task_id      = tfe_organization_run_task.task.id
   depends_on   = [tfe_workspace_run_task.ws_task]
 }
+data "tfe_registry_provider" "d_regprov" {
+  organization  = tfe_organization.org.name
+  registry_name = "private"
+  name          = tfe_registry_provider.regprov.name
+  depends_on    = [tfe_registry_provider.regprov]
+}
+data "tfe_registry_providers" "d_regprovs" {
+  organization  = tfe_organization.org.name
+  registry_name = "private"
+  depends_on    = [tfe_registry_provider.regprov]
+}
+data "tfe_admin_smtp_settings" "d_smtp" {
+  depends_on = [tfe_admin_smtp_settings.smtp]
+}
+data "tfe_organization_tags" "d_tags" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_organization.org]
+}
 
 output "ds_org_name"     { value = data.tfe_organization.d_org.name }
 output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
@@ -631,6 +649,10 @@ output "ds_pool_name"    { value = data.tfe_agent_pool.d_pool.name }
 output "ds_me_username"  { value = data.tfe_current_user.d_me.username }
 output "ds_task_name"    { value = data.tfe_organization_run_task.d_task.name }
 output "ds_ws_task_level" { value = data.tfe_workspace_run_task.d_ws_task.enforcement_level }
+output "ds_regprov_name"   { value = data.tfe_registry_provider.d_regprov.name }
+output "ds_regprovs_count" { value = length(data.tfe_registry_providers.d_regprovs.providers) }
+output "ds_smtp_sender"     { value = data.tfe_admin_smtp_settings.d_smtp.sender }
+output "ds_tags_count"      { value = length(data.tfe_organization_tags.d_tags.tags) }
 `;
 }
 
@@ -809,6 +831,10 @@ describe("tfe provider e2e", () => {
           expect(val("ds_me_username")).toBe(auth.username);
           expect(val("ds_task_name")).toBe(`pe2e-task-${suffix}`);
           expect(val("ds_ws_task_level")).toBe("advisory");
+          expect(val("ds_regprov_name")).toBe(`pe2e-prov-${suffix}`);
+          expect(Number(val("ds_regprovs_count"))).toBeGreaterThan(0);
+          expect(val("ds_smtp_sender")).toBe("pe2e@example.com");
+          expect(Number(val("ds_tags_count"))).toBeGreaterThanOrEqual(0);
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 

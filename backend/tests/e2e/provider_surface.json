@@ -4,7 +4,7 @@
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 41,
-  "data_sources_covered": 22,
+  "data_sources_covered": 26,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -298,7 +298,7 @@
   "data_sources": [
     {
       "name": "tfe_admin_smtp_settings",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_agent_pool",
@@ -362,7 +362,7 @@
     },
     {
       "name": "tfe_organization_tags",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_organizations",
@@ -402,11 +402,11 @@
     },
     {
       "name": "tfe_registry_provider",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_registry_providers",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_saml_settings",
