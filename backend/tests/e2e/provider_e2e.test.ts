@@ -67,6 +67,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_opa_version.opaver",
   "tfe_admin_smtp_settings.smtp",
   "tfe_registry_provider.regprov",
+  "tfe_organization_run_task_global_settings.rgs",
 ];
 
 function freePort(): Promise<number> {
@@ -493,6 +494,12 @@ resource "tfe_registry_provider" "regprov" {
   name          = "pe2e-prov-${suffix}"
   organization  = tfe_organization.org.name
   registry_name = "private"
+}
+
+resource "tfe_organization_run_task_global_settings" "rgs" {
+  task_id           = tfe_organization_run_task.task.id
+  enforcement_level = "advisory"
+  stages            = ["pre_plan", "post_plan"]
 }
 `;
 }

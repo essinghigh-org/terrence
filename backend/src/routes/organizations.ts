@@ -346,7 +346,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         attributes: {
           operations: true, "state-storage": true, teams: true, "vcs-integrations": false,
           "policy-enforcement": false, "cost-estimation": false, "private-module-registry": false,
-          agents: false, sso: false, "run-tasks": false, "audit-logging": false,
+          agents: false, sso: false, "run-tasks": true, "global-run-tasks": true, "audit-logging": false,
           "self-serve-billing": false, "user-limit": null,
         },
         links: { self: `/api/v2/entitlement-sets/${org.id}` },

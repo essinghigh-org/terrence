@@ -3,7 +3,7 @@
   "provider": "hashicorp/tfe v0.79.0",
   "resource_count": 72,
   "data_source_count": 43,
-  "resources_covered": 41,
+  "resources_covered": 42,
   "data_sources_covered": 26,
   "resources": [
     {
@@ -100,7 +100,7 @@
     },
     {
       "name": "tfe_organization_run_task_global_settings",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_organization_token",

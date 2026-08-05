@@ -83,6 +83,30 @@ function taskResultResource(result: ResultItem): Record<string, unknown> {
 
 type RunTaskRow = typeof runTasks.$inferSelect;
 
+type GlobalConfig = { enabled: boolean; stages: string[]; enforcementLevel: string };
+
+// go-tfe serializes the run-task "global-configuration" object with the
+// kebab-case "enforcement-level" key (see GlobalRunTask jsonapi tags).
+function apiGlobalConfig(value: GlobalConfig | null | undefined): Record<string, unknown> {
+  // go-tfe treats a missing "global-configuration" as a nil *GlobalRunTask,
+  // so a nil/absent value is serialized as the default empty object rather
+  // than null to keep the provider's task.Global non-nil.
+  const v = value ?? { enabled: false, stages: [], enforcementLevel: "advisory" };
+  return { enabled: v.enabled, stages: [...v.stages], "enforcement-level": v.enforcementLevel };
+}
+
+function parseGlobalConfig(value: unknown): GlobalConfig | null {
+  if (value === null || typeof value !== "object") return null;
+  const o = value as Record<string, unknown>;
+  return {
+    enabled: typeof o.enabled === "boolean" ? o.enabled : true,
+    stages: Array.isArray(o.stages) ? o.stages.filter((s: unknown): s is string => typeof s === "string") : [],
+    enforcementLevel: typeof o["enforcement-level"] === "string"
+      ? o["enforcement-level"]
+      : (typeof o.enforcementLevel === "string" ? o.enforcementLevel : "advisory"),
+  };
+}
+
 const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): Promise<Record<string, unknown>> => {
   const orgName = orgNameOverride !== undefined ? orgNameOverride : await organizationName(t.orgId);
   return {
@@ -97,7 +121,7 @@ const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): 
       category: t.category,
       enabled: t.enabled,
       "hmac-key": null,
-      "global-configuration": t.globalConfiguration ?? null,
+      "global-configuration": apiGlobalConfig(t.globalConfiguration),
     },
     relationships: {
       // go-tfe requires the organization relationship — the framework
@@ -135,9 +159,7 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const category = typeof attrs.category === "string" && attrs.category.trim() !== "" ? attrs.category : "general";
   const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
   const hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
-  const globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
-    ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
-    : null;
+  const globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
   const rowData = { id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
   await db.insert(runTasks).values(rowData);
   (set as { status: number }).status = 201;
@@ -172,9 +194,7 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   if (attrs["hmac-key"] !== undefined) updates.hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
   if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
   if (attrs["global-configuration"] !== undefined) {
-    updates.globalConfiguration = attrs["global-configuration"] !== null && typeof attrs["global-configuration"] === "object"
-      ? (attrs["global-configuration"] as { enabled: boolean; stages: string[]; enforcementLevel: string })
-      : null;
+    updates.globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
   }
   if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
   const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
