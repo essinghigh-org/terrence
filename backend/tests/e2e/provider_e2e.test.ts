@@ -1108,6 +1108,22 @@ describe("tfe provider e2e", () => {
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
+          // Second org for the admin module-sharing consumers surface.
+          await api(backend.port, "POST", "/api/v2/organizations", {
+            data: { type: "organizations", attributes: { name: `pe2e-org2-${suffix}`, email: `org2-${suffix}@example.com` } },
+          }, auth.token);
+          const adminBundleTf = `resource "tfe_organization_module_sharing" "oms" {
+  organization     = tfe_organization.org.name
+  module_consumers = ["pe2e-org2-${suffix}"]
+}
+resource "tfe_admin_organization_settings" "aos" {
+  organization          = tfe_organization.org.name
+  access_beta_tools     = true
+  global_module_sharing = false
+  workspace_limit       = 100
+}
+`;
+
           // tfe_scim_group_mapping needs a provisioned SCIM group (created via
           // the SCIM API with a SCIM bearer token). The group can't be created
           // by Terraform itself, so provision it here between applies using an
@@ -1207,7 +1223,7 @@ data "tfe_no_code_module" "d_ncm" {
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1233,6 +1249,8 @@ data "tfe_no_code_module" "d_ncm" {
             cliOk(stateList3, "state list #3");
             expect(stateList3.out).toContain("tfe_workspace_run.ws_run");
             slugAssert(stateList3.out);
+            expect(stateList3.out).toContain("tfe_organization_module_sharing.oms");
+            expect(stateList3.out).toContain("tfe_admin_organization_settings.aos");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 

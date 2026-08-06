@@ -170,6 +170,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         assessmentsEnforced,
         globalModuleSharing: false,
         globalProviderSharing: false,
+        accessBetaTools: false,
+        workspaceLimit: null,
         samlEnabled: saml?.enabled ?? false,
         ownersTeamSamlRoleId: null,
         allowForceDeleteWorkspaces,

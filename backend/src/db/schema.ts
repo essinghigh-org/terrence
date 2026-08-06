@@ -35,6 +35,8 @@ export const organizations = sqliteTable("organizations", {
   assessmentsEnforced: integer("assessments_enforced", { mode: "boolean" }).notNull().default(false),
   globalModuleSharing: integer("global_module_sharing", { mode: "boolean" }).notNull().default(false),
   globalProviderSharing: integer("global_provider_sharing", { mode: "boolean" }).notNull().default(false),
+  accessBetaTools: integer("access_beta_tools", { mode: "boolean" }).notNull().default(false),
+  workspaceLimit: integer("workspace_limit"),
   samlEnabled: integer("saml_enabled", { mode: "boolean" }).notNull().default(false),
   ownersTeamSamlRoleId: text("owners_team_saml_role_id"),
   allowForceDeleteWorkspaces: integer("allow_force_delete_workspaces", { mode: "boolean" }).notNull().default(true),

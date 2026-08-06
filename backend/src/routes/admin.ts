@@ -340,12 +340,18 @@ function adminUserResource(u: UserItem): Record<string, unknown> {
 
 function adminOrganizationResource(org: OrgItem): Record<string, unknown> {
   return {
-    id: org.id,
+    // go-tfe's AdminOrganization primary field is Name — jsonapi unmarshals the
+    // response `id` into it, and the provider re-uses d.Id() for the
+    // module-consumers calls. It MUST be the org NAME, not the UUID.
+    id: org.name,
     type: "organizations",
     attributes: {
       name: org.name,
       "global-module-sharing": org.globalModuleSharing,
       "global-provider-sharing": org.globalProviderSharing,
+      "access-beta-tools": org.accessBetaTools,
+      "workspace-limit": org.workspaceLimit,
+      "sso-enabled": org.samlEnabled,
       "saml-enabled": org.samlEnabled,
       "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
     },
@@ -587,6 +593,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     }
     if (typeof attributes["global-module-sharing"] === "boolean") updates.globalModuleSharing = attributes["global-module-sharing"];
     if (typeof attributes["global-provider-sharing"] === "boolean") updates.globalProviderSharing = attributes["global-provider-sharing"];
+    if (typeof attributes["access-beta-tools"] === "boolean") updates.accessBetaTools = attributes["access-beta-tools"];
+    if (attributes["workspace-limit"] !== undefined) {
+      if (attributes["workspace-limit"] !== null && (typeof attributes["workspace-limit"] !== "number" || !Number.isInteger(attributes["workspace-limit"]))) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "workspace-limit must be an integer or null" }] };
+      }
+      updates.workspaceLimit = typeof attributes["workspace-limit"] === "number" ? attributes["workspace-limit"] : null;
+    }
     if (attributes["owners-team-saml-role-id"] !== undefined) {
       if (attributes["owners-team-saml-role-id"] !== null && typeof attributes["owners-team-saml-role-id"] !== "string") {
         (set as { status: number }).status = 422;

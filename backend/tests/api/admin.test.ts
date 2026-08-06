@@ -84,11 +84,12 @@ describe("Admin Operations API contract", () => {
     const getUserBody = await getUserRes.json();
     expect(getUserBody.data.attributes.username).toBe(userId);
 
-    // 3. Admin Organizations list
+    // 3. Admin Organizations list (admin org resource id == org name, matching
+    // go-tfe's AdminOrganization primary field)
     const getOrgsRes = await request("/api/v2/admin/organizations");
     expect(getOrgsRes.status).toBe(200);
     const getOrgsBody = await getOrgsRes.json();
-    expect(getOrgsBody.data.some((o: any) => o.id === orgId)).toBeTrue();
+    expect(getOrgsBody.data.some((o: any) => o.id === orgName)).toBeTrue();
 
     // 4. Admin Workspaces list
     const getWsRes = await request("/api/v2/admin/workspaces");

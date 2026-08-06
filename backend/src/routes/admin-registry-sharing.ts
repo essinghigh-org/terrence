@@ -44,19 +44,6 @@ function stringArray(value: unknown): string[] | null {
   return [...new Set(value.map((item): string => String(item).trim()))];
 }
 
-function organizationResource(org: Organization): Record<string, unknown> {
-  return {
-    id: org.id,
-    type: "organizations",
-    attributes: {
-      name: org.name,
-      "global-module-sharing": org.globalModuleSharing,
-      "global-provider-sharing": org.globalProviderSharing,
-    },
-    links: { self: `/api/v2/admin/organizations/${org.name}` },
-  };
-}
-
 function partnershipResource(partnership: Partnership, producer: Organization, consumer: Organization): Record<string, unknown> {
   return {
     id: partnership.id,
@@ -156,7 +143,13 @@ async function consumerResources(producerId: string, kind: "modules" | "provider
   const consumers = await db.query.organizations.findMany({
     where: inArray(organizations.id, partnerships.map((partnership): string => partnership.consumerOrgId)),
   });
-  return consumers.map(organizationResource);
+  return consumers.map((consumer): Record<string, unknown> => ({
+    // AdminOrganizationList items unmarshal their jsonapi id into Name —
+    // the provider reads c.Name, so id must be the org name.
+    id: consumer.name,
+    type: "organizations",
+    attributes: { name: consumer.name },
+  }));
 }
 
 function relationshipIdentifiers(body: unknown): string[] | null {

@@ -124,6 +124,18 @@ migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
   }
 }
 
+// organizations gained access_beta_tools + workspace_limit (admin settings).
+// Guarded ALTER for existing deployments; fresh DBs get them via drizzle.
+{
+  const orgCols = (client.query("SELECT name FROM pragma_table_info('organizations')").all() as { name: string }[]).map((c): string => c.name);
+  if (!orgCols.includes("access_beta_tools")) {
+    client.run("ALTER TABLE organizations ADD COLUMN access_beta_tools INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!orgCols.includes("workspace_limit")) {
+    client.run("ALTER TABLE organizations ADD COLUMN workspace_limit INTEGER");
+  }
+}
+
 // Read-path performance indexes (also in migration 0059). Re-applied
 // idempotently here so deployments with historically incomplete migration
 // journals still get the indexes even though the journal doesn't record 0059.
