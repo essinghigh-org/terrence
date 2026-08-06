@@ -303,13 +303,29 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
 
     return { data: repos };
   })
-  .get("/api/v2/github-app/installations", async ({ user, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/github-app/installations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe GHAInstallations.List (global list across orgs) — used by the
     // tfe_github_app_installation data source, which pages through this.
-    if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    // User tokens need a logged-in user; organization and team tokens are
+    // scoped by their own identifiers even when user is null.
+    const isOrgtoken = tokenOrgId !== null && tokenOrgId !== undefined;
+    const isTeamToken = tokenTeamId !== null && tokenTeamId !== undefined;
+    if ((user === null || user === undefined) && !isOrgtoken && !isTeamToken) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const installations = await db.query.githubAppInstallations.findMany();
+    // Never leak another organization's installations: a site admin sees all,
+    // an org token is scoped to its org, and user/team tokens only see
+    // installs in orgs where they have VCS read access.
+    const filtered: typeof installations = [];
+    for (const installation of installations) {
+      if (user !== undefined && user !== null && user.isSiteAdmin === true) { filtered.push(installation); continue; }
+      if (isOrgtoken) {
+        if (installation.orgId === tokenOrgId) filtered.push(installation);
+        continue;
+      }
+      if (await checkOrganizationVcsReadPermission(installation.orgId, user?.id, tokenOrgId, tokenTeamId)) filtered.push(installation);
+    }
     return {
-      data: installations.map((installation): Record<string, unknown> => installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null })),
+      data: filtered.map((installation): Record<string, unknown> => installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null })),
       meta: { pagination: { "current-page": 1, "total-pages": 1 } },
     };
   })

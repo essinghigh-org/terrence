@@ -40,15 +40,15 @@ export function ModuleSharing(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-policies"?: boolean } } };
+      // The endpoint is site-admin authority (admin/organizations/...), so gate
+      // on the caller's account flag — org-level can-manage-policies is not
+      // sufficient and would misrepresent who may use this view.
+      const accountResponse = await fetchApi("/api/v2/account/details") as {
+        data?: { attributes?: { "is-site-admin"?: boolean } };
       };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-policies"] !== true) {
-        setError("You do not have permission to manage module sharing for this organization.");
+      if (accountResponse.data?.attributes?.["is-site-admin"] !== true) {
+        setError("Module sharing can only be managed by a site administrator.");
         setLoading(false);
         return;
       }
@@ -67,7 +67,14 @@ export function ModuleSharing(): React.JSX.Element {
     }
   };
 
-  const patchConsumers = async (next: string[]): Promise<void> => {
+  // Re-read the current list before applying a change so a concurrent edit
+  // elsewhere isn't silently clobbered by the full-list PATCH.
+  const patchConsumers = async (mutate: (current: string[]) => string[]): Promise<string[]> => {
+    const fresh = await fetchApi(
+      `/admin/organizations/${encodeURIComponent(orgName)}/relationships/module-consumers`,
+    ) as { data: ConsumerResource[] };
+    const current = fresh.data.map((consumer): string => consumer.id);
+    const next = mutate(current);
     await fetchApi(
       `/admin/organizations/${encodeURIComponent(orgName)}/relationships/module-consumers`,
       {
@@ -77,6 +84,7 @@ export function ModuleSharing(): React.JSX.Element {
         }),
       },
     );
+    return next;
   };
 
   const addConsumer = async (): Promise<void> => {
@@ -90,8 +98,10 @@ export function ModuleSharing(): React.JSX.Element {
     setError("");
     setSaved(false);
     try {
-      await patchConsumers([...consumers, name]);
-      setConsumers([...consumers, name]);
+      const next = await patchConsumers((current): string[] => (current.includes(name) ? current : [...current, name]));
+      // Drop a stale response if the user navigated to another org mid-request.
+      if (activeOrganizationName.current !== orgName) return;
+      setConsumers(next);
       setNewConsumer("");
       setSaved(true);
     } catch (reason) {
@@ -106,8 +116,8 @@ export function ModuleSharing(): React.JSX.Element {
     setError("");
     setSaved(false);
     try {
-      const next = consumers.filter((consumer): boolean => consumer !== id);
-      await patchConsumers(next);
+      const next = await patchConsumers((current): string[] => current.filter((consumer): boolean => consumer !== id));
+      if (activeOrganizationName.current !== orgName) return;
       setConsumers(next);
       setSaved(true);
     } catch (reason) {

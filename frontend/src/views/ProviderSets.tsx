@@ -210,23 +210,23 @@ export function ProviderSets(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Name</label>
-              <Input value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider-set" />
+              <label className="text-sm font-medium" htmlFor="provider-set-name">Name</label>
+              <Input id="provider-set-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider-set" />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Provider source</label>
-              <Input value={providerSource} onChange={(e): void => { setProviderSource(e.target.value); }} placeholder="registry.terraform.io/hashicorp/aws" />
+              <label className="text-sm font-medium" htmlFor="provider-set-source">Provider source</label>
+              <Input id="provider-set-source" value={providerSource} onChange={(e): void => { setProviderSource(e.target.value); }} placeholder="registry.terraform.io/hashicorp/aws" />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Description</label>
-              <Input value={description} onChange={(e): void => { setDescription(e.target.value); }} placeholder="Optional" />
+              <label className="text-sm font-medium" htmlFor="provider-set-description">Description</label>
+              <Input id="provider-set-description" value={description} onChange={(e): void => { setDescription(e.target.value); }} placeholder="Optional" />
             </div>
             <div className="flex items-center justify-between rounded-md border p-3">
-              <div className="text-sm">
+              <label className="text-sm" htmlFor="provider-set-global">
                 <div className="font-medium">Use in all runs</div>
                 <div className="text-muted-foreground">When enabled, applies the provider set to every run in the organization.</div>
-              </div>
-              <input type="checkbox" className="h-4 w-4" checked={global} onChange={(e): void => { setGlobal(e.target.checked); }} />
+              </label>
+              <input id="provider-set-global" type="checkbox" className="h-4 w-4" checked={global} onChange={(e): void => { setGlobal(e.target.checked); }} />
             </div>
             {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
           </div>

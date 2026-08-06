@@ -917,7 +917,7 @@ export const hyokConfigurations = sqliteTable("hyok_configurations", {
   name: text("name").notNull(),
   kekId: text("kek_id").notNull(),
   kmsOptions: text("kms_options", { mode: "json" }).$type<Record<string, string>>(),
-  agentPoolId: text("agent_pool_id"),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   oidcConfigId: text("oidc_config_id").notNull(),
   oidcConfigType: text("oidc_config_type").notNull(),
   isPrimary: integer("is_primary", { mode: "boolean" }).default(false),

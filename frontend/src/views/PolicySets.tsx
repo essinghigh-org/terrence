@@ -193,12 +193,6 @@ export function PolicySets(): React.JSX.Element {
                     <Spinner className="mx-auto size-6 text-primary" />
                   </TableCell>
                 </TableRow>
-              ) : !canManage && error === "" ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                    Policy set access is read-only.
-                  </TableCell>
-                </TableRow>
               ) : policySets.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
@@ -299,11 +293,11 @@ export function PolicySets(): React.JSX.Element {
               </div>
               <div className="flex flex-col gap-3">
                 <label className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={global} onCheckedChange={(checked: boolean): void => { setGlobal(checked); }} />
+                  <Checkbox checked={global} onCheckedChange={(checked: boolean | "indeterminate"): void => { setGlobal(checked === true); }} />
                   <span>Apply to all workspaces <span className="text-xs text-muted-foreground">(Global policy set)</span></span>
                 </label>
                 <label className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={overridable} onCheckedChange={(checked: boolean): void => { setOverridable(checked); }} />
+                  <Checkbox checked={overridable} onCheckedChange={(checked: boolean | "indeterminate"): void => { setOverridable(checked === true); }} />
                   <span>Allow policy overrides <span className="text-xs text-muted-foreground">(recommended)</span></span>
                 </label>
               </div>

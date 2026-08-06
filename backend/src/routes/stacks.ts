@@ -163,7 +163,13 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
     if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
     // vcs-repo updates replace the stored VCS attributes (empty/null clears).
+    // A present-but-malformed vcs-repo is a client error, not a silent clear.
     if (attributes["vcs-repo"] !== undefined) {
+      const vcs = attributes["vcs-repo"];
+      if (vcs !== null && (typeof vcs !== "object" || Array.isArray(vcs))) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "vcs-repo must be an object or null" }] };
+      }
       const v = stackVcsRepoAttributes(attributes);
       updates.vcsIdentifier = v.vcsIdentifier;
       updates.vcsBranch = v.vcsBranch;
@@ -188,5 +194,8 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    // Terrence has no outbound VCS integration, so there is nothing to fetch:
+    // return the current stack state (a no-op) rather than claim a fetch
+    // happened. go-tfe callers only observe the returned resource.
     return { data: stackResource(details.stack, details.projectName) };
   });

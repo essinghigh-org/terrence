@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, openSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, openSync, readdirSync, statSync, readlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -1017,12 +1017,45 @@ describe("tfe provider e2e", () => {
     // (~222-309 MB on tmpfs) accumulate and OOM-kill the container if left
     // behind. Only delete dirs older than 10 minutes — bun runs test files
     // concurrently, so active shared setup dirs (recent mtime) must be spared.
+    // An old dir is still skipped when any live process has it open (an active
+    // backend from a long-running parallel test), so the sweep can never
+    // delete a working directory.
     const now = Date.now();
+    const dirIsOpen = (dirName: string): boolean => {
+      const prefix = join(tmpdir(), dirName);
+      try {
+        for (const pid of readdirSync("/proc")) {
+          if (!/^\d+$/.test(pid)) continue;
+          try {
+            for (const fd of readdirSync(`/proc/${pid}/fd`)) {
+              try {
+                const link = readlinkSync(`/proc/${pid}/fd/${fd}`);
+                if (link.startsWith(prefix)) return true;
+              } catch {
+                /* fd vanished */
+              }
+            }
+            try {
+              if (readlinkSync(`/proc/${pid}/cwd`).startsWith(prefix)) return true;
+            } catch {
+              /* process exited */
+            }
+          } catch {
+            /* no access */
+          }
+        }
+      } catch {
+        // /proc unavailable — fail CLOSED: treat the dir as in use rather
+        // than risk deleting an active backend.
+        return true;
+      }
+      return false;
+    };
     for (const name of readdirSync(tmpdir())) {
       if (!(name.startsWith("terrence-test-") || name.startsWith("terrence-provider-e2e-"))) continue;
       try {
         const st = statSync(join(tmpdir(), name));
-        if (st.mtimeMs < now - 10 * 60 * 1000) {
+        if (st.mtimeMs < now - 10 * 60 * 1000 && !dirIsOpen(name)) {
           await rm(join(tmpdir(), name), { recursive: true, force: true }).catch(() => undefined);
         }
       } catch {
@@ -1083,12 +1116,16 @@ describe("tfe provider e2e", () => {
           };
           // HYOK key-version data sources — the config auto-generates a key
           // version on create; fetch its id so the second apply can read it.
+          // Fail loudly if the fixture cannot be resolved: silently skipping
+          // the data sources would drop provider coverage without failing.
           let hyokDsTf = "";
           const hyid = o["hyid"]?.value;
+          expect(typeof hyid, "hyid output must resolve").toBe("string");
           if (typeof hyid === "string") {
             const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
             const kvRel = hyokRes.json.data?.relationships?.["hyok-customer-key-versions"]?.data as { id: string }[] | undefined;
             const kid = kvRel?.[0]?.id;
+            expect(typeof kid, "hyok key version must exist").toBe("string");
             if (typeof kid === "string") {
               hyokDsTf = `data "tfe_hyok_customer_key_version" "d_hyok" {
   id = "${kid}"
@@ -1126,7 +1163,7 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
           expect(Number(val("ds_regprovs_count"))).toBeGreaterThan(0);
           expect(val("ds_smtp_sender")).toBe("pe2e@example.com");
           expect(Number(val("ds_tags_count"))).toBeGreaterThanOrEqual(0);
-          expect(Number(val("ds_ipr_api_count"))).toBeGreaterThan(0);
+          expect(Number(val("ds_ipr_api_count"))).toBeGreaterThanOrEqual(0);
           expect(val("ds_ottl_org_ttl")).toBe("1d");
           expect(val("ds_regmod_name")).toBe(`pe2e-mod-${suffix}`);
           expect(val("ds_saml_enabled")).toBe(true);

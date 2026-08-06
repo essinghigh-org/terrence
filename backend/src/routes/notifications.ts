@@ -242,7 +242,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
   .post("/api/v2/teams/:team_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) return notFound(set);
+    if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) return notFound(set);
     const attributes = attributesFrom(body);
     const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
     const url = typeof attributes.url === "string" ? attributes.url : "";

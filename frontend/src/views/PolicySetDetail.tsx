@@ -233,10 +233,12 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   async function saveRelationTargets(): Promise<void> {
     if (!canManage || policySet === null) return;
     setSavingAttach(true);
-    const endpoint = `/api/v2/policy-sets/${encodeURIComponent(setId)}/relationships/${attachKind}`;
+    // Global policy sets edit workspace EXCLUSIONS, not attachments.
+    const relationshipKind = attachKind === "workspaces" && isGlobal ? "workspace-exclusions" : attachKind;
+    const endpoint = `/api/v2/policy-sets/${encodeURIComponent(setId)}/relationships/${relationshipKind}`;
     try {
       if (attachKind === "workspaces") {
-        const current = new Set(attachedWorkspaceIds);
+        const current = new Set(isGlobal ? attachedExclusionIds : attachedWorkspaceIds);
         const toAdd = [...selectedWorkspaces].filter((id): boolean => !current.has(id));
         const toRemove = [...current].filter((id): boolean => !selectedWorkspaces.has(id));
         if (toAdd.length > 0) await fetchApi(endpoint, { method: "POST", body: JSON.stringify({ data: toAdd.map((id): { id: string; type: string } => ({ id, type: "workspaces" })) }) });
@@ -767,7 +769,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             name: policyName.trim(),
             description: policyDescription.trim() === "" ? null : policyDescription.trim(),
             "enforcement-level": policyEnforcement,
-            query: policyQuery,
+            policy: policyQuery,
           } } }),
         });
         toast.add({ title: "Policy created", type: "success" });

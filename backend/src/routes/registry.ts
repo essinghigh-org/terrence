@@ -22,7 +22,7 @@ import {
   workspaces,
   type users,
 } from "../db/schema";
-import { eq, and, desc, like, or } from "drizzle-orm";
+import { eq, and, desc, like, or, ne } from "drizzle-orm";
 import {
   checkOrganizationPermission,
   checkOrgPermission,
@@ -956,7 +956,10 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
   const cat = typeof category === "string" ? category : "terraform";
   if (cat !== "terraform" && cat !== "env") return { error: "category must be terraform or env" };
-  const result: Record<string, string | boolean> = { category: cat };
+  const result: Record<string, string | boolean> = {};
+  // Only set category when the caller provided it, so a PATCH that omits
+  // category preserves the stored one (create defaults to "terraform").
+  if (typeof category === "string") result.category = cat;
   if (typeof key === "string") result.key = key;
   if (typeof attrs.value === "string") result.value = attrs.value;
   if (typeof attrs.sensitive === "boolean") result.sensitive = attrs.sensitive;
@@ -1285,13 +1288,13 @@ export const registryRoutes = new Elysia({ name: "registry" })
     (set as { status: number }).status = 201;
     return { data: registryModuleResource({ id, name, provider, namespace, createdAt: Date.now() }, org.name) };
   })
-  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const namespace = params.namespace ?? "";
     const moduleName = params.module_name ?? "";
     const provider = params.provider ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
@@ -1310,7 +1313,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
     return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org?.name ?? mod.orgId) };
   })
-  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe RegistryModules.ReadVersion — resolves a single published module
     // version by ?module_version=. The tfe_no_code_module create polls this
     // until the pinned version is published.
@@ -1320,7 +1323,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const provider = params.provider ?? "";
     const version = new URL(request.url).searchParams.get("module_version") ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null)) || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
       where: and(eq(registryModules.orgId, org.id), eq(registryModules.namespace, namespace), eq(registryModules.name, moduleName), eq(registryModules.provider, provider)),
     });
@@ -2137,7 +2140,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
-    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({
       where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
     });
@@ -2435,13 +2438,39 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const input = testVariableInput(body, false);
     if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
     const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now() };
-    if (input.key !== undefined) updates.key = input.key;
+    if (input.key !== undefined) {
+      if (input.key.trim() === "") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] };
+      }
+      const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, variable.moduleId), eq(testVariables.key, input.key), ne(testVariables.id, variable.id)) });
+      if (dup !== undefined) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] };
+      }
+      updates.key = input.key;
+    }
     if (input.value !== undefined) updates.value = input.value;
     if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
     if (input.hcl !== undefined) updates.hcl = input.hcl;
     if (input.category !== undefined) updates.category = input.category;
     if (input.description !== undefined) updates.description = input.description ?? null;
-    await db.update(testVariables).set(updates).where(eq(testVariables.id, variable.id));
+    let conflict = "";
+    await db.transaction(async (tx): Promise<void> => {
+      // Duplicate-key enforcement and the write share one transaction so a
+      // concurrent create cannot slip a same-key row between check and update.
+      if (input.key !== undefined) {
+        if (input.key.trim() === "") { conflict = "key must not be empty"; return; }
+        const dup = await tx.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, variable.moduleId), eq(testVariables.key, input.key), ne(testVariables.id, variable.id)) });
+        if (dup !== undefined) { conflict = "A test variable with this key already exists"; return; }
+        updates.key = input.key;
+      }
+      await tx.update(testVariables).set(updates).where(eq(testVariables.id, variable.id));
+    });
+    if (conflict !== "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: conflict }] };
+    }
     const updated = await db.query.testVariables.findFirst({ where: eq(testVariables.id, variable.id) });
     return { data: updated === undefined ? undefined : testVariableResource(updated) };
   })

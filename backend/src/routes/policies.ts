@@ -295,6 +295,11 @@ async function policyResource(pol: PolicyRow, orgName: string | null): Promise<R
       kind: "sentinel",
       policy: pol.query ?? "",
       "enforcement-level": pol.enforcementLevel ?? "soft-mandatory",
+      // `enforce` is deprecated in TFE; go-tfe still decodes it into a
+      // []*Enforcement array, so it must be an array (empty = no per-policy
+      // overrides) or the provider's jsonapi unmarshal fails entirely.
+      enforce: [],
+      "policy-set-count": pol.policySetId === null ? 0 : 1,
       "created-at": new Date(pol.createdAt).toISOString(),
       "updated-at": new Date(pol.createdAt).toISOString(),
     },
@@ -368,11 +373,19 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const psRel = typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null ? (rels["policy-sets"] as Record<string, unknown>) : {};
     const psData = Array.isArray(psRel.data) ? (psRel.data as Record<string, string>[]) : [];
+    if (psData.length > 1) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "a policy can belong to at most one policy set" }] };
+    }
     if (psData.length > 0 && typeof psData[0]?.id === "string") {
       const targetSet = await db.query.policySets.findFirst({ where: eq(policySets.id, psData[0].id) });
       if (targetSet === undefined || targetSet.orgId !== org.id) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-sets relationship must reference a policy set in this organization" }] };
+      }
+      if (targetSet.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed policy sets cannot have uploaded policies attached" }] };
       }
       policySetId = targetSet.id;
     }
@@ -979,11 +992,15 @@ export const policyRoutes = new Elysia({ name: "policies" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(policySetProjectExclusions).where(eq(policySetProjectExclusions.policySetId, policySetId));
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = Array.isArray(payload.data) ? (payload.data as { id?: unknown }[]) : [];
+    const projectIds = items.filter((item): item is { id: string } => typeof item?.id === "string").map((item): string => item.id);
+    if (projectIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must list at least one project to un-exclude" }] }; }
+    await db.delete(policySetProjectExclusions).where(and(eq(policySetProjectExclusions.policySetId, policySetId), inArray(policySetProjectExclusions.projectId, projectIds)));
     (set as { status: number }).status = 204;
     return {};
   })

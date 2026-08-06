@@ -146,7 +146,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await hyokResource(row, org.name) };
   })
   .patch("/api/v2/hyok-configurations/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.hyok_id ?? "";
+    const id = params.id ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
@@ -162,7 +162,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await hyokResource(updated, org.name) };
   })
   .delete("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const id = params.hyok_id ?? "";
+    const id = params.id ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     if (!(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);

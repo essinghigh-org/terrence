@@ -314,6 +314,17 @@ for (const [col, def] of psAdditions) {
 // Mirrored in migration 0060 (which adds org_id only; the rebuild here is
 // the source of truth for dropping NOT NULL).
 {
+  // Recover an interrupted rebuild from a prior startup: if the live `policies`
+  // table is missing but `policies_old` was left behind by a swap that never
+  // completed, restore it so the rebuild below can re-run idempotently.
+  const policiesExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies'").length > 0;
+  if (!policiesExists) {
+    const oldExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies_old'").length > 0;
+    if (oldExists) {
+      runSql("DROP TABLE IF EXISTS policies_new;");
+      runSql("ALTER TABLE policies_old RENAME TO policies;");
+    }
+  }
   const policiesTableInfo = tableRows("PRAGMA table_info(policies)");
   const policiesColumns = getColumnNames(policiesTableInfo);
   if (!policiesColumns.has("org_id")) {
@@ -327,6 +338,10 @@ for (const [col, def] of psAdditions) {
       //   no-op inside one), so manage it around the rebuild steps below.
       // - DROP TABLE IF EXISTS policies_new makes the rebuild idempotent and
       //   recovers from an interrupted prior startup.
+      // - The live table is never dropped until its replacement is in place:
+      //   rename policies -> policies_old, promote policies_new, then drop the
+      //   old copy. Every intermediate state is recoverable on next startup
+      //   (the swap-restore block above).
       // Issue each statement separately — bun:sqlite's run() is not guaranteed
       // to execute a multi-statement string all the way through.
       runSql("PRAGMA foreign_keys = OFF;");
@@ -355,11 +370,9 @@ for (const [col, def] of psAdditions) {
           UPDATE policies_new SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies_new.policy_set_id)
             WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
         `);
-        // Rebuild is NOT-atomic (SQLite DDL auto-commits each statement), so if
-        // interrupted mid-rebuild the policy table may be dropped; that is handled
-        // by the idempotent re-run on next startup.
-        runSql("DROP TABLE policies;");
+        runSql("ALTER TABLE policies RENAME TO policies_old;");
         runSql("ALTER TABLE policies_new RENAME TO policies;");
+        runSql("DROP TABLE IF EXISTS policies_old;");
       } finally {
         runSql("PRAGMA foreign_keys = ON;");
       }
@@ -381,7 +394,7 @@ runSql(`
     policy_set_id TEXT NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS policy_set_project_exclusions_idx ON policy_set_project_exclusions (policy_set_id, project_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS policy_set_project_exclusions_idx ON policy_set_project_exclusions (policy_set_id, project_id);
 `);
 
 // Create admin version tables if they don't exist
@@ -476,7 +489,7 @@ CREATE TABLE IF NOT EXISTS admin_terraform_versions (
     name TEXT NOT NULL,
     kek_id TEXT NOT NULL,
     kms_options TEXT,
-    agent_pool_id TEXT,
+    agent_pool_id TEXT REFERENCES agent_pools(id) ON DELETE SET NULL,
     oidc_config_id TEXT NOT NULL,
     oidc_config_type TEXT NOT NULL,
     is_primary INTEGER DEFAULT false,
@@ -501,6 +514,44 @@ CREATE TABLE IF NOT EXISTS admin_terraform_versions (
     updated_at INTEGER NOT NULL
   );
 `);
+
+// Backfill `enabled` on admin version tables that predate the column (older
+// installs created them without it; the provider reads `enabled`).
+for (const table of ["admin_terraform_versions", "admin_sentinel_versions", "admin_opa_versions"] as const) {
+  const cols = getColumnNames(tableRows(`PRAGMA table_info(${table})`));
+  if (cols.size > 0 && !cols.has("enabled")) {
+    runSql(`ALTER TABLE ${table} ADD COLUMN enabled INTEGER DEFAULT true NOT NULL;`);
+  }
+}
+
+// Enforce unique provider-set names per organization. Legacy DBs can carry
+// duplicate names, so purge the later duplicates first (keep the earliest row
+// per org/name) rather than silently skipping the constraint.
+const providerSetIdxExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'provider_sets_org_name_idx'").length > 0;
+if (!providerSetIdxExists) {
+  runSql("DELETE FROM provider_sets WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY org_id, name ORDER BY created_at, rowid) AS rn FROM provider_sets) WHERE rn = 1);");
+  runSql("CREATE UNIQUE INDEX IF NOT EXISTS provider_sets_org_name_idx ON provider_sets (org_id, name);");
+}
+
+// Upgrade the project-exclusions index to UNIQUE for DBs that created it
+// non-unique before the constraint existed (fresh tables already create it
+// unique). Dedupe first so the upgrade cannot fail on legacy duplicates.
+const projExclIdx = tableRows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name = 'policy_set_project_exclusions_idx'");
+if (projExclIdx.length > 0 && !String((projExclIdx[0] as { sql?: string }).sql ?? "").toUpperCase().includes("UNIQUE")) {
+  runSql("DELETE FROM policy_set_project_exclusions WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY policy_set_id, project_id ORDER BY rowid) AS rn FROM policy_set_project_exclusions) WHERE rn = 1);");
+  runSql("DROP INDEX IF EXISTS policy_set_project_exclusions_idx;");
+  runSql("CREATE UNIQUE INDEX IF NOT EXISTS policy_set_project_exclusions_idx ON policy_set_project_exclusions (policy_set_id, project_id);");
+}
+
+// Backfill the test-variable (module_id, key) uniqueness constraint on DBs
+// whose table predates the index (fresh tables create it unique). Dedupe
+// legacy duplicates first so the constraint installs cleanly.
+const tvIdx = tableRows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'test_variables_module_key_idx'");
+if (tvIdx.length === 0) {
+  runSql("DELETE FROM test_variables WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY module_id, key ORDER BY created_at, rowid) AS rn FROM test_variables) WHERE rn = 1);");
+  runSql("CREATE UNIQUE INDEX IF NOT EXISTS test_variables_module_key_idx ON test_variables (module_id, key);");
+}
+
 
 // Check notification_configurations for missing columns
 const ncTableInfo = tableRows("PRAGMA table_info(notification_configurations)");

@@ -275,7 +275,7 @@ function samlInput(
   if (attrUsername === "" || attrEmail === "" || attrGroups === "" || attrSiteAdmin === "" || siteAdminRole === "") {
     return { error: "attr-username, attr-email, attr-groups, attr-site-admin, and site-admin-role must not be empty" };
   }
-  if (enabled && (idpCert === null || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null)) {
+  if (enabled && (idpCert === null || idpCert === "" || idpEntityId === null || idpEntityId === "" || ssoEndpointUrl === null || ssoEndpointUrl === "")) {
     return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
   }
 

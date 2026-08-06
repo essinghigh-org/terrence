@@ -381,7 +381,8 @@ async function normalizeVcsRepo(
 // workspace resource when the caller requests ?include=outputs (go-tfe's
 // tfe_outputs data source). Returns the enriched resource plus included docs.
 // Callers must already enforce workspace read access; outputs ride along for
-// any reader without a separate state-read gate.
+// any reader (matches TFE, where workspace readers can read outputs; covered
+// by the team-token workspace authorization test).
 async function maybeAttachOutputs(
   data: Record<string, unknown>,
   workspace: WsItem,

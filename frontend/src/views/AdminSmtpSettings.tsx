@@ -81,10 +81,15 @@ export function AdminSmtpSettings(): React.JSX.Element {
     setSaved(false);
     setSaving(true);
     try {
+      const portNumber = Number(port);
+      if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+        setSaveError("Port must be an integer between 1 and 65535.");
+        return;
+      }
       const attributes: Record<string, unknown> = {
         enabled,
         host: host.trim(),
-        port: Number(port),
+        port: portNumber,
         "sender-email": senderEmail.trim(),
         auth,
         username: username.trim(),

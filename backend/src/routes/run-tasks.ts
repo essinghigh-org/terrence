@@ -281,7 +281,9 @@ const getWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: to
 const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const workspaceId = params.workspace_id ?? "";
   const taskId = params.task_id ?? "";
-  const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  // Mirrors the create handler: workspace run-tasks access AND org-level
+  // task-management permission are both required to modify a binding.
+  const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const binding = await db.query.workspaceRunTasks.findFirst({
     where: and(
@@ -302,8 +304,30 @@ const updateWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
     }
     updates.enforcementLevel = level;
   }
-  const requestedStages = Array.isArray(attrs.stages) ? (attrs.stages as unknown[]).filter((s): s is string => typeof s === "string") : [];
-  if (requestedStages.length > 0) updates.stage = requestedStages[0] ?? "post_plan";
+  const rawStages = attrs.stages;
+  if (Array.isArray(rawStages) && (rawStages as unknown[]).some((s): boolean => typeof s !== "string")) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stages must contain only strings" }] };
+  }
+  // The provider sends either a singular `stage` or the `stages` array; honor
+  // whichever is present (single-stage binding, so >1 is rejected).
+  const requestedStages = Array.isArray(rawStages)
+    ? (rawStages as unknown[]).filter((s): s is string => typeof s === "string")
+    : typeof attrs.stage === "string" && attrs.stage !== ""
+      ? [attrs.stage]
+      : [];
+  if (requestedStages.length > 1) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "this binding stores a single stage; provide exactly one" }] };
+  }
+  if (requestedStages.length === 1) {
+    const stage = requestedStages[0] ?? "";
+    if (!["pre_plan", "post_plan", "pre_apply", "post_apply"].includes(stage)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stage must be one of pre_plan, post_plan, pre_apply, post_apply" }] };
+    }
+    updates.stage = stage;
+  }
   if (Object.keys(updates).length > 0) await db.update(workspaceRunTasks).set(updates).where(eq(workspaceRunTasks.id, binding.id));
   const updated = await db.query.workspaceRunTasks.findFirst({ where: eq(workspaceRunTasks.id, binding.id) });
   if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

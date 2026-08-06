@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
@@ -132,10 +132,13 @@ export function PolicySetsTags(): React.JSX.Element {
                     }}
                   >
                     <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName)}/settings/policy-sets/${encodeURIComponent(policySet.id)}`}
+                        className="flex items-center gap-2 hover:underline"
+                      >
                         <Tags className="h-4 w-4 text-primary" />
                         {policySet.attributes.name}
-                      </div>
+                      </Link>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline">{(policySet.attributes.kind ?? "sentinel").toUpperCase()}</Badge>

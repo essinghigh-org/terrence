@@ -45,9 +45,10 @@ const organizationAccessKeys = [
   "manage-membership", "manage-teams", "manage-organization-access",
   "access-secret-teams", "allow-member-token-management",
 ] as const;
-// The TFE team organization-access object also carries these string keys; they
-// are stored on dedicated columns, not in the boolean JSON blob.
+// The TFE team organization-access object also carries these string/non-list
+// keys; they are stored on dedicated columns, not in the boolean JSON blob.
 const organizationAccessStringKeys = new Set(["visibility", "sso-team-id"]);
+const organizationAccessColumnKeys = new Set(["allow-member-token-management"]);
 
 function parseOrganizationAccess(input: unknown): Readonly<{ value: Record<string, boolean> }> | Readonly<{ error: string }> {
   if (input === undefined) return { value: {} };
@@ -55,11 +56,13 @@ function parseOrganizationAccess(input: unknown): Readonly<{ value: Record<strin
   const entries = Object.entries(input as Record<string, unknown>);
   const booleans: Record<string, boolean> = {};
   for (const [key, value] of entries) {
-    if (!organizationAccessKeys.includes(key as typeof organizationAccessKeys[number]) && !organizationAccessStringKeys.has(key)) {
+    if (!organizationAccessKeys.includes(key as typeof organizationAccessKeys[number]) && !organizationAccessStringKeys.has(key) && !organizationAccessColumnKeys.has(key)) {
       return { error: "organization-access contains an unknown permission" };
     }
     if (organizationAccessStringKeys.has(key)) {
       if (value !== null && typeof value !== "string") return { error: `organization-access.${key} must be a string or null` };
+    } else if (organizationAccessColumnKeys.has(key)) {
+      if (typeof value !== "boolean") return { error: `organization-access.${key} must be a boolean` };
     } else {
       if (typeof value !== "boolean") return { error: "organization-access contains a non-boolean permission" };
       booleans[key] = value;
@@ -213,6 +216,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const description = typeof attributes.description === "string" ? attributes.description : null;
     const visibility = typeof attributes.visibility === "string" ? attributes.visibility : (typeof rawOrgAccess.visibility === "string" ? rawOrgAccess.visibility : "organization");
     const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
+    const allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     const organizationAccess = parseOrganizationAccess(rawOrgAccess);
     if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
     if (
@@ -221,7 +225,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     ) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const newTeam = { id, orgId: org.id, name, description, visibility, ssoTeamId, organizationAccess: organizationAccess.value, createdAt: Date.now() };
+    const newTeam = { id, orgId: org.id, name, description, visibility, ssoTeamId, allowMemberTokenManagement, organizationAccess: organizationAccess.value, createdAt: Date.now() };
     await db.insert(teams).values(newTeam);
     (set as { status: number }).status = 201;
     return { data: await teamResource(newTeam, 0, { users: [] }) };
@@ -289,11 +293,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const organizationAccess = parseOrganizationAccess(rawOrgAccess);
       if ("error" in organizationAccess) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: organizationAccess.error }] }; }
       updates.organizationAccess = { ...team.organizationAccess, ...organizationAccess.value };
-      // The provider carries visibility / sso-team-id inside organization-access,
-      // but the top-level attribute takes precedence when present (matching the
-      // create handler), and sso-team-id is gated by the linked-team guard.
+      // The provider carries visibility / sso-team-id / allow-member-token-management
+      // inside organization-access, but the top-level attribute takes precedence
+      // when present (matching the create handler), and sso-team-id is gated by
+      // the linked-team guard. Column-backed keys are persisted to their columns.
       if (attributes.visibility === undefined && typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
       if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
+      if (rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });

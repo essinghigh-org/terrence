@@ -28,7 +28,8 @@ function displayValue(config: OidcConfig): string {
   const attrs = config.attributes;
   const candidates = ["role-arn", "workload-identity-provider-id", "identity", "address"];
   for (const key of candidates) {
-    if (typeof attrs[key] === "string") return attrs[key];
+    const value = attrs[key];
+    if (typeof value === "string") return value;
   }
   return config.id;
 }
@@ -223,8 +224,8 @@ export function OidcConfigurations(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Provider</label>
-              <Select value={configType} onValueChange={setConfigType}>
+              <label className="text-sm font-medium" htmlFor="oidc-provider-type">Provider</label>
+              <Select id="oidc-provider-type" value={configType} onValueChange={setConfigType}>
                 {Object.entries(TYPE_LABELS).map(([value, label]): React.JSX.Element => (
                   <SelectItem key={value} value={value}>{label}</SelectItem>
                 ))}
@@ -232,27 +233,27 @@ export function OidcConfigurations(): React.JSX.Element {
             </div>
             {configType === "aws-oidc-configurations" && (
               <div className="space-y-2">
-                <label className="text-sm font-medium">Role ARN</label>
-                <Input value={roleArn} onChange={(e): void => { setRoleArn(e.target.value); }} placeholder="arn:aws:iam::123456789012:role/my-role" />
+                <label className="text-sm font-medium" htmlFor="oidc-role-arn">Role ARN</label>
+                <Input id="oidc-role-arn" value={roleArn} onChange={(e): void => { setRoleArn(e.target.value); }} placeholder="arn:aws:iam::123456789012:role/my-role" />
               </div>
             )}
             {(configType === "azure-oidc-configurations" || configType === "gcp-oidc-configurations") && (
               <div className="space-y-2">
-                <label className="text-sm font-medium">
+                <label className="text-sm font-medium" htmlFor="oidc-identity">
                   {configType === "azure-oidc-configurations" ? "Identity (client ID)" : "Workload identity provider ID"}
                 </label>
-                <Input value={identity} onChange={(e): void => { setIdentity(e.target.value); }} placeholder={configType === "azure-oidc-configurations" ? "client-id" : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"} />
+                <Input id="oidc-identity" value={identity} onChange={(e): void => { setIdentity(e.target.value); }} placeholder={configType === "azure-oidc-configurations" ? "client-id" : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"} />
               </div>
             )}
             {configType === "vault-oidc-configurations" && (
               <>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Address</label>
-                  <Input value={address} onChange={(e): void => { setAddress(e.target.value); }} placeholder="https://vault.example.com" />
+                  <label className="text-sm font-medium" htmlFor="oidc-address">Address</label>
+                  <Input id="oidc-address" value={address} onChange={(e): void => { setAddress(e.target.value); }} placeholder="https://vault.example.com" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Namespace</label>
-                  <Input value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder="admin" />
+                  <label className="text-sm font-medium" htmlFor="oidc-namespace">Namespace</label>
+                  <Input id="oidc-namespace" value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder="admin" />
                 </div>
               </>
             )}

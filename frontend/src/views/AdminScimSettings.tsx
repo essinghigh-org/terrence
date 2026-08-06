@@ -19,6 +19,7 @@ export function AdminScimSettings(): React.JSX.Element {
   const [loadError, setLoadError] = useState("");
 
   const [enabled, setEnabled] = useState(false);
+  const [previouslyEnabled, setPreviouslyEnabled] = useState(false);
   const [paused, setPaused] = useState(false);
   const [siteAdminGroupScimId, setSiteAdminGroupScimId] = useState<string | null>(null);
   const [siteAdminGroupDisplayName, setSiteAdminGroupDisplayName] = useState("");
@@ -38,6 +39,7 @@ export function AdminScimSettings(): React.JSX.Element {
       if (!mounted.current) return;
       const attrs = response.data?.attributes;
       setEnabled(attrs?.enabled === true);
+      setPreviouslyEnabled(attrs?.enabled === true);
       setPaused(attrs?.paused === true);
       setSiteAdminGroupScimId(attrs?.["site-admin-group-scim-id"] ?? null);
       setSiteAdminGroupDisplayName(
@@ -67,14 +69,22 @@ export function AdminScimSettings(): React.JSX.Element {
     setSaved(false);
     setSaving(true);
     try {
+      // Disabling SCIM goes through DELETE — the backend rejects enabled:false
+      // ("Use DELETE to disable SCIM"). Handle it explicitly instead of
+      // silently dropping the user's intent.
+      if (!enabled && previouslyEnabled) {
+        await fetchApi("/admin/scim-settings", { method: "DELETE" });
+        setSaved(true);
+        await load();
+        return;
+      }
       const attributes: Record<string, unknown> = {
         paused,
-        // The backend has no write path for the site-admin group display name —
-        // the group is identified by its SCIM id, which is preserved unchanged.
-        "site-admin-group-display-name": siteAdminGroupDisplayName,
+        // site-admin-group-display-name is read-only (derived from the SCIM
+        // id, which has no write path) — do not submit it.
       };
-      // The backend rejects enabled: false ("Use DELETE to disable SCIM"), so
-      // only send enabled when turning it on; omitting it keeps the current value.
+      // The backend rejects enabled: false, so only send enabled when turning
+      // it on; omitting it keeps the current value.
       if (enabled) {
         attributes["enabled"] = true;
       }
@@ -91,6 +101,7 @@ export function AdminScimSettings(): React.JSX.Element {
         }),
       });
       setSaved(true);
+      await load();
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : "Failed to save SCIM settings.");
     } finally {
@@ -155,9 +166,11 @@ export function AdminScimSettings(): React.JSX.Element {
                 <Input
                   id="scim-site-admin-group"
                   value={siteAdminGroupDisplayName}
+                  readOnly
                   onChange={(e): void => { setSiteAdminGroupDisplayName(e.target.value); }}
                   placeholder="SCIM group that grants site admin access"
                 />
+                <p className="text-xs text-muted-foreground">Read-only — derived from the site-admin group SCIM id.</p>
               </div>
 
               {saveError !== "" && <div className="text-sm text-red-500">{saveError}</div>}

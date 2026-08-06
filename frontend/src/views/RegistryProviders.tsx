@@ -51,6 +51,7 @@ export function RegistryProviders(): React.JSX.Element {
     setProviders([]);
     setManageableOrganizationName("");
     setCreateDialogOpen(false);
+    setProviderToDelete(null);
     if (orgName !== "") void loadProviders();
   }, [orgName]);
 
@@ -219,12 +220,12 @@ export function RegistryProviders(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Name</label>
-              <Input value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider" />
+              <label className="text-sm font-medium" htmlFor="registry-provider-name">Name</label>
+              <Input id="registry-provider-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider" />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Namespace</label>
-              <Input value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
+              <label className="text-sm font-medium" htmlFor="registry-provider-namespace">Namespace</label>
+              <Input id="registry-provider-namespace" value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Registry name</label>

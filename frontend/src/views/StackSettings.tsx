@@ -36,6 +36,7 @@ export function StackSettings(): React.JSX.Element {
   useEffect((): void => {
     setStacks([]);
     setManageableOrganizationName("");
+    setStackToDelete(null);
     if (orgName !== "") void loadStacks();
   }, [orgName]);
 
