@@ -129,7 +129,7 @@ async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string>
       return "1.9.3";
     }
   } catch (err: unknown) {
-    console.warn(`[terrence] Could not resolve latest version for ${tool}, using default:`, err);
+    log.warn(`Could not resolve latest version for ${tool}, using default`, { tool, error: err instanceof Error ? err.message : String(err) });
     return tool === "tofu" ? "1.7.2" : "1.9.3";
   }
 }

@@ -174,7 +174,7 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     const timestamps = { ...existingTimestamps, [statusKey]: now };
     await db.update(runs).set({ status, statusTimestamps: timestamps, ...(extra ?? {}) }).where(eq(runs.id, runId));
   } catch (err: unknown) {
-    console.error(`[terrence] Failed to update run ${runId} status to ${status}:`, err);
+    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
     await db.update(runs).set({ status, ...(extra ?? {}) }).where(eq(runs.id, runId));
   }
   const trigger = status === "planning"
@@ -1158,7 +1158,7 @@ export async function executeRun(runId: string): Promise<void> {
     }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`Run ${runId} planning failed`, error);
+    log.error(`Run ${runId} planning failed`, { error: errMsg });
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
   } finally {

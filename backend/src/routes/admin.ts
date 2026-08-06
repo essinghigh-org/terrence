@@ -388,8 +388,8 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const conditions: SQL[] = [];
     if (filterAdmin === "true") conditions.push(eq(users.isSiteAdmin, true));
     if (filterAdmin === "false") conditions.push(eq(users.isSiteAdmin, false));
-    if (filterSuspended === "true") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], true));
-    if (filterSuspended === "false") conditions.push(eq((users as unknown as Record<string, unknown>).isSuspended as Parameters<typeof eq>[0], false));
+    if (filterSuspended === "true") conditions.push(eq(users.isSuspended, true));
+    if (filterSuspended === "false") conditions.push(eq(users.isSuspended, false));
     if (q !== "") {
       const pattern = `%${q}%`;
       conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern)) as SQL); // eslint-disable-line @typescript-eslint/non-nullable-type-assertion-style
