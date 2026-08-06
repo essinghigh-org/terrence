@@ -81,6 +81,8 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_vault_oidc_configuration.vault_oidc",
   "tfe_hyok_configuration.hyok",
   "tfe_saml_settings.saml",
+  "tfe_scim_settings.scim",
+  "tfe_scim_token.scim_tok",
 ];
 
 function freePort(): Promise<number> {
@@ -619,6 +621,15 @@ etdW1cufqHhJK0JwAA==
 EOT
   slo_endpoint_url = "https://saml.pe2e.example.com/slo"
   sso_endpoint_url = "https://saml.pe2e.example.com/sso"
+}
+
+resource "tfe_scim_settings" "scim" {
+  depends_on = [tfe_saml_settings.saml]
+}
+
+resource "tfe_scim_token" "scim_tok" {
+  description = "pe2e-scim-token-${suffix}"
+  depends_on  = [tfe_scim_settings.scim]
 }
 `;
 }

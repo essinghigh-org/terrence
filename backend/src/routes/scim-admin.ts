@@ -111,7 +111,7 @@ function jsonApiAttributes(
   const data = (body as Record<string, unknown>).data;
   if (data === null || typeof data !== "object" || Array.isArray(data)) return { error: "data must be an object" };
   const record = data as Record<string, unknown>;
-  if (record.type !== type) return { error: `data.type must be ${type}` };
+  if (record.type !== type && record.type !== "") return { error: `data.type must be ${type}` };
   const attributes = record.attributes;
   if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) {
     return { error: "data.attributes must be an object" };
