@@ -4,7 +4,7 @@
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 72,
-  "data_sources_covered": 41,
+  "data_sources_covered": 43,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -342,7 +342,7 @@
     },
     {
       "name": "tfe_organization_audit_configuration",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_organization_members",
@@ -358,7 +358,7 @@
     },
     {
       "name": "tfe_organization_run_task_global_settings",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_organization_tags",

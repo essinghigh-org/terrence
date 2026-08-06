@@ -1167,6 +1167,26 @@ resource "tfe_stack_variable_set" "stack_vs" {
   variable_set_id = tfe_variable_set.vs.id
 }
 `;
+          // The org audit-configuration data source's attrs are Optional (not
+          // Computed) in the provider schema, so a DEFERRED (apply-time) read
+          // drops them. In this second apply the org already exists (known from
+          // state) -> the data source reads at plan time and values persist.
+          const audit2Tf = `data "tfe_organization_audit_configuration" "d_audit2" {
+  organization = "pe2e-org-${suffix}"
+}
+output "ds_audit2" {
+  value = data.tfe_organization_audit_configuration.d_audit2.audit_trails_enabled
+}
+`;
+          // Same deferred-read limitation for the org run-task global settings
+          // data source — the task exists from apply 1, so read at plan time.
+          const rgs2Tf = `data "tfe_organization_run_task_global_settings" "d_rgs2" {
+  task_id = tfe_organization_run_task.task.id
+}
+output "ds_rgs2" {
+  value = data.tfe_organization_run_task_global_settings.d_rgs2.enabled
+}
+`;
           const adminBundleTf = `resource "tfe_organization_module_sharing" "oms" {
   organization     = tfe_organization.org.name
   module_consumers = ["pe2e-org2-${suffix}"]
@@ -1278,12 +1298,14 @@ data "tfe_no_code_module" "d_ncm" {
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf + stackTf + hyokDsTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf + stackTf + hyokDsTf + audit2Tf + rgs2Tf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
+          expect(o2["ds_audit2"]?.value).toBe(true);
+          expect(o2["ds_rgs2"]?.value).toBe(true);
           if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
