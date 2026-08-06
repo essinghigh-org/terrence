@@ -867,11 +867,18 @@ export function Layout({
           label: "Policy sets",
           to: `${organizationSettingsPath}/policy-sets`,
         },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/provider-sets`),
+          icon: Package,
+          label: "Provider sets",
+          to: `${organizationSettingsPath}/provider-sets`,
+        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
         && (link.label !== "Agent pools" || canManageAgentPools)
-        && (link.label !== "Policy sets" || canManagePolicies));
+        && (link.label !== "Policy sets" || canManagePolicies)
+        && (link.label !== "Provider sets" || canManagePolicies));
 
       return (
         <>
