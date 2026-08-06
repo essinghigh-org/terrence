@@ -79,6 +79,7 @@ async function organizationResourceForPrincipal(
         "can-manage-agent-pools": canManageAgentPools,
         "can-manage-policies": canManagePolicies,
         "can-read-policies": canReadPolicies,
+        "can-manage-auditing": canManageOrganization,
       },
     },
   };

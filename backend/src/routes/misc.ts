@@ -447,6 +447,34 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
     return { data: await auditTrailResources(logsList) };
   })
+  .get("/api/v2/organizations/:org_name/audit-configuration", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    // go-tfe OrganizationAuditConfigurations.Read. HCP-only fields are null for
+    // a TFE-style deployment; audit trails are always enabled here.
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return {
+      data: {
+        id: org.id,
+        type: "audit-configurations",
+        attributes: {
+          // go-tfe expects nested objects and the org relationship name
+          // (the data source dereferences v.Organization.Name).
+          "audit-trails": { enabled: true },
+          "hcp-audit-log-streaming": { enabled: false, "organization-id": "", "use-default-organization": true },
+          permissions: {
+            "can-enable-hcp-audit-log-streaming": true,
+            "can-set-hcp-audit-log-streaming-organization-id": true,
+            "can-use-default-audit-log-streaming-organization": true,
+          },
+          "updated-at": new Date().toISOString(),
+        },
+        relationships: {
+          organization: { data: { id: org.name, type: "organizations" } },
+        },
+      },
+    };
+  })
   .get("/api/v2/organization-audit-trailers", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     return { data: await auditTrailResources(await auditLogsForUser(user)) };

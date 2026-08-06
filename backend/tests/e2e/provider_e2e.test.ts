@@ -1114,12 +1114,14 @@ describe("tfe provider e2e", () => {
           // admin-issued SCIM token, then reference it in the second apply.
           let scimMapping = "";
           let scimMappingTf = "";
+          let scimDsTf = "";
           {
             const scimTokRes = await api(backend.port, "POST", "/api/v2/admin/scim-tokens", {
               data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
             }, auth.token);
             if (scimTokRes.status === 201) {
               const scimRaw = scimTokRes.json.data.attributes.token as string;
+              const scimTokenId = scimTokRes.json.data.id as string;
               const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
                 method: "POST",
                 headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
@@ -1137,6 +1139,13 @@ describe("tfe provider e2e", () => {
 }
 `;
                 }
+                scimDsTf = `data "tfe_scim_group" "d_sgroup" {
+  name = "pe2e-scim-group-${suffix}"
+}
+data "tfe_scim_token" "d_stok" {
+  id = "${scimTokenId}"
+}
+`;
               }
             }
           }
@@ -1186,18 +1195,22 @@ describe("tfe provider e2e", () => {
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + noCodeTf + wsRunTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
-          if (scimMapping !== "" || noCodeTf !== "") {
+          if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
             if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
             if (noCodeTf !== "") expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+            if (scimDsTf !== "") {
+              expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
+              expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
+            }
           }
           // tfe_workspace_run should be present after the second apply.
           {
