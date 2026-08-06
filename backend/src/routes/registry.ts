@@ -1236,6 +1236,32 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org.name) };
   })
+  .get("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const moduleId = params.module_id ?? "";
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
+    return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org?.name ?? mod.orgId) };
+  })
+  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
+    // go-tfe RegistryModules.ReadVersion — resolves a single published module
+    // version by ?module_version=. The tfe_no_code_module create polls this
+    // until the pinned version is published.
+    const orgName = params.org_name ?? "";
+    const namespace = params.namespace ?? "";
+    const moduleName = params.module_name ?? "";
+    const provider = params.provider ?? "";
+    const version = new URL(request.url).searchParams.get("module_version") ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const mod = await db.query.registryModules.findFirst({
+      where: and(eq(registryModules.orgId, org.id), eq(registryModules.namespace, namespace), eq(registryModules.name, moduleName), eq(registryModules.provider, provider)),
+    });
+    if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: { id: ver.id, type: "registry-module-versions", attributes: { version: ver.version, status: ver.status, "created-at": new Date(ver.createdAt).toISOString() } } };
+  })
   .delete("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
@@ -1359,8 +1385,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: resources };
   })
   .get("/api/v2/no-code-modules/:id", async ({ params, query, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const include = query?.include;
-    if (include !== undefined && include !== "variable_options") {
+    const includeRaw = query?.include;
+    const include = typeof includeRaw === "string" ? includeRaw : undefined;
+    if (include !== undefined && include !== "variable_options" && include !== "variable-options") {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "include must be variable_options" }] };
     }
@@ -1380,7 +1407,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     });
     return {
       data: noCodeResource(details.noCode, details.org, details.mod, details.version, options),
-      ...(include === "variable_options" ? { included: options.map(variableOptionResource) } : {}),
+      ...(include === "variable_options" || include === "variable-options" ? { included: options.map(variableOptionResource) } : {}),
     };
   })
   .get("/api/v2/no-code-modules/:id/input-variables", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {

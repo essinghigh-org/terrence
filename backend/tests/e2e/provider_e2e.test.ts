@@ -1103,19 +1103,53 @@ describe("tfe provider e2e", () => {
             }
           }
 
+          // tfe_no_code_module needs a PUBLISHED registry module version
+          // (status "ok"). Create + upload one between applies, then reference
+          // it with a version_pin in the second apply.
+          let noCodeTf = "";
+          {
+            const modRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`, undefined, auth.token);
+            const moduleId = modRes.json.data?.id as string | undefined;
+            if (typeof moduleId === "string") {
+              const verRes = await api(backend.port, "POST", `/api/v2/registry-modules/${moduleId}/versions`, {
+                data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+              }, auth.token);
+              const versionId = verRes.json.data?.id as string | undefined;
+              if (typeof versionId === "string") {
+                const tarProc = Bun.spawn(["tar", "-czf", join(workDir, "modver.tar.gz"), "--files-from", "/dev/null"]);
+                if ((await tarProc.exited) === 0) {
+                  const upload = await fetch(`http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
+                    body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
+                  });
+                  if (upload.status === 200) {
+                    noCodeTf = `resource "tfe_no_code_module" "ncm" {
+  organization    = "pe2e-org-${suffix}"
+  registry_module = tfe_registry_module.regmod.id
+  version_pin     = "1.0.0"
+}
+`;
+                  }
+                }
+              }
+            }
+          }
+
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + noCodeTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
-          if (scimMapping !== "") {
-            // The SCIM group mapping was created in the second apply.
+          if (scimMapping !== "" || noCodeTf !== "") {
+            // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
-            expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+            if (noCodeTf !== "") expect(stateList2.out).toContain("tfe_no_code_module.ncm");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
