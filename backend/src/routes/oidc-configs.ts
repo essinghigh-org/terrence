@@ -61,6 +61,13 @@ export const oidcConfigRoutes = new Elysia({ name: "oidc-configs" })
     (set as { status: number }).status = 201;
     return { data: oidcResource(row, org.name) };
   })
+  .get("/api/v2/organizations/:org_name/oidc-configurations", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const orgName = params.org_name ?? "";
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
+    const rows = await db.query.oidcConfigs.findMany({ where: eq(oidcConfigs.orgId, org.id) });
+    return { data: rows.map((row): Record<string, unknown> => oidcResource(row, org.name)) };
+  })
   .get("/api/v2/oidc-configurations/:oidc_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const id = params.oidc_id ?? "";
     const row = await db.query.oidcConfigs.findFirst({ where: eq(oidcConfigs.id, id) });

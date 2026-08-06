@@ -16,6 +16,7 @@ import { AgentPools } from "./views/AgentPools";
 import { PolicySets } from "./views/PolicySets";
 import { PolicySetDetail } from "./views/PolicySetDetail";
 import { ProviderSets } from "./views/ProviderSets";
+import { OidcConfigurations } from "./views/OidcConfigurations";
 import { AdminDashboard } from "./views/AdminDashboard";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
 import {
@@ -125,6 +126,7 @@ function App(): JSX.Element {
             <Route path=":orgName/settings/agents" element={<AgentPools />} />
             <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
             <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
+            <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
             <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />

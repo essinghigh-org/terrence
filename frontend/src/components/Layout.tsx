@@ -31,6 +31,7 @@ import {
   MonitorSmartphone,
   Package,
   PackageOpen,
+  Fingerprint,
   PanelLeftClose,
   PanelLeftOpen,
   Palette,
@@ -873,12 +874,19 @@ export function Layout({
           label: "Provider sets",
           to: `${organizationSettingsPath}/provider-sets`,
         },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/oidc`),
+          icon: Fingerprint,
+          label: "OIDC",
+          to: `${organizationSettingsPath}/oidc`,
+        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
         && (link.label !== "Agent pools" || canManageAgentPools)
         && (link.label !== "Policy sets" || canManagePolicies)
-        && (link.label !== "Provider sets" || canManagePolicies));
+        && (link.label !== "Provider sets" || canManagePolicies)
+        && (link.label !== "OIDC" || canManagePolicies));
 
       return (
         <>
