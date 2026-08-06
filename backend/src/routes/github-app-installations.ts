@@ -303,6 +303,16 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
 
     return { data: repos };
   })
+  .get("/api/v2/github-app/installations", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    // go-tfe GHAInstallations.List (global list across orgs) — used by the
+    // tfe_github_app_installation data source, which pages through this.
+    if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    const installations = await db.query.githubAppInstallations.findMany();
+    return {
+      data: installations.map((installation): Record<string, unknown> => installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null })),
+      meta: { pagination: { "current-page": 1, "total-pages": 1 } },
+    };
+  })
   .get("/api/v2/organizations/:org_name/github-app/installations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {

@@ -1122,6 +1122,15 @@ describe("tfe provider e2e", () => {
           await api(backend.port, "POST", "/api/v2/organizations", {
             data: { type: "organizations", attributes: { name: `pe2e-org2-${suffix}`, email: `org2-${suffix}@example.com` } },
           }, auth.token);
+          // Github app installation fixture for the tfe_github_app_installation
+          // data source (global list).
+          await api(backend.port, "POST", `/api/v2/organizations/pe2e-org-${suffix}/github-app/installations`, {
+            data: { type: "github-app-installations", attributes: { name: `pe2e-ghapp-${suffix}`, "installation-id": 123456 } },
+          }, auth.token);
+          const ghAppDsTf = `data "tfe_github_app_installation" "d_gh" {
+  name = "pe2e-ghapp-${suffix}"
+}
+`;
           const adminBundleTf = `resource "tfe_organization_module_sharing" "oms" {
   organization     = tfe_organization.org.name
   module_consumers = ["pe2e-org2-${suffix}"]
@@ -1233,7 +1242,7 @@ data "tfe_no_code_module" "d_ncm" {
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1261,6 +1270,7 @@ data "tfe_no_code_module" "d_ncm" {
             slugAssert(stateList3.out);
             expect(stateList3.out).toContain("tfe_organization_module_sharing.oms");
             expect(stateList3.out).toContain("tfe_admin_organization_settings.aos");
+            expect(stateList3.out).toContain("data.tfe_github_app_installation.d_gh");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 

@@ -4,7 +4,7 @@
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 70,
-  "data_sources_covered": 38,
+  "data_sources_covered": 39,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -310,7 +310,7 @@
     },
     {
       "name": "tfe_github_app_installation",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_hyok_customer_key_version",
