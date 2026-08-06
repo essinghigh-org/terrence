@@ -50,6 +50,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool.pool",
   "tfe_agent_token.agent_tok",
   "tfe_oauth_client.client",
+  "tfe_project_oauth_client.proj_oc",
   "tfe_policy.policy",
   "tfe_sentinel_policy.spolicy",
   "tfe_policy_set.ps",
@@ -390,6 +391,11 @@ resource "tfe_oauth_client" "client" {
   http_url         = "https://github.com"
   oauth_token      = "ghp_pe2e_${suffix}"
   service_provider = "github"
+}
+
+resource "tfe_project_oauth_client" "proj_oc" {
+  project_id      = tfe_project.proj.id
+  oauth_client_id = tfe_oauth_client.client.id
 }
 
 resource "tfe_policy" "policy" {
