@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, openSync } from "node:fs";
+import { mkdtempSync, openSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:net";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -80,6 +80,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_gcp_oidc_configuration.gcp_oidc",
   "tfe_vault_oidc_configuration.vault_oidc",
   "tfe_hyok_configuration.hyok",
+  "tfe_saml_settings.saml",
 ];
 
 function freePort(): Promise<number> {
@@ -593,6 +594,32 @@ resource "tfe_hyok_configuration" "hyok" {
   oidc_configuration_id   = tfe_vault_oidc_configuration.vault_oidc.id
   oidc_configuration_type = "vault"
 }
+
+resource "tfe_saml_settings" "saml" {
+  idp_cert = <<-EOT
+-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUEJYth31uZD/ISbnf2jBNHHs5QTswDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJcGUyZS1zYW1sMB4XDTI2MDgwNjA4MTE0NFoXDTM2MDgw
+MzA4MTE0NFowFDESMBAGA1UEAwwJcGUyZS1zYW1sMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAnMuEDDS/IpVp1SIK7EMkUPf1Vm1Eehzbah3RuWG5aKDx
+tILt9u5LYCI/uYwmMcqLmeAx+tUzpzzSNobYsXGIK1CMaFIM8gfdWfGwV/V3Ls8E
+4yvxA/7/gH0o0QN3TfudGd7MAIJE2OPqWggyfWD2IatKbjREjbHNkuzvUKMv5LJ4
+GaxVOBK3jjNw7z+k8TwNsYzRJB1m+q2MX5hR5ZF1m41PXIWKmcsoeW1c43l0pvXF
+0/GY2QHyMDucBJpXdH8HfLHIa6CgMgS3yEODyM1On+779Gz23NlAJqxZCBemnDZ7
+2LO3azAStOi9gRyBpmbh7kf1yHzcBK3IS4cRWxCPowIDAQABo1MwUTAdBgNVHQ4E
+FgQUeDxXMacJKKGyJ4UdMAytce/ZXoQwHwYDVR0jBBgwFoAUeDxXMacJKKGyJ4Ud
+MAytce/ZXoQwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAJzV2
+fMNpnPDeH0QM42LFRseN3djaBNVKkQ3qHhha6s8vUBCGHjbyMkaoCOnP+7BgK0ka
+WeSqPnOsbslao5Egf1hAc+SGDXYQKv1mlXS1869RpWnMsxS+aX85E4l9y73GcTNj
+aKe/LSjSp3gyho06nIX/YS5eYc8KQTaQZU53gVf1fs9/tamCfHwGR0ejxYsCwmZy
+4uiTnJq/mJGqIkROozLuvsxtXRePIawTRqwmkyJLFrPNdY0Kal6ieQwfq89Rn5VY
+OGMnxsBKUikIADzpC0yRNRNj59RVPprxNespSBF7l96neB5dcgFMAX/MMIAcYHYr
+etdW1cufqHhJK0JwAA==
+-----END CERTIFICATE-----
+EOT
+  slo_endpoint_url = "https://saml.pe2e.example.com/slo"
+  sso_endpoint_url = "https://saml.pe2e.example.com/sso"
+}
 `;
 }
 
@@ -874,6 +901,23 @@ output "probe_output" {
 
 describe("tfe provider e2e", () => {
   beforeAll(async () => {
+    // Sweep STALE E2E/test dirs left by interrupted/killed runs (SIGKILL
+    // never reaches each file's afterAll/teardown). The backend dirs
+    // (~222-309 MB on tmpfs) accumulate and OOM-kill the container if left
+    // behind. Only delete dirs older than 10 minutes — bun runs test files
+    // concurrently, so active shared setup dirs (recent mtime) must be spared.
+    const now = Date.now();
+    for (const name of readdirSync(tmpdir())) {
+      if (!(name.startsWith("terrence-test-") || name.startsWith("terrence-provider-e2e-"))) continue;
+      try {
+        const st = statSync(join(tmpdir(), name));
+        if (st.mtimeMs < now - 10 * 60 * 1000) {
+          await rm(join(tmpdir(), name), { recursive: true, force: true }).catch(() => undefined);
+        }
+      } catch {
+        /* ignore races */
+      }
+    }
     const { ensureBinary } = await import("../../src/binaryManager");
     const terraform = await ensureBinary("terraform");
     const tofu = await ensureBinary("tofu");

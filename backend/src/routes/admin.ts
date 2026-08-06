@@ -164,6 +164,7 @@ function samlSettingsResource(
     attributes: {
       enabled: settings.enabled,
       debug: settings.debug,
+      "provider-type": "unknown",
       "old-idp-cert": settings.oldIdpCert,
       "idp-cert": settings.idpCert,
       "idp-entity-id": settings.idpEntityId,
@@ -178,6 +179,11 @@ function samlSettingsResource(
       "link-by-email": linkByEmail,
       "acs-consumer-url": apiURL(request, "/users/saml/auth"),
       "metadata-url": apiURL(request, "/users/saml/metadata"),
+      "authn-requests-signed": false,
+      "want-assertions-signed": false,
+      "team-management-enabled": false,
+      "signature-signing-method": "SHA256",
+      "signature-digest-method": "SHA256",
     },
   };
 }
@@ -238,15 +244,21 @@ function samlInput(
 
   const nullableString = (key: "idp-cert" | "idp-entity-id" | "slo-endpoint-url" | "sso-endpoint-url", fallback: string | null): string | null =>
     attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : null;
+  // idp-cert must round-trip byte-for-byte (the provider compares it exactly,
+  // including trailing newlines); trim would cause an inconsistent result.
+  const rawCertString = (fallback: string | null): string | null =>
+    attributes["idp-cert"] === undefined ? fallback : typeof attributes["idp-cert"] === "string" ? attributes["idp-cert"] : null;
   const requiredString = (
     key: "attr-username" | "attr-email" | "attr-groups" | "attr-site-admin" | "site-admin-role",
     fallback: string,
   ): string => attributes[key] === undefined ? fallback : typeof attributes[key] === "string" ? attributes[key].trim() : "";
 
-  const idpCert = nullableString("idp-cert", current.idpCert);
-  const idpEntityId = nullableString("idp-entity-id", current.idpEntityId);
+  const idpCert = rawCertString(current.idpCert);
   const sloEndpointUrl = nullableString("slo-endpoint-url", current.sloEndpointUrl);
   const ssoEndpointUrl = nullableString("sso-endpoint-url", current.ssoEndpointUrl);
+  // The tfe_saml_settings resource does not expose idp-entity-id; TFE derives a
+  // default entity ID when the SSO endpoint is known.
+  const idpEntityId = nullableString("idp-entity-id", current.idpEntityId) ?? ssoEndpointUrl;
   const attrUsername = requiredString("attr-username", current.attrUsername);
   const attrEmail = requiredString("attr-email", current.attrEmail);
   const attrGroups = requiredString("attr-groups", current.attrGroups);
@@ -254,12 +266,12 @@ function samlInput(
   const siteAdminRole = requiredString("site-admin-role", current.siteAdminRole);
   const enabled = typeof attributes.enabled === "boolean" ? attributes.enabled : current.enabled;
 
-  if (idpCert !== null && (
+  if (idpCert !== null && idpCert !== "" && (
     !idpCert.includes("-----BEGIN CERTIFICATE-----")
     || !idpCert.includes("-----END CERTIFICATE-----")
   )) return { error: "idp-cert must be a PEM encoded X.509 certificate" };
-  if (sloEndpointUrl !== null && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
-  if (ssoEndpointUrl !== null && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
+  if (sloEndpointUrl !== null && sloEndpointUrl !== "" && !validHttpsUrl(sloEndpointUrl)) return { error: "slo-endpoint-url must be an HTTPS URL" };
+  if (ssoEndpointUrl !== null && ssoEndpointUrl !== "" && !validHttpsUrl(ssoEndpointUrl)) return { error: "sso-endpoint-url must be an HTTPS URL" };
   if (attrUsername === "" || attrEmail === "" || attrGroups === "" || attrSiteAdmin === "" || siteAdminRole === "") {
     return { error: "attr-username, attr-email, attr-groups, attr-site-admin, and site-admin-role must not be empty" };
   }
@@ -897,9 +909,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const data = payload.data !== null && typeof payload.data === "object"
       ? payload.data as Record<string, unknown>
       : {};
-    if (data.type !== undefined && data.type !== "saml-settings") {
+    if (data.type !== undefined && data.type !== "" && data.type !== "saml-settings" && data.type !== "admin-saml-settings") {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be saml-settings" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data.type)})` }] };
     }
     const attributes = data.attributes !== null && typeof data.attributes === "object"
       ? data.attributes as Record<string, unknown>
