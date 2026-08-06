@@ -775,6 +775,17 @@ data "tfe_registry_module" "d_regmod" {
   module_provider = "aws"
   depends_on      = [tfe_registry_module.regmod]
 }
+data "tfe_saml_settings" "d_saml" {
+  depends_on = [tfe_saml_settings.saml]
+}
+data "tfe_scim_settings" "d_scim" {
+  depends_on = [tfe_scim_settings.scim]
+}
+data "tfe_provider_set" "d_pset" {
+  organization = tfe_organization.org.name
+  name         = tfe_provider_set.pset.name
+  depends_on   = [tfe_provider_set.pset]
+}
 
 output "ds_org_name"     { value = data.tfe_organization.d_org.name }
 output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
@@ -806,6 +817,9 @@ output "ds_tags_count"      { value = length(data.tfe_organization_tags.d_tags.t
 output "ds_ipr_api_count"   { value = length(data.tfe_ip_ranges.d_ipr.api) }
 output "ds_ottl_org_ttl"    { value = data.tfe_org_max_token_ttl_policy.d_ottl.org_token_max_ttl }
 output "ds_regmod_name"     { value = data.tfe_registry_module.d_regmod.name }
+output "ds_saml_enabled"    { value = data.tfe_saml_settings.d_saml.enabled }
+output "ds_scim_enabled"    { value = data.tfe_scim_settings.d_scim.enabled }
+output "ds_pset_name"       { value = data.tfe_provider_set.d_pset.name }
 `;
 }
 
@@ -1011,6 +1025,9 @@ describe("tfe provider e2e", () => {
           expect(Number(val("ds_ipr_api_count"))).toBeGreaterThan(0);
           expect(val("ds_ottl_org_ttl")).toBe("1d");
           expect(val("ds_regmod_name")).toBe(`pe2e-mod-${suffix}`);
+          expect(val("ds_saml_enabled")).toBe(true);
+          expect(val("ds_scim_enabled")).toBe(true);
+          expect(val("ds_pset_name")).toBe(`pe2e-pset-${suffix}`);
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
