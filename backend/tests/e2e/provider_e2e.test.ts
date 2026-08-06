@@ -59,6 +59,8 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_notification_configuration.nc",
   "tfe_project_notification_configuration.project_nc",
   "tfe_policy_set_parameter.p_param",
+  "tfe_tag_policy_set.tag_inc",
+  "tfe_tag_policy_set_exclusion.tag_exc",
   "tfe_team_notification_configuration.tn",
   "tfe_workspace_policy_set_exclusion.ws_excl",
   "tfe_data_retention_policy.drp",
@@ -450,6 +452,17 @@ resource "tfe_policy_set_parameter" "p_param" {
   key           = "pe2e_param"
   value         = "pe2e_param_value"
   policy_set_id = tfe_policy_set.ps.id
+}
+
+resource "tfe_tag_policy_set" "tag_inc" {
+  policy_set_id = tfe_policy_set.ps.id
+  key           = "pe2e-tag-inc-${suffix}"
+  value         = "pe2e-value"
+}
+
+resource "tfe_tag_policy_set_exclusion" "tag_exc" {
+  policy_set_id = tfe_policy_set.ps.id
+  key           = "pe2e-tag-exc-${suffix}"
 }
 
 resource "tfe_team_notification_configuration" "tn" {

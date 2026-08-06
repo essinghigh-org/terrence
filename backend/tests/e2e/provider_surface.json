@@ -3,7 +3,7 @@
   "provider": "hashicorp/tfe v0.79.0",
   "resource_count": 72,
   "data_source_count": 43,
-  "resources_covered": 59,
+  "resources_covered": 61,
   "data_sources_covered": 32,
   "resources": [
     {
@@ -204,11 +204,11 @@
     },
     {
       "name": "tfe_tag_policy_set",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_tag_policy_set_exclusion",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_team",

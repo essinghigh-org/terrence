@@ -296,11 +296,23 @@ for (const [col, def] of psAdditions) {
         runSql("PRAGMA foreign_keys = ON;");
       }
     }
-  }
+}
+
+// Create tag-selector rows for policy sets (tag inclusion/exclusion).
+runSql(`
+  CREATE TABLE IF NOT EXISTS policy_set_tag_selectors (
+    id TEXT PRIMARY KEY,
+    policy_set_id TEXT NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT,
+    is_exclude INTEGER DEFAULT false
+  );
+  CREATE INDEX IF NOT EXISTS policy_set_tag_selectors_pset_idx ON policy_set_tag_selectors (policy_set_id);
+`);
 
 // Create admin version tables if they don't exist
 runSql(`
-  CREATE TABLE IF NOT EXISTS admin_terraform_versions (
+CREATE TABLE IF NOT EXISTS admin_terraform_versions (
     id TEXT PRIMARY KEY,
     version TEXT NOT NULL UNIQUE,
     url TEXT,

@@ -783,6 +783,19 @@ export const policySetProjects = sqliteTable("policy_set_projects", {
   uniqueIndex("policy_set_projects_idx").on(table.policySetId, table.projectId),
 ]);
 
+// Tag selectors (tag inclusion/exclusion) attached to a policy set.
+// Keyed by (policy_set_id, key, value, is_exclude) so tfe_tag_policy_set /
+// tfe_tag_policy_set_exclusion round-trip.
+export const policySetTagSelectors = sqliteTable("policy_set_tag_selectors", {
+  id: text("id").primaryKey(),
+  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  value: text("value"),
+  isExclude: integer("is_exclude", { mode: "boolean" }).notNull().default(false),
+}, (table) => [
+  index("policy_set_tag_selectors_pset_idx").on(table.policySetId),
+]);
+
 export const policySetExclusions = sqliteTable("policy_set_exclusions", {
   id: text("id").primaryKey(),
   policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),

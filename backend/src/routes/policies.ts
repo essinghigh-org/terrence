@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
-import { eq, and, inArray, asc } from "drizzle-orm";
+import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
+import { eq, and, inArray, asc, isNull } from "drizzle-orm";
 import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
@@ -83,7 +83,8 @@ function extractPolicyRefIds(body: unknown): string[] {
   return [];
 }
 
-function policySetAttributes(policySet: PsItem): Record<string, unknown> {
+async function policySetAttributes(policySet: PsItem): Promise<Record<string, unknown>> {
+  const selectors = await db.query.policySetTagSelectors.findMany({ where: eq(policySetTagSelectors.policySetId, policySet.id) });
   return {
     name: policySet.name,
     description: policySet.description,
@@ -95,6 +96,11 @@ function policySetAttributes(policySet: PsItem): Record<string, unknown> {
     "policies-path": policySet.policiesPath,
     "policy-update-patterns": policySet.policyUpdatePatterns,
     "vcs-repo": vcsRepoResource(policySet.vcsRepo),
+    "tag-selectors": selectors.map((s): Record<string, unknown> => ({
+      "tag-key": s.key,
+      "tag-value": s.value,
+      "is-exclude": s.isExclude === true,
+    })),
   };
 }
 
@@ -470,15 +476,15 @@ export const policyRoutes = new Elysia({ name: "policies" })
     }
 
     return {
-      data: effectiveSets.map((policySet: PsItem): Record<string, unknown> => ({
+      data: await Promise.all(effectiveSets.map(async (policySet: PsItem): Promise<Record<string, unknown>> => ({
         id: policySet.id,
         type: "policy-sets",
         attributes: {
-          ...policySetAttributes(policySet),
+          ...(await policySetAttributes(policySet)),
           "policy-count": policyCounts.get(policySet.id) ?? 0,
           scope: policySet.global === true ? "global" : directIds.has(policySet.id) ? "workspace" : "project",
         },
-      })),
+      }))),
     };
   })
   .get("/api/v2/organizations/:org_name/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -520,10 +526,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       list.push(pol);
       polBySet.set(pol.policySetId, list);
     }
-    const data = psList.map((ps: PsItem): Record<string, unknown> => ({
+    const data = await Promise.all(psList.map(async (ps: PsItem): Promise<Record<string, unknown>> => ({
       id: ps.id,
       type: "policy-sets",
-      attributes: policySetAttributes(ps),
+      attributes: await policySetAttributes(ps),
       relationships: {
         organization: { data: { id: org.name, type: "organizations" } },
         workspaces: { data: (wsBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
@@ -531,7 +537,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
         "workspace-exclusions": { data: (exclBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
         policies: { data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
       },
-    }));
+    })));
     return { data };
   })
   .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -618,13 +624,13 @@ export const policyRoutes = new Elysia({ name: "policies" })
       }
     }
     (set as { status: number }).status = 201;
-    return { data: { id, type: "policy-sets", attributes: policySetAttributes(created), relationships: await policySetRelationships(created) } };
+    return { data: { id, type: "policy-sets", attributes: await policySetAttributes(created), relationships: await policySetRelationships(created) } };
   })
   .get("/api/v2/policy-sets/:policy_set_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: ps.id, type: "policy-sets", attributes: policySetAttributes(ps), relationships: await policySetRelationships(ps) } };
+    return { data: { id: ps.id, type: "policy-sets", attributes: await policySetAttributes(ps), relationships: await policySetRelationships(ps) } };
   })
   .patch("/api/v2/policy-sets/:policy_set_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
@@ -696,7 +702,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (Object.keys(updates).length > 0) await db.update(policySets).set(updates).where(eq(policySets.id, policySetId));
     const updated = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "policy-sets", attributes: policySetAttributes(updated), relationships: await policySetRelationships(updated) } };
+    return { data: { id: updated.id, type: "policy-sets", attributes: await policySetAttributes(updated), relationships: await policySetRelationships(updated) } };
   })
   .delete("/api/v2/policy-sets/:policy_set_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policySetId = params.policy_set_id ?? "";
@@ -944,6 +950,51 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const wsItems = payload.data;
     if (Array.isArray(wsItems)) { const wsIds = wsItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== ""); if (wsIds.length > 0) await db.delete(policySetWorkspaces).where(and(eq(policySetWorkspaces.policySetId, policySetId), inArray(policySetWorkspaces.workspaceId, wsIds))); }
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  // --- Tag selectors (tag inclusion / exclusion) ---
+  .post("/api/v2/policy-sets/:policy_set_id/tag-selectors", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    if (!Array.isArray(items)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+    for (const item of items) {
+      if (item === null || typeof item !== "object") continue;
+      const rec = item as Record<string, unknown>;
+      const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
+      if (key === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
+      const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
+      const isExclude = rec["is-exclude"] === true;
+      const existing = await db.query.policySetTagSelectors.findFirst({
+        where: and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)),
+      });
+      if (existing === undefined) {
+        await db.insert(policySetTagSelectors).values({ id: crypto.randomUUID(), policySetId, key, value, isExclude });
+      }
+    }
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/policy-sets/:policy_set_id/tag-selectors", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (item === null || typeof item !== "object") continue;
+        const rec = item as Record<string, unknown>;
+        const key = typeof rec["tag-key"] === "string" ? rec["tag-key"] : "";
+        if (key === "") continue;
+        const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
+        const isExclude = rec["is-exclude"] === true;
+        await db.delete(policySetTagSelectors).where(and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)));
+      }
+    }
     (set as { status: number }).status = 204;
     return {};
   })
