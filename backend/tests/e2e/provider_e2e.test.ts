@@ -685,6 +685,18 @@ data "tfe_organization_tags" "d_tags" {
   depends_on   = [tfe_organization.org]
 }
 data "tfe_ip_ranges" "d_ipr" {}
+data "tfe_org_max_token_ttl_policy" "d_ottl" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_org_max_token_ttl_policy.ottl]
+}
+data "tfe_registry_module" "d_regmod" {
+  organization    = tfe_organization.org.name
+  namespace       = tfe_organization.org.name
+  registry_name   = "private"
+  name            = tfe_registry_module.regmod.name
+  module_provider = "aws"
+  depends_on      = [tfe_registry_module.regmod]
+}
 
 output "ds_org_name"     { value = data.tfe_organization.d_org.name }
 output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
@@ -714,6 +726,8 @@ output "ds_regprovs_count" { value = length(data.tfe_registry_providers.d_regpro
 output "ds_smtp_sender"     { value = data.tfe_admin_smtp_settings.d_smtp.sender }
 output "ds_tags_count"      { value = length(data.tfe_organization_tags.d_tags.tags) }
 output "ds_ipr_api_count"   { value = length(data.tfe_ip_ranges.d_ipr.api) }
+output "ds_ottl_org_ttl"    { value = data.tfe_org_max_token_ttl_policy.d_ottl.org_token_max_ttl }
+output "ds_regmod_name"     { value = data.tfe_registry_module.d_regmod.name }
 `;
 }
 
@@ -900,6 +914,8 @@ describe("tfe provider e2e", () => {
           expect(val("ds_smtp_sender")).toBe("pe2e@example.com");
           expect(Number(val("ds_tags_count"))).toBeGreaterThanOrEqual(0);
           expect(Number(val("ds_ipr_api_count"))).toBeGreaterThan(0);
+          expect(val("ds_ottl_org_ttl")).toBe("1d");
+          expect(val("ds_regmod_name")).toBe(`pe2e-mod-${suffix}`);
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
