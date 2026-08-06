@@ -45,6 +45,13 @@ import {
   UserRound,
   Users,
   Variable,
+  Boxes,
+  Hourglass,
+  Layers,
+  Tags,
+  FileClock,
+  Mail,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -492,6 +499,12 @@ export function Layout({
           label: "Authentication",
           to: "/app/admin/auth",
         },
+        {
+          active: isActivePath(location.pathname, "/app/admin/smtp"),
+          icon: Mail,
+          label: "SMTP settings",
+          to: "/app/admin/smtp",
+        },
       ] as const;
 
       return (
@@ -869,6 +882,12 @@ export function Layout({
           to: `${organizationSettingsPath}/policy-sets`,
         },
         {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets/tags`),
+          icon: Tags,
+          label: "Tag policy sets",
+          to: `${organizationSettingsPath}/policy-sets/tags`,
+        },
+        {
           active: isActivePath(location.pathname, `${organizationSettingsPath}/provider-sets`),
           icon: Package,
           label: "Provider sets",
@@ -880,13 +899,63 @@ export function Layout({
           label: "OIDC",
           to: `${organizationSettingsPath}/oidc`,
         },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/registry-providers`),
+          icon: Boxes,
+          label: "Registry providers",
+          to: `${organizationSettingsPath}/registry-providers`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/registry-modules`),
+          icon: PackageOpen,
+          label: "Registry modules",
+          to: `${organizationSettingsPath}/registry-modules`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/token-ttl`),
+          icon: Hourglass,
+          label: "Token TTL policies",
+          to: `${organizationSettingsPath}/token-ttl`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/stacks-workspaces`),
+          icon: Layers,
+          label: "Stacks",
+          to: `${organizationSettingsPath}/stacks-workspaces`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/agent-pool-scoping`),
+          icon: SlidersHorizontal,
+          label: "Agent pool scoping",
+          to: `${organizationSettingsPath}/agent-pool-scoping`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/hyok`),
+          icon: KeyRound,
+          label: "Encryption keys",
+          to: `${organizationSettingsPath}/hyok`,
+        },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/audit-trail-tokens`),
+          icon: FileClock,
+          label: "Audit trail token",
+          to: `${organizationSettingsPath}/audit-trail-tokens`,
+        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
         && (link.label !== "Agent pools" || canManageAgentPools)
         && (link.label !== "Policy sets" || canManagePolicies)
+        && (link.label !== "Tag policy sets" || canManagePolicies)
         && (link.label !== "Provider sets" || canManagePolicies)
-        && (link.label !== "OIDC" || canManagePolicies));
+        && (link.label !== "OIDC" || canManagePolicies)
+        && (link.label !== "Registry providers" || canManagePolicies)
+        && (link.label !== "Registry modules" || canManagePolicies)
+        && (link.label !== "Token TTL policies" || canManagePolicies)
+        && (link.label !== "Stacks" || canManageWorkspaces)
+        && (link.label !== "Agent pool scoping" || canManageAgentPools)
+        && (link.label !== "Encryption keys" || canManagePolicies)
+        && (link.label !== "Audit trail token" || canManagePolicies));
 
       return (
         <>

@@ -17,7 +17,16 @@ import { PolicySets } from "./views/PolicySets";
 import { PolicySetDetail } from "./views/PolicySetDetail";
 import { ProviderSets } from "./views/ProviderSets";
 import { OidcConfigurations } from "./views/OidcConfigurations";
+import { RegistryProviders } from "./views/RegistryProviders";
+import { RegistryModules } from "./views/RegistryModules";
+import { TokenTTLPolicies } from "./views/TokenTTLPolicies";
+import { StackSettings } from "./views/StackSettings";
+import { AgentPoolScoping } from "./views/AgentPoolScoping";
+import { HyokConfigurations } from "./views/HyokConfigurations";
+import { AuditTrailTokens } from "./views/AuditTrailTokens";
+import { PolicySetsTags } from "./views/PolicySetsTags";
 import { AdminDashboard } from "./views/AdminDashboard";
+import { AdminSmtpSettings } from "./views/AdminSmtpSettings";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
 import {
   AUTH_CHANGED_EVENT,
@@ -112,6 +121,7 @@ function App(): JSX.Element {
             <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
             <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
             <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+            <Route path="admin/smtp" element={<AdminSmtpSettings />} />
             <Route path="account" element={<AccountSettings />} />
             <Route path=":orgName" element={<Workspaces />} />
             <Route path=":orgName/workspaces" element={<Workspaces />} />
@@ -127,6 +137,14 @@ function App(): JSX.Element {
             <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
             <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
             <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
+            <Route path=":orgName/settings/registry-providers" element={<RegistryProviders />} />
+            <Route path=":orgName/settings/registry-modules" element={<RegistryModules />} />
+            <Route path=":orgName/settings/token-ttl" element={<TokenTTLPolicies />} />
+            <Route path=":orgName/settings/stacks-workspaces" element={<StackSettings />} />
+            <Route path=":orgName/settings/agent-pool-scoping" element={<AgentPoolScoping />} />
+            <Route path=":orgName/settings/hyok" element={<HyokConfigurations />} />
+            <Route path=":orgName/settings/audit-trail-tokens" element={<AuditTrailTokens />} />
+            <Route path=":orgName/settings/policy-sets/tags" element={<PolicySetsTags />} />
             <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />
