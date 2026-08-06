@@ -13,6 +13,7 @@ import {
   registryModuleVersions,
   moduleTestConfigurations,
   moduleTestResults,
+  testVariables,
   registryProviders,
   registryProviderPlatforms,
   registryProviderVersions,
@@ -896,6 +897,72 @@ function inputVariableResource(
       "no-code-module": { data: { id: noCodeModuleId, type: "no-code-modules" } },
     },
   };
+}
+
+function testVariableResource(variable: DeepReadonly<typeof testVariables.$inferSelect>): Record<string, unknown> {
+  const raw = variable;
+  return {
+    id: raw.id,
+    type: "vars",
+    attributes: {
+      key: raw.key,
+      value: raw.value,
+      description: raw.description ?? "",
+      category: raw.category,
+      hcl: raw.hcl,
+      sensitive: raw.sensitive,
+      "version-id": String(raw.updatedAt),
+    },
+  };
+}
+
+type TestVarsParams = { org_name?: string | undefined; registry_name?: string | undefined; namespace?: string | undefined; module_name?: string | undefined; provider?: string | undefined; variable_id?: string | undefined };
+
+async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
+  const orgName = params.org_name ?? "";
+  const namespace = params.namespace ?? "";
+  const moduleName = params.module_name ?? "";
+  const provider = params.provider ?? "";
+  if (orgName === "" || moduleName === "" || provider === "") return undefined;
+  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  if (org === undefined) return undefined;
+  return db.query.registryModules.findFirst({
+    where: and(
+      eq(registryModules.orgId, org.id),
+      eq(registryModules.namespace, namespace === "" ? orgName : namespace),
+      eq(registryModules.name, moduleName),
+      eq(registryModules.provider, provider),
+    ),
+  });
+}
+
+async function findTestVariable(params: TestVarsParams): Promise<DeepReadonly<typeof testVariables.$inferSelect> | undefined> {
+  const mod = await findTestVarsModule(params);
+  if (mod === undefined || params.variable_id === undefined) return undefined;
+  return db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.id, params.variable_id)) });
+}
+
+function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const data = payload.data;
+  if (data === null || typeof data !== "object") return { error: "data is required" };
+  const attributes = (data as Record<string, unknown>).attributes;
+  if (attributes === null || typeof attributes !== "object") return { error: "data.attributes is required" };
+  const attrs = attributes as Record<string, unknown>;
+  const key = attrs.key;
+  const category = attrs.category;
+  if (typeof category !== "undefined" && category !== null && typeof category !== "string") return { error: "category must be a string" };
+  if (requireKey && (typeof key !== "string" || key.trim() === "")) return { error: "key is required" };
+  if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
+  const cat = typeof category === "string" ? category : "terraform";
+  if (cat !== "terraform" && cat !== "env") return { error: "category must be terraform or env" };
+  const result: Record<string, string | boolean> = { category: cat };
+  if (typeof key === "string") result.key = key;
+  if (typeof attrs.value === "string") result.value = attrs.value;
+  if (typeof attrs.sensitive === "boolean") result.sensitive = attrs.sensitive;
+  if (typeof attrs.hcl === "boolean") result.hcl = attrs.hcl;
+  if (typeof attrs.description === "string") result.description = attrs.description;
+  return result as Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }>;
 }
 
 async function buildNoCodeConfigurationArchive(
@@ -2334,6 +2401,54 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
     await db.update(registryModuleVersions).set({ status: "ok" }).where(eq(registryModuleVersions.id, versionId));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const mod = await findTestVarsModule(params);
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const rows = await db.query.testVariables.findMany({ where: eq(testVariables.moduleId, mod.id) });
+    return { data: rows.map(testVariableResource) };
+  })
+  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const mod = await findTestVarsModule(params);
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const input = testVariableInput(body, true);
+    if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
+    const existing = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.key, input.key ?? "")) });
+    if (existing !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] }; }
+    const id = `var-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const now = Date.now();
+    const created = { id, moduleId: mod.id, key: input.key ?? "", value: input.value ?? "", sensitive: input.sensitive ?? false, hcl: input.hcl ?? false, category: input.category ?? "terraform", description: input.description ?? null, createdAt: now, updatedAt: now };
+    await db.insert(testVariables).values(created);
+    (set as { status: number }).status = 201;
+    return { data: testVariableResource(created) };
+  })
+  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const variable = await findTestVariable(params);
+    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return { data: testVariableResource(variable) };
+  })
+  .patch("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const variable = await findTestVariable(params);
+    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const input = testVariableInput(body, false);
+    if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
+    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now() };
+    if (input.key !== undefined) updates.key = input.key;
+    if (input.value !== undefined) updates.value = input.value;
+    if (input.sensitive !== undefined) updates.sensitive = input.sensitive;
+    if (input.hcl !== undefined) updates.hcl = input.hcl;
+    if (input.category !== undefined) updates.category = input.category;
+    if (input.description !== undefined) updates.description = input.description ?? null;
+    await db.update(testVariables).set(updates).where(eq(testVariables.id, variable.id));
+    const updated = await db.query.testVariables.findFirst({ where: eq(testVariables.id, variable.id) });
+    return { data: updated === undefined ? undefined : testVariableResource(updated) };
+  })
+  .delete("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const variable = await findTestVariable(params);
+    if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(testVariables).where(eq(testVariables.id, variable.id));
     (set as { status: number }).status = 204;
     return {};
   })

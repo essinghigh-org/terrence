@@ -145,6 +145,21 @@ runSql(`
   CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id);
   CREATE INDEX IF NOT EXISTS organization_memberships_user_org_idx ON organization_memberships (user_id, org_id);
 `);
+runSql(`
+  CREATE TABLE IF NOT EXISTS test_variables (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES registry_modules (id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL DEFAULT '',
+    sensitive INTEGER NOT NULL DEFAULT 0,
+    hcl INTEGER NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'terraform',
+    description TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS test_variables_module_key_idx ON test_variables (module_id, key);
+`);
 
 // Keep upgrades from pre-RBAC releases safe even when their migration journal is incomplete.
 runSql(`

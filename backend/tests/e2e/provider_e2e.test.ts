@@ -81,6 +81,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool_excluded_workspaces.apexw",
   "tfe_org_max_token_ttl_policy.ottl",
   "tfe_registry_module.regmod",
+  "tfe_test_variable.test_var",
   "tfe_registry_gpg_key.gpg_key",
   "tfe_aws_oidc_configuration.aws_oidc",
   "tfe_azure_oidc_configuration.azure_oidc",
@@ -599,6 +600,15 @@ resource "tfe_registry_module" "regmod" {
   organization    = tfe_organization.org.name
   registry_name   = "private"
   module_provider = "aws"
+}
+
+resource "tfe_test_variable" "test_var" {
+  organization    = tfe_organization.org.name
+  module_name     = tfe_registry_module.regmod.name
+  module_provider = tfe_registry_module.regmod.module_provider
+  key             = "e2e_test_key"
+  category        = "env"
+  value           = "e2e-test-value"
 }
 
 resource "tfe_registry_gpg_key" "gpg_key" {

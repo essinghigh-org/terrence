@@ -672,6 +672,21 @@ export const noCodeVariableOptions = sqliteTable("no_code_variable_options", {
   uniqueIndex("no_code_variable_options_module_name_idx").on(table.noCodeModuleId, table.variableName),
 ]);
 
+export const testVariables = sqliteTable("test_variables", {
+  id: text("id").primaryKey(),
+  moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  value: text("value").notNull(),
+  sensitive: integer("sensitive", { mode: "boolean" }).notNull().default(false),
+  hcl: integer("hcl", { mode: "boolean" }).notNull().default(false),
+  category: text("category").notNull().default("terraform"),
+  description: text("description"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("test_variables_module_key_idx").on(table.moduleId, table.key),
+]);
+
 export const noCodeWorkspaceConfigurations = sqliteTable("no_code_workspace_configurations", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
