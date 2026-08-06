@@ -1176,6 +1176,9 @@ data "tfe_scim_token" "d_stok" {
   registry_module = tfe_registry_module.regmod.id
   version_pin     = "1.0.0"
 }
+data "tfe_no_code_module" "d_ncm" {
+  id = tfe_no_code_module.ncm.id
+}
 `;
                   }
                 }
@@ -1193,9 +1196,18 @@ data "tfe_scim_token" "d_stok" {
 }
 `;
 
+          // tfe_slug is local-only (go-slug pack + sha256); it tracks the config
+          // directory for uploads. No backend involvement, but it exercises the
+          // data source against a real directory.
+          const slugTf = `data "tfe_slug" "d_slug" {
+  source_path = "${cfgDir}"
+}
+`;
+          const slugAssert = (state2: string): void => { expect(state2).toContain("data.tfe_slug.d_slug"); };
+
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1206,7 +1218,10 @@ data "tfe_scim_token" "d_stok" {
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList2, "state list #2");
             if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
-            if (noCodeTf !== "") expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+            if (noCodeTf !== "") {
+              expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+              expect(stateList2.out).toContain("data.tfe_no_code_module.d_ncm");
+            }
             if (scimDsTf !== "") {
               expect(stateList2.out).toContain("data.tfe_scim_group.d_sgroup");
               expect(stateList2.out).toContain("data.tfe_scim_token.d_stok");
@@ -1217,6 +1232,7 @@ data "tfe_scim_token" "d_stok" {
             const stateList3 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
             cliOk(stateList3, "state list #3");
             expect(stateList3.out).toContain("tfe_workspace_run.ws_run");
+            slugAssert(stateList3.out);
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
