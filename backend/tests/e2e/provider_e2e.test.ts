@@ -51,6 +51,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_token.agent_tok",
   "tfe_oauth_client.client",
   "tfe_policy.policy",
+  "tfe_sentinel_policy.spolicy",
   "tfe_policy_set.ps",
   "tfe_workspace_policy_set.ws_ps",
   "tfe_project_policy_set.project_ps",
@@ -395,6 +396,13 @@ resource "tfe_policy" "policy" {
   organization = tfe_organization.org.name
   name         = "pe2e-policy-${suffix}"
   kind         = "sentinel"
+  enforce_mode = "advisory"
+  policy       = "main = rule { true }"
+}
+
+resource "tfe_sentinel_policy" "spolicy" {
+  organization = tfe_organization.org.name
+  name         = "pe2e-spolicy-${suffix}"
   enforce_mode = "advisory"
   policy       = "main = rule { true }"
 }
