@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, projects, projectTags, organizations, workspaces, teamWorkspaces, type users } from "../db/schema";
-import { eq, and, inArray, count, countDistinct, asc, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, count, countDistinct, asc, isNotNull, sql } from "drizzle-orm";
 import { projectResource, projectTagBindingResource } from "../lib/response";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
@@ -400,19 +400,15 @@ export const projectRoutes = new Elysia({ name: "projects" })
       (set as { status: number }).status = 201;
       return { data: [] };
     }
-    const existingTags = await db.query.projectTags.findMany({ where: and(eq(projectTags.projectId, projectId), inArray(projectTags.key, keys)) });
-    const existingKeys = new Set(existingTags.map((t: Readonly<{ readonly key: string }>): string => t.key));
-    for (const et of existingTags) {
-      const entry = entries.find((e: TagEntry): boolean => e.key === et.key);
-      if (entry !== undefined && entry.value !== et.value) {
-        await db.update(projectTags).set({ value: entry.value }).where(eq(projectTags.id, et.id));
-      }
-    }
-    const newEntries = entries.filter((e: TagEntry): boolean => !existingKeys.has(e.key));
-    if (newEntries.length > 0) {
-      await db.insert(projectTags).values(newEntries.map((e: TagEntry): typeof projectTags.$inferInsert => ({ id: `ptag-${crypto.randomUUID()}`, projectId, key: e.key, value: e.value })));
-
-    }
+    // Single upsert upserts all requested tag bindings in one statement
+    // (insert new keys, update values for existing ones) instead of a
+    // per-row UPDATE loop on top of a separate INSERT.
+    await db.insert(projectTags).values(
+      entries.map((e: TagEntry): typeof projectTags.$inferInsert => ({ id: `ptag-${crypto.randomUUID()}`, projectId, key: e.key, value: e.value })),
+    ).onConflictDoUpdate({
+      target: [projectTags.projectId, projectTags.key],
+      set: { value: sql`excluded.value` },
+    });
     const allTags = await db.query.projectTags.findMany({ where: and(eq(projectTags.projectId, projectId), inArray(projectTags.key, keys)) });
     const created = allTags.map((pt: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(pt));
     (set as { status: number }).status = 201;

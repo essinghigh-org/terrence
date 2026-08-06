@@ -691,18 +691,31 @@ async function executeRunTasks(
   const configuredTimeout = Number(process.env.RUN_TASK_TIMEOUT_MS ?? 3_600_000);
   const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
 
+  // Batch-insert all pending run-task results in one statement instead of
+  // issuing one INSERT per binding inside the loop below.
+  const entryList: Readonly<{
+    binding: Readonly<(typeof bindings)[number]>;
+    task: Readonly<typeof runTasks.$inferSelect>;
+    resultId: string;
+  }>[] = [];
   for (const binding of bindings) {
     const task = tasksById.get(binding.runTaskId);
     if (task === undefined) continue;
+    entryList.push({ binding, task, resultId: `taskrs-${crypto.randomUUID()}` });
+  }
+  if (entryList.length > 0) {
+    await db.insert(runTaskResults).values(
+      entryList.map((entry): typeof runTaskResults.$inferInsert => ({
+        id: entry.resultId,
+        runId,
+        runTaskId: entry.task.id,
+        status: "pending",
+        createdAt: Date.now(),
+      })),
+    );
+  }
 
-    const resultId = `taskrs-${crypto.randomUUID()}`;
-    await db.insert(runTaskResults).values({
-      id: resultId,
-      runId,
-      runTaskId: task.id,
-      status: "pending",
-      createdAt: Date.now(),
-    });
+  for (const { binding, task, resultId } of entryList) {
     const port = process.env.PORT ?? "3000";
     const callbackBase = process.env.PUBLIC_URL ?? `http://localhost:${port}`;
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
@@ -816,12 +829,17 @@ async function waitForTaskSettlement(
   timeoutMs: number,
 ): Promise<Readonly<{ status: string; message: string | null; url: string | null }> | undefined> {
   const deadline = Date.now() + timeoutMs;
+  // Exponential backoff: start at the poll base and double up to a cap so a
+  // long-running task stops hammering the DB with a query every 100ms.
+  let waitMs = RUN_TASK_POLL_INTERVAL_MS;
+  const MAX_RUN_TASK_POLL_MS = 5_000;
   while (Date.now() < deadline) {
     const latest = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
     if (latest !== undefined && ["passed", "failed"].includes(latest.status)) return latest;
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
-    await Bun.sleep(Math.min(RUN_TASK_POLL_INTERVAL_MS, remaining));
+    await Bun.sleep(Math.min(waitMs, remaining));
+    waitMs = Math.min(waitMs * 2, MAX_RUN_TASK_POLL_MS);
   }
   return undefined;
 }

@@ -669,11 +669,30 @@ for (const [col, def] of pcAdditions) {
 }
 
 // Encrypt private keys created by older releases before serving requests.
+// Batch the whole upgrade into a single UPDATE (per-row CASE) instead of a
+// separate UPDATE per key, so startup scales with keys that need re-encrypting.
 const storedSshKeys = await db.query.sshKeys.findMany();
+const pendingKeys: { id: string; value: string }[] = [];
 for (const key of storedSshKeys) {
-  if (!isEncryptedSecret(key.value)) {
-    client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?").run(await encryptSecret(key.value), key.id);
+  if (!isEncryptedSecret(key.value)) pendingKeys.push({ id: key.id, value: key.value });
+}
+if (pendingKeys.length === 1) {
+  const only = pendingKeys[0];
+  if (only !== undefined) {
+    await client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?")
+      .run(await encryptSecret(only.value), only.id);
   }
+} else if (pendingKeys.length > 1) {
+  const encrypted: { id: string; value: string }[] = [];
+  for (const key of pendingKeys) encrypted.push({ id: key.id, value: await encryptSecret(key.value) });
+  const whenClauses = encrypted.map((): string => "WHEN id = ? THEN ?").join(" ");
+  const idPlaceholders = encrypted.map((): string => "?").join(",");
+  const params: string[] = [];
+  for (const row of encrypted) params.push(row.id, row.value);
+  for (const row of encrypted) params.push(row.id);
+  client.prepare(
+    `UPDATE ssh_keys SET value = CASE ${whenClauses} END WHERE id IN (${idPlaceholders})`,
+  ).run(...params);
 }
 
 // Check users for missing columns

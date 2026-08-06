@@ -476,12 +476,28 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         typeof binding.key === "string" && binding.key !== ""
         && typeof binding.value === "string",
     );
-    const matchingTagIds = await Promise.all(tagBindings.map(async (binding): Promise<string[]> =>
-      (await db.query.workspaceTags.findMany({
-        where: and(eq(workspaceTags.key, binding.key), eq(workspaceTags.value, binding.value)),
-        columns: { workspaceId: true },
-      })).map((tag: Readonly<{ workspaceId: string }>): string => tag.workspaceId),
-    ));
+    const bindingKeys = [...new Set(tagBindings.map((binding: Readonly<{ key: string }>): string => binding.key))];
+    const singleBinding = tagBindings.length === 1 ? tagBindings[0] : undefined;
+    const taggedWorkspaceTagRows = bindingKeys.length === 0
+      ? []
+      : (await db.query.workspaceTags.findMany({
+        where: singleBinding === undefined
+          ? inArray(workspaceTags.key, bindingKeys)
+          : and(eq(workspaceTags.key, singleBinding.key), eq(workspaceTags.value, singleBinding.value)),
+        columns: { workspaceId: true, key: true, value: true },
+      }));
+    // Index rows by "key\0value" so we need exactly one query regardless of
+    // how many tag bindings the caller supplied.
+    const workspaceIdsByTag = new Map<string, string[]>();
+    for (const row of taggedWorkspaceTagRows) {
+      const tag = `${row.key}\u0000${row.value ?? ""}`;
+      const list = workspaceIdsByTag.get(tag) ?? [];
+      list.push(row.workspaceId);
+      workspaceIdsByTag.set(tag, list);
+    }
+    const matchingTagIds = tagBindings.map((binding: Readonly<{ key: string; value: string }>): string[] =>
+      workspaceIdsByTag.get(`${binding.key}\u0000${binding.value}`) ?? [],
+    );
     for (const workspaceIds of matchingTagIds) {
       conditions.push(workspaceIds.length > 0
         ? inArray(workspaces.id, [...new Set(workspaceIds)])
@@ -1047,27 +1063,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
     }
-    const existingTags = await db.query.workspaceTags.findMany({
-      where: eq(workspaceTags.workspaceId, workspaceId),
-    });
-    const existingByKey = new Map(existingTags.map((tag: TagItem): readonly [string, TagItem] => [tag.key, tag]));
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const dbTx = tx as typeof db;
-      for (const entry of entries) {
-        const existing = existingByKey.get(entry.key);
-        if (existing === undefined) {
-          await dbTx.insert(workspaceTags).values({
-            id: crypto.randomUUID(),
-            workspaceId,
-            key: entry.key,
-            value: entry.value,
-          });
-        } else {
-          await dbTx.update(workspaceTags)
-            .set({ value: entry.value })
-            .where(eq(workspaceTags.id, existing.id));
-        }
-      }
+    // Single upsert: insert new tag keys and update values for existing ones
+    // in one statement, replacing the per-entry INSERT/UPDATE loop.
+    await db.insert(workspaceTags).values(
+      entries.map((entry: Readonly<{ readonly key: string; readonly value: string }>): typeof workspaceTags.$inferInsert => ({
+        id: crypto.randomUUID(),
+        workspaceId,
+        key: entry.key,
+        value: entry.value,
+      })),
+    ).onConflictDoUpdate({
+      target: [workspaceTags.workspaceId, workspaceTags.key],
+      set: { value: sql`excluded.value` },
     });
 
     const updatedTags = await db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspaceId), orderBy: [asc(workspaceTags.key)] });
