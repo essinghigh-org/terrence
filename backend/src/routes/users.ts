@@ -459,7 +459,7 @@ export const userRoutes = new Elysia({ name: "users" })
     if (orgId !== undefined) {
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
-        await t.delete(apiTokens).where(eq(apiTokens.orgId, orgId));
+        await t.delete(apiTokens).where(and(eq(apiTokens.orgId, orgId), eq(apiTokens.tokenType, "")));
         await t.insert(apiTokens).values(createdToken);
       });
     } else {
@@ -519,7 +519,7 @@ export const userRoutes = new Elysia({ name: "users" })
     };
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
-      await t.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
+      await t.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)));
       await t.insert(apiTokens).values(createdToken);
     });
     (set as { status: number }).status = 201;

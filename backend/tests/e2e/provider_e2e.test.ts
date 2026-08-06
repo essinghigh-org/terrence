@@ -830,12 +830,13 @@ output "ds_pset_name"       { value = data.tfe_provider_set.d_pset.name }
 
 // Reads the real run's outputs from the workspace state (tfe_outputs),
 // written into the workspace only after planAndApply commits a state version.
-function stateOutputsTf(suffix: string): string {
+function stateOutputsTf(suffix: string, scimMapping = ""): string {
   return `data "tfe_outputs" "d_out" {
   workspace    = "pe2e-ws-${suffix}"
   organization = "pe2e-org-${suffix}"
 }
 output "run_output_value" { value = data.tfe_outputs.d_out.nonsensitive_values["probe_output"] }
+${scimMapping}
 `;
 }
 
@@ -1036,14 +1037,53 @@ describe("tfe provider e2e", () => {
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
+          // tfe_scim_group_mapping needs a provisioned SCIM group (created via
+          // the SCIM API with a SCIM bearer token). The group can't be created
+          // by Terraform itself, so provision it here between applies using an
+          // admin-issued SCIM token, then reference it in the second apply.
+          let scimMapping = "";
+          let scimMappingTf = "";
+          {
+            const scimTokRes = await api(backend.port, "POST", "/api/v2/admin/scim-tokens", {
+              data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
+            }, auth.token);
+            if (scimTokRes.status === 201) {
+              const scimRaw = scimTokRes.json.data.attributes.token as string;
+              const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
+                method: "POST",
+                headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
+                body: JSON.stringify({ schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"], displayName: `pe2e-scim-group-${suffix}` }),
+              });
+              if (groupRes.status === 201) {
+                const scimGroupId = (await groupRes.json() as { id: string }).id;
+                const teamsRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/teams`, undefined, auth.token);
+                const team = (teamsRes.json.data as { id: string; attributes: { name: string } }[]).find((t): boolean => t.attributes.name === `pe2e-team-${suffix}`);
+                if (team !== undefined) {
+                  scimMapping = scimGroupId;
+                  scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
+  team_id       = "${team.id}"
+  scim_group_id = "${scimGroupId}"
+}
+`;
+                }
+              }
+            }
+          }
+
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
+          if (scimMapping !== "") {
+            // The SCIM group mapping was created in the second apply.
+            const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
+            cliOk(stateList2, "state list #2");
+            expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
+          }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
           const destroy = await cli(bin, ["destroy", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
