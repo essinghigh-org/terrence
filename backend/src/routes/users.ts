@@ -334,6 +334,7 @@ export const userRoutes = new Elysia({ name: "users" })
       orgId: null,
       description,
       scopes: scopes === null ? null : JSON.stringify(scopes),
+      tokenType: "",
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -449,6 +450,7 @@ export const userRoutes = new Elysia({ name: "users" })
       orgId: orgId ?? null,
       description,
       scopes: scopes === null ? null : JSON.stringify(scopes),
+      tokenType: "",
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -466,27 +468,33 @@ export const userRoutes = new Elysia({ name: "users" })
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
-  .get("/api/v2/organizations/:org_name/authentication-token", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.orgId, org.id) });
+    // HCP passes ?token=audit-trails to address the audit-trails token slot
+    // distinctly from the organization token (which sends no query param).
+    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const token = await db.query.apiTokens.findFirst({
+      where: and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)),
+    });
     if (token === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     return { data: tokenResource(token) };
   })
-  .post("/api/v2/organizations/:org_name/authentication-token", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -503,6 +511,7 @@ export const userRoutes = new Elysia({ name: "users" })
       orgId: org.id,
       description: null,
       scopes: null,
+      tokenType,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -516,14 +525,15 @@ export const userRoutes = new Elysia({ name: "users" })
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
-  .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params.org_name ?? "";
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
+    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)));
     (set as { status: number }).status = 204;
     return {};
   });

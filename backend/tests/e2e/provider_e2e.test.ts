@@ -44,6 +44,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_ssh_key.ssh",
   "tfe_workspace_settings.ws_settings",
   "tfe_organization_token.org_tok",
+  "tfe_audit_trail_token.audit_tok",
   "tfe_team_members.team_members",
   "tfe_team_organization_members.team_org_members",
   "tfe_agent_pool.pool",
@@ -351,6 +352,10 @@ resource "tfe_workspace_settings" "ws_settings" {
 # --- coverage additions beyond the original smoke test ---
 
 resource "tfe_organization_token" "org_tok" {
+  organization = tfe_organization.org.name
+}
+
+resource "tfe_audit_trail_token" "audit_tok" {
   organization = tfe_organization.org.name
 }
 

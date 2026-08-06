@@ -114,6 +114,16 @@ const session = (db as unknown as { session: SQLiteBunSession<Record<string, unk
 
 migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
 
+// api_tokens gained a token_type column (org token slot: "" vs "audit-trails").
+// Guarded ALTER so both fresh DBs (created by drizzle migrations) and existing
+// deployments converge.
+{
+  const cols = (client.query("SELECT name FROM pragma_table_info('api_tokens')").all() as { name: string }[]).map((c): string => c.name);
+  if (!cols.includes("token_type")) {
+    client.run("ALTER TABLE api_tokens ADD COLUMN token_type TEXT DEFAULT ''");
+  }
+}
+
 // Read-path performance indexes (also in migration 0059). Re-applied
 // idempotently here so deployments with historically incomplete migration
 // journals still get the indexes even though the journal doesn't record 0059.
