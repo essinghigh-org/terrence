@@ -321,9 +321,21 @@ export const app = new Elysia()
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
 
     const headers = set.headers as Record<string, string | number>;
-    const allowOrigin = process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "http://localhost:5173");
-    if (allowOrigin !== undefined) {
-      headers["Access-Control-Allow-Origin"] = allowOrigin;
+    // CORS: never emit a hardcoded allow-origin fallback (a blanket
+    // http://localhost:5173 previously exposed the API to any localhost page).
+    // If CORS_ORIGIN is set (comma-separated allow-list) we reflect only an
+    // Origin that matches it. Otherwise, in non-production builds we reflect a
+    // Vite dev Origin explicitly — no origin, no CORS header.
+    const origin = request.headers.get("origin");
+    const allowedOrigins = (process.env.CORS_ORIGIN ?? "")
+      .split(",")
+      .map((value): string => value.trim())
+      .filter((value): boolean => value !== "");
+    const isDevBuild = process.env.NODE_ENV !== "production";
+    if (origin !== null
+      && ((allowedOrigins.length > 0 && allowedOrigins.includes(origin))
+        || (allowedOrigins.length === 0 && isDevBuild && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173")))) {
+      headers["Access-Control-Allow-Origin"] = origin;
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";

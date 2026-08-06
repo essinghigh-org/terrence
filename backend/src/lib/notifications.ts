@@ -61,6 +61,9 @@ export async function postNotification(
         method: "POST",
         headers,
         body,
+        // redirect:"error" stops a redirect from a checked public host to an
+        // internal endpoint (redirect-based SSRF) — we never follow 3xx.
+        redirect: "error",
         signal: AbortSignal.timeout(5_000),
       });
       const responseBody = await lastResponse.text();

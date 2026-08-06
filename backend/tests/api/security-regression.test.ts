@@ -131,14 +131,30 @@ describe("Security Regression — Signup Disabled by Default", () => {
 });
 
 describe("Security Regression — CORS Defaults", () => {
-  it("does not expose a wildcard origin in development", async () => {
+  it("does not expose a hardcoded origin or reflect arbitrary origins without a configured allow-list", async () => {
     const previous = process.env.CORS_ORIGIN;
     delete process.env.CORS_ORIGIN;
     try {
+      // A non-allowlisted origin must NOT receive an access-control-allow-origin
+      // header — neither the (removed) localhost hardcode nor the origin itself.
       const response = await app.handle(new Request("http://localhost/api/v2/ping", {
         headers: { Origin: "https://malicious.example" },
       }));
-      expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.CORS_ORIGIN;
+      else process.env.CORS_ORIGIN = previous;
+    }
+  });
+
+  it("reflects an origin that is explicitly allow-listed in CORS_ORIGIN", async () => {
+    const previous = process.env.CORS_ORIGIN;
+    process.env.CORS_ORIGIN = "https://app.example,https://dev.example";
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/ping", {
+        headers: { Origin: "https://dev.example" },
+      }));
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://dev.example");
     } finally {
       if (previous === undefined) delete process.env.CORS_ORIGIN;
       else process.env.CORS_ORIGIN = previous;

@@ -238,4 +238,47 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       await webhook.stop(true);
     }
   });
+
+  it("does not deliver to a private URL unless the private-URL escape hatch is enabled (SSRF guard)", async () => {
+    // Deliveries read the escape-hatch env at call time, so clearing it here
+    // exercises the default (blocking) path regardless of what beforeAll set.
+    const previous = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "false";
+    const ssrfsRunId = `run-ssrf-${crypto.randomUUID()}`;
+    let configId = "";
+    try {
+      await db.insert(runs).values({
+        id: ssrfsRunId,
+        workspaceId,
+        status: "applied",
+        message: "SSRF guard",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      const createRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
+        data: {
+          attributes: {
+            name: "SSRF probe",
+            "destination-type": "generic",
+            url: "http://127.0.0.1:9/internal",
+            triggers: ["run:completed"],
+            enabled: true,
+          },
+        },
+      });
+      const createBody = await createRes.json();
+      configId = createBody.data.id;
+      const deliveries = await deliverRunNotifications(ssrfsRunId, "run:completed");
+      expect(deliveries[0]).toBeDefined();
+      const results = deliveries[0];
+      if (results === undefined) throw new Error("expected a delivery result");
+      expect(results.successful).toBeFalse();
+      expect(results.code).toBe("422");
+      expect(results.body).toContain("private or loopback");
+    } finally {
+      process.env.TERRENCE_ALLOW_PRIVATE_URLS = previous;
+      await db.delete(runs).where(eq(runs.id, ssrfsRunId));
+      if (configId !== "") await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, configId));
+    }
+  });
 });

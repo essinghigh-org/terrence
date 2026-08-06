@@ -1,11 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-const costEstimateDirectory = resolve(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
-  "cost-estimates",
-);
-
 type JsonObject = Readonly<Record<string, unknown>>;
 
 export type CostEstimateStatus = "queued" | "pending" | "finished" | "errored" | "canceled" | "skipped";
@@ -29,8 +24,17 @@ export type CostEstimateAttributes = Readonly<{
   "error-message": string | null;
 }>;
 
+// Resolved lazily (not at module load) so tests can point STORAGE_DIR at a
+// throwaway dir regardless of import order/caching.
+function costEstimateDirectory(): string {
+  return resolve(
+    process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+    "cost-estimates",
+  );
+}
+
 function artifactPath(runId: string): string {
-  return join(costEstimateDirectory, `${runId}.json`);
+  return join(costEstimateDirectory(), `${runId}.json`);
 }
 
 function asObject(value: unknown): JsonObject | undefined {
@@ -125,7 +129,7 @@ export async function writeCostEstimateArtifact(
   runId: string,
   estimate: CostEstimateAttributes,
 ): Promise<void> {
-  await mkdir(costEstimateDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(costEstimateDirectory(), { recursive: true, mode: 0o700 });
   const target = artifactPath(runId);
   const temporary = `${target}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(estimate), { mode: 0o600 });

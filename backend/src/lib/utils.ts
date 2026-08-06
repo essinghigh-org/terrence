@@ -1091,7 +1091,10 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-const PRIVATE_IP_PATTERN = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.|::1$|localhost$)/i;
+// Private / loopback / link-local / CGNAT / cloud-metadata ranges (incl.
+// RFC 1918, 169.254.x for cloud metadata, 100.64.0.0/10 CGNAT). IPv6 loopback
+// (::1) and link-local/ULA are checked separately in the async resolver.
+const PRIVATE_IP_PATTERN = /^(127\.|0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d)\.|localhost$)/i;
 
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {

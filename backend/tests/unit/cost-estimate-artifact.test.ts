@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// costEstimateDirectory is resolved from STORAGE_DIR at module load, so we
-// point it at a throwaway temp dir before importing.
+// costEstimateDirectory is resolved lazily from STORAGE_DIR, so we can point
+// it at a throwaway temp dir for the duration of this suite.
+const previousStorageDir = process.env.STORAGE_DIR;
 const storage = mkdtempSync(join(tmpdir(), "cost-artifact-"));
 
 let cost: typeof import("../../src/lib/cost-estimate");
@@ -18,6 +19,8 @@ beforeAll(async (): Promise<void> => {
 
 afterAll((): void => {
   rmSync(storage, { recursive: true, force: true });
+  if (previousStorageDir === undefined) delete process.env.STORAGE_DIR;
+  else process.env.STORAGE_DIR = previousStorageDir;
 });
 
 const estimateFixture = {
