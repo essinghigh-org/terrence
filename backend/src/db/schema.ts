@@ -834,6 +834,17 @@ export const orgTokenTTLPolicies = sqliteTable("org_token_ttl_policies", {
   uniqueIndex("org_token_ttl_policies_org_type_idx").on(table.orgId, table.tokenType),
 ]);
 
+// OIDC identity-provider configuration (tfe_aws/azure/gcp/vault_oidc_configuration).
+// Kept in its own table to avoid colliding with the OIDC *login* module (oidc.ts).
+export const oidcConfigs = sqliteTable("oidc_configs", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  configType: text("config_type").notNull(),
+  config: text("config", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
 export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects", {
   id: text("id").primaryKey(),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),

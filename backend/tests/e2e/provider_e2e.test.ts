@@ -75,6 +75,10 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool_excluded_workspaces.apexw",
   "tfe_org_max_token_ttl_policy.ottl",
   "tfe_registry_module.regmod",
+  "tfe_aws_oidc_configuration.aws_oidc",
+  "tfe_azure_oidc_configuration.azure_oidc",
+  "tfe_gcp_oidc_configuration.gcp_oidc",
+  "tfe_vault_oidc_configuration.vault_oidc",
 ];
 
 function freePort(): Promise<number> {
@@ -552,6 +556,32 @@ resource "tfe_registry_module" "regmod" {
   organization    = tfe_organization.org.name
   registry_name   = "private"
   module_provider = "aws"
+}
+
+resource "tfe_aws_oidc_configuration" "aws_oidc" {
+  organization = tfe_organization.org.name
+  role_arn     = "arn:aws:iam::123456789012:role/pe2e-oidc-role"
+}
+
+resource "tfe_azure_oidc_configuration" "azure_oidc" {
+  organization    = tfe_organization.org.name
+  client_id       = "00000000-0000-0000-0000-000000000001"
+  subscription_id = "00000000-0000-0000-0000-000000000002"
+  tenant_id       = "00000000-0000-0000-0000-000000000003"
+}
+
+resource "tfe_gcp_oidc_configuration" "gcp_oidc" {
+  organization            = tfe_organization.org.name
+  project_number          = "123456789012"
+  service_account_email   = "pe2e-sa@gcp-project.iam.gserviceaccount.com"
+  workload_provider_name  = "projects/123456789012/locations/global/workloadIdentityPools/pool/providers/provider"
+}
+
+resource "tfe_vault_oidc_configuration" "vault_oidc" {
+  organization = tfe_organization.org.name
+  address      = "https://vault.example.com"
+  namespace    = "admin"
+  role_name    = "pe2e-role"
 }
 `;
 }

@@ -366,6 +366,14 @@ runSql(`
     updated_at INTEGER NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS org_token_ttl_policies_org_type_idx ON org_token_ttl_policies (org_id, token_type);
+  CREATE TABLE IF NOT EXISTS oidc_configs (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    config_type TEXT NOT NULL,
+    config TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   CREATE UNIQUE INDEX IF NOT EXISTS github_app_installations_org_installation_idx
     ON github_app_installations (org_id, installation_id);
   CREATE INDEX IF NOT EXISTS workspaces_vcs_repo_identifier_idx
