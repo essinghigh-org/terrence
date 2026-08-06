@@ -30,6 +30,7 @@ import { providerSetRoutes } from "./routes/provider-sets";
 import { tokenTtlRoutes } from "./routes/token-ttl";
 import { oidcConfigRoutes } from "./routes/oidc-configs";
 import { hyokRoutes } from "./routes/hyok";
+import { stackRoutes } from "./routes/stacks";
 import { adminRoutes } from "./routes/admin";
 import { scimAdminRoutes } from "./routes/scim-admin";
 import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
@@ -426,6 +427,7 @@ export const app = new Elysia()
   .use(projectRoutes)
   .use(gpgKeyRoutes)
   .use(registryRoutes)
+  .use(stackRoutes)
   .use(providerSetRoutes)
   .use(tokenTtlRoutes)
   .use(oidcConfigRoutes)

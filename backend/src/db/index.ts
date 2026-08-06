@@ -161,6 +161,47 @@ runSql(`
   CREATE UNIQUE INDEX IF NOT EXISTS test_variables_module_key_idx ON test_variables (module_id, key);
 `);
 
+// Stacks domain (tfe_stack / tfe_stack_variable_set).
+runSql(`
+  CREATE TABLE IF NOT EXISTS stacks (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects (id) ON DELETE SET NULL,
+    agent_pool_id TEXT,
+    name TEXT NOT NULL,
+    description TEXT,
+    speculative_enabled INTEGER NOT NULL DEFAULT 0,
+    working_directory TEXT,
+    trigger_patterns TEXT NOT NULL DEFAULT '[]',
+    vcs_identifier TEXT,
+    vcs_branch TEXT,
+    vcs_oauth_token_id TEXT,
+    vcs_gha_installation_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS stack_variable_sets (
+    stack_id TEXT NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
+    variable_set_id TEXT NOT NULL REFERENCES variable_sets (id) ON DELETE CASCADE,
+    PRIMARY KEY (stack_id, variable_set_id)
+  );
+`);
+
+// HYOK customer key versions (tfe_hyok_customer_key_version / tfe_hyok_encrypted_data_key data sources).
+runSql(`
+  CREATE TABLE IF NOT EXISTS hyok_customer_key_versions (
+    id TEXT PRIMARY KEY,
+    hyok_config_id TEXT NOT NULL REFERENCES hyok_configurations (id) ON DELETE CASCADE,
+    key_version TEXT NOT NULL,
+    encrypted_dek TEXT NOT NULL,
+    customer_key_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    workspaces_secured INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL
+  );
+`);
+
 // Keep upgrades from pre-RBAC releases safe even when their migration journal is incomplete.
 runSql(`
   CREATE TABLE IF NOT EXISTS organization_roles (

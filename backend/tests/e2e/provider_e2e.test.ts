@@ -874,6 +874,7 @@ output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
 output "ds_ws_name"      { value = data.tfe_workspace.d_ws.name }
 output "ds_ws2_name"     { value = data.tfe_workspace.d_ws2.name }
 output "ds_wsids_full"   { value = data.tfe_workspace_ids.d_wsids.full_names }
+output "hyid"            { value = tfe_hyok_configuration.hyok.id }
 output "ds_proj_name"    { value = data.tfe_project.d_proj.name }
 output "ds_projs_names"  { value = [for p in data.tfe_projects.d_projs.projects : p.name] }
 output "ds_team_name"    { value = data.tfe_team.d_team.name }
@@ -1080,6 +1081,24 @@ describe("tfe provider e2e", () => {
             if (!(key in o)) throw new Error(`output ${key} missing; available: ${Object.keys(o).join(",")}`);
             return o[key]!.value;
           };
+          // HYOK key-version data sources — the config auto-generates a key
+          // version on create; fetch its id so the second apply can read it.
+          let hyokDsTf = "";
+          const hyid = o["hyid"]?.value;
+          if (typeof hyid === "string") {
+            const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
+            const kvRel = hyokRes.json.data?.relationships?.["hyok-customer-key-versions"]?.data as { id: string }[] | undefined;
+            const kid = kvRel?.[0]?.id;
+            if (typeof kid === "string") {
+              hyokDsTf = `data "tfe_hyok_customer_key_version" "d_hyok" {
+  id = "${kid}"
+}
+data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
+  id = "${kid}"
+}
+`;
+            }
+          }
           expect(val("ds_org_name")).toBe(`pe2e-org-${suffix}`);
           expect(val("ds_orgs_names")).toEqual(expect.arrayContaining([`pe2e-org-${suffix}`]));
           expect(val("ds_ws_name")).toBe(`pe2e-ws-${suffix}`);
@@ -1129,6 +1148,23 @@ describe("tfe provider e2e", () => {
           }, auth.token);
           const ghAppDsTf = `data "tfe_github_app_installation" "d_gh" {
   name = "pe2e-ghapp-${suffix}"
+}
+`;
+
+          // tfe_stack is VCS-backed and needs a real github-app installation or
+          // oauth token (the provider validates one is present and returns it on
+          // read). d_gh provides it; both live in the second apply.
+          const stackTf = `resource "tfe_stack" "stack" {
+  project_id = tfe_project.proj.id
+  name       = "pe2e-stack-${suffix}"
+  vcs_repo {
+    identifier                 = "pe2e-org-${suffix}/pe2e-stack-repo"
+    github_app_installation_id = data.tfe_github_app_installation.d_gh.id
+  }
+}
+resource "tfe_stack_variable_set" "stack_vs" {
+  stack_id        = tfe_stack.stack.id
+  variable_set_id = tfe_variable_set.vs.id
 }
 `;
           const adminBundleTf = `resource "tfe_organization_module_sharing" "oms" {
@@ -1242,7 +1278,7 @@ data "tfe_no_code_module" "d_ncm" {
 
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + scimDsTf + noCodeTf + wsRunTf + slugTf + adminBundleTf + ghAppDsTf + stackTf + hyokDsTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1271,6 +1307,12 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList3.out).toContain("tfe_organization_module_sharing.oms");
             expect(stateList3.out).toContain("tfe_admin_organization_settings.aos");
             expect(stateList3.out).toContain("data.tfe_github_app_installation.d_gh");
+            expect(stateList3.out).toContain("tfe_stack.stack");
+            expect(stateList3.out).toContain("tfe_stack_variable_set.stack_vs");
+            if (hyokDsTf !== "") {
+              expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
+              expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
+            }
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 

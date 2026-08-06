@@ -3,8 +3,8 @@
   "provider": "hashicorp/tfe v0.79.0",
   "resource_count": 72,
   "data_source_count": 43,
-  "resources_covered": 70,
-  "data_sources_covered": 39,
+  "resources_covered": 72,
+  "data_sources_covered": 41,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -196,11 +196,11 @@
     },
     {
       "name": "tfe_stack",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_stack_variable_set",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_tag_policy_set",
@@ -314,11 +314,11 @@
     },
     {
       "name": "tfe_hyok_customer_key_version",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_hyok_encrypted_data_key",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_ip_ranges",

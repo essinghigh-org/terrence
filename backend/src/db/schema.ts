@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const users = sqliteTable("users", {
@@ -512,6 +512,31 @@ export const variableSetWorkspaces = sqliteTable("variable_set_workspaces", {
   uniqueIndex("variable_set_workspaces_idx").on(table.variableSetId, table.workspaceId),
 ]);
 
+export const stacks = sqliteTable("stacks", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+  agentPoolId: text("agent_pool_id"),
+  name: text("name").notNull(),
+  description: text("description"),
+  speculativeEnabled: integer("speculative_enabled", { mode: "boolean" }).notNull().default(false),
+  workingDirectory: text("working_directory"),
+  triggerPatterns: text("trigger_patterns", { mode: "json" }).$type<string[]>().notNull().default([]),
+  vcsIdentifier: text("vcs_identifier"),
+  vcsBranch: text("vcs_branch"),
+  vcsOAuthTokenId: text("vcs_oauth_token_id"),
+  vcsGhaInstallationId: text("vcs_gha_installation_id"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const stackVariableSets = sqliteTable("stack_variable_sets", {
+  stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
+  variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
+}, (table) => [
+  primaryKey({ columns: [table.stackId, table.variableSetId] }),
+]);
+
 export const variableSetProjects = sqliteTable("variable_set_projects", {
   id: text("id").primaryKey(),
   variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
@@ -900,6 +925,18 @@ export const hyokConfigurations = sqliteTable("hyok_configurations", {
   error: text("error"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
+export const hyokCustomerKeyVersions = sqliteTable("hyok_customer_key_versions", {
+  id: text("id").primaryKey(),
+  hyokConfigId: text("hyok_config_id").notNull().references(() => hyokConfigurations.id, { onDelete: "cascade" }),
+  keyVersion: text("key_version").notNull(),
+  encryptedDek: text("encrypted_dek").notNull(),
+  customerKeyName: text("customer_key_name").notNull(),
+  status: text("status").notNull().default("active"),
+  workspacesSecured: integer("workspaces_secured").notNull().default(0),
+  error: text("error"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
 export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects", {

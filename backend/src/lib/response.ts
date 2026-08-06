@@ -5,7 +5,7 @@ import type {
   projects, runs
 } from "../db/schema";
 import { organizations, workspaceTags, variableSetWorkspaces,
-  variableSetProjects, variableSetVariables
+  variableSetProjects, variableSetVariables, stackVariableSets
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
 import { apiURL, signedApiURL } from "./utils";
@@ -423,6 +423,7 @@ type VarSetParam = DeepReadonly<typeof variableSets.$inferSelect>;
 type VariableSetResourceOptions = Readonly<{
   readonly workspaceLinks?: readonly DeepReadonly<typeof variableSetWorkspaces.$inferSelect>[];
   readonly projectLinks?: readonly DeepReadonly<typeof variableSetProjects.$inferSelect>[];
+  readonly stackLinks?: readonly DeepReadonly<typeof stackVariableSets.$inferSelect>[];
   readonly variables?: readonly DeepReadonly<typeof variableSetVariables.$inferSelect>[];
   readonly orgName?: string | null;
 }>;
@@ -433,7 +434,7 @@ export async function variableSetResource(
 ): Promise<Record<string, unknown>> {
   // Each collection is loaded independently: callers may preload some or all
   // of them (list handlers batch per page); anything omitted is fetched here.
-  const [workspaceLinks, projectLinks, variables] = await Promise.all([
+  const [workspaceLinks, projectLinks, stackLinks, variables] = await Promise.all([
     options?.workspaceLinks
       ?? db.query.variableSetWorkspaces.findMany({
         where: eq(variableSetWorkspaces.variableSetId, variableSet.id),
@@ -441,6 +442,10 @@ export async function variableSetResource(
     options?.projectLinks
       ?? db.query.variableSetProjects.findMany({
         where: eq(variableSetProjects.variableSetId, variableSet.id),
+      }),
+    options?.stackLinks
+      ?? db.query.stackVariableSets.findMany({
+        where: eq(stackVariableSets.variableSetId, variableSet.id),
       }),
     options?.variables
       ?? db.query.variableSetVariables.findMany({
@@ -462,6 +467,7 @@ export async function variableSetResource(
       "var-count": variables.length,
       "workspace-count": workspaceLinks.length,
       "project-count": projectLinks.length,
+      "stack-count": stackLinks.length,
     },
     relationships: {
       organization: { data: { id: orgName ?? variableSet.orgId, type: "organizations" } },
@@ -473,6 +479,9 @@ export async function variableSetResource(
       },
       projects: {
         data: projectLinks.map((link: DeepReadonly<typeof variableSetProjects.$inferSelect>): { id: string; type: string } => ({ id: link.projectId, type: "projects" })),
+      },
+      stacks: {
+        data: stackLinks.map((link: DeepReadonly<typeof stackVariableSets.$inferSelect>): { id: string; type: string } => ({ id: link.stackId, type: "stacks" })),
       },
       vars: {
         data: variables.map((variable: DeepReadonly<typeof variableSetVariables.$inferSelect>): { id: string; type: string } => ({ id: variable.id, type: "vars" })),

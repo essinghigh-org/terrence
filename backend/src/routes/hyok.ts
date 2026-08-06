@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { hyokConfigurations, organizations, type users } from "../db/schema";
+import { hyokConfigurations, hyokCustomerKeyVersions, organizations, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/utils";
 import { authPlugin } from "../auth";
@@ -22,8 +22,12 @@ function notFound(set: { status?: number | string }): { errors: { status: string
 }
 
 // go-tfe HYOKConfiguration's model reads Organization.Name, AgentPool.ID and the
-// polymorphic oidc-configuration relationship (type-tagged).
-function hyokResource(row: HyokRow, orgName: string): Record<string, unknown> {
+// polymorphic oidc-configuration relationship (type-tagged). Key versions are
+// loaded per config (create auto-generates one, like TFE's KMS key pair).
+async function hyokResource(row: HyokRow, orgName: string): Promise<Record<string, unknown>> {
+  const keyVersions = await db.query.hyokCustomerKeyVersions.findMany({
+    where: eq(hyokCustomerKeyVersions.hyokConfigId, row.id),
+  });
   return {
     id: row.id,
     type: "hyok-configurations",
@@ -39,7 +43,26 @@ function hyokResource(row: HyokRow, orgName: string): Record<string, unknown> {
       organization: { data: { id: orgName, type: "organizations" } },
       "agent-pool": row.agentPoolId !== null ? { data: { id: row.agentPoolId, type: "agent-pools" } } : { data: null },
       "oidc-configuration": { data: row.oidcConfigId !== "" ? { id: row.oidcConfigId, type: row.oidcConfigType } : null },
-      "hyok-customer-key-versions": { data: [] },
+      "hyok-customer-key-versions": {
+        data: keyVersions.map((keyVersion): Record<string, string> => ({ id: keyVersion.id, type: "hyok-customer-key-versions" })),
+      },
+    },
+  };
+}
+
+function hyokKeyVersionResource(row: Readonly<typeof hyokCustomerKeyVersions.$inferSelect>): Record<string, unknown> {
+  return {
+    id: row.id,
+    type: "hyok-customer-key-versions",
+    attributes: {
+      "key-version": row.keyVersion,
+      status: row.status,
+      "workspaces-secured": row.workspacesSecured,
+      error: row.error ?? "",
+      "created-at": new Date(row.createdAt).toISOString(),
+    },
+    relationships: {
+      "hyok-configuration": { data: { id: row.hyokConfigId, type: "hyok-configurations" } },
     },
   };
 }
@@ -89,8 +112,23 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
       createdAt: now, updatedAt: now,
     };
     await db.insert(hyokConfigurations).values(row);
+    // TFE auto-generates a customer key version (and encrypted data key) when a
+    // HYOK configuration is created — the KMS key pair. Mirror that so the
+    // hyok key-version data sources have something to read.
+    const keyVersionId = `hyokcv-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    await db.insert(hyokCustomerKeyVersions).values({
+      id: keyVersionId,
+      hyokConfigId: id,
+      keyVersion: "1",
+      encryptedDek: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      customerKeyName: kekId,
+      status: "active",
+      workspacesSecured: 0,
+      error: null,
+      createdAt: now,
+    });
     (set as { status: number }).status = 201;
-    return { data: hyokResource(row, org.name) };
+    return { data: await hyokResource(row, org.name) };
   })
   .get("/api/v2/hyok-configurations/:hyok_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const id = params.hyok_id ?? "";
@@ -98,7 +136,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     if (row === undefined) return notFound(set);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
     if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
-    return { data: hyokResource(row, org.name) };
+    return { data: await hyokResource(row, org.name) };
   })
   .patch("/api/v2/hyok-configurations/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const id = params.hyok_id ?? "";
@@ -114,7 +152,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     if (Object.keys(updates).length > 0) await db.update(hyokConfigurations).set({ ...updates, updatedAt: Date.now() }).where(eq(hyokConfigurations.id, id));
     const updated = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (updated === undefined) return notFound(set);
-    return { data: hyokResource(updated, org.name) };
+    return { data: await hyokResource(updated, org.name) };
   })
   .delete("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const id = params.hyok_id ?? "";
@@ -124,4 +162,34 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     await db.delete(hyokConfigurations).where(eq(hyokConfigurations.id, id));
     (set as { status: number }).status = 204;
     return {};
+  })
+  .get("/api/v2/hyok-customer-key-versions/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    // go-tfe HYOKCustomerKeyVersions.Read — the tfe_hyok_customer_key_version data source.
+    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params.key_id ?? "") });
+    if (keyVersion === undefined) return notFound(set);
+    const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
+    if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
+    return { data: hyokKeyVersionResource(keyVersion) };
+  })
+  .get("/api/v2/hyok-encrypted-data-keys/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    // go-tfe HYOKEncryptedDataKeys.Read — the tfe_hyok_encrypted_data_key data source.
+    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params.key_id ?? "") });
+    if (keyVersion === undefined) return notFound(set);
+    const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
+    if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
+    return {
+      data: {
+        id: keyVersion.id,
+        type: "hyok-encrypted-data-keys",
+        attributes: {
+          "encrypted-dek": keyVersion.encryptedDek,
+          "customer-key-name": keyVersion.customerKeyName,
+          "created-at": new Date(keyVersion.createdAt).toISOString(),
+        },
+        relationships: {
+          "hyok-customer-key-versions": { data: { id: keyVersion.id, type: "hyok-customer-key-versions" } },
+        },
+      },
+    };
   });
+;

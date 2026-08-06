@@ -1,10 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, workspaces, projects, organizations, type users } from "../db/schema";
+import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, stackVariableSets, stacks, workspaces, projects, organizations, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { variableSetResource, variableSetVariableResource, variableSetVariableUpdate } from "../lib/response";
 import { validVariableSetAttributes, validVariableSetVariableAttributes, isUniqueConstraintError } from "../lib/validation";
-import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, variableRelationshipResources } from "../lib/utils";
+import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, stackRelationshipIds, variableRelationshipResources } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { authPlugin } from "../auth";
@@ -239,6 +239,31 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const projectIds = projectRelationshipIds(body);
     if (!projectIds || projectIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid project relationships" }] }; }
     await db.delete(variableSetProjects).where(and(eq(variableSetProjects.variableSetId, record.id), inArray(variableSetProjects.projectId, projectIds)));
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  // relationships/stacks (tfe_stack_variable_set — go-tfe VariableSets.ApplyToStacks / RemoveFromStacks)
+  .post("/api/v2/varsets/:varset_id/relationships/stacks", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+    const varsetId = params.varset_id ?? "";
+    const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
+    if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const stackIds = stackRelationshipIds(body);
+    if (!stackIds || stackIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid stack relationships" }] }; }
+    const targets = await db.query.stacks.findMany({ where: inArray(stacks.id, stackIds) });
+    if (targets.length !== stackIds.length || targets.some((s: Readonly<{ readonly orgId: string }>): boolean => s.orgId !== record.orgId)) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Stacks must belong to the variable set organization" }] };
+    }
+    await db.insert(stackVariableSets).values(stackIds.map((sid: string): typeof stackVariableSets.$inferInsert => ({ stackId: sid, variableSetId: record.id }))).onConflictDoNothing();
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/varsets/:varset_id/relationships/stacks", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+    const varsetId = params.varset_id ?? "";
+    const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
+    if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const stackIds = stackRelationshipIds(body);
+    if (!stackIds || stackIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid stack relationships" }] }; }
+    await db.delete(stackVariableSets).where(and(eq(stackVariableSets.variableSetId, record.id), inArray(stackVariableSets.stackId, stackIds)));
     (set as { status: number }).status = 204;
     return {};
   })

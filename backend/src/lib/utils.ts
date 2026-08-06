@@ -945,6 +945,15 @@ export function workspaceRelationshipIds(body: unknown): string[] | undefined {
   return [...new Set(items.map((item: unknown): string => (item as { readonly id: string }).id))];
 }
 
+export function stackRelationshipIds(body: unknown): string[] | undefined {
+  const payload = body as Record<string, unknown> | null;
+  const data = payload?.data;
+  if (!Array.isArray(data) || data.length === 0) return undefined;
+  const items = data as unknown[];
+  if (items.some((item: unknown): boolean => !isJsonApiData(item, "stacks"))) return undefined;
+  return [...new Set(items.map((item: unknown): string => (item as { readonly id: string }).id))];
+}
+
 export function projectRelationshipIds(body: unknown): string[] | undefined {
   const payload = body as Record<string, unknown> | null;
   const data = payload?.data;
