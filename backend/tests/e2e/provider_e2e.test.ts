@@ -1174,9 +1174,19 @@ describe("tfe provider e2e", () => {
             }
           }
 
+          // tfe_workspace_run triggers a real run on pe2e-ws, whose config was
+          // uploaded by planAndApply above; the run executes via the worker.
+          const wsRunTf = `resource "tfe_workspace_run" "ws_run" {
+  workspace_id = tfe_workspace.ws.id
+  apply {
+    manual_confirm = true
+  }
+}
+`;
+
           // tfe_outputs reads the real run's state outputs (available only
           // after planAndApply committed a state version).
-          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + noCodeTf));
+          await writeFile(join(cfgDir, "build-outputs.tf"), stateOutputsTf(suffix, scimMappingTf + noCodeTf + wsRunTf));
           const outApply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
@@ -1188,6 +1198,12 @@ describe("tfe provider e2e", () => {
             cliOk(stateList2, "state list #2");
             if (scimMapping !== "") expect(stateList2.out).toContain("tfe_scim_group_mapping.sgm");
             if (noCodeTf !== "") expect(stateList2.out).toContain("tfe_no_code_module.ncm");
+          }
+          // tfe_workspace_run should be present after the second apply.
+          {
+            const stateList3 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
+            cliOk(stateList3, "state list #3");
+            expect(stateList3.out).toContain("tfe_workspace_run.ws_run");
           }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 

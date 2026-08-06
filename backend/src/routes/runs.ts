@@ -284,6 +284,19 @@ export async function createRun(
     }
     cvId = result;
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+  } else {
+    // Manual runs without an explicit configuration version use the workspace's
+    // latest uploaded configuration version (matches TFE behaviour; tfe_workspace_run
+    // creates runs without claiming a config version, and the worker only plans
+    // runs that have one).
+    const latest = await db.query.configurationVersions.findFirst({
+      where: and(eq(configurationVersions.workspaceId, workspaceId), inArray(configurationVersions.status, ["uploaded", "pending"])),
+      orderBy: [desc(configurationVersions.createdAt)],
+    });
+    if (latest !== undefined) {
+      cvId = latest.id;
+      configurationVersion = latest;
+    }
   }
   if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
   const id = `run-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
