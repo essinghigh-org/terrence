@@ -52,6 +52,8 @@ import {
   FileClock,
   Mail,
   SlidersHorizontal,
+  UserCog,
+  Share2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -505,6 +507,12 @@ export function Layout({
           label: "SMTP settings",
           to: "/app/admin/smtp",
         },
+        {
+          active: isActivePath(location.pathname, "/app/admin/scim"),
+          icon: UserCog,
+          label: "SCIM settings",
+          to: "/app/admin/scim",
+        },
       ] as const;
 
       return (
@@ -941,6 +949,12 @@ export function Layout({
           label: "Audit trail token",
           to: `${organizationSettingsPath}/audit-trail-tokens`,
         },
+        {
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/module-sharing`),
+          icon: Share2,
+          label: "Module sharing",
+          to: `${organizationSettingsPath}/module-sharing`,
+        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
@@ -955,7 +969,8 @@ export function Layout({
         && (link.label !== "Stacks" || canManageWorkspaces)
         && (link.label !== "Agent pool scoping" || canManageAgentPools)
         && (link.label !== "Encryption keys" || canManagePolicies)
-        && (link.label !== "Audit trail token" || canManagePolicies));
+        && (link.label !== "Audit trail token" || canManagePolicies)
+        && (link.label !== "Module sharing" || siteAdmin));
 
       return (
         <>

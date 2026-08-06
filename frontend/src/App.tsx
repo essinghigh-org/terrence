@@ -27,6 +27,8 @@ import { AuditTrailTokens } from "./views/AuditTrailTokens";
 import { PolicySetsTags } from "./views/PolicySetsTags";
 import { AdminDashboard } from "./views/AdminDashboard";
 import { AdminSmtpSettings } from "./views/AdminSmtpSettings";
+import { AdminScimSettings } from "./views/AdminScimSettings";
+import { ModuleSharing } from "./views/ModuleSharing";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
 import {
   AUTH_CHANGED_EVENT,
@@ -122,6 +124,7 @@ function App(): JSX.Element {
             <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
             <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
             <Route path="admin/smtp" element={<AdminSmtpSettings />} />
+            <Route path="admin/scim" element={<AdminScimSettings />} />
             <Route path="account" element={<AccountSettings />} />
             <Route path=":orgName" element={<Workspaces />} />
             <Route path=":orgName/workspaces" element={<Workspaces />} />
@@ -145,6 +148,7 @@ function App(): JSX.Element {
             <Route path=":orgName/settings/hyok" element={<HyokConfigurations />} />
             <Route path=":orgName/settings/audit-trail-tokens" element={<AuditTrailTokens />} />
             <Route path=":orgName/settings/policy-sets/tags" element={<PolicySetsTags />} />
+            <Route path=":orgName/settings/module-sharing" element={<ModuleSharing />} />
             <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
             <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />
