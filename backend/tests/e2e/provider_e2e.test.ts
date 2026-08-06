@@ -81,6 +81,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool_excluded_workspaces.apexw",
   "tfe_org_max_token_ttl_policy.ottl",
   "tfe_registry_module.regmod",
+  "tfe_registry_gpg_key.gpg_key",
   "tfe_aws_oidc_configuration.aws_oidc",
   "tfe_azure_oidc_configuration.azure_oidc",
   "tfe_gcp_oidc_configuration.gcp_oidc",
@@ -598,6 +599,30 @@ resource "tfe_registry_module" "regmod" {
   organization    = tfe_organization.org.name
   registry_name   = "private"
   module_provider = "aws"
+}
+
+resource "tfe_registry_gpg_key" "gpg_key" {
+  organization = tfe_organization.org.name
+  ascii_armor  = <<-EOT
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQENBGp0dyQBCACdC2AJzTVlMmvNx/T6Nu8uIlVlb4ThPwZy3oz2qCfPscs8b1Zy
+Hckf3ZtaCutCUtbLQh94xGwZxc8dmVs3DGz1c0w06bmO6lzQ56JH1XmBCK8bKR6A
+SVCD5fYUBDS9o+sOrFjcDaRiXwpLH8/skxeo/+henntduUHwtGjI1eIKI0rSyIiY
+n3m6kVF4JdYopLEUZ6BOe5tW6ik1j3afG5gj0dYU2qkW4A0Edh0/eSGVHu2a7LNX
+bSV76IW8+vxtKZIuHS4Oy8GigVSCPQVU47WpC8mWvtQ7QudNx8tG9OtPLpRFaLEy
+BynWeb3JnFiin0q+bJpZz+EMACK+L4ejiSAxABEBAAG0HlRlcnJlbmNlIEUyRSA8
+ZTJlQGV4YW1wbGUuY29tPokBTwQTAQoAORYhBDFvdNIhedDpsgZcteheaAck9deV
+BQJqdHckAxsvBAULCQgHAgYVCgkICwIEFgIDAQIeAQIXgAAKCRDoXmgHJPXXlYgJ
+B/9urXrHjjGtI7wQ/J2Xy9LSNwUShXO3TIkU6M5fK3Yh3CMqC8o/az/oEjcLyzNX
+Hwkv8Vw2mGVl9OurZemnksaHjBvx01qNz1FTawbuSrCcjnFnZh2o+Uo0AAEKu9Pd
+E+T1NOif9atCf4x+jmSnlCZt91ZvPxZzpESfapo/PWOxyTXqtCpkXfOB1z+y881M
+feOUTGQAG25jd0/2SJwJHDvbbPbCNs/nZbJYPVE65G3eUUMhx17NhBIZJwPaJoXR
+FMde0pNlcQAzlmbwqmiap4mSTYtSXjiOEwZlTqw8Wb0SJeiKz8C/FmOaJit5fBFo
+dl3Sige1Ys4Ql7vIKqx0Rl04
+=UNxX
+-----END PGP PUBLIC KEY BLOCK-----
+EOT
 }
 
 resource "tfe_aws_oidc_configuration" "aws_oidc" {
