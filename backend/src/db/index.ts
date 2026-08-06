@@ -308,6 +308,12 @@ runSql(`
     is_exclude INTEGER DEFAULT false
   );
   CREATE INDEX IF NOT EXISTS policy_set_tag_selectors_pset_idx ON policy_set_tag_selectors (policy_set_id);
+  CREATE TABLE IF NOT EXISTS policy_set_project_exclusions (
+    id TEXT PRIMARY KEY,
+    policy_set_id TEXT NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS policy_set_project_exclusions_idx ON policy_set_project_exclusions (policy_set_id, project_id);
 `);
 
 // Create admin version tables if they don't exist

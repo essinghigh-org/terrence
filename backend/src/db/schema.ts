@@ -804,6 +804,14 @@ export const policySetExclusions = sqliteTable("policy_set_exclusions", {
   uniqueIndex("policy_set_exclusions_idx").on(table.policySetId, table.workspaceId),
 ]);
 
+export const policySetProjectExclusions = sqliteTable("policy_set_project_exclusions", {
+  id: text("id").primaryKey(),
+  policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+}, (table) => [
+  uniqueIndex("policy_set_project_exclusions_idx").on(table.policySetId, table.projectId),
+]);
+
 export const policySetParameters = sqliteTable("policy_set_parameters", {
   id: text("id").primaryKey(),
   policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),

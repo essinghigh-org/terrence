@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
+import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
 import { eq, and, inArray, asc, isNull } from "drizzle-orm";
 import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL } from "../lib/utils";
 import { organizationName } from "../lib/response";
@@ -108,10 +108,11 @@ async function policySetAttributes(policySet: PsItem): Promise<Record<string, un
 // policy-set resources read the attached workspaces/projects back from the
 // policy-set resource, so these must be populated.
 async function policySetRelationships(policySet: PsItem): Promise<Record<string, unknown>> {
-  const [workspaceLinks, projLinks, exclLinks, policyRows] = await Promise.all([
+  const [workspaceLinks, projLinks, exclLinks, projExclLinks, policyRows] = await Promise.all([
     db.query.policySetWorkspaces.findMany({ where: eq(policySetWorkspaces.policySetId, policySet.id) }),
     db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, policySet.id) }),
     db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, policySet.id) }),
+    db.query.policySetProjectExclusions.findMany({ where: eq(policySetProjectExclusions.policySetId, policySet.id) }),
     db.query.policies.findMany({ where: eq(policies.policySetId, policySet.id), columns: { id: true } }),
   ]);
   const orgName = await organizationName(policySet.orgId);
@@ -120,6 +121,7 @@ async function policySetRelationships(policySet: PsItem): Promise<Record<string,
     workspaces: { data: workspaceLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
     projects: { data: projLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
     "workspace-exclusions": { data: exclLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+    "project-exclusions": { data: projExclLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
     policies: { data: policyRows.map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
   };
 }
@@ -939,7 +941,49 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const wsItems = payload.data;
-    if (Array.isArray(wsItems)) { const wsIds = wsItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== ""); if (wsIds.length > 0) await db.delete(policySetExclusions).where(and(eq(policySetExclusions.policySetId, policySetId), inArray(policySetExclusions.workspaceId, wsIds))); }
+    if (Array.isArray(wsItems)) {
+      const wsIds = wsItems
+        .map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "")
+        .filter((s: string): boolean => s !== "");
+      if (wsIds.length > 0) {
+        await db.delete(policySetExclusions).where(and(eq(policySetExclusions.policySetId, policySetId), inArray(policySetExclusions.workspaceId, wsIds)));
+      }
+    }
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const projItems = payload.data;
+    if (Array.isArray(projItems)) {
+      const projectIds = projItems
+        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string"
+          ? (item as Record<string, unknown>).id as string
+          : "")
+        .filter((id: string): boolean => id !== "");
+      const projectsInOrg = projectIds.length === 0
+        ? []
+        : await db.query.projects.findMany({
+          where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
+        });
+      const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
+        id: `pspex-${crypto.randomUUID()}`,
+        policySetId,
+        projectId: project.id,
+      }));
+      if (batch.length > 0) await db.insert(policySetProjectExclusions).values(batch).onConflictDoNothing();
+    }
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    const policySetId = params.policy_set_id ?? "";
+    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await db.delete(policySetProjectExclusions).where(eq(policySetProjectExclusions.policySetId, policySetId));
     (set as { status: number }).status = 204;
     return {};
   })
