@@ -4,7 +4,7 @@
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 66,
-  "data_sources_covered": 32,
+  "data_sources_covered": 34,
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
@@ -390,11 +390,11 @@
     },
     {
       "name": "tfe_registry_gpg_key",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_registry_gpg_keys",
-      "status": "planned"
+      "status": "covered"
     },
     {
       "name": "tfe_registry_module",

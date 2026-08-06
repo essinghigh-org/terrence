@@ -849,6 +849,15 @@ data "tfe_provider_set" "d_pset" {
   name         = tfe_provider_set.pset.name
   depends_on   = [tfe_provider_set.pset]
 }
+data "tfe_registry_gpg_key" "d_gpg" {
+  id           = tfe_registry_gpg_key.gpg_key.id
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_registry_gpg_key.gpg_key]
+}
+data "tfe_registry_gpg_keys" "d_gpgs" {
+  organization = tfe_organization.org.name
+  depends_on   = [tfe_registry_gpg_key.gpg_key]
+}
 
 output "ds_org_name"     { value = data.tfe_organization.d_org.name }
 output "ds_orgs_names"   { value = data.tfe_organizations.d_orgs.names }
@@ -883,6 +892,8 @@ output "ds_regmod_name"     { value = data.tfe_registry_module.d_regmod.name }
 output "ds_saml_enabled"    { value = data.tfe_saml_settings.d_saml.enabled }
 output "ds_scim_enabled"    { value = data.tfe_scim_settings.d_scim.enabled }
 output "ds_pset_name"       { value = data.tfe_provider_set.d_pset.name }
+output "ds_gpg_armor"       { value = data.tfe_registry_gpg_key.d_gpg.ascii_armor }
+output "ds_gpgs_count"      { value = length(data.tfe_registry_gpg_keys.d_gpgs.keys) }
 `;
 }
 
@@ -1092,6 +1103,8 @@ describe("tfe provider e2e", () => {
           expect(val("ds_saml_enabled")).toBe(true);
           expect(val("ds_scim_enabled")).toBe(true);
           expect(val("ds_pset_name")).toBe(`pe2e-pset-${suffix}`);
+          expect(String(val("ds_gpg_armor"))).toContain("BEGIN PGP PUBLIC KEY BLOCK");
+          expect(Number(val("ds_gpgs_count"))).toBeGreaterThan(0);
 
           await planAndApply(backend.port, auth.token, `pe2e-org-${suffix}`, `pe2e-ws-${suffix}`, workDir);
 
