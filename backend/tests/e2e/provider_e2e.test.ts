@@ -79,6 +79,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_azure_oidc_configuration.azure_oidc",
   "tfe_gcp_oidc_configuration.gcp_oidc",
   "tfe_vault_oidc_configuration.vault_oidc",
+  "tfe_hyok_configuration.hyok",
 ];
 
 function freePort(): Promise<number> {
@@ -582,6 +583,15 @@ resource "tfe_vault_oidc_configuration" "vault_oidc" {
   address      = "https://vault.example.com"
   namespace    = "admin"
   role_name    = "pe2e-role"
+}
+
+resource "tfe_hyok_configuration" "hyok" {
+  organization            = tfe_organization.org.name
+  name                    = "pe2e-hyok-${suffix}"
+  kek_id                  = "arn:aws:kms:us-east-1:123456789012:key/pe2e-kek"
+  agent_pool_id           = tfe_agent_pool.pool.id
+  oidc_configuration_id   = tfe_vault_oidc_configuration.vault_oidc.id
+  oidc_configuration_type = "vault"
 }
 `;
 }

@@ -845,6 +845,24 @@ export const oidcConfigs = sqliteTable("oidc_configs", {
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
 
+// HYOK (hold-your-own-key) configurations reference an OIDC configuration and
+// an agent pool (tfe_hyok_configuration).
+export const hyokConfigurations = sqliteTable("hyok_configurations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kekId: text("kek_id").notNull(),
+  kmsOptions: text("kms_options", { mode: "json" }).$type<Record<string, string>>(),
+  agentPoolId: text("agent_pool_id"),
+  oidcConfigId: text("oidc_config_id").notNull(),
+  oidcConfigType: text("oidc_config_type").notNull(),
+  isPrimary: integer("is_primary", { mode: "boolean" }).default(false),
+  status: text("status").notNull().default("ok"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+});
+
 export const agentPoolAllowedProjects = sqliteTable("agent_pool_allowed_projects", {
   id: text("id").primaryKey(),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),

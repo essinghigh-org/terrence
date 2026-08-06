@@ -374,6 +374,21 @@ runSql(`
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS hyok_configurations (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kek_id TEXT NOT NULL,
+    kms_options TEXT,
+    agent_pool_id TEXT,
+    oidc_config_id TEXT NOT NULL,
+    oidc_config_type TEXT NOT NULL,
+    is_primary INTEGER DEFAULT false,
+    status TEXT NOT NULL DEFAULT 'ok',
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   CREATE UNIQUE INDEX IF NOT EXISTS github_app_installations_org_installation_idx
     ON github_app_installations (org_id, installation_id);
   CREATE INDEX IF NOT EXISTS workspaces_vcs_repo_identifier_idx
