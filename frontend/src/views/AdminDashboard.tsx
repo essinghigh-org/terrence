@@ -688,6 +688,8 @@ function AuthAdmin(props: Readonly<{
     error: string | null;
     localAuthEnabled: boolean;
     setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    trustedClientIpHeaders: string;
+    setTrustedClientIpHeaders: React.Dispatch<React.SetStateAction<string>>;
     persistedSamlEnabled: boolean | null;
     persistedOidcEnabled: boolean | null;
     persistedLdapEnabled: boolean | null;
@@ -789,6 +791,8 @@ function AuthAdmin(props: Readonly<{
       error: generalError,
       localAuthEnabled,
       setLocalAuthEnabled,
+      trustedClientIpHeaders,
+      setTrustedClientIpHeaders,
       persistedSamlEnabled,
       persistedOidcEnabled,
       persistedLdapEnabled,
@@ -916,6 +920,25 @@ function AuthAdmin(props: Readonly<{
                         When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
                         configured). Existing local accounts cannot sign in with a password until this is re-enabled.
                       </p>
+
+                      <div className="space-y-2 pt-1">
+                        <label htmlFor="trusted-client-ip-headers" className="block text-sm font-medium text-gray-900">
+                          Trusted client-IP headers
+                        </label>
+                        <input
+                          id="trusted-client-ip-headers"
+                          type="text"
+                          value={trustedClientIpHeaders}
+                          onChange={(e): void => { setTrustedClientIpHeaders(e.target.value); }}
+                          placeholder="CF-Connecting-IP, X-Forwarded-For"
+                          className="h-9 w-full max-w-md rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        />
+                        <p className="text-xs text-gray-500">
+                          Comma-separated proxy headers, ordered by priority, used to determine the real client IP
+                          for browser sessions and rate limiting. Only set this when the app sits behind a trusting
+                          reverse proxy (e.g. Cloudflare). Leave empty to always trust the direct connection.
+                        </p>
+                      </div>
                       <Button
                         type="submit"
                         disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
@@ -1432,6 +1455,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
 
   // Local authentication state
   const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
+  const [trustedClientIpHeaders, setTrustedClientIpHeaders] = useState("");
   const [generalLoading, setGeneralLoading] = useState(false);
   const [generalSaving, setGeneralSaving] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
@@ -1703,6 +1727,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         data: { attributes: Record<string, unknown> };
       };
       setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
+      const trusted = res.data.attributes["trusted-client-ip-headers"];
+      setTrustedClientIpHeaders(Array.isArray(trusted) ? trusted.join(", ") : "");
     } catch (err: unknown) {
       setGeneralError(err instanceof Error ? err.message : "Failed to load general settings");
     } finally {
@@ -1755,7 +1781,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           body: JSON.stringify({
             data: {
               type: "general-settings",
-              attributes: { "local-auth-enabled": localAuthEnabled },
+              attributes: {
+                "local-auth-enabled": localAuthEnabled,
+                "trusted-client-ip-headers": trustedClientIpHeaders
+                  .split(",")
+                  .map((name): string => name.trim())
+                  .filter((name): boolean => name !== ""),
+              },
             },
           }),
         });
@@ -2048,6 +2080,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 error: generalError,
                 localAuthEnabled,
                 setLocalAuthEnabled,
+                trustedClientIpHeaders,
+                setTrustedClientIpHeaders,
                 persistedSamlEnabled,
                 persistedOidcEnabled,
                 persistedLdapEnabled,

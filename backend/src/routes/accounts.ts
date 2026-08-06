@@ -11,6 +11,7 @@ import { authPlugin } from "../auth";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
+import { resolveClientIp } from "../lib/client-ip";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -55,10 +56,6 @@ type RequestInfo = Readonly<{
   headers: Readonly<{ get: (name: string) => string | null }>;
 }>;
 
-type IpServer = Readonly<{
-  readonly requestIP?: (request: RequestInfo | undefined) => Readonly<{ readonly address?: string }> | null;
-}>;
-
 type ReqCtx = Readonly<{
   body?: unknown;
   request?: RequestInfo;
@@ -99,21 +96,6 @@ function refreshCookie(request: RequestInfo | undefined): string | undefined {
 function secureRequest(request: RequestInfo | undefined): boolean {
   const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   return forwarded === "https" || (request !== undefined && new URL(request.url).protocol === "https:");
-}
-
-function clientIp(request: RequestInfo | undefined, server: unknown): string | null {
-  const ipServer = server as IpServer | null;
-  const directAddress = typeof ipServer?.requestIP === "function"
-    ? ipServer.requestIP(request)?.address
-    : undefined;
-  if (directAddress !== undefined && directAddress !== "") return directAddress;
-  // app.handle() has no socket address; accept forwarded headers only in that
-  // test-only path so a simulated client address can be supplied. In real
-  // deployments the peer address is authoritative and spoofed headers are ignored.
-  if (server !== null) return null;
-  const forwarded = request?.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded !== undefined && forwarded !== "") return forwarded;
-  return request?.headers.get("x-real-ip") ?? null;
 }
 
 function setRefreshCookie(
@@ -256,7 +238,7 @@ export async function issueLoginSession(
   const accessExpiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
   const refreshExpiresAt = createdAt + REFRESH_TOKEN_TTL_MS;
   const refreshToken = opaqueToken("refresh");
-  const ipAddress = clientIp(request, server);
+  const ipAddress = await resolveClientIp(request, server);
   const userAgent = request?.headers.get("user-agent") ?? null;
   await db.transaction(async (tx: unknown): Promise<void> => {
     const t = tx as typeof db;

@@ -5,6 +5,7 @@ import {
   Trash2,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Copy,
   FileCode,
@@ -13,6 +14,7 @@ import {
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
+import { AttributeDiff } from "./PlanOutput";
 
 type Change = {
   actions: string[];
@@ -300,50 +302,57 @@ function ApplyResourceRow({
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 text-xs last:border-b-0 hover:bg-gray-50/80">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
-          {"icon" in config ? (
-            <config.icon className="size-3" aria-hidden="true" />
-          ) : (
-            <span aria-hidden="true">{config.symbol}</span>
-          )}
-        </span>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <code className="truncate font-mono text-xs font-semibold text-gray-900">{resource.address}</code>
-            <button
-              type="button"
-              aria-label={`Copy ${resource.address} address`}
-              title={copied ? "Copied address!" : "Copy resource address"}
-              className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
-              onClick={handleCopy}
-            >
-              {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
-            </button>
-          </div>
-
-          <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
-            <span>Type: <code className="font-mono">{resource.type}</code></span>
-            {resource.previous_address !== undefined && (
-              <span className="flex items-center gap-1">
-                Moved from <code className="font-mono">{resource.previous_address}</code>
-                <ArrowRight className="inline size-3 text-gray-400" />
-                <code className="font-mono font-medium text-gray-700">{resource.address}</code>
-              </span>
+    <details
+      className="group border-b border-gray-200 last:border-b-0"
+      aria-label={`Apply details for ${resource.address}`}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-gray-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+          <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
+            {"icon" in config ? (
+              <config.icon className="size-3" aria-hidden="true" />
+            ) : (
+              <span aria-hidden="true">{config.symbol}</span>
             )}
-            {execution.resourceId !== undefined && (
-              <span>ID: <code className="font-mono text-gray-700">{execution.resourceId}</code></span>
-            )}
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <code className="truncate font-mono text-xs font-semibold text-gray-900">{resource.address}</code>
+              <button
+                type="button"
+                aria-label={`Copy ${resource.address} address`}
+                title={copied ? "Copied address!" : "Copy resource address"}
+                className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+                onClick={handleCopy}
+              >
+                {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
+              </button>
+            </div>
+
+            <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
+              <span>Type: <code className="font-mono">{resource.type}</code></span>
+              {resource.previous_address !== undefined && (
+                <span className="flex items-center gap-1">
+                  Moved from <code className="font-mono">{resource.previous_address}</code>
+                  <ArrowRight className="inline size-3 text-gray-400" />
+                  <code className="font-mono font-medium text-gray-700">{resource.address}</code>
+                </span>
+              )}
+              {execution.resourceId !== undefined && (
+                <span>ID: <code className="font-mono text-gray-700">{execution.resourceId}</code></span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="shrink-0">
-        <ExecutionBadge execution={execution} />
-      </div>
-    </div>
+        <div className="shrink-0">
+          <ExecutionBadge execution={execution} />
+        </div>
+      </summary>
+      <AttributeDiff change={resource.change} address={resource.address} />
+    </details>
   );
 }
 
@@ -457,7 +466,9 @@ export function ApplyOutput({
           )}
         </div>
         <span className="text-xs text-gray-500">
-          {changedResources.length} resource{changedResources.length === 1 ? "" : "s"} total
+          Terraform {planJson.terraform_version ?? "unknown"}
+          {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
+          <span className="ml-1.5 text-gray-400">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
         </span>
       </div>
 

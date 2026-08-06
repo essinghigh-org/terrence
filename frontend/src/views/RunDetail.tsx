@@ -775,6 +775,9 @@ export function RunDetail({
   const timestamps = attributes["status-timestamps"] ?? {};
   const planStatus = plan?.attributes.status ?? phaseStatusFromRun(status, "plan", timestamps);
   const applyStatus = apply?.attributes.status ?? phaseStatusFromRun(status, "apply", timestamps);
+  // Once a run has applied, surface the apply phase as the default-expanded
+  // section and collapse the plan (user preference).
+  const applied = applyStatus === "finished";
   const planActionCount = planSummary?.runId === runId ? planSummary.summary.actionCount : null;
   const artifactImportCount = planSummary?.runId === runId ? planSummary.summary.importCount : null;
   const planCounts = plan?.attributes ?? {
@@ -1049,7 +1052,7 @@ export function RunDetail({
           <details
             aria-labelledby="plan-heading"
             className="group overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
-            open={["running", "finished", "errored", "unreachable"].includes(planStatus)}
+            open={!applied && ["running", "finished", "errored", "unreachable"].includes(planStatus)}
           >
             <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1251,7 +1254,7 @@ export function RunDetail({
             className={`group overflow-hidden rounded-md border bg-white shadow-sm ${
               ["errored", "unreachable"].includes(applyStatus) ? "border-red-300" : "border-gray-200"
             }`}
-            open={["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
+            open={applied || ["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
           >
             <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

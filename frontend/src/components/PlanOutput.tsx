@@ -317,7 +317,7 @@ function Value({
   return <code className="break-all font-mono text-[12px] text-gray-700">{formatValue(value)}</code>;
 }
 
-function AttributeDiff({ change, address }: Readonly<{ change: Change; address: string }>): React.JSX.Element {
+export function AttributeDiff({ change, address }: Readonly<{ change: Change; address: string }>): React.JSX.Element {
   const rows = attributeDiff(change);
   const contextualUnchanged = new Set(
     rows

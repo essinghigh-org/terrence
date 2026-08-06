@@ -314,17 +314,37 @@ for (const [col, def] of psAdditions) {
 // Mirrored in migration 0060 (which adds org_id only; the rebuild here is
 // the source of truth for dropping NOT NULL).
 {
-  // Recover an interrupted rebuild from a prior startup: if the live `policies`
-  // table is missing but `policies_old` was left behind by a swap that never
-  // completed, restore it so the rebuild below can re-run idempotently.
+  // Rebuild the policies table when its shape is out of date (NOT NULL cannot
+  // be dropped via ALTER). Runs outside any transaction so PRAGMA foreign_keys
+  // changes take effect. Idempotent and recoverable at every step WITHOUT ever
+  // renaming the live table away:
+  //   * The live `policies` table keeps its name the whole time, so child
+  //     foreign keys (policy_checks.policy_id -> policies) stay valid.
+  //   * Data is copied into `policies_new` first, then `DROP TABLE policies`
+  //     + `ALTER TABLE policies_new RENAME TO policies` promotes the new shape
+  //     under the SAME name. The only crash window (policies gone, data safe in
+  //     policies_new) is restored on next startup by the recovery block below.
+  // Prefer this over a policies->policies_old rename, which rewrites child FKs
+  // to `policies_old` and leaves them dangling once that table is dropped.
+  // Mirrored in migration 0060 (which adds org_id only; the rebuild here is
+  // the source of truth for dropping NOT NULL).
   const policiesExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies'").length > 0;
+
+  // Recover an interrupted rebuild: the live table is gone but the full data
+  // set survived in policies_new — restore it under the canonical name so the
+  // check below sees a complete `policies` row (and child FKs resolve).
   if (!policiesExists) {
-    const oldExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies_old'").length > 0;
-    if (oldExists) {
-      runSql("DROP TABLE IF EXISTS policies_new;");
-      runSql("ALTER TABLE policies_old RENAME TO policies;");
+    const newExists = tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies_new'").length > 0;
+    if (newExists) {
+      runSql("ALTER TABLE policies_new RENAME TO policies;");
+      // Refresh the policy-set org_id backfill this rebuild would have applied.
+      runSql(`
+        UPDATE policies SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies.policy_set_id)
+          WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
+      `);
     }
   }
+
   const policiesTableInfo = tableRows("PRAGMA table_info(policies)");
   const policiesColumns = getColumnNames(policiesTableInfo);
   if (!policiesColumns.has("org_id")) {
@@ -333,50 +353,89 @@ for (const [col, def] of psAdditions) {
   const policySetIdCol = policiesTableInfo.find((r: unknown): boolean =>
     (r as TableInfoRow).name === "policy_set_id");
   if (policySetIdCol !== undefined && (policySetIdCol as { notnull?: number }).notnull === 1) {
-      // Rebuild of the policies table.
-      // - PRAGMA foreign_keys must be toggled OUTSIDE any transaction (it is a
-      //   no-op inside one), so manage it around the rebuild steps below.
-      // - DROP TABLE IF EXISTS policies_new makes the rebuild idempotent and
-      //   recovers from an interrupted prior startup.
-      // - The live table is never dropped until its replacement is in place:
-      //   rename policies -> policies_old, promote policies_new, then drop the
-      //   old copy. Every intermediate state is recoverable on next startup
-      //   (the swap-restore block above).
-      // Issue each statement separately — bun:sqlite's run() is not guaranteed
-      // to execute a multi-statement string all the way through.
+    // Rebuild of the policies table.
+    // - PRAGMA foreign_keys must be toggled OUTSIDE any transaction (it is a
+    //   no-op inside one), so manage it around the rebuild steps below.
+    // - DROP TABLE IF EXISTS policies_new makes the rebuild idempotent and
+    //   recovers from an interrupted prior startup.
+    runSql("PRAGMA foreign_keys = OFF;");
+    try {
+      runSql("DROP TABLE IF EXISTS policies_new;");
+      runSql(`
+        CREATE TABLE policies_new (
+          id TEXT PRIMARY KEY NOT NULL,
+          org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+          policy_set_id TEXT REFERENCES policy_sets(id) ON DELETE CASCADE,
+          policy_set_version_id TEXT REFERENCES policy_set_versions(id) ON DELETE SET NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          enforcement_level TEXT DEFAULT 'soft-mandatory' NOT NULL,
+          query TEXT,
+          source TEXT,
+          source_path TEXT,
+          created_at INTEGER NOT NULL
+        );
+      `);
+      runSql(`
+        INSERT INTO policies_new (id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at)
+          SELECT id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at FROM policies;
+      `);
+      runSql(`
+        UPDATE policies_new SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies_new.policy_set_id)
+          WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
+      `);
+      // Promote under the SAME name — no intermediate rename, so child FKs
+      // referencing `policies` stay correct.
+      runSql("DROP TABLE policies;");
+      runSql("ALTER TABLE policies_new RENAME TO policies;");
+    } finally {
+      runSql("PRAGMA foreign_keys = ON;");
+    }
+  }
+
+  // Repair any DB that ran an earlier rename-based rebuild (which rewired
+  // policy_checks.policy_id to the dropped policies_old) or that crashed mid-
+  // swap leaving an orphan policies_old. Regardless of current state, drop any
+  // lingering policies_old and rebuild policy_checks when its policy FK no
+  // longer points at the live `policies`.
+  if (tableRows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'policies_old'").length > 0) {
+    runSql("DROP TABLE IF EXISTS policies_old;");
+  }
+  try {
+    const pcFks = tableRows("PRAGMA foreign_key_list(policy_checks)");
+    const policiesFk = pcFks.find((f: unknown): boolean =>
+      (f as { from: string }).from === "policy_id");
+    const target = (policiesFk as { table?: string } | undefined)?.table;
+    if (target !== undefined && target !== "policies") {
+      // Re-point the child FK to the live `policies`: rebuild the table with
+      // corrected references (data preserved).
       runSql("PRAGMA foreign_keys = OFF;");
       try {
-        runSql("DROP TABLE IF EXISTS policies_new;");
+        runSql("DROP TABLE IF EXISTS policy_checks_new;");
         runSql(`
-          CREATE TABLE policies_new (
-            id TEXT PRIMARY KEY NOT NULL,
-            org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
-            policy_set_id TEXT REFERENCES policy_sets(id) ON DELETE CASCADE,
-            policy_set_version_id TEXT REFERENCES policy_set_versions(id) ON DELETE SET NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            enforcement_level TEXT DEFAULT 'soft-mandatory' NOT NULL,
-            query TEXT,
-            source TEXT,
-            source_path TEXT,
-            created_at INTEGER NOT NULL
+          CREATE TABLE policy_checks_new (
+            id text PRIMARY KEY NOT NULL,
+            run_id text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            policy_id text REFERENCES policies(id) ON DELETE SET NULL,
+            policy_set_id text REFERENCES policy_sets(id) ON DELETE SET NULL,
+            status text NOT NULL DEFAULT 'pending',
+            result text,
+            created_at integer NOT NULL
           );
         `);
         runSql(`
-          INSERT INTO policies_new (id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at)
-            SELECT id, org_id, policy_set_id, policy_set_version_id, name, description, enforcement_level, query, source, source_path, created_at FROM policies;
+          INSERT INTO policy_checks_new (id, run_id, policy_id, policy_set_id, status, result, created_at)
+            SELECT id, run_id, policy_id, policy_set_id, status, result, created_at FROM policy_checks;
         `);
-        runSql(`
-          UPDATE policies_new SET org_id = (SELECT ps.org_id FROM policy_sets ps WHERE ps.id = policies_new.policy_set_id)
-            WHERE org_id IS NULL AND policy_set_id IS NOT NULL;
-        `);
-        runSql("ALTER TABLE policies RENAME TO policies_old;");
-        runSql("ALTER TABLE policies_new RENAME TO policies;");
-        runSql("DROP TABLE IF EXISTS policies_old;");
+        runSql("DROP TABLE policy_checks;");
+        runSql("ALTER TABLE policy_checks_new RENAME TO policy_checks;");
       } finally {
         runSql("PRAGMA foreign_keys = ON;");
       }
     }
+  } catch {
+    // policy_checks or its FK was already consistent — nothing to repair.
+  }
 }
 
 // Create tag-selector rows for policy sets (tag inclusion/exclusion).
@@ -834,3 +893,77 @@ if (!existingPeCols.has("task_stage_id")) runSql("ALTER TABLE policy_evaluations
 if (!existingPeCols.has("run_id")) runSql("ALTER TABLE policy_evaluations ADD COLUMN run_id TEXT REFERENCES runs(id)");
 
 runSql('PRAGMA foreign_keys = ON');
+
+// ---------------------------------------------------------------------------
+// Id-format migration: re-key persisted rows that predate the current ID
+// scheme (e.g. workspaces `w-*` -> `ws-*`, users `u-*` -> `usr-*`, orgs `o-*`
+// -> `org-*`, raw-UUID runs/state refs -> prefixed). Both the primary key and
+// every column that foreign-keys to it are rewritten so relational integrity
+// holds after upgrade. Idempotent: rows already in the current shape are left
+// untouched, so this is a no-op once the data is migrated.
+// ---------------------------------------------------------------------------
+{
+  const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
+    { table: "organizations", prefix: "org-", fullUuidSuffix: true },
+    { table: "users", prefix: "usr-", fullUuidSuffix: true },
+    { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
+    { table: "projects", prefix: "prj-", fullUuidSuffix: false },
+    { table: "runs", prefix: "run-", fullUuidSuffix: false },
+  ];
+
+  const isNewId = (id: string, prefix: string, fullUuidSuffix: boolean): boolean => {
+    if (!id.startsWith(prefix)) return false;
+    const suffix = id.slice(prefix.length);
+    if (fullUuidSuffix) {
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suffix);
+    }
+    return /^[0-9a-f]{16}$/.test(suffix);
+  };
+
+  // 1. Compute old -> new id maps per entity.
+  const rekeyMaps = new Map<string, Map<string, string>>();
+  for (const fmt of ID_FORMATS) {
+    const rows = client.prepare(`SELECT id FROM "${fmt.table}"`).all() as { id: string }[];
+    const map = new Map<string, string>();
+    for (const { id } of rows) {
+      if (isNewId(id, fmt.prefix, fmt.fullUuidSuffix)) continue;
+      const suffix = fmt.fullUuidSuffix
+        ? crypto.randomUUID()
+        : crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+      map.set(id, `${fmt.prefix}${suffix}`);
+    }
+    if (map.size > 0) rekeyMaps.set(fmt.table, map);
+  }
+  if (rekeyMaps.size > 0) {
+    // Build a table -> [{column, ref}] for every column that references each
+    // entity, discovered from the live foreign_key metadata.
+    const refs = new Map<string, Array<{ table: string; column: string }>>();
+    const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+    for (const { name } of allTables) {
+      const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
+      for (const fk of fks) {
+        if (rekeyMaps.has(fk.table)) {
+          if (!refs.has(fk.table)) refs.set(fk.table, []);
+          refs.get(fk.table)?.push({ table: name, column: fk.from });
+        }
+      }
+    }
+
+    client.run("PRAGMA foreign_keys = OFF");
+    try {
+      for (const [parent, map] of rekeyMaps) {
+        for (const { table, column } of refs.get(parent) ?? []) {
+          const stmt = client.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`);
+          for (const [old, next] of map) stmt.run(next, old);
+        }
+        const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
+        for (const [old, next] of map) pkStmt.run(next, old);
+      }
+    } finally {
+      client.run("PRAGMA foreign_keys = ON");
+    }
+    const entityNames = [...rekeyMaps.keys()].join(", ");
+    const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
+    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames}).`);
+  }
+}

@@ -5,7 +5,7 @@ import { adminSettings } from "../db/schema";
 export type Settings = Record<string, unknown>;
 
 const settingDefaults: Record<string, Settings> = {
-  general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false },
+  general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false, "trusted-client-ip-headers": [] },
   retention: { "delete-older-than-n-days": null },
   cost: { enabled: false, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
   smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain" },

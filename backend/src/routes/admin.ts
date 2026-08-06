@@ -5,6 +5,7 @@ import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
+import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -354,6 +355,9 @@ function adminOrganizationResource(org: OrgItem): Record<string, unknown> {
       "sso-enabled": org.samlEnabled,
       "saml-enabled": org.samlEnabled,
       "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
+      // The default IaC engine, so the admin org table reflects the org's
+      // actual setting (Terraform vs OpenTofu) instead of a hardcoded fallback.
+      "iac-binary": org.defaultIacBinary ?? "tofu",
     },
   };
 }
@@ -1012,6 +1016,13 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-auth-enabled must be a boolean" }] };
     }
+    if (attrs["trusted-client-ip-headers"] !== undefined
+      && attrs["trusted-client-ip-headers"] !== null
+      && (!Array.isArray(attrs["trusted-client-ip-headers"])
+        || !(attrs["trusted-client-ip-headers"] as unknown[]).every((name: unknown): boolean => typeof name === "string"))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trusted-client-ip-headers must be an array of header names (highest priority first)" }] };
+    }
     const localAuthEnabled = typeof attrs["local-auth-enabled"] === "boolean"
       ? attrs["local-auth-enabled"]
       : current["local-auth-enabled"] !== false;
@@ -1027,6 +1038,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     }, localAuthEnabled);
     if (authError !== null) return authError;
     const updated = await updateSettings("general", attrs);
+    await refreshTrustedClientIpHeaders();
     invalidatePingSsoCache();
     return settingResource("general-settings", updated);
     });

@@ -3,6 +3,7 @@ import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
+import { syncedTrustedClientIp } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
@@ -182,6 +183,10 @@ function fixedWindowContext(): RateLimitContext {
 }
 
 function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
+  // When the admin has opted into trusting forwarded headers (behind Cloudflare
+  // etc.), key rate limits on the real client IP instead of the proxy peer.
+  const trusted = syncedTrustedClientIp(request);
+  if (trusted !== null && trusted !== "") return `ip:${trusted}`;
   const directAddress = typeof server?.requestIP === "function"
     ? server.requestIP(request)?.address
     : undefined;
