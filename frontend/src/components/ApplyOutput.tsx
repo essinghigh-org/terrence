@@ -351,7 +351,7 @@ function ApplyResourceRow({
           <ExecutionBadge execution={execution} />
         </div>
       </summary>
-      <AttributeDiff change={resource.change} address={resource.address} />
+      <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={resource.name} />
     </details>
   );
 }

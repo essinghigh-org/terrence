@@ -229,14 +229,14 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(within(applySection as HTMLElement).queryByText("PLAN_PHASE_ONLY")).toBeNull();
   expect(within(applySection as HTMLElement).getByText("Resources pending")).toBeTruthy();
   expect(view.getByText("Plan & apply duration")).toBeTruthy();
-  expect(view.getByText("In progress")).toBeTruthy();
-  expect(view.getByText("Resources changed")).toBeTruthy();
+  expect(view.getByText("Less than a minute")).toBeTruthy();
+  expect(view.getByText("Resources changed", { selector: "dt" })).toBeTruthy();
   expect(view.getByRole("heading", { name: "Please review the planned changes before continuing" }))
     .toBeTruthy();
-  expect(within(planSection as HTMLElement).getByText("&2 to import")).toBeTruthy();
+  expect(within(planSection as HTMLElement).queryByText("&2 to import")).toBeNull();
+  expect(view.getByText("Resources changed", { selector: "dt" }).closest("div")?.textContent).toContain("&2 to import");
   await waitFor((): void => {
-    expect(within(planSection as HTMLElement).getByText(/2 to invoke/)).toBeTruthy();
-    expect(within(applySection as HTMLElement).getByText(/2 to invoke/)).toBeTruthy();
+    expect(view.getByText("Actions", { selector: "dt" }).closest("div")?.textContent).toContain("2 to invoke");
   });
 
   expect(view.getByRole("button", { name: "Review & apply" })).toBeTruthy();
@@ -271,8 +271,8 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     data: { attributes: { comment: "Approved after reviewing the dependency graph" } },
   });
   const finishedApply = view.getByRole("heading", { name: "Apply finished" }).closest("details");
-  expect(within(finishedApply as HTMLElement).getByText(/2 invoked/)).toBeTruthy();
-  expect(within(finishedApply as HTMLElement).getByText("&4 to import")).toBeTruthy();
+  expect(view.getByText("Actions", { selector: "dt" }).closest("div")?.textContent).toContain("2 invoked");
+  expect(view.getByText("Resources changed", { selector: "dt" }).closest("div")?.textContent).toContain("&4 to import");
   expect(view.getByText("Less than a minute")).toBeTruthy();
 });
 
@@ -434,7 +434,7 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
   expect(view.queryByRole("heading", { name: /^Apply / })).toBeNull();
   expect(view.queryByRole("heading", { name: "Cost estimation" })).toBeNull();
   expect(view.queryByRole("heading", { name: "Policy check" })).toBeNull();
-  expect(view.getByText("No run activity yet.")).toBeTruthy();
+  expect(view.getByText("No run activity or comments yet.")).toBeTruthy();
   expect(view.getByText("Plan duration").nextElementSibling?.textContent).toBe("Unavailable");
 });
 
@@ -590,6 +590,6 @@ test("clears stale activity immediately when navigating to another run", async (
 
   resolveSecondEvents?.(json({ data: [] }));
   await waitFor((): void => {
-    expect(view.getByText("No run activity yet.")).toBeTruthy();
+    expect(view.getByText("No run activity or comments yet.")).toBeTruthy();
   });
 });

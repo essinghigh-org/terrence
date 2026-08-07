@@ -131,7 +131,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getByText(JSON.stringify("https://old.example"))).toBeTruthy();
     expect(view.getByText(JSON.stringify("https://new.example"))).toBeTruthy();
     expect(view.getByText(JSON.stringify("stable-resource"))).toBeTruthy();
-    expect(view.getByText("Forces replacement")).toBeTruthy();
+    expect(view.getAllByText("Forces replacement").length).toBeGreaterThan(0);
     expect(view.getByText(/1 unchanged attribute hidden/)).toBeTruthy();
   });
   expect(view.getByText("Module:").parentElement?.textContent).toContain("module.app");
@@ -379,4 +379,53 @@ test("shows a neutral state when a terminal run never produced a plan artifact",
   expect(view.queryByRole("alert")).toBeNull();
   expect(view.queryByRole("button", { name: "Try again" })).toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test("renders structured terraform-style diff lines for changed list elements", async () => {
+  globalThis.fetch = mock(async (): Promise<Response> => json({
+    terraform_version: "1.11.0",
+    format_version: "1.2",
+    resource_changes: [{
+      address: "github_repository.this",
+      type: "github_repository",
+      name: "this",
+      change: {
+        actions: ["update"],
+        before: {
+          id: "twitter-nsfw-api",
+          name: "twitter-nsfw-api",
+          topics: ["tfe-managed", "unchanged-topic"],
+          visibility: "private",
+        },
+        after: {
+          id: "twitter-nsfw-api",
+          name: "twitter-nsfw-api",
+          topics: ["terrence-managed", "unchanged-topic"],
+          visibility: "private",
+        },
+      },
+    }],
+  })) as typeof fetch;
+
+  const view = render(<PlanOutput runId="run-topics" status="planned" />);
+  await waitFor((): void => {
+    expect(view.getByText("github_repository.this")).toBeTruthy();
+  });
+
+  fireEvent.click(view.getByText("github_repository.this"));
+  await waitFor((): void => {
+    expect(view.getByText('"tfe-managed"')).toBeTruthy();
+    expect(view.getByText('"terrence-managed"')).toBeTruthy();
+    expect(view.getByText("~ resource")).toBeTruthy();
+    expect(view.getByText('"github_repository" "this" {')).toBeTruthy();
+  });
+
+  // Unchanged list element is hidden; unchanged attributes are summarized instead.
+  expect(view.queryByText('"unchanged-topic"')).toBeNull();
+  expect(view.getByText(/2 unchanged attributes hidden/)).toBeTruthy();
+
+  // The unchanged-attributes summary renders inside the resource block, before the closing brace.
+  const diff = view.getByLabelText("Attribute changes for github_repository.this");
+  const text = diff.textContent ?? "";
+  expect(text.indexOf("2 unchanged attributes hidden")).toBeLessThan(text.lastIndexOf("}"));
 });

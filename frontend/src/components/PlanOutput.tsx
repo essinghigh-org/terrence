@@ -303,29 +303,327 @@ function formatValue(value: unknown): string {
   return Array.isArray(value) ? "[…]" : "{…}";
 }
 
-function Value({
-  value,
-  sensitive = false,
-  unknown = false,
-}: Readonly<{ value: unknown; sensitive?: boolean; unknown?: boolean }>): React.JSX.Element {
-  if (sensitive) {
-    return <span className="font-medium italic text-gray-500">Sensitive value</span>;
+type DiffNode =
+  | Readonly<{
+      kind: "leaf";
+      key: string | number | null;
+      path: string;
+      before: unknown;
+      after: unknown;
+      unchanged: boolean;
+      sensitive: boolean;
+      unknown: boolean;
+    }>
+  | Readonly<{
+      kind: "object" | "array";
+      key: string | number | null;
+      path: string;
+      before: unknown;
+      after: unknown;
+      unchanged: boolean;
+      added: boolean;
+      removed: boolean;
+      children: readonly DiffNode[];
+    }>;
+
+function buildDiffNode(
+  key: string | number | null,
+  path: string,
+  before: unknown,
+  after: unknown,
+  beforeSensitive: unknown,
+  afterSensitive: unknown,
+  afterUnknown: unknown,
+): DiffNode {
+  const equal = JSON.stringify(before) === JSON.stringify(after);
+  if (beforeSensitive === true || afterSensitive === true || afterUnknown === true) {
+    return {
+      kind: "leaf",
+      key,
+      path,
+      before,
+      after,
+      unchanged: equal,
+      sensitive: beforeSensitive === true || afterSensitive === true,
+      unknown: afterUnknown === true,
+    };
   }
-  if (unknown) {
-    return <span className="font-medium italic text-purple-700">Known after apply</span>;
+  if (Array.isArray(before) || Array.isArray(after)) {
+    const length = Math.max(
+      Array.isArray(before) ? before.length : 0,
+      Array.isArray(after) ? after.length : 0,
+    );
+    const children: DiffNode[] = [];
+    for (let index = 0; index < length; index++) {
+      children.push(buildDiffNode(
+        index,
+        path === "" ? `[${index}]` : `${path}[${index}]`,
+        Array.isArray(before) ? before[index] : undefined,
+        Array.isArray(after) ? after[index] : undefined,
+        Array.isArray(beforeSensitive) ? beforeSensitive[index] : undefined,
+        Array.isArray(afterSensitive) ? afterSensitive[index] : undefined,
+        Array.isArray(afterUnknown) ? afterUnknown[index] : undefined,
+      ));
+    }
+    return {
+      kind: "array",
+      key,
+      path,
+      before,
+      after,
+      unchanged: equal,
+      added: before === undefined || before === null,
+      removed: after === undefined || after === null,
+      children,
+    };
   }
-  return <code className="break-all font-mono text-[12px] text-gray-700">{formatValue(value)}</code>;
+  if (isRecord(before) || isRecord(after)) {
+    const keys = collectionKeys([before, after, beforeSensitive, afterSensitive, afterUnknown]);
+    const children = keys.map((childKey): DiffNode => buildDiffNode(
+      childKey,
+      path === "" ? String(childKey) : `${path}.${childKey}`,
+      childValue(before, childKey),
+      childValue(after, childKey),
+      childValue(beforeSensitive, childKey),
+      childValue(afterSensitive, childKey),
+      childValue(afterUnknown, childKey),
+    ));
+    return {
+      kind: "object",
+      key,
+      path,
+      before,
+      after,
+      unchanged: equal,
+      added: before === undefined || before === null,
+      removed: after === undefined || after === null,
+      children,
+    };
+  }
+  return {
+    kind: "leaf",
+    key,
+    path,
+    before,
+    after,
+    unchanged: equal,
+    sensitive: false,
+    unknown: false,
+  };
 }
 
-export function AttributeDiff({ change, address }: Readonly<{ change: Change; address: string }>): React.JSX.Element {
+type DiffLine = {
+  depth: number;
+  path: string;
+  parts: ReadonlyArray<Readonly<{ text: string; cls: string }>>;
+  replacement: boolean;
+};
+
+type DiffMarker = "add" | "del" | "mod";
+const diffMarkerClasses: Record<DiffMarker, string> = {
+  add: "text-emerald-700",
+  del: "text-red-600",
+  mod: "text-blue-700",
+};
+const diffMarkerText: Readonly<Record<DiffMarker, string>> = {
+  add: "+",
+  del: "-",
+  mod: "~",
+};
+
+function diffMarkerFor(node: DiffNode, force: "add" | "del" | null): DiffMarker | null {
+  if (force === "add") return "add";
+  if (force === "del") return "del";
+  if (node.unchanged) return null;
+  if (node.kind === "leaf") {
+    if (node.before === undefined) return "add";
+    if (node.after === undefined) return "del";
+    return "mod";
+  }
+  if (node.added) return "add";
+  if (node.removed) return "del";
+  return "mod";
+}
+
+function maxKeyWidth(children: readonly DiffNode[]): number {
+  return children.reduce((width: number, child: DiffNode): number =>
+    Math.max(width, child.key === null ? 0 : String(child.key).length), 0);
+}
+
+function padKeyText(key: string | number, width: number): string {
+  const text = String(key);
+  return text + " ".repeat(Math.max(0, width - text.length));
+}
+
+function emitArrayItemBlock(
+  node: Extract<DiffNode, { kind: "object" | "array" }>,
+  force: "add" | "del",
+  context: ReadonlySet<string>,
+  depth: number,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  const marker = force === "add" ? "add" : "del";
+  const open = node.kind === "array" ? "[" : "{";
+  const close = node.kind === "array" ? "]" : "}";
+  lines.push({
+    depth,
+    path: node.path,
+    parts: [{ text: `${diffMarkerText[marker]} ${open}`, cls: diffMarkerClasses[marker] }],
+    replacement: forcesReplacement(node.path),
+  });
+  const childDepth = depth + 1;
+  const width = node.kind === "object" ? maxKeyWidth(node.children) : 0;
+  for (const child of node.children) {
+    flattenDiff(
+      child,
+      context,
+      force,
+      childDepth,
+      node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
+      node.kind === "array",
+      forcesReplacement,
+      lines,
+    );
+  }
+  lines.push({
+    depth,
+    path: node.path,
+    parts: [{ text: close, cls: "text-gray-400" }],
+    replacement: false,
+  });
+}
+
+function flattenDiff(
+  node: DiffNode,
+  context: ReadonlySet<string>,
+  force: "add" | "del" | null,
+  depth: number,
+  keyText: string | null,
+  inArray: boolean,
+  forcesReplacement: (path: string) => boolean,
+  lines: DiffLine[],
+): void {
+  if (node.kind === "leaf") {
+    if (node.unchanged && force === null && !context.has(node.path)) return;
+    const marker = diffMarkerFor(node, force);
+    if (inArray && marker === "mod") {
+      lines.push({
+        depth,
+        path: node.path,
+        parts: [
+          { text: "- ", cls: diffMarkerClasses.del },
+          { text: formatValue(node.before), cls: "text-gray-700" },
+          { text: ",", cls: "text-gray-400" },
+        ],
+        replacement: forcesReplacement(node.path),
+      });
+      lines.push({
+        depth,
+        path: node.path,
+        parts: [
+          { text: "+ ", cls: diffMarkerClasses.add },
+          { text: formatValue(node.after), cls: "text-gray-700" },
+          { text: ",", cls: "text-gray-400" },
+        ],
+        replacement: forcesReplacement(node.path),
+      });
+      return;
+    }
+    const parts: { text: string; cls: string }[] = [];
+    if (marker !== null) parts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
+    if (keyText !== null) {
+      parts.push({ text: keyText, cls: "text-gray-900" });
+      parts.push({ text: " = ", cls: "text-gray-400" });
+    }
+    if (node.sensitive) {
+      parts.push({ text: "Sensitive value", cls: "font-medium italic text-gray-500" });
+    } else if (node.unknown) {
+      parts.push({ text: "Known after apply", cls: "font-medium italic text-purple-700" });
+    } else if (marker === "mod") {
+      parts.push({ text: formatValue(node.before), cls: "text-gray-700" });
+      parts.push({ text: " -> ", cls: "text-gray-400" });
+      parts.push({ text: formatValue(node.after), cls: "text-gray-700" });
+    } else {
+      parts.push({
+        text: formatValue(marker === "del" ? node.before : node.after),
+        cls: node.unchanged ? "text-gray-500" : "text-gray-700",
+      });
+    }
+    if (inArray) parts.push({ text: ",", cls: "text-gray-400" });
+    lines.push({ depth, path: node.path, parts, replacement: forcesReplacement(node.path) });
+    return;
+  }
+
+  const isRoot = node.key === null && keyText === null && !inArray;
+  if (!isRoot && node.unchanged && force === null) return;
+  const marker = diffMarkerFor(node, force);
+  const childForce: "add" | "del" | null = force ?? (node.added ? "add" : node.removed ? "del" : null);
+  const childDepth = depth + 1;
+  const width = node.kind === "object" ? maxKeyWidth(node.children) : 0;
+
+  if (isRoot) {
+    for (const child of node.children) {
+      flattenDiff(
+        child,
+        context,
+        childForce,
+        depth,
+        node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
+        node.kind === "array",
+        forcesReplacement,
+        lines,
+      );
+    }
+    return;
+  }
+
+  if (inArray) {
+    if (marker === "mod" && force === null) {
+      emitArrayItemBlock(node, "del", context, depth, forcesReplacement, lines);
+      emitArrayItemBlock(node, "add", context, depth, forcesReplacement, lines);
+    } else {
+      emitArrayItemBlock(node, childForce === null ? "del" : childForce, context, depth, forcesReplacement, lines);
+    }
+    return;
+  }
+
+  const open = node.kind === "array" ? "[" : "{";
+  const close = node.kind === "array" ? "]" : "}";
+  const keyedParts: { text: string; cls: string }[] = [];
+  if (marker !== null) keyedParts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
+  keyedParts.push({ text: keyText ?? "", cls: "text-gray-900" });
+  keyedParts.push({ text: ` = ${open}`, cls: "text-gray-400" });
+  lines.push({ depth, path: node.path, parts: keyedParts, replacement: forcesReplacement(node.path) });
+  for (const child of node.children) {
+    flattenDiff(
+      child,
+      context,
+      childForce,
+      childDepth,
+      node.kind === "object" && child.key !== null ? padKeyText(child.key, width) : null,
+      node.kind === "array",
+      forcesReplacement,
+      lines,
+    );
+  }
+  lines.push({ depth, path: node.path, parts: [{ text: close, cls: "text-gray-400" }], replacement: false });
+}
+
+export function AttributeDiff({
+  change,
+  address,
+  type,
+  name,
+}: Readonly<{ change: Change; address: string; type?: string | undefined; name?: string | undefined }>): React.JSX.Element {
   const rows = attributeDiff(change);
   const contextualUnchanged = new Set(
     rows
       .filter((row): boolean => row.unchanged && !row.sensitive && ["id", "name"].includes(row.path))
       .map((row): string => row.path),
   );
-  const visibleRows = rows.filter((row): boolean => !row.unchanged || contextualUnchanged.has(row.path));
-  const hiddenUnchanged = rows.filter((row): boolean => row.unchanged).length - contextualUnchanged.size;
+  const visibleRows = rows.filter((row) => !row.unchanged || contextualUnchanged.has(row.path));
+  const hiddenUnchanged = rows.filter((row) => row.unchanged).length - contextualUnchanged.size;
   const replacementPaths = (change.replace_paths ?? []).map(formatPath);
   const forcesReplacement = (path: string): boolean => replacementPaths.some((replacementPath): boolean =>
     path === replacementPath
@@ -343,45 +641,78 @@ export function AttributeDiff({ change, address }: Readonly<{ change: Change; ad
     );
   }
 
+  const header = type !== undefined && name !== undefined
+    ? ((): { text: string; cls: string } => {
+        const op = operationFor(change.actions);
+        if (op === "create") return { text: "+", cls: diffMarkerClasses.add };
+        if (op === "delete" || op === "remove") return { text: "-", cls: diffMarkerClasses.del };
+        if (op === "replace") return { text: "-/", cls: "text-amber-700" };
+        return { text: "~", cls: diffMarkerClasses.mod };
+      })()
+    : null;
+  const hasHeader = header !== null;
+
+  const root = buildDiffNode(
+    null,
+    "",
+    change.before,
+    change.after,
+    change.before_sensitive,
+    change.after_sensitive,
+    change.after_unknown,
+  );
+  const lines: DiffLine[] = [];
+  if (hasHeader) {
+    lines.push({
+      depth: 0,
+      path: "",
+      parts: [
+        { text: `${header.text} resource `, cls: header.cls },
+        { text: `"${type}" "${name}" {`, cls: "text-gray-900" },
+      ],
+      replacement: false,
+    });
+  }
+  flattenDiff(
+    root,
+    contextualUnchanged,
+    null,
+    hasHeader ? 1 : 0,
+    root.kind === "leaf" ? "value" : null,
+    false,
+    forcesReplacement,
+    lines,
+  );
+  if (unchangedSummary !== "") {
+    lines.push({
+      depth: 1,
+      path: "",
+      parts: [{ text: `# (${unchangedSummary})`, cls: "text-blue-600" }],
+      replacement: false,
+    });
+  }
+  if (hasHeader) {
+    lines.push({ depth: 0, path: "", parts: [{ text: "}", cls: "text-gray-400" }], replacement: false });
+  }
+
   return (
     <div aria-label={`Attribute changes for ${address}`} className="overflow-x-auto border-t border-gray-200 bg-gray-50 px-4 pb-3">
-      <div className="min-w-[560px]">
-        <div className="grid grid-cols-[minmax(120px,1fr)_minmax(120px,1.2fr)_20px_minmax(120px,1.2fr)] gap-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-          <span>Attribute</span>
-          <span>Before</span>
-          <span aria-hidden="true" />
-          <span>After</span>
-        </div>
-        {visibleRows.map((row): React.JSX.Element => {
-          const attrSymbol = row.unchanged ? null : row.before === undefined ? { char: "+", cls: "text-emerald-700" } : row.after === undefined ? { char: "−", cls: "text-red-700" } : { char: "~", cls: "text-blue-700" };
-          return (
-          <div key={row.path} className="grid grid-cols-[minmax(120px,1fr)_minmax(120px,1.2fr)_20px_minmax(120px,1.2fr)] items-start gap-3 border-t border-gray-100 py-2 text-xs">
-            <div className="min-w-0 flex items-center gap-1.5">
-              {attrSymbol !== null && <span aria-hidden="true" className={`shrink-0 text-xs font-semibold ${attrSymbol.cls}`}>{attrSymbol.char}</span>}
-              <code className="break-all font-mono font-medium text-gray-700">{row.path}</code>
-              {forcesReplacement(row.path) && (
-                <span className="ml-1 block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                  Forces replacement
-                </span>
-              )}
-            </div>
-            {row.unchanged ? (
-              <div className="col-span-3 text-gray-500">
-                <Value value={row.after} sensitive={row.sensitive} />
-              </div>
-            ) : (
-              <>
-                <Value value={row.before} sensitive={row.sensitive} />
-                <span aria-hidden="true" className="text-center text-gray-300">→</span>
-                <Value value={row.after} sensitive={row.sensitive} unknown={row.unknown} />
-              </>
+      <div className="min-w-[560px] py-2 font-mono text-xs leading-5">
+        {lines.map((line, index): React.JSX.Element => (
+          <div key={index} className="flex items-baseline whitespace-pre">
+            <code>
+              <span className="text-gray-400">{" ".repeat(line.depth * 2)}</span>
+              {line.parts.map((part, partIndex): React.JSX.Element => (
+                <span key={partIndex} className={part.cls}>{part.text}</span>
+              ))}
+            </code>
+            {line.replacement && (
+              <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                Forces replacement
+              </span>
             )}
           </div>
-          );
-        })}
-        {unchangedSummary !== "" && (
-          <p className="border-t border-gray-100 py-2 text-xs text-blue-600">… {unchangedSummary}</p>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -416,6 +747,10 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   const [copied, setCopied] = useState(false);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
+  // Plan JSON always names the resource; fall back to the final address element
+  // so the structured header renders for hand-built fixtures too.
+  const fallbackName = resource.name
+    ?? (resource.address.split(".").pop() ?? undefined);
 
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
@@ -495,13 +830,13 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
                 </code>
               </span>
             )}
-            {resource.action_reason !== undefined && (
+            {resource.action_reason !== undefined && resource.action_reason !== "" && (
               <span>Reason: {actionReasonLabel(resource.action_reason)}</span>
             )}
           </div>
         </div>
       </summary>
-      {expanded && <AttributeDiff change={resource.change} address={resource.address} />}
+      {expanded && <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={fallbackName} />}
     </details>
   );
 }
@@ -606,7 +941,7 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
               <span className="inline-flex items-center rounded border border-gray-300 bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
               <span className="text-gray-500">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
             </summary>
-            <AttributeDiff change={output} address={`output.${name}`} />
+            <AttributeDiff change={output} address={`output.${name}`} name={name} />
           </details>
         ))}
       </div>

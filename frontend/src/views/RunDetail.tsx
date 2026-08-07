@@ -803,7 +803,17 @@ export function RunDetail({
     : undefined;
   const duration = TERMINAL_STATUSES.has(status)
     ? formatDuration(durationStart, durationEnd)
-    : "In progress";
+    : planStatus === "finished"
+      ? formatDuration(durationStart, validTimestampValues[validTimestampValues.length - 1] ?? durationStart)
+      : "In progress";
+  // When a phase completed but left no captured raw log (e.g. structured JSON
+  // output exists), don't claim the phase never produced output.
+  const planRawLogMessage = planStatus === "finished"
+    ? "No raw plan log was captured for this run (structured output is shown above)."
+    : "Plan output is not available yet.";
+  const applyRawLogMessage = applyStatus === "finished"
+    ? "No raw apply log was captured for this run."
+    : "Apply output is not available yet.";
   const summaryCounts = applyStatus === "finished" ? applyCounts : planCounts;
   const summaryImportCount = applyStatus === "finished"
     ? applyCounts?.["resource-imports"] ?? planImportCount
@@ -863,6 +873,26 @@ export function RunDetail({
     && status !== "planned_and_finished"
     && !terminatedBeforeApply;
   const successfulStatus = ["applied", "planned_and_finished"].includes(status);
+  const showCombinedEmptyActivity = TERMINAL_STATUSES.has(status)
+    && runEvents.length === 0
+    && comments.length === 0;
+
+  const commentForm = canComment ? (
+    <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-gray-200 p-5">
+      <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-gray-900">Add a comment</label>
+      <textarea
+        id="run-comment"
+        rows={3}
+        value={commentBody}
+        onChange={(event): void => { setCommentBody(event.target.value); }}
+        className="w-full resize-y rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+        placeholder="Share context about this run"
+      />
+      <div className="mt-2 flex justify-end">
+        <Button type="submit" disabled={commentBody.trim() === "" || pendingAction !== ""}>Add comment</Button>
+      </div>
+    </form>
+  ) : null;
 
   return (
     <div className="w-full">
@@ -1070,17 +1100,14 @@ export function RunDetail({
                     timestamps={plan?.attributes["status-timestamps"] ?? timestamps}
                     logUrl={plan?.attributes["log-read-url"]}
                   />
-                  <ResourceCounts
-                    additions={planCounts["resource-additions"]}
-                    changes={planCounts["resource-changes"]}
-                    destructions={planCounts["resource-destructions"]}
-                    imports={planImportCount}
-                    status={planStatus}
-                  />
-                  {planActionCount !== null && (
-                    <span className="text-xs text-gray-500">
-                      <span className="font-semibold text-gray-700">Actions:</span> {planActionCount} to invoke
-                    </span>
+                  {applyStatus === "finished" && (
+                    <ResourceCounts
+                      additions={planCounts["resource-additions"]}
+                      changes={planCounts["resource-changes"]}
+                      destructions={planCounts["resource-destructions"]}
+                      imports={planImportCount}
+                      status={planStatus}
+                    />
                   )}
                 </div>
               </div>
@@ -1100,7 +1127,7 @@ export function RunDetail({
                 Raw plan log
               </summary>
               <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
-                {planLogs !== "" ? planLogs : "Plan output is not available yet."}
+                {planLogs !== "" ? planLogs : planRawLogMessage}
               </pre>
             </details>
           </details>
@@ -1272,18 +1299,14 @@ export function RunDetail({
                     timestamps={apply?.attributes["status-timestamps"] ?? timestamps}
                     logUrl={apply?.attributes["log-read-url"]}
                   />
-                  <ResourceCounts
-                    additions={applyCounts?.["resource-additions"]}
-                    changes={applyCounts?.["resource-changes"]}
-                    destructions={applyCounts?.["resource-destructions"]}
-                    imports={applyCounts?.["resource-imports"] ?? planImportCount}
-                    status={applyStatus}
-                  />
-                  {planActionCount !== null && (
-                    <span className="text-xs text-gray-500">
-                      <span className="font-semibold text-gray-700">Actions:</span> {planActionCount}{" "}
-                      {applyStatus === "finished" ? "invoked" : "to invoke"}
-                    </span>
+                  {applyStatus !== "finished" && (
+                    <ResourceCounts
+                      additions={applyCounts?.["resource-additions"]}
+                      changes={applyCounts?.["resource-changes"]}
+                      destructions={applyCounts?.["resource-destructions"]}
+                      imports={applyCounts?.["resource-imports"] ?? planImportCount}
+                      status={applyStatus}
+                    />
                   )}
                 </div>
               </div>
@@ -1311,7 +1334,7 @@ export function RunDetail({
                 Raw apply log
               </summary>
               <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
-                {applyLogs !== "" ? applyLogs : "Apply output is not available yet."}
+                {applyLogs !== "" ? applyLogs : applyRawLogMessage}
               </pre>
             </details>
           </details>
@@ -1418,6 +1441,19 @@ export function RunDetail({
             </section>
           )}
 
+          {showCombinedEmptyActivity ? (
+            <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
+                <History className="size-5 text-gray-400" aria-hidden="true" />
+                <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
+                <h2 id="activity-heading" className="font-semibold text-gray-950">Activity &amp; comments</h2>
+                <span className="text-xs text-gray-500">0</span>
+              </div>
+              <p className="px-5 py-4 text-sm text-gray-500">No run activity or comments yet.</p>
+              {commentForm}
+            </section>
+          ) : (
+            <>
           <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
             <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
               <History className="size-5 text-gray-400" aria-hidden="true" />
@@ -1506,23 +1542,10 @@ export function RunDetail({
                 </article>
               ))}
             </div>
-            {canComment && (
-              <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-gray-200 p-5">
-                <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-gray-900">Add a comment</label>
-                <textarea
-                  id="run-comment"
-                  rows={3}
-                  value={commentBody}
-                  onChange={(event): void => { setCommentBody(event.target.value); }}
-                  className="w-full resize-y rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-                  placeholder="Share context about this run"
-                />
-                <div className="mt-2 flex justify-end">
-                  <Button type="submit" disabled={commentBody.trim() === "" || pendingAction !== ""}>Add comment</Button>
-                </div>
-              </form>
-            )}
+            {commentForm}
           </section>
+            </>
+          )}
       </div>
     </div>
   );
