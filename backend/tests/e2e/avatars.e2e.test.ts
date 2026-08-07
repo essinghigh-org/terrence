@@ -81,7 +81,15 @@ beforeAll(async (): Promise<void> => {
 });
 
 afterAll(async (): Promise<void> => {
-  (app.server as unknown as { stop(): void }).stop();
+  // Fully tear down the listening app: stop it AND null app.server. A shared
+  // Bun worker is reused across test FILES, so leaving app.server set here
+  // breaks later files' synthetic app.handle() requests (client-IP and
+  // rate-limit-key resolution both branch on `server` being non-null).
+  const running = app as unknown as { server: { stop(): unknown } | null };
+  if (running.server !== null) {
+    running.server.stop();
+    running.server = null;
+  }
   upstream.stop();
   rmSync(storage, { recursive: true, force: true });
   if (previousStorageDir === undefined) delete process.env.STORAGE_DIR;
