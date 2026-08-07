@@ -43,14 +43,15 @@ afterAll(async (): Promise<void> => {
 
 describe("avatar proxy route", (): void => {
   it("serves a proxied avatar at its opaque key with a long cache; 404 for unknown keys", async (): Promise<void> => {
-    // The admin-configured GitHub App origin makes this loopback host trusted.
+    // The bound `github-app` integration origin makes this loopback host trusted.
     process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
-    const key = await AvatarService.record("test", `${origin}avatar.png`);
+    const key = await AvatarService.record("github-app", `${origin}avatar.png`);
     const res = await app.handle(new Request(`http://t/api/v2/avatars/${key}`));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, max-age=86400");
     expect(res.headers.get("content-type")).toBe("image/png");
-    expect(res.headers.get("etag")).toBe(`"${key}"`);
+    // ETag derives from the image bytes (content hash), not the URL key.
+    expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{64}"$/);
     expect(Buffer.from(new Uint8Array(await res.arrayBuffer())).equals(PNG)).toBeTrue();
     delete process.env.GITHUB_APP_HTTP_URL;
 
@@ -62,18 +63,25 @@ describe("avatar proxy route", (): void => {
 
   it("honours 304 revalidation when the browser sends If-None-Match", async (): Promise<void> => {
     process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
-    const key = await AvatarService.record("avatar", `${origin}avatar.png`);
-    // Prime the cache, then a revalidation request must 304.
-    await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+    const key = await AvatarService.record("github-app", `${origin}avatar.png`);
+    // Prime the cache, then a revalidation request with the returned ETag must
+    // 304 — and the 304 must carry the cache metadata.
+    const primed = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+    expect(primed.status).toBe(200);
+    const etag = primed.headers.get("etag");
+    expect(etag).not.toBeNull();
     const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`, {
-      headers: { "If-None-Match": `"${key}"` },
+      headers: { "If-None-Match": etag ?? "" },
     }));
     expect(res.status).toBe(304);
+    expect(res.headers.get("etag")).toBe(etag);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=86400");
     delete process.env.GITHUB_APP_HTTP_URL;
   });
 
   it("refuses a non-trusted private destination (SSRF), including shape-mismatch", async (): Promise<void> => {
-    // Loopback origin is NOT in the trusted set here, so it must be rejected.
+    // An UNBOUND provider id gets no private exception even when a GitHub App
+    // origin is configured — trust is integration-scoped, never global.
     process.env.GITHUB_APP_HTTP_URL = "http://example.com";
     const key = await AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
     const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
@@ -81,12 +89,22 @@ describe("avatar proxy route", (): void => {
     delete process.env.GITHUB_APP_HTTP_URL;
   });
 
+  it("scopes the private exception to the matching integration origin", async (): Promise<void> => {
+    // Trusted origin is configured, but the avatar URL is on a DIFFERENT host
+    // than the underlying integration -> still refused (no cross-host trust).
+    process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
+    const key = await AvatarService.record("github-app", "http://127.0.0.1:1/avatar.png");
+    const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+    expect([422, 502]).toContain(res.status);
+    delete process.env.GITHUB_APP_HTTP_URL;
+  });
+
   it("rejects non-image and mislabeled content from the upstream", async (): Promise<void> => {
     process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
-    const text = await AvatarService.record("avatar", `${origin}text.txt`);
+    const text = await AvatarService.record("github-app", `${origin}text.txt`);
     const rText = await app.handle(new Request(`https://t/api/v2/avatars/${text}`));
     expect(rText.status).toBe(415);
-    const fake = await AvatarService.record("avatar", `${origin}fake.png`);
+    const fake = await AvatarService.record("github-app", `${origin}fake.png`);
     const rFake = await app.handle(new Request(`https://t/api/v2/avatars/${fake}`));
     expect(rFake.status).toBe(415);
     delete process.env.GITHUB_APP_HTTP_URL;

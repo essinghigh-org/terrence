@@ -2,9 +2,11 @@ import { describe, expect, it } from "bun:test";
 import {
   AvatarService,
   avatarCacheKey,
-  isPrivateIp,
-  isPrivateIpv4,
-  isPrivateIpv6,
+  isLiteralIpv4,
+  isLiteralIpv6,
+  isNonPublicAddress,
+  isNonPublicIpv4,
+  isNonPublicIpv6,
 } from "../../src/lib/avatars";
 
 describe("avatarCacheKey", (): void => {
@@ -13,7 +15,6 @@ describe("avatarCacheKey", (): void => {
     const keyB = avatarCacheKey("vcs", "https://gitlab.example.com/uploads/avatar/1.png");
     expect(keyA).toBe(keyB);
     expect(keyA).toMatch(/^[0-9a-f]{64}$/);
-    // The key is opaque: a changed URL must not be recoverable, only different.
     expect(avatarCacheKey("vcs", "https://gitlab.example.com/uploads/avatar/2.png")).not.toBe(keyA);
   });
 
@@ -37,34 +38,65 @@ describe("AvatarService.resolveUrl", (): void => {
   });
 });
 
-describe("private-range detection (SSRF)", (): void => {
-  it("rejects loopback / RFC1918 / link-local / CGNAT IPv4", (): void => {
-    for (const ip of ["127.0.0.1", "10.0.0.5", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0"]) {
-      expect(isPrivateIp(ip)).toBeTrue();
+describe("address classification (SSRF)", (): void => {
+  it("rejects loopback / RFC1918 / link-local / CGNAT / metadata IPv4", (): void => {
+    for (const ip of ["127.0.0.1", "127.0.0.0", "10.0.0.5", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0"]) {
+      expect(isNonPublicIpv4(ip)).toBeTrue();
+    }
+  });
+
+  it("rejects IPv4 multicast 224.0.0.0/4 and reserved/broadcast", (): void => {
+    for (const ip of ["224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255"]) {
+      expect(isNonPublicIpv4(ip)).toBeTrue();
     }
   });
 
   it("allows public IPv4", (): void => {
-    for (const ip of ["8.8.8.8", "1.1.1.1", "140.82.112.5"]) {
-      expect(isPrivateIp(ip)).toBeFalse();
-    }
+      for (const ip of ["8.8.8.8", "1.1.1.1", "140.82.112.5"]) {
+        expect(isNonPublicIpv4(ip)).toBeFalse();
+      }
+    });
+
+  it("rejects IPv6 loopback, ULA, and multicast ff00::/8", (): void => {
+    expect(isNonPublicIpv6("::1")).toBeTrue();
+    expect(isNonPublicIpv6("fc00::1")).toBeTrue();
+    expect(isNonPublicIpv6("fd12:3456::1")).toBeTrue();
+    expect(isNonPublicIpv6("ff00::1")).toBeTrue();
+    expect(isNonPublicIpv6("ff02::1")).toBeTrue();
   });
 
-  it("rejects IPv6 loopback / link-local / ULA and allows public v6", (): void => {
-    expect(isPrivateIp("::1")).toBeTrue();
-    expect(isPrivateIp("fe80::1")).toBeTrue();
-    expect(isPrivateIp("fd00::1")).toBeTrue();
-    expect(isPrivateIp("fc00::1")).toBeTrue();
-    expect(isPrivateIp("2606:4700:4700::1111")).toBeFalse();
+  it("rejects IPv6 link-local fe80::/10 (fe80-febf, not just the fe80 prefix)", (): void => {
+    expect(isNonPublicIpv6("fe80::1")).toBeTrue();
+    expect(isNonPublicIpv6("fe9f::1")).toBeTrue();   // top hextet 0xfe9f still /10
+    expect(isNonPublicIpv6("febf::1")).toBeTrue();   // top of fe80::/10
+    // fec0:: (site-local, legacy) is above the /10 boundary — not link-local.
+    expect(isNonPublicIpv6("fec0::1")).toBeFalse();
   });
 
-  it("classifies IPv4-mapped addresses by their embedded IPv4", (): void => {
-    expect(isPrivateIp("::ffff:10.0.0.1")).toBeTrue();
-    expect(isPrivateIp("::ffff:8.8.8.8")).toBeFalse();
+  it("allows public IPv6", (): void => {
+    expect(isNonPublicIpv6("2606:4700:4700::1111")).toBeFalse();
+    expect(isNonPublicIpv6("2001:4860:4860::8888")).toBeFalse();
   });
 
-  it("exports consistent helpers", (): void => {
-    expect(isPrivateIpv4("127.0.0.1")).toBeTrue();
-    expect(isPrivateIpv6("::1")).toBeTrue();
+  it("classifies IPv4-mapped ::ffff:a.b.c.d by the embedded IPv4", (): void => {
+    expect(isNonPublicAddress("::ffff:10.0.0.1")).toBeTrue();
+    expect(isNonPublicAddress("::ffff:169.254.169.254")).toBeTrue();
+    expect(isNonPublicAddress("::ffff:8.8.8.8")).toBeFalse();
+  });
+
+  it("isNonPublicAddress handles plain v4 and v6", (): void => {
+    expect(isNonPublicAddress("127.0.0.1")).toBeTrue();
+    expect(isNonPublicAddress("224.0.0.1")).toBeTrue();
+    expect(isNonPublicAddress("::1")).toBeTrue();
+    expect(isNonPublicAddress("8.8.8.8")).toBeFalse();
+  });
+
+  it("detects literal IPs separately from hostnames", (): void => {
+    expect(isLiteralIpv4("8.8.8.8")).toBeTrue();
+    expect(isLiteralIpv4("300.1.1.1")).toBeFalse(); // invalid octet
+    expect(isLiteralIpv4("example.com")).toBeFalse();
+    expect(isLiteralIpv6("::1")).toBeTrue();
+    expect(isLiteralIpv6("2001:db8::1")).toBeTrue();
+    expect(isLiteralIpv6("example.com")).toBeFalse();
   });
 });

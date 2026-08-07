@@ -10,22 +10,32 @@
 //
 // Fetch rules (OWASP SSRF guidance):
 //   - http/https only, no URL credentials
-//   - resolve A/AAAA and reject loopback/link-local/multicast/private ranges
-//     UNLESS the origin is a configured VCS integration (admin-trusted:
-//     oauth clients' httpUrl or the GitHub App http URL) — self-hosted GitLab
-//     at 10.x is legitimate
-//   - redirects are never followed (redirect: "error")
+//   - DNS is resolved, every returned address is classified, and the HTTP
+//     connection is PINNED to a validated address while the original hostname
+//     is retained for the Host header and TLS SNI/cert verification. This
+//     closes the DNS-rebinding / TOCTOU gap between "validate" and "connect":
+//     we never blindly `fetch(url)` after resolving (which would re-resolve).
+//   - resolution/safety fails CLOSED: if we cannot look the host up safely, we
+//     refuse to fetch at all.
+//   - non-public networks are rejected unless the destination origin equals
+//     the single VCS integration that supplied the avatar (integration-scoped
+//     trust, not a global allow-list).
+//   - redirects are never followed
 //   - short timeout, 2 MiB response cap, image MIME + magic-byte sniffing
 //   - no incoming cookies/Authorization are ever forwarded
 //
 // Caching: storage/avatars/<2-hex>/<key>.json (metadata) + <key>.img (bytes).
-// The browser gets Cache-Control: private, max-age=86400 + ETag; the server
-// revalidates the upstream copy with If-None-Match / If-Modified-Since and
+// The browser ETag is derived from SHA-256 of the cached bytes, so it changes
+// when the avatar changes (not when the URL stays the same); responses use
+// Cache-Control: private, max-age=86400 and 304s carry the cache metadata.
+// The server revalidates upstream with If-None-Match / If-Modified-Since and
 // serves a stale cached copy if the upstream is unreachable.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import http from "node:http";
+import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { db } from "../db";
 
@@ -53,6 +63,8 @@ export type AvatarMeta = Readonly<{
   fetchedAt: number | null;
   expiresAt: number | null;
   bytes: number | null;
+  /** SHA-256 (hex) of the cached image bytes — the browser ETag source. */
+  contentHash: string | null;
 }>;
 
 function avatarDir(): string {
@@ -75,40 +87,45 @@ export function avatarCacheKey(providerId: string, url: string): string {
   return createHash("sha256").update(`${providerId}\u0000${url}`).digest("hex");
 }
 
-// Write-once memoization for the fire-and-forget record writes from the
-// synchronous serializer path (a page of runs enqueues N distinct records).
-const recordedKeys = new Set<string>();
-async function writeAvatarRecord(providerId: string, url: string): Promise<string> {
-  const key = avatarCacheKey(providerId, url);
-  if (recordedKeys.has(key) || existsSync(metaPath(key))) return key;
-  recordedKeys.add(key);
-  const dir = join(avatarDir(), key.slice(0, 2));
+// ---------------------------------------------------------------------------
+// Pending-record map (solves the write race and the failed-write retry bug)
+//
+// `resolveUrl()` is synchronous but must not hand the browser a URL whose
+// metadata hasn't been (or isn't about to be) persisted. We keep an in-memory
+// map of `key -> writePromise`: resolveUrl sets it before returning, so a
+// subsequent readMeta() awaits it. If the underlying write fails, the entry is
+// removed so it can be retried (fixes the old "recordedKeys.add before the
+// work" bug where a failed write poisoned the key forever).
+// ---------------------------------------------------------------------------
+const pendingWrites = new Map<string, Promise<void>>();
+
+async function writeMeta(meta: AvatarMeta): Promise<void> {
+  const dir = join(avatarDir(), meta.key.slice(0, 2));
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const meta: AvatarMeta = {
-    key, providerId, url, state: "pending",
-    contentType: null, etag: null, lastModified: null,
-    fetchedAt: null, expiresAt: null, bytes: null,
-  };
-  await writeFile(metaPath(key), JSON.stringify(meta), { mode: 0o600 });
+  await writeFile(metaPath(meta.key), JSON.stringify(meta), { mode: 0o600 });
+}
+
+function ensureRecorded(providerId: string, url: string): string {
+  const key = avatarCacheKey(providerId, url);
+  if (pendingWrites.has(key)) return key;
+  const write = (async (): Promise<void> => {
+    const meta: AvatarMeta = {
+      key, providerId, url, state: "pending",
+      contentType: null, etag: null, lastModified: null,
+      fetchedAt: null, expiresAt: null, bytes: null, contentHash: null,
+    };
+    await writeMeta(meta);
+  })();
+  // On failure drop the entry so a later call retries the persistence.
+  void write.catch(() => pendingWrites.delete(key));
+  pendingWrites.set(key, write);
   return key;
 }
 
-/** Synchronous serializer helper: same-origin service URL or null. */
-function resolveUrl(providerId: string, url: string | null | undefined): string | null {
-  if (typeof url !== "string" || url === "") return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-  const key = avatarCacheKey(providerId, url);
-  void writeAvatarRecord(providerId, url);
-  return `/api/v2/avatars/${key}`;
-}
-
+/** readMeta: await any in-flight record write first, then load the file. */
 async function readAvatarMeta(key: string): Promise<AvatarMeta | null> {
+  const pending = pendingWrites.get(key);
+  if (pending !== undefined) await pending.catch(() => undefined);
   try {
     const raw = await readFile(metaPath(key), "utf8");
     const parsed = JSON.parse(raw) as Partial<AvatarMeta>;
@@ -119,69 +136,168 @@ async function readAvatarMeta(key: string): Promise<AvatarMeta | null> {
   }
 }
 
-async function saveAvatarMeta(meta: AvatarMeta): Promise<void> {
-  await writeFile(metaPath(meta.key), JSON.stringify(meta), { mode: 0o600 });
+/** Synchronous serializer-facing: same-origin service URL or null. */
+function resolveUrl(providerId: string, url: string | null | undefined): string | null {
+  if (typeof url !== "string" || url === "") return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const key = ensureRecorded(providerId, url);
+  return `/api/v2/avatars/${key}`;
 }
 
 // ---------------------------------------------------------------------------
-// SSRF validation
+// Address classification (correct: IPv4 multicast, IPv6 link-local /10, etc.)
 // ---------------------------------------------------------------------------
-export function isPrivateIpv4(ip: string): boolean {
-  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const IPV6_TAIL_RE = /^(?:[0-9a-f:]*)?::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
+
+export function isLiteralIpv4(host: string): boolean {
+  const m = IPV4_RE.exec(host);
   if (m === null) return false;
-  const a = Number(m[1]); const b = Number(m[2]);
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true; // link-local / cloud metadata
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  return [m[1]!, m[2]!, m[3]!, m[4]!].every((o: string): boolean => Number(o) <= 255);
+}
+
+export function isLiteralIpv6(host: string): boolean {
+  if (!host.includes(":")) return false;
+  try {
+    parseV6(host);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when an IPv4 address must never be a fetch destination (non-global). */
+export function isNonPublicIpv4(ip: string): boolean {
+  const m = IPV4_RE.exec(ip);
+  if (m === null) return true;
+  const a = Number(m[1]); const b = Number(m[2]); const c = Number(m[3]); const d = Number(m[4]);
+  if (a > 255 || b > 255 || c > 255 || d > 255) return true;
+  return (
+    a === 0 || a === 10 || a === 127                       // unspecified, RFC1918, loopback
+    || (a === 100 && b >= 64 && b <= 127)                  // CGNAT
+    || (a === 169 && b === 254)                            // link-local / cloud metadata
+    || (a === 172 && b >= 16 && b <= 31)                   // RFC1918
+    || (a === 192 && b === 168)                            // RFC1918
+    || (a === 192 && b === 0 && c === 0)                   // IETF protocol assignments
+    || (a === 192 && b === 0 && c === 2)                   // TEST-NET-1
+    || (a === 198 && b === 18)                             // benchmark
+    || (a === 198 && b === 51 && c === 100)                // TEST-NET-2
+    || (a === 203 && b === 0 && c === 113)                 // TEST-NET-3
+    || (a >= 224 && a <= 239)                              // multicast 224.0.0.0/4
+    || a >= 240                                            // reserved / broadcast
+  );
+}
+
+/** Parse an IPv6 literal into a 128-bit bigint (throws on invalid). */
+function parseV6(host: string): bigint {
+  let addr = host;
+  const embedded = /^(.*):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
+  if (embedded !== null && embedded[2] !== undefined) {
+    const v4 = embedded[2].split(".").map(Number);
+    if (v4.some((o: number): boolean => o > 255)) throw new Error("bad v4 tail");
+    const hi = ((v4[0]! << 8) | v4[1]!) & 0xffff;
+    const lo = ((v4[2]! << 8) | v4[3]!) & 0xffff;
+    addr = `${embedded[1]}:${hi.toString(16)}:${lo.toString(16)}`;
+  }
+  const hextets: string[] = [];
+  if (addr.includes("::")) {
+    const split = addr.split("::");
+    const leftRaw = split[0] ?? "";
+    const rightRaw = split[1] ?? "";
+    const left = leftRaw === "" ? [] : leftRaw.split(":");
+    const right = rightRaw === "" ? [] : rightRaw.split(":");
+    if (left.length + right.length >= 8) throw new Error("bad length");
+    for (const part of left) hextets.push(part.padStart(4, "0"));
+    while (hextets.length < 8 - right.length) hextets.push("0000");
+    for (const part of right) hextets.push(part.padStart(4, "0"));
+  } else {
+    const parts = addr.split(":");
+    if (parts.length !== 8) throw new Error("bad length");
+    for (const part of parts) hextets.push(part.padStart(4, "0"));
+  }
+  if (hextets.some((h: string): boolean => !/^[0-9a-fA-F]{4}$/.test(h))) throw new Error("bad hextet");
+  return BigInt(`0x${hextets.join("")}`);
+}
+
+/** True when an IPv6 address must never be a fetch destination (non-global). */
+export function isNonPublicIpv6(ip: string): boolean {
+  let big: bigint;
+  try {
+    big = parseV6(ip);
+  } catch {
+    return true; // unparseable forms are conservatively refused
+  }
+  const topByte = Number((big >> 120n) & 0xffn);
+  const group6 = Number((big >> 112n) & 0xffffn);
+  if (big === 0n) return true;                                      // ::
+  if (big === 1n) return true;                                      // ::1 loopback
+  if (topByte === 0xff) return true;                                // ff00::/8 multicast
+  if (group6 >= 0xfe80 && group6 <= 0xfebf) return true;            // fe80::/10 link-local
+  if (topByte === 0xfc || topByte === 0xfd) return true;            // fc00::/7 ULA
   return false;
 }
 
-export function isPrivateIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  return lower === "::1"
-    || lower.startsWith("fe80") // link-local
-    || lower.startsWith("fc") || lower.startsWith("fd") // ULA
-    || lower.startsWith("ff0"); // multicast (ff00::/8)
+/** True for any address that must not be fetched (non-global, incl. mapped). */
+export function isNonPublicAddress(ip: string): boolean {
+  const mapped = IPV6_TAIL_RE.exec(ip);
+  if (mapped !== null && mapped[1] !== undefined) return isNonPublicIpv4(mapped[1]);
+  if (!ip.includes(":")) return isNonPublicIpv4(ip);
+  return isNonPublicIpv6(ip);
 }
 
-export function isPrivateIp(ip: string): boolean {
-  if (!ip.includes(":")) return isPrivateIpv4(ip);
-  const mapped = ip.toLowerCase().match(/^(?:::ffff:|0:0:0:0:0:ffff:)(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped !== null && mapped[1] !== undefined) return isPrivateIpv4(mapped[1]);
-  return isPrivateIpv6(ip);
+// ---------------------------------------------------------------------------
+// Trusted (integration-scoped) origins
+// ---------------------------------------------------------------------------
+function originOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Origins the administrator explicitly configured as VCS integrations. An
- * avatar hosted on one of these is legitimate even if it resolves to a
- * private network (self-hosted GitLab etc.).
+ * The single origin a provider id may fetch without the public-only
+ * restriction — and only that one. Bound to the specific VCS integration that
+ * supplied the avatar, not a global allow-list, so an org-level oauth client
+ * cannot authorize fetching arbitrary private hosts. `null` = no exception.
  */
-export async function trustedAvatarOrigins(): Promise<Set<string>> {
-  const origins = new Set<string>();
-  try {
-    const clients = await db.query.oauthClients.findMany({ columns: { httpUrl: true } });
-    for (const client of clients) {
-      if (typeof client.httpUrl === "string" && client.httpUrl !== "") addOrigin(origins, client.httpUrl);
+async function authorizedOriginForProvider(providerId: string): Promise<string | null> {
+  // Bound OAuth integration: "vcs:<oauth-clients.id>".
+  const bound = /^vcs:(.+)$/.exec(providerId);
+  if (bound !== null && bound[1] !== undefined) {
+    try {
+      const client = await db.query.oauthClients.findFirst({
+        where: (table, { eq }) => eq(table.id, bound[1] ?? ""),
+        columns: { httpUrl: true },
+      });
+      if (client !== undefined && typeof client.httpUrl === "string" && client.httpUrl !== "") {
+        return originOf(client.httpUrl);
+      }
+    } catch {
+      return null;
     }
-  } catch {
-    // DB unavailable: fall through to env-configured origins only.
+    return null;
   }
-  const githubAppUrl = process.env.GITHUB_APP_HTTP_URL;
-  if (typeof githubAppUrl === "string" && githubAppUrl !== "") addOrigin(origins, githubAppUrl);
-  return origins;
+  if (providerId === "github-app") {
+    const httpUrl = process.env.GITHUB_APP_HTTP_URL;
+    if (typeof httpUrl === "string" && httpUrl !== "") return originOf(httpUrl);
+    return null;
+  }
+  return null; // "user-gravatar", unbound "vcs", etc. have NO private exception
 }
 
-function addOrigin(set: Set<string>, url: string): void {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") set.add(`${parsed.protocol}//${parsed.host}`);
-  } catch {
-    // ignore malformed configured URLs
-  }
-}
-
+// ---------------------------------------------------------------------------
+// DNS + connection pinning
+// ---------------------------------------------------------------------------
 async function resolveHost(hostname: string): Promise<string[] | null> {
   try {
     const result = await Promise.race([
@@ -197,28 +313,115 @@ async function resolveHost(hostname: string): Promise<string[] | null> {
   }
 }
 
-/** Returns an error string when the destination must not be fetched. */
-export async function assertSafeAvatarDestination(url: string, trusted: ReadonlySet<string>): Promise<string | null> {
+type DestinationDecision = { error: string } | { pinned: string };
+
+/** Returns the address to connect to, or an error (fails CLOSED on DNS). */
+async function assertSafeAvatarDestination(url: string, providerId: string): Promise<DestinationDecision> {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return "Invalid avatar URL";
+    return { error: "Invalid avatar URL" };
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "Only http and https avatar URLs are allowed";
-  if (parsed.username !== "" || parsed.password !== "") return "Avatar URLs must not contain credentials";
-  const origin = `${parsed.protocol}//${parsed.host}`;
-  if (trusted.has(origin)) return null; // admin-configured VCS integration
-  const addresses = await resolveHost(parsed.hostname);
-  if (addresses === null) return null; // DNS failure: fetch will surface it; nothing was reached
-  for (const address of addresses) {
-    if (isPrivateIp(address)) return "Avatar URL resolves to a private or loopback address";
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { error: "Only http and https avatar URLs are allowed" };
   }
-  return null;
+  if (parsed.username !== "" || parsed.password !== "") {
+    return { error: "Avatar URLs must not contain credentials" };
+  }
+
+  const hostname = parsed.hostname;
+  const expectedOrigin = `${parsed.protocol}//${parsed.host}`;
+  const authorized = await authorizedOriginForProvider(providerId);
+  const originTrusted = authorized !== null && authorized === expectedOrigin;
+
+  if (isLiteralIpv4(hostname) || isLiteralIpv6(hostname)) {
+    // Literal IP: no DNS involved, classify directly. Trusted integration
+    // origins (e.g. a self-hosted GitLab on a literal private IP) pass.
+    if (!originTrusted && isNonPublicAddress(hostname)) {
+      return { error: "Avatar URL is a non-public address" };
+    }
+    return { pinned: hostname };
+  }
+
+  const resolved = await resolveHost(hostname);
+  if (resolved === null) {
+    // FAIL CLOSED: unsafe/unresolvable lookup => never fall through to a
+    // blind fetch (the old code returned OK on null, opening a TOCTOU hole).
+    return { error: "Could not safely resolve the avatar host" };
+  }
+  for (const address of resolved) {
+    if (!originTrusted && isNonPublicAddress(address)) {
+      // Reject if ANY answer is non-public: split-horizon/rebinding defense.
+      return { error: "Avatar host resolves to a non-public address (loopback/private/multicast)" };
+    }
+  }
+  return { pinned: resolved[0]! };
 }
 
 // ---------------------------------------------------------------------------
-// Fetch + cache
+// Pinned HTTP(S) client
+// ---------------------------------------------------------------------------
+type RawResponse = Readonly<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  bytes: Buffer;
+  truncated: boolean;
+}>;
+
+function requestPinned(target: {
+  scheme: "http" | "https";
+  address: string;  // validated IP / literal host to connect to
+  hostname: string; // original hostname (no port) for Host + TLS SNI
+  port: number;
+  path: string;     // pathname + search
+  headers: Record<string, string>;
+  timeoutMs: number;
+  maxBytes: number;
+}): Promise<RawResponse> {
+  return new Promise((resolvePromise, rejectPromise): void => {
+    const { scheme, address, hostname, port, path, headers, timeoutMs, maxBytes } = target;
+    const mod = scheme === "https" ? https : http;
+    const connectHost = address.includes(":") ? `[${address}]` : address;
+    const defaultPort = scheme === "https" ? 443 : 80;
+    const hostHeader = `${address.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
+    const options: https.RequestOptions = {
+      protocol: `${scheme}:`,
+      host: connectHost,
+      hostname: connectHost,
+      port,
+      path,
+      method: "GET",
+      // TLS SNI + certificate verification stay bound to the ORIGINAL hostname.
+      servername: scheme === "https" ? hostname : undefined,
+      headers: { ...headers, Host: hostHeader },
+      signal: AbortSignal.timeout(timeoutMs),
+    };
+    const request = mod.request(options, (res: http.IncomingMessage): void => {
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let truncated = false;
+      res.on("data", (chunk: Uint8Array): void => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          truncated = true;
+          res.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on("end", (): void => {
+        resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.concat(chunks), truncated });
+      });
+      res.on("error", (error: Error): void => rejectPromise(error));
+    });
+    request.on("error", (error: Error): void => rejectPromise(error));
+    request.end();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fetch + cache (revalidation-aware, content-hashed ETag)
 // ---------------------------------------------------------------------------
 function sniffImageKind(bytes: Uint8Array): string | null {
   const b = Buffer.from(bytes);
@@ -240,79 +443,81 @@ export type AvatarFetchResult = Readonly<{
 
 /** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
 async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
-  const trusted = await trustedAvatarOrigins();
-  const violation = await assertSafeAvatarDestination(meta.url, trusted);
-  if (violation !== null) {
-    return { ok: false, status: 422, message: violation, meta };
+  const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
+  if ("error" in decision) {
+    return { ok: false, status: 422, message: decision.error, meta };
   }
+  const pinned = decision.pinned;
+  const parsed = new URL(meta.url);
+  const scheme = parsed.protocol === "https:" ? "https" : "http";
+  const hostname = parsed.hostname;
+  const port = parsed.port !== "" ? Number(parsed.port) : (scheme === "https" ? 443 : 80);
 
   const headers: Record<string, string> = {};
   if (meta.etag !== null) headers["If-None-Match"] = meta.etag;
   if (meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
+  // Incoming cookies/Authorization are deliberately never forwarded.
 
-  let response: Response;
+  let raw: RawResponse;
   try {
-    response = await fetch(meta.url, {
-      method: "GET",
+    raw = await requestPinned({
+      scheme,
+      address: pinned,
+      hostname,
+      port,
+      path: `${parsed.pathname}${parsed.search}`,
       headers,
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: MAX_AVATAR_BYTES,
     });
   } catch (error) {
     return { ok: false, status: 0, message: error instanceof Error ? error.message : "fetch failed", meta };
   }
 
   const now = Date.now();
-  if (response.status === 304 && hasCachedImage(meta.key)) {
+  if (raw.status === 304 && hasCachedImage(meta.key)) {
+    // Retain the cached content hash — the representation did not change.
     const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + AVATAR_REVALIDATE_MS };
-    await saveAvatarMeta(refreshed);
+    await writeMeta(refreshed);
     return { ok: true, status: 304, message: null, meta: refreshed };
   }
-  if (!response.ok) {
-    return { ok: false, status: response.status, message: `upstream returned ${response.status}`, meta };
+  if (raw.status < 200 || raw.status >= 300) {
+    return { ok: false, status: raw.status, message: `upstream returned ${raw.status}`, meta };
   }
-
-  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (raw.truncated) {
+    return { ok: false, status: 413, message: "avatar exceeds the 2 MiB limit", meta };
+  }
+  const contentType = typeof raw.headers["content-type"] === "string"
+    ? (raw.headers["content-type"] as string).toLowerCase()
+    : "";
   if (!contentType.startsWith("image/")) {
     return { ok: false, status: 415, message: "upstream returned a non-image content type", meta };
   }
-  if (response.body === null) {
-    return { ok: false, status: 0, message: "upstream returned no body", meta };
+  if (raw.bytes.length === 0) {
+    return { ok: false, status: 0, message: "upstream returned an empty body", meta };
   }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.length;
-    if (total > MAX_AVATAR_BYTES) {
-      await reader.cancel();
-      return { ok: false, status: 413, message: "avatar exceeds the 2 MiB limit", meta };
-    }
-    chunks.push(value);
-  }
-  const bytes = Buffer.concat(chunks);
-  const kind = sniffImageKind(new Uint8Array(bytes));
+  const kind = sniffImageKind(new Uint8Array(raw.bytes));
   if (kind === null) {
     return { ok: false, status: 415, message: "upstream bytes are not a recognized image", meta };
   }
   const mime = IMAGE_KIND_TO_MIME[kind] ?? "image/png";
+  // New content => new content hash => new browser ETag (fixes stale-avatar 304).
+  const contentHash = createHash("sha256").update(raw.bytes).digest("hex");
   await mkdir(join(avatarDir(), meta.key.slice(0, 2)), { recursive: true, mode: 0o700 });
-  await writeFile(imgPath(meta.key), bytes, { mode: 0o600 });
+  await writeFile(imgPath(meta.key), raw.bytes, { mode: 0o600 });
   const refreshed: AvatarMeta = {
     ...meta,
     state: "fetched",
     contentType: mime,
-    etag: response.headers.get("etag"),
-    lastModified: response.headers.get("last-modified"),
+    etag: typeof raw.headers.etag === "string" ? raw.headers.etag : meta.etag,
+    lastModified: typeof raw.headers["last-modified"] === "string" ? raw.headers["last-modified"] : meta.lastModified,
     fetchedAt: now,
     expiresAt: now + AVATAR_REVALIDATE_MS,
-    bytes: total,
+    bytes: raw.bytes.length,
+    contentHash,
   };
-  await saveAvatarMeta(refreshed);
-  return { ok: true, status: response.status, message: null, meta: refreshed };
+  await writeMeta(refreshed);
+  return { ok: true, status: raw.status, message: null, meta: refreshed };
 }
 
 async function readCachedImageBytes(key: string): Promise<Buffer | null> {
@@ -325,23 +530,17 @@ async function readCachedImageBytes(key: string): Promise<Buffer | null> {
 
 /**
  * The single abstraction serializers/the route talk to: resolve a remote
- * avatar URL to a same-origin key, remember it, cache, and serve back — never
- * handing the browser a third-party URL and never accepting an arbitrary
- * `?url=`. Higher-level than a dumb proxy: caching + revalidation + serving.
+ * avatar URL to a same-origin key, cache, and serve back — never handing the
+ * browser a third-party URL and never accepting an arbitrary `?url=`. Caching,
+ * revalidation, pinned network access and content-hashed ETags live here.
  */
 export const AvatarService = {
   cacheKey: avatarCacheKey,
-  /** Synchronous serializer helper: `"/api/v2/avatars/<key>"` or `null`. */
   resolveUrl,
-  /** Persist a metadata record the server itself saw during serialization. */
-  record: writeAvatarRecord,
-  /** Fetch/revalidate the upstream and refresh the local copy. Never throws. */
+  record: ensureRecorded,
   refresh: refreshAvatar,
-  /** Whether an image body is cached on disk. */
   hasCached: hasCachedImage,
-  /** Read the persisted metadata for a key, or null. */
   readMeta: readAvatarMeta,
-  /** Read the cached image bytes for a key, or null. */
   readBytes: readCachedImageBytes,
 } as const;
 
