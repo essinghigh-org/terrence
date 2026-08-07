@@ -32,7 +32,7 @@
 // serves a stale cached copy if the upstream is unreachable.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import http from "node:http";
 import https from "node:https";
@@ -44,6 +44,11 @@ const FETCH_TIMEOUT_MS = 6_000;
 const DNS_TIMEOUT_MS = 2_500;
 export const AVATAR_REVALIDATE_MS = 60 * 60 * 1000; // server considers fresh 1h
 export const AVATAR_CLIENT_CACHE = "private, max-age=86400";
+const DEFAULT_CACHE_BYTES = 64 * 1024 * 1024;      // max total avatar disk usage
+const DEFAULT_CACHE_ENTRIES = 2048;                // max entries on disk
+const DEFAULT_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000; // drop untouched after 30d
+// Throttle: sweep at most ~1 in this many successful upstream fetches.
+const SWEEP_EVERY_N_FETCHES = 64;
 
 const IMAGE_KIND_TO_MIME: Readonly<Record<string, string>> = {
   png: "image/png",
@@ -528,6 +533,7 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
     contentHash,
   };
   await writeMeta(refreshed);
+  maybeSweepCache(); // throttled: bounded cache, never append-only
   return { ok: true, status: raw.status, message: null, meta: refreshed };
 }
 
@@ -537,6 +543,135 @@ async function readCachedImageBytes(key: string): Promise<Buffer | null> {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cache garbage collection (bounded: storage/avatars is not append-only)
+// ---------------------------------------------------------------------------
+function positiveEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * Bounded sweep: drops untouched entries past the max age and evicts the
+ * least-recently-fetched entries when the cache exceeds the byte/entry budget.
+ * Metadata-only records (recorded but never fetched) older than an hour are
+ * orphans and are removed too — a future serializer call re-records them.
+ * Best-effort: never throws.
+ */
+async function sweepAvatarCache(): Promise<{ removed: number }> {
+  const dir = avatarDir();
+  const maxBytes = positiveEnv("AVATAR_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
+  const maxEntries = positiveEnv("AVATAR_CACHE_MAX_ENTRIES", DEFAULT_CACHE_ENTRIES);
+  const maxAgeMs = positiveEnv("AVATAR_CACHE_MAX_AGE_MS", DEFAULT_CACHE_AGE_MS);
+  const now = Date.now();
+  let removed = 0;
+
+  let shardNames: string[] = [];
+  try {
+    shardNames = (await readdir(dir, { withFileTypes: true }))
+      .filter((entry): boolean => entry.isDirectory())
+      .map((entry): string => entry.name);
+  } catch {
+    return { removed };
+  }
+
+  // key -> { imgPath, size (img+json), last (fetchedAt ?? mtime), orphan }
+  const entries = new Map<string, { img?: string; json?: string; size: number; last: number }>();
+  for (const shard of shardNames) {
+    const shardPath = join(dir, shard);
+    let names: string[] = [];
+    try {
+      names = (await readdir(shardPath, { withFileTypes: true }))
+        .filter((entry): boolean => entry.isFile() && /^[0-9a-f]{64}\.(json|img)$/.test(entry.name))
+        .map((entry): string => entry.name);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const key = name.slice(0, 64);
+      const record = entries.get(key) ?? { size: 0, last: 0 };
+      if (name.endsWith(".img")) record.img = join(shardPath, name);
+      else record.json = join(shardPath, name);
+      entries.set(key, record);
+    }
+  }
+
+  for (const [key, record] of entries) {
+    let size = 0;
+    let last = 0;
+    if (record.img !== undefined) {
+      try {
+        const imageStat = await stat(record.img);
+        size += imageStat.size;
+        last = imageStat.mtimeMs;
+      } catch {
+        continue; // image vanished; leave the entry alone
+      }
+    }
+    if (record.json !== undefined) {
+      try {
+        const jsonStat = await stat(record.json);
+        size += jsonStat.size;
+        if (last === 0) last = jsonStat.mtimeMs;
+      } catch {
+        // ignore missing json
+      }
+      const meta = await readAvatarMeta(key);
+      if (meta?.fetchedAt !== null && typeof meta?.fetchedAt === "number") last = Math.max(last, meta.fetchedAt);
+    }
+    record.size = size;
+    record.last = last;
+  }
+
+  const removals = new Set<string>();
+  // 1) Age-based: untouched past the max age (and metadata-only orphans).
+  for (const [key, record] of entries) {
+    const orphan = record.img === undefined;
+    if (record.last > 0 && now - record.last > maxAgeMs) removals.add(key);
+    else if (orphan && now - record.last > 60 * 60 * 1000) removals.add(key);
+  }
+  // 2) Budget-based: evict least-recently-fetched until within limits.
+  let totalBytes = 0;
+  const live: Array<{ key: string; last: number; size: number }> = [];
+  for (const [key, record] of entries) {
+    if (removals.has(key)) continue;
+    totalBytes += record.size;
+    live.push({ key, last: record.last, size: record.size });
+  }
+  live.sort((a, b): number => a.last - b.last);
+  // Evict enough oldest entries to reach the entry/byte budgets.
+  const mustRemoveForCount = Math.max(0, live.length - maxEntries);
+  for (let index = 0; index < live.length && (index < mustRemoveForCount || totalBytes > maxBytes); index += 1) {
+    const candidate = live[index];
+    if (candidate === undefined) break;
+    totalBytes -= candidate.size;
+    removals.add(candidate.key);
+  }
+
+  for (const key of removals) {
+    const record = entries.get(key);
+    if (record === undefined) continue;
+    const targets = [record.img, record.json].filter((path): path is string => typeof path === "string");
+    for (const path of targets) {
+      try {
+        await unlink(path);
+        removed += 1;
+      } catch {
+        // already gone
+      }
+    }
+  }
+  return { removed };
+}
+
+let successfulFetchesSinceSweep = 0;
+function maybeSweepCache(): void {
+  successfulFetchesSinceSweep += 1;
+  if (successfulFetchesSinceSweep < SWEEP_EVERY_N_FETCHES) return;
+  successfulFetchesSinceSweep = 0;
+  void sweepAvatarCache();
 }
 
 /**
@@ -554,6 +689,8 @@ export const AvatarService = {
   hasCached: hasCachedImage,
   readMeta: readAvatarMeta,
   readBytes: readCachedImageBytes,
+  /** Bounded GC: age-based + LRU eviction within the byte/entry budget. */
+  sweepCache: sweepAvatarCache,
 } as const;
 
 export { avatarDir, metaPath, imgPath };

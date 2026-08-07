@@ -1,12 +1,18 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AvatarService,
   avatarCacheKey,
+  avatarDir,
+  imgPath,
   isLiteralIpv4,
   isLiteralIpv6,
   isNonPublicAddress,
   isNonPublicIpv4,
   isNonPublicIpv6,
+  metaPath,
 } from "../../src/lib/avatars";
 
 describe("avatarCacheKey", (): void => {
@@ -126,5 +132,73 @@ describe("address classification (SSRF)", (): void => {
     expect(isLiteralIpv6("::1")).toBeTrue();
     expect(isLiteralIpv6("2001:db8::1")).toBeTrue();
     expect(isLiteralIpv6("example.com")).toBeFalse();
+  });
+});
+
+describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
+  const savedEnv: Record<string, string | undefined> = {};
+  let storageDir = "";
+
+  function fabricate(fetchedAt: number): string {
+    const key = avatarCacheKey(`gc${fetchedAt}`, `https://x${fetchedAt}.example.com/a.png`);
+    const shard = join(avatarDir(), key.slice(0, 2));
+    mkdirSync(shard, { recursive: true });
+    writeFileSync(imgPath(key), Buffer.alloc(120, 1));
+    writeFileSync(metaPath(key), JSON.stringify({
+      key, providerId: "gc", url: `https://x${fetchedAt}.example.com/a.png`, state: "fetched",
+      contentType: "image/png", etag: null, lastModified: null, fetchedAt, expiresAt: fetchedAt + 3_600_000, bytes: 120, contentHash: "f".repeat(64),
+    }));
+    return key;
+  }
+
+  function setUp(overrides: Record<string, string>): void {
+    storageDir = mkdtempSync(join(tmpdir(), "avatar-gc-test-"));
+    savedEnv.STORAGE_DIR = process.env.STORAGE_DIR;
+    process.env.STORAGE_DIR = storageDir;
+    for (const [name, value] of Object.entries(overrides)) {
+      savedEnv[name] = process.env[name];
+      process.env[name] = value;
+    }
+  }
+
+  function tearDown(): void {
+    for (const [name, prior] of Object.entries(savedEnv)) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+
+  it("drops entries untouched past the max age", async (): Promise<void> => {
+    setUp({ AVATAR_CACHE_MAX_AGE_MS: "3", AVATAR_CACHE_MAX_BYTES: "999999", AVATAR_CACHE_MAX_ENTRIES: "999" });
+    const now = Date.now();
+    try {
+      const oldKey = fabricate(now - 8_000);
+      const midKey = fabricate(now - 4_000);
+      const freshKey = fabricate(now);
+      const result = await AvatarService.sweepCache();
+      expect(existsSync(imgPath(oldKey))).toBeFalse();
+      expect(existsSync(imgPath(midKey))).toBeFalse();
+      expect(existsSync(imgPath(freshKey))).toBeTrue();
+      expect(result.removed).toBe(4); // 2 img + 2 json
+    } finally {
+      tearDown();
+    }
+  });
+
+  it("evicts least-recently-fetched when over the entry budget", async (): Promise<void> => {
+    setUp({ AVATAR_CACHE_MAX_AGE_MS: "999999999", AVATAR_CACHE_MAX_BYTES: "999999", AVATAR_CACHE_MAX_ENTRIES: "2" });
+    const now = Date.now();
+    try {
+      const newest = fabricate(now);
+      const middle = fabricate(now - 1_000);
+      const oldest = fabricate(now - 2_000);
+      await AvatarService.sweepCache();
+      expect(existsSync(imgPath(oldest))).toBeFalse();
+      expect(existsSync(imgPath(middle))).toBeTrue();
+      expect(existsSync(imgPath(newest))).toBeTrue();
+    } finally {
+      tearDown();
+    }
   });
 });
