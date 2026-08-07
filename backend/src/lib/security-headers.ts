@@ -13,9 +13,9 @@ const CSP = [
   "frame-ancestors 'none'",
   "form-action 'self'",
   "connect-src 'self'",
-  // userResource() emits Gravatar avatar URLs that the layout + account page
-  // render; allow those (avoids blocking every user avatar).
-  "img-src 'self' data: https://www.gravatar.com https://secure.gravatar.com",
+  // userResource() emits Gravatar avatar URLs, and VCS-triggered runs/events
+  // carry GitHub sender/committer avatars (avatars.githubusercontent.com).
+  "img-src 'self' data: https://www.gravatar.com https://secure.gravatar.com https://avatars.githubusercontent.com",
   "media-src 'self'",
   "font-src 'self'",
   "script-src 'self'",
