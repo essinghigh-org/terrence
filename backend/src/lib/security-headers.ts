@@ -5,28 +5,50 @@
 // not police, and a small set of components use dynamic inline `style={}` props,
 // so we allow inline styles ('unsafe-inline' in style-src ONLY) while keeping
 // script-src strict ('self' — no inline/eval).
-const CSP = [
-  "default-src 'self'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "frame-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  "connect-src 'self'",
+//
+// Extra image hosts (self-hosted GitHub Enterprise, GitLab/Bitbucket uploaded
+// avatars, etc.) can be allow-listed without a rebuild via the
+// TERRENCE_CSP_IMG_SRC env var (comma-separated origins appended to img-src).
+const DEFAULT_IMG_SRC = [
+  "'self'",
+  "data:",
   // userResource() emits Gravatar avatar URLs, and VCS-triggered runs/events
   // carry GitHub sender/committer avatars (avatars.githubusercontent.com).
-  "img-src 'self' data: https://www.gravatar.com https://secure.gravatar.com https://avatars.githubusercontent.com",
-  "media-src 'self'",
-  "font-src 'self'",
-  "script-src 'self'",
-  // See notes: theme colors go through the CSSOM (not blocked), but React
-  // style props like DependencyGraph's borderLeftColor are also CSSOM writes;
-  // keeping unsafe-inline here without touching script-src is intentional.
-  "style-src 'self' 'unsafe-inline'",
-].join("; ");
+  "https://www.gravatar.com",
+  "https://secure.gravatar.com",
+  "https://avatars.githubusercontent.com",
+];
+
+function extraImageSources(): string[] {
+  return (process.env.TERRENCE_CSP_IMG_SRC ?? "")
+    .split(",")
+    .map((value): string => value.trim())
+    .filter((value): boolean => value !== "");
+}
+
+/** Build the CSP fresh each call so TERRENCE_CSP_IMG_SRC applies/testable. */
+export function buildContentSecurityPolicy(): string {
+  const imgSrc = [...DEFAULT_IMG_SRC, ...extraImageSources()].join(" ");
+  return [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "connect-src 'self'",
+    `img-src ${imgSrc}`,
+    "media-src 'self'",
+    "font-src 'self'",
+    "script-src 'self'",
+    // See notes: theme colors go through the CSSOM (not blocked), but React
+    // style props like DependencyGraph's borderLeftColor are also CSSOM writes;
+    // keeping unsafe-inline here without touching script-src is intentional.
+    "style-src 'self' 'unsafe-inline'",
+  ].join("; ");
+}
 
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
-  "Content-Security-Policy": CSP,
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "same-origin",
   // Clickjacking: CSP frame-ancestors is the modern control; keep the legacy
@@ -60,6 +82,7 @@ export function staticCacheControl(pathname: string): string | undefined {
 }
 
 export function applySecurityHeaders(target: Record<string, string | number>): void {
+  target["Content-Security-Policy"] = buildContentSecurityPolicy();
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
     if (target[name] === undefined) target[name] = value;
   }
