@@ -4,8 +4,11 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { KeyRound, Trash2 } from "lucide-react";
 
@@ -24,6 +27,43 @@ type Hyok = {
   };
 };
 
+type OidcConfig = {
+  id: string;
+  type: string;
+  attributes: Record<string, unknown>;
+};
+
+type AgentPool = {
+  id: string;
+  attributes: { name: string };
+};
+
+type HyokForm = {
+  name: string;
+  kekId: string;
+  oidcConfigId: string;
+  agentPoolId: string;
+};
+
+const TYPE_LABELS: Readonly<Record<string, string>> = {
+  "aws-oidc-configurations": "AWS",
+  "azure-oidc-configurations": "Azure",
+  "gcp-oidc-configurations": "GCP",
+  "vault-oidc-configurations": "Vault",
+};
+
+function oidcLabel(config: OidcConfig): string {
+  const label = TYPE_LABELS[config.type];
+  return label ?? `${config.type} (${config.id})`;
+}
+
+const emptyForm: HyokForm = {
+  name: "",
+  kekId: "",
+  oidcConfigId: "",
+  agentPoolId: "",
+};
+
 export function HyokConfigurations(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
@@ -38,9 +78,18 @@ export function HyokConfigurations(): React.JSX.Element {
   const [configurationToDelete, setConfigurationToDelete] = useState<Hyok | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [form, setForm] = useState<HyokForm>(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [oidcConfigs, setOidcConfigs] = useState<OidcConfig[]>([]);
+  const [agentPools, setAgentPools] = useState<AgentPool[]>([]);
+
   useEffect((): void => {
     setConfigurations([]);
     setManageableOrganizationName("");
+    setDialogOpen(false);
+    setOidcConfigs([]);
+    setAgentPools([]);
     if (orgName !== "") void loadConfigurations();
   }, [orgName]);
 
@@ -62,17 +111,88 @@ export function HyokConfigurations(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
-      const response = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}/hyok-configurations`,
-      ) as { data: Hyok[] };
+      const [configsResponse, oidcResponse] = await Promise.all([
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/hyok-configurations`) as Promise<{ data: Hyok[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/oidc-configurations`) as Promise<{ data: OidcConfig[] }>,
+      ]);
       if (activeOrganizationName.current !== requestedOrganizationName) return;
-      setConfigurations(response.data);
+      setConfigurations(configsResponse.data);
+      setOidcConfigs(oidcResponse.data);
+      // Agent pools are optional; a lack of read access to them should not
+      // prevent the HYOK list (and the required OIDC options) from loading.
+      try {
+        const agentPoolsResponse = await fetchApi(
+          `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
+        ) as { data?: AgentPool[] };
+        if (activeOrganizationName.current === requestedOrganizationName && Array.isArray(agentPoolsResponse.data)) {
+          setAgentPools(agentPoolsResponse.data);
+        }
+      } catch {
+        // Non-fatal: leave the agent pool select empty.
+      }
     } catch (reason) {
       if (activeOrganizationName.current === requestedOrganizationName) {
         setError(reason instanceof Error ? reason.message : "Failed to load HYOK configurations.");
       }
     } finally {
       if (activeOrganizationName.current === requestedOrganizationName) setLoading(false);
+    }
+  };
+
+  const openCreate = (): void => {
+    setForm(emptyForm);
+    setError("");
+    setDialogOpen(true);
+  };
+
+  const set = (key: keyof HyokForm): ((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void) =>
+    (e): void => { setForm((prev): HyokForm => ({ ...prev, [key]: e.target.value })); };
+
+  const submit = async (): Promise<void> => {
+    setSaving(true);
+    setError("");
+    const name = form.name.trim();
+    const kekId = form.kekId.trim();
+    if (name === "") {
+      setError("A name is required.");
+      setSaving(false);
+      return;
+    }
+    if (kekId === "") {
+      setError("A KMS key id is required.");
+      setSaving(false);
+      return;
+    }
+    if (form.oidcConfigId === "") {
+      setError("An OIDC configuration is required.");
+      setSaving(false);
+      return;
+    }
+    const selectedOidc = oidcConfigs.find((config): boolean => config.id === form.oidcConfigId);
+    const relationships: Record<string, unknown> = {
+      "oidc-configuration": {
+        data: { id: form.oidcConfigId, type: selectedOidc === undefined ? "oidc-configurations" : selectedOidc.type },
+      },
+    };
+    if (form.agentPoolId !== "") {
+      relationships["agent-pool"] = { data: { id: form.agentPoolId, type: "agent-pools" } };
+    }
+    try {
+      await fetchApi(`/organizations/${encodeURIComponent(orgName)}/hyok-configurations`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            attributes: { name, "kek-id": kekId },
+            relationships,
+          },
+        }),
+      });
+      setDialogOpen(false);
+      await loadConfigurations();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to create HYOK configuration.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -92,11 +212,18 @@ export function HyokConfigurations(): React.JSX.Element {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">HYOK configurations</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Bring-your-own-key configurations let Terraform workspaces encrypt run data with customer-managed KMS keys.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">HYOK configurations</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Bring-your-own-key configurations let Terraform workspaces encrypt run data with customer-managed KMS keys.
+          </p>
+        </div>
+        {canManage && (
+          <Button onClick={openCreate}>
+            <span className="mr-1.5 text-base leading-none">+</span> New HYOK configuration
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -110,7 +237,7 @@ export function HyokConfigurations(): React.JSX.Element {
           ) : configurations.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
               <KeyRound className="h-8 w-8" />
-              <p className="text-sm">No HYOK configurations.</p>
+              <p className="text-sm">{canManage ? "No HYOK configurations yet. Create one to get started." : "No HYOK configurations."}</p>
             </div>
           ) : (
             <Table>
@@ -159,6 +286,66 @@ export function HyokConfigurations(): React.JSX.Element {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create HYOK configuration</DialogTitle>
+            <DialogDescription>
+              Encrypt workspace run data with a customer-managed KMS key.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="hyok-name">Name</Label>
+              <Input id="hyok-name" value={form.name} onChange={set("name")} placeholder="my-hyok-config" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="hyok-kek-id">KMS key id</Label>
+              <Input id="hyok-kek-id" value={form.kekId} onChange={set("kekId")} placeholder="alias/terraform/lf4rpw..." />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="hyok-oidc">OIDC configuration</Label>
+              <select
+                id="hyok-oidc"
+                value={form.oidcConfigId}
+                onChange={set("oidcConfigId")}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Select an OIDC configuration</option>
+                {oidcConfigs.map((config): React.JSX.Element => (
+                  <option key={config.id} value={config.id}>{oidcLabel(config)}</option>
+                ))}
+              </select>
+              {oidcConfigs.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No OIDC configurations available for this organization.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="hyok-agent-pool">Agent pool</Label>
+              <select
+                id="hyok-agent-pool"
+                value={form.agentPoolId}
+                onChange={set("agentPoolId")}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">None (optional)</option>
+                {agentPools.map((pool): React.JSX.Element => (
+                  <option key={pool.id} value={pool.id}>{pool.attributes.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
+            <Button onClick={submit} disabled={saving}>
+              {saving ? "Saving…" : "Create HYOK configuration"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={configurationToDelete !== null}

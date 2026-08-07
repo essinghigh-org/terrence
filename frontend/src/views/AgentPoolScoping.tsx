@@ -5,7 +5,10 @@ import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
-import { Boxes } from "lucide-react";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import { Boxes, Plus } from "lucide-react";
 
 // The GET /organizations/:org/agent-pools serializer emits each pool's scope
 // relationships as raw resource identifiers ({ id, type }) — the backend
@@ -47,12 +50,22 @@ export function AgentPoolScoping(): React.JSX.Element {
   const [pools, setPools] = useState<AgentPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
+  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [name, setName] = useState("");
+  const [organizationScoped, setOrganizationScoped] = useState(true);
 
   useEffect((): void => {
     setPools([]);
     setError("");
+    setManageableOrganizationName("");
+    setCreateDialogOpen(false);
     if (orgName !== "") void loadPools();
   }, [orgName]);
 
@@ -73,6 +86,7 @@ export function AgentPoolScoping(): React.JSX.Element {
         setLoading(false);
         return;
       }
+      setManageableOrganizationName(requestedOrganizationName);
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
       ) as { data?: AgentPool[] };
@@ -87,6 +101,37 @@ export function AgentPoolScoping(): React.JSX.Element {
     }
   };
 
+  const createAgentPool = async (): Promise<void> => {
+    if (name.trim() === "") {
+      setFormError("Name is required.");
+      return;
+    }
+    setCreating(true);
+    setFormError("");
+    try {
+      await fetchApi(`/organizations/${encodeURIComponent(orgName)}/agent-pools`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "agent-pools",
+            attributes: {
+              name: name.trim(),
+              "organization-scoped": organizationScoped,
+            },
+          },
+        }),
+      });
+      setCreateDialogOpen(false);
+      setName("");
+      setOrganizationScoped(true);
+      await loadPools();
+    } catch (reason) {
+      setFormError(reason instanceof Error ? reason.message : "Failed to create agent pool.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -96,6 +141,12 @@ export function AgentPoolScoping(): React.JSX.Element {
             Which workspaces and projects each agent pool is allowed, or explicitly excluded, from running in.
           </p>
         </div>
+        {canManage && (
+          <Button onClick={(): void => { setCreateDialogOpen(true); }}>
+            <Plus className="mr-2 h-4 w-4" />
+            New agent pool
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -146,6 +197,37 @@ export function AgentPoolScoping(): React.JSX.Element {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New agent pool</DialogTitle>
+            <DialogDescription>
+              Create a new agent pool with a name and optional organization-wide scoping.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="agent-pool-name">Name</label>
+              <Input id="agent-pool-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-agent-pool" />
+            </div>
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <label className="text-sm" htmlFor="agent-pool-org-scoped">
+                <div className="font-medium">Organization-scoped</div>
+                <div className="text-muted-foreground">When enabled, the agent pool is scoped to the whole organization by default.</div>
+              </label>
+              <input id="agent-pool-org-scoped" type="checkbox" className="h-4 w-4" checked={organizationScoped} onChange={(e): void => { setOrganizationScoped(e.target.checked); }} />
+            </div>
+            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
+            <Button onClick={createAgentPool} disabled={creating}>
+              {creating ? <Spinner /> : "Create agent pool"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
