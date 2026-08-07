@@ -150,6 +150,17 @@ function resolveUrl(providerId: string, url: string | null | undefined): string 
   return `/api/v2/avatars/${key}`;
 }
 
+/**
+ * Serializer-facing helper for VCS-provided avatars. `providerKey` is the
+ * bound integration identity (`"vcs:<oauth-clients.id>"` for OAuth flows,
+ * `"github-app"` for the GitHub App): the private-network exception is only
+ * granted when the avatar's origin matches that integration's own origin.
+ * Unknown/absent keys fall back to the strict unbound provider (no exception).
+ */
+function resolveVcsUrl(providerKey: string | null | undefined, url: string | null | undefined): string | null {
+  return resolveUrl(typeof providerKey === "string" && providerKey !== "" ? providerKey : "vcs", url);
+}
+
 // ---------------------------------------------------------------------------
 // Address classification (correct: IPv4 multicast, IPv6 link-local /10, etc.)
 // ---------------------------------------------------------------------------
@@ -537,6 +548,7 @@ async function readCachedImageBytes(key: string): Promise<Buffer | null> {
 export const AvatarService = {
   cacheKey: avatarCacheKey,
   resolveUrl,
+  resolveVcsUrl,
   record: ensureRecorded,
   refresh: refreshAvatar,
   hasCached: hasCachedImage,

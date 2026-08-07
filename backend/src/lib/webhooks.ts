@@ -51,6 +51,8 @@ type ProviderCredentials = Readonly<{
   apiUrl: string;
   provider: VcsProvider;
   token: string;
+  /** The bound oauth-clients.id that authorized this integration (if OAuth). */
+  oauthClientId?: string;
 }>;
 type VcsCredentialSubject = Readonly<{
   orgId: string;
@@ -453,7 +455,7 @@ async function oauthProviderCredentials(
   );
   if (apiUrl === undefined) return undefined;
   try {
-    return { apiUrl, provider, token: await decryptSecret(token.token) };
+    return { apiUrl, provider, token: await decryptSecret(token.token), oauthClientId: client.id };
   } catch {
     return undefined;
   }
@@ -974,7 +976,10 @@ async function handleOAuthProviderWebhook(
         ...(details.branch === undefined ? {} : { branch: details.branch }),
         ...(details.tag === undefined ? {} : { tag: details.tag }),
         senderUsername: details.senderUsername,
-        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl }),
+        ...(details.senderAvatarUrl === undefined ? {} : {
+          senderAvatarUrl: details.senderAvatarUrl,
+          senderProviderId: credentials.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+        }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
       },
@@ -999,7 +1004,10 @@ async function handleOAuthProviderWebhook(
       source: provider,
       triggerReason: kind,
       actorUsername: details.senderUsername,
-      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl }),
+      ...(details.senderAvatarUrl === undefined ? {} : {
+        actorAvatarUrl: details.senderAvatarUrl,
+        actorProviderId: credentials.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+      }),
     });
     void reportRunVcsStatus(runId, "pending");
 
@@ -1097,7 +1105,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
         ...(details.branch === undefined ? {} : { branch: details.branch }),
         ...(details.tag === undefined ? {} : { tag: details.tag }),
         senderUsername: details.senderUsername,
-        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl }),
+        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl, senderProviderId: "github-app" }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
       },
@@ -1122,7 +1130,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       source: "github",
       triggerReason: isSpeculative ? "pull_request" : "push",
       actorUsername: details.senderUsername,
-      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl }),
+      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl, actorProviderId: "github-app" }),
     });
     void reportRunVcsStatus(runId, "pending");
     configurationVersionIds.push(configurationVersionId);

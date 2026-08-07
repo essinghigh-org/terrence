@@ -38,7 +38,7 @@ type DeepReadonly<T> = T extends (infer R)[]
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
 const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
-type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string; triggeredBy?: string; triggeredByAvatarUrl?: string }>;
+type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: string; commitSha?: string; triggeredBy?: string; triggeredByAvatarUrl?: string; triggeredByProviderId?: string }>;
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
@@ -65,6 +65,7 @@ function originForConfiguration(
     ...(typeof ingress?.commitSha === "string" ? { commitSha: ingress.commitSha } : {}),
     ...(typeof ingress?.senderUsername === "string" ? { triggeredBy: ingress.senderUsername } : {}),
     ...(typeof ingress?.senderAvatarUrl === "string" ? { triggeredByAvatarUrl: ingress.senderAvatarUrl } : {}),
+    ...(typeof ingress?.senderProviderId === "string" ? { triggeredByProviderId: ingress.senderProviderId } : {}),
   };
   return origin;
 }
@@ -482,7 +483,7 @@ export const runRoutes = new Elysia({ name: "runs" })
           "created-at": new Date(event.createdAt).toISOString(),
           "actor-username": event.userId === null ? safeRunEventDetails(event).actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
           "actor-avatar-url": event.userId === null
-            ? AvatarService.resolveUrl("vcs", safeRunEventDetails(event).actorAvatarUrl ?? null)
+            ? AvatarService.resolveVcsUrl(safeRunEventDetails(event).actorProviderId, safeRunEventDetails(event).actorAvatarUrl ?? null)
             : gravatarUrl(usernames.get(event.userId)?.email ?? null),
           details: safeRunEventDetails(event),
         },

@@ -38,6 +38,34 @@ describe("AvatarService.resolveUrl", (): void => {
   });
 });
 
+describe("AvatarService.resolveVcsUrl", (): void => {
+  const url = "https://gitlab.example.com/uploads/avatar/1.png";
+
+  it("binds the cache key to the integration provider id", (): void => {
+    const bound = AvatarService.resolveVcsUrl("vcs:oc-123", url);
+    expect(bound).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
+    const key = bound!.replace("/api/v2/avatars/", "");
+    expect(key).toBe(AvatarService.cacheKey("vcs:oc-123", url));
+    expect(key).not.toBe(AvatarService.cacheKey("vcs", url));
+  });
+
+  it("binds the GitHub App provider id", (): void => {
+    const bound = AvatarService.resolveVcsUrl("github-app", url);
+    const key = bound!.replace("/api/v2/avatars/", "");
+    expect(key).toBe(AvatarService.cacheKey("github-app", url));
+  });
+
+  it("falls back to the strict unbound provider when no key is given", (): void => {
+    const bound = AvatarService.resolveVcsUrl(null, url);
+    const key = bound!.replace("/api/v2/avatars/", "");
+    expect(key).toBe(AvatarService.cacheKey("vcs", url));
+  });
+
+  it("rejects non-http(s) URLs even when bound", (): void => {
+    expect(AvatarService.resolveVcsUrl("vcs:oc-123", "file:///etc/passwd")).toBeNull();
+  });
+});
+
 describe("address classification (SSRF)", (): void => {
   it("rejects loopback / RFC1918 / link-local / CGNAT / metadata IPv4", (): void => {
     for (const ip of ["127.0.0.1", "127.0.0.0", "10.0.0.5", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0"]) {

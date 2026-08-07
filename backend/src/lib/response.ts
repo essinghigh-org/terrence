@@ -608,8 +608,13 @@ export function runResource(
       "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
       "triggered-by": (origin as Record<string, unknown> | undefined)?.triggeredBy ?? null,
       "triggered-by-avatar-url": (() => {
-        const avatar = (origin as Record<string, unknown> | undefined)?.triggeredByAvatarUrl;
-        return AvatarService.resolveUrl("vcs", typeof avatar === "string" ? avatar : null);
+        const originRecord = origin as Record<string, unknown> | undefined;
+        const avatar = originRecord?.triggeredByAvatarUrl;
+        const providerId = originRecord?.triggeredByProviderId;
+        return AvatarService.resolveVcsUrl(
+          typeof providerId === "string" ? providerId : null,
+          typeof avatar === "string" ? avatar : null,
+        );
       })(),
       variables: ((): unknown[] => {
         if (!Array.isArray(run.variables)) return [];
