@@ -305,7 +305,7 @@ describe("GitHub Webhooks", () => {
     };
     expect(runDocument.data.attributes).toMatchObject({
       "triggered-by": "essinghigh",
-      "triggered-by-avatar-url": "https://avatars.githubusercontent.com/u/110120257?v=4",
+      "triggered-by-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
     });
     const eventResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {
       headers: { Authorization: `Bearer ${authToken}` },
@@ -315,7 +315,7 @@ describe("GitHub Webhooks", () => {
     };
     expect(eventDocument.data[0]?.attributes).toMatchObject({
       "actor-username": "essinghigh",
-      "actor-avatar-url": "https://avatars.githubusercontent.com/u/110120257?v=4",
+      "actor-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
     });
     expect(tarballFetches).toBe(1);
     expect(await waitForCommitStatus()).toMatchObject({ state: "pending" });

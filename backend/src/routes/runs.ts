@@ -12,6 +12,7 @@ import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
+import { proxiedAvatarUrl } from "../lib/avatars";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -97,11 +98,10 @@ async function usernamesById(userIds: readonly (string | null)[]): Promise<Reado
 }
 
 function gravatarUrl(email: string | null | undefined): string {
-  if (typeof email === "string" && email !== "") {
-    const hash = createHash('md5').update(email.toLowerCase().trim()).digest('hex');
-    return `https://www.gravatar.com/avatar/${hash}?d=mp&s=80`;
-  }
-  return `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
+  const raw = typeof email === "string" && email !== ""
+    ? `https://www.gravatar.com/avatar/${createHash('md5').update(email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
+    : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
+  return proxiedAvatarUrl("user-gravatar", raw) ?? raw;
 }
 
 const RUN_VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -481,7 +481,9 @@ export const runRoutes = new Elysia({ name: "runs" })
           action: event.action,
           "created-at": new Date(event.createdAt).toISOString(),
           "actor-username": event.userId === null ? safeRunEventDetails(event).actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
-          "actor-avatar-url": event.userId === null ? safeRunEventDetails(event).actorAvatarUrl ?? null : gravatarUrl(usernames.get(event.userId)?.email ?? null),
+          "actor-avatar-url": event.userId === null
+            ? proxiedAvatarUrl("vcs", safeRunEventDetails(event).actorAvatarUrl ?? null)
+            : gravatarUrl(usernames.get(event.userId)?.email ?? null),
           details: safeRunEventDetails(event),
         },
       })),

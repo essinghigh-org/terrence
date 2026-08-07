@@ -53,6 +53,7 @@ import { workspaceTransferRoutes } from "./routes/workspace-transfers";
 import { planExportRoutes } from "./routes/plan-exports";
 import { cidrRangeRoutes } from "./routes/cidr-ranges";
 import { queryRoutes } from "./routes/queries";
+import { avatarHandler } from "./routes/avatars";
 import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
@@ -370,9 +371,10 @@ export const app = new Elysia()
     const cacheControl = staticCacheControl(pathname);
     if (cacheControl !== undefined) {
       headers["Cache-Control"] = cacheControl;
-    } else if (pathname === "/api" || pathname.startsWith("/api/")) {
+    } else if ((pathname === "/api" || pathname.startsWith("/api/")) && headers["Cache-Control"] === undefined) {
       // Control-plane API responses can carry secrets/state; never let a
-      // browser or shared cache persist them.
+      // browser or shared cache persist them (avatar images set their own
+      // Cache-Control intentionally, so we don't override those).
       headers["Cache-Control"] = "no-store";
     }
 
@@ -411,14 +413,26 @@ export const app = new Elysia()
     assets: join(import.meta.dir, "../../frontend/dist"),
     prefix: "/",
   }))
+  // Avatar proxy handled from the SPA catch-all (see `.get("*")` below) so it
+  // is not shadowed by the wildcard route.
   .get("/", serveFrontend)
   .get("/login", serveFrontend)
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
-  .get("*", async ({ request, set }: { request: { url: string }; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string }[] } | undefined> => {
+  .get("*", async ({ request, set }: { request: Request; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string }[] } | undefined> => {
     const url = new URL(request.url);
     const pathname = url.pathname;
+    // Avatar proxy: handled here (the wildcard route is what Elysia matches
+    // for `/api/v2/avatars/<key>`) so it can't be shadowed by a `:param` route.
+    const avatarMatch = /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(pathname);
+    if (avatarMatch !== null && avatarMatch[1] !== undefined) {
+      return avatarHandler({
+        params: { key: avatarMatch[1] },
+        request: request as { headers: Headers },
+        set: set as { status: number | string; headers: Record<string, string | number> },
+      });
+    }
     const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
     if (isApiPath) {
       (set as { status: number }).status = 404;

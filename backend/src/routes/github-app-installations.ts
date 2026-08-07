@@ -8,6 +8,7 @@ import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission
 import { decryptSecret } from "../lib/secrets";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
+import { proxiedAvatarUrl } from "../lib/avatars";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -223,7 +224,7 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
     attributes: {
       name: installation.name,
       "installation-id": installation.installationId,
-      "icon-url": installation.iconUrl,
+      "icon-url": installation.iconUrl === null ? null : proxiedAvatarUrl("github-app", installation.iconUrl),
       "installation-type": installation.installationType,
       "installation-url": installation.installationUrl,
       "created-at": new Date(installation.createdAt).toISOString(),

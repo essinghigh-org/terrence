@@ -204,11 +204,9 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(res.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(res.headers.get("content-security-policy")).toContain("base-uri 'none'");
-    // userResource emits Gravatar avatar URLs — the CSP must allow them.
-    expect(res.headers.get("content-security-policy")).toContain("https://www.gravatar.com");
-    expect(res.headers.get("content-security-policy")).toContain("https://secure.gravatar.com");
-    // VCS-triggered runs emit GitHub sender/committer avatars.
-    expect(res.headers.get("content-security-policy")).toContain("https://avatars.githubusercontent.com");
+    // Avatars are proxied server-side, so img-src stays same-origin.
+    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' data:");
+    expect(res.headers.get("content-security-policy")).not.toContain("https://");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("same-origin");
     expect(res.headers.get("x-frame-options")).toBe("DENY");

@@ -6,29 +6,14 @@
 // so we allow inline styles ('unsafe-inline' in style-src ONLY) while keeping
 // script-src strict ('self' — no inline/eval).
 //
-// Extra image hosts (self-hosted GitHub Enterprise, GitLab/Bitbucket uploaded
-// avatars, etc.) can be allow-listed without a rebuild via the
-// TERRENCE_CSP_IMG_SRC env var (comma-separated origins appended to img-src).
-const DEFAULT_IMG_SRC = [
-  "'self'",
-  "data:",
-  // userResource() emits Gravatar avatar URLs, and VCS-triggered runs/events
-  // carry GitHub sender/committer avatars (avatars.githubusercontent.com).
-  "https://www.gravatar.com",
-  "https://secure.gravatar.com",
-  "https://avatars.githubusercontent.com",
-];
+// Avatars (Gravatar, GitHub/GitLab/Bitbucket, self-hosted VCS) are fetched
+// server-side by the /api/v2/avatars/<opaque-key> proxy, so img-src stays
+// same-origin and no remote image host ever needs to be allow-listed.
+const DEFAULT_IMG_SRC = ["'self'", "data:"];
 
-function extraImageSources(): string[] {
-  return (process.env.TERRENCE_CSP_IMG_SRC ?? "")
-    .split(",")
-    .map((value): string => value.trim())
-    .filter((value): boolean => value !== "");
-}
-
-/** Build the CSP fresh each call so TERRENCE_CSP_IMG_SRC applies/testable. */
+/** Build the CSP fresh each call (kept as a function for testability). */
 export function buildContentSecurityPolicy(): string {
-  const imgSrc = [...DEFAULT_IMG_SRC, ...extraImageSources()].join(" ");
+  const imgSrc = DEFAULT_IMG_SRC.join(" ");
   return [
     "default-src 'self'",
     "base-uri 'none'",

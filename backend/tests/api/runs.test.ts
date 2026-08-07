@@ -157,7 +157,7 @@ describe("TFE API v2 - Runs", () => {
     const includedUser = document.included!.find((u: { type: string }): boolean => u.type === "users");
     expect(includedUser).toBeDefined();
     expect(includedUser!.attributes.username).toBe("run-owner");
-    expect(includedUser!.attributes["avatar-url"]).toContain("gravatar.com/avatar/");
+    expect(includedUser!.attributes["avatar-url"]).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 
   it("lists runs with created-by included user data", async () => {
@@ -203,7 +203,7 @@ describe("TFE API v2 - Runs", () => {
     const includedUser = listData.included!.find((u) => u.type === "users");
     expect(includedUser).toBeDefined();
     expect(includedUser!.attributes.username).toBe("run-owner");
-    expect(includedUser!.attributes["avatar-url"]).toContain("gravatar.com/avatar/");
+    expect(includedUser!.attributes["avatar-url"]).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 
   it("rejects destroy runs when destroy plans are disabled", async () => {

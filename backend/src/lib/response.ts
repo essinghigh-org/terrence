@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { db } from "../db";
+import { proxiedAvatarUrl } from "./avatars";
 import type {
   workspaces, stateVersions, apiTokens, variableSets, workspaceVariables,
   projects, runs
@@ -39,9 +40,11 @@ export function userResource(
   user: UserParam,
   authenticatedResource: AuthenticatedResourceParam = { id: user.id, type: "users" }
 ) {
-  const avatarUrl = typeof user.email === "string" && user.email !== ""
+  const rawAvatarUrl = typeof user.email === "string" && user.email !== ""
     ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
     : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
+  // Same-origin avatar proxy: the browser never contacts Gravatar directly.
+  const avatarUrl = proxiedAvatarUrl("user-gravatar", rawAvatarUrl) ?? rawAvatarUrl;
 
   return {
     id: user.id,
@@ -604,7 +607,10 @@ export function runResource(
       "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
       "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
       "triggered-by": (origin as Record<string, unknown> | undefined)?.triggeredBy ?? null,
-      "triggered-by-avatar-url": (origin as Record<string, unknown> | undefined)?.triggeredByAvatarUrl ?? null,
+      "triggered-by-avatar-url": (() => {
+        const avatar = (origin as Record<string, unknown> | undefined)?.triggeredByAvatarUrl;
+        return proxiedAvatarUrl("vcs", typeof avatar === "string" ? avatar : null);
+      })(),
       variables: ((): unknown[] => {
         if (!Array.isArray(run.variables)) return [];
         return (run.variables as Record<string, unknown>[]).map((v) => ({

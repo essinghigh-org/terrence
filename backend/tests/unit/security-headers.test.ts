@@ -2,37 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { staticCacheControl, staticMimeFor, buildContentSecurityPolicy } from "../../src/lib/security-headers";
 
 describe("buildContentSecurityPolicy", (): void => {
-  it("includes the default avatar CDNs and a strict script-src by default", (): void => {
-    const previous = process.env.TERRENCE_CSP_IMG_SRC;
-    delete process.env.TERRENCE_CSP_IMG_SRC;
-    try {
-      const csp = buildContentSecurityPolicy();
-      expect(csp).toContain("script-src 'self'");
-      expect(csp).toContain("base-uri 'none'");
-      expect(csp).toContain("https://avatars.githubusercontent.com");
-      expect(csp).toContain("https://www.gravatar.com");
-      expect(csp).not.toContain("https://ghe.example.com");
-    } finally {
-      restore(previous);
-    }
+  it("keeps img-src same-origin (avatars are proxied server-side)", (): void => {
+    const csp = buildContentSecurityPolicy();
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).not.toContain("https://");
   });
-
-  it("appends TERRENCE_CSP_IMG_SRC origins to img-src without a rebuild", (): void => {
-    const previous = process.env.TERRENCE_CSP_IMG_SRC;
-    process.env.TERRENCE_CSP_IMG_SRC = "https://ghe.example.com, https://gitlab.example.com";
-    try {
-      const csp = buildContentSecurityPolicy();
-      expect(csp).toContain("img-src 'self' data: https://www.gravatar.com https://secure.gravatar.com https://avatars.githubusercontent.com https://ghe.example.com https://gitlab.example.com");
-      expect(csp).toContain("script-src 'self'");
-    } finally {
-      restore(previous);
-    }
-  });
-
-  function restore(value: string | undefined): void {
-    if (value === undefined) delete process.env.TERRENCE_CSP_IMG_SRC;
-    else process.env.TERRENCE_CSP_IMG_SRC = value;
-  }
 });
 
 describe("staticCacheControl", (): void => {

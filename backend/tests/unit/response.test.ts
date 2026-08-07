@@ -52,17 +52,17 @@ describe("userResource", () => {
     });
   });
 
-  it("generates avatar URL from email hash", () => {
+  it("generates a same-origin proxied avatar URL from an email hash", () => {
     const result = userResource({ id: "u-1", username: "x", email: "test@test.com" });
     const avatarUrl = result.attributes["avatar-url"];
-    expect(avatarUrl).toInclude("gravatar.com/avatar/");
+    expect(avatarUrl).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
+    expect(avatarUrl).not.toContain("gravatar.com");
   });
 
   it("falls back to default avatar when email is empty", () => {
     const result = userResource({ id: "user-fallback", username: "y", email: "" });
     const avatarUrl = result.attributes["avatar-url"];
-    expect(avatarUrl).toInclude("gravatar.com/avatar/00000000000000000000000000000000");
-    expect(avatarUrl).toInclude("d=mp&s=80&f=y");
+    expect(avatarUrl).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 
   it("sets permissions for user type", () => {

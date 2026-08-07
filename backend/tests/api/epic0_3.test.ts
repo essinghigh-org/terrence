@@ -60,7 +60,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.data.attributes["avatar-url"]).toContain("gravatar.com");
+    expect(body.data.attributes["avatar-url"]).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 
   it("lists all users and supports username filtering", async () => {
