@@ -368,7 +368,13 @@ export const app = new Elysia()
       if (mime !== undefined) headers["Content-Type"] = mime;
     }
     const cacheControl = staticCacheControl(pathname);
-    if (cacheControl !== undefined) headers["Cache-Control"] = cacheControl;
+    if (cacheControl !== undefined) {
+      headers["Cache-Control"] = cacheControl;
+    } else if (pathname === "/api" || pathname.startsWith("/api/")) {
+      // Control-plane API responses can carry secrets/state; never let a
+      // browser or shared cache persist them.
+      headers["Cache-Control"] = "no-store";
+    }
 
     // When an Origin is reflected (or the server may vary by origin), the
     // response MUST advertise that with Vary: Origin or shared caches will

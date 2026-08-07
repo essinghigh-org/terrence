@@ -292,12 +292,11 @@ function getStoredThemeId(): ThemeId {
 
 function syncThemeColorMeta(theme: ThemeDefinition): void {
   if (typeof document === "undefined") return;
-  // Theme colors are "h h% l%" triplets; emit a concrete hsl() for the
-  // browser chrome / PWA UI so the address bar matches the active theme.
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta !== null) {
-    const background = theme.colors["background"] ?? "0 0% 100%";
-    meta.setAttribute("content", `hsl(${background})`);
+  // Update every theme-color meta (incl. media-scoped variants) so the
+  // browser chrome tracks the selected theme regardless of prefers-color-scheme.
+  const content = `hsl(${theme.colors["background"] ?? "0 0% 100%"})`;
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    meta.setAttribute("content", content);
   }
 }
 

@@ -212,11 +212,12 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
   });
 
   it("serves the SPA entry page with no-cache revalidation", async () => {
-    // /login is an explicit SPA route, but it returns 404 when the frontend
-    // bundle isn't built (CI builds dist before this suite runs). When the
-    // bundle is present, assert the SPA HTML is revalidated (no-cache).
+    // Skip when the frontend bundle isn't built in this environment (CI builds
+    // dist before the API suite runs; local runs may not have it).
+    const { existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    if (!existsSync(join(import.meta.dir, "../../../frontend/dist/index.html"))) return;
     const res = await app.handle(new Request("http://localhost/login"));
-    if (res.status === 404) return; // frontend/dist not present in this environment
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("no-cache");
   });
