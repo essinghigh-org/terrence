@@ -8,6 +8,7 @@ import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
+import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -357,6 +358,28 @@ export const app = new Elysia()
       && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
     const headers = set.headers as Record<string, string | number>;
     const pathname = new URL(request.url).pathname;
+
+    // Browser/document shell hardening (CSP, clickjacking, referrer, robots,
+    // permissions) + static caching. Applies to every response, so static
+    // assets and SPA HTML get the same treatment as API responses.
+    applySecurityHeaders(headers);
+    if (headers["Content-Type"] === undefined) {
+      const mime = staticMimeFor(pathname);
+      if (mime !== undefined) headers["Content-Type"] = mime;
+    }
+    const cacheControl = staticCacheControl(pathname);
+    if (cacheControl !== undefined) headers["Cache-Control"] = cacheControl;
+
+    // When an Origin is reflected (or the server may vary by origin), the
+    // response MUST advertise that with Vary: Origin or shared caches will
+    // serve one origin's CORS decision to everyone.
+    const originHeader = request.headers.get("origin");
+    const corsConfigured = (process.env.CORS_ORIGIN ?? "").split(",").some((value: string): boolean => value.trim() !== "");
+    if (originHeader !== null || corsConfigured) {
+      const existingVary = headers["Vary"];
+      headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
+    }
+
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
     }
@@ -382,6 +405,7 @@ export const app = new Elysia()
     assets: join(import.meta.dir, "../../frontend/dist"),
     prefix: "/",
   }))
+  .get("/", serveFrontend)
   .get("/login", serveFrontend)
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)

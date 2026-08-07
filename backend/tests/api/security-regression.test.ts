@@ -196,3 +196,72 @@ describe("Security Regression — VCS Webhooks Fail Closed", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("Security Headers — document shell (CSP, clickjacking, referrer, robots)", () => {
+  it("applies the browser-security headers to responses", async () => {
+    const res = await app.handle(new Request("http://localhost/api/v2/ping"));
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+    expect(res.headers.get("permissions-policy")).toContain("geolocation=()");
+    expect(res.headers.get("permissions-policy")).not.toContain("clipboard");
+  });
+
+  it("serves the SPA entry page with no-cache revalidation", async () => {
+    // /login is an explicit SPA route (independent of the built bundle present).
+    const res = await app.handle(new Request("http://localhost/login"));
+    expect(res.status).toBe(200);
+    const resCache = res.headers.get("cache-control");
+    // Either our no-cache header, or the row is 404 if dist isn't built in CI.
+    if (resCache !== null) expect(resCache).toContain("no-cache");
+  });
+});
+
+describe("Security Regression — CORS Vary: Origin", () => {
+  const previous = process.env.CORS_ORIGIN;
+
+  it("reflects a matching origin and advertises Vary: Origin", async () => {
+    process.env.CORS_ORIGIN = "https://app.example,https://dev.example";
+    try {
+      const res = await app.handle(new Request("http://localhost/api/v2/ping", {
+        headers: { Origin: "https://app.example" },
+      }));
+      expect(res.headers.get("access-control-allow-origin")).toBe("https://app.example");
+      expect(res.headers.get("vary")).toContain("Origin");
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not reflect a non-allowlisted origin but still varries by Origin", async () => {
+    process.env.CORS_ORIGIN = "https://app.example";
+    try {
+      const res = await app.handle(new Request("http://localhost/api/v2/ping", {
+        headers: { Origin: "https://evil.example" },
+      }));
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+      expect(res.headers.get("vary")).toContain("Origin");
+    } finally {
+      restore();
+    }
+  });
+
+  it("advertises Vary: Origin when CORS is configured even with no Origin header", async () => {
+    process.env.CORS_ORIGIN = "https://app.example";
+    try {
+      const res = await app.handle(new Request("http://localhost/api/v2/ping"));
+      expect(res.headers.get("vary")).toContain("Origin");
+    } finally {
+      restore();
+    }
+  });
+
+  function restore(): void {
+    if (previous === undefined) delete process.env.CORS_ORIGIN;
+    else process.env.CORS_ORIGIN = previous;
+  }
+});

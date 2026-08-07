@@ -1,0 +1,90 @@
+// Browser/shell hardening headers for the Terrence serving layer.
+//
+// CSP is scoped to the actual SPA: everything is same-origin; theme colors are
+// applied via the CSSOM (element.style.setProperty / classList), which CSP does
+// not police, and a small set of components use dynamic inline `style={}` props,
+// so we allow inline styles ('unsafe-inline' in style-src ONLY) while keeping
+// script-src strict ('self' — no inline/eval).
+const CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "media-src 'self'",
+  "font-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+].join("; ");
+
+export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": CSP,
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "same-origin",
+  // Clickjacking: CSP frame-ancestors is the modern control; keep the legacy
+  // X-Frame-Options for older browsers that ignore frame-ancestors.
+  "X-Frame-Options": "DENY",
+  // Authenticated app: don't want search engines referencing it.
+  "X-Robots-Tag": "noindex, nofollow, noarchive",
+  // Browser capabilities Terrence does not use (clipboard deliberately left
+  // enabled — the UI writes tokens/config to the clipboard).
+  "Permissions-Policy": "geolocation=(), camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), battery=(), accelerometer=(), gyroscope=(), magnetometer=(), xr-spatial-tracking=(), display-capture=(), idle-detection=(), gamepad=(), picture-in-picture=()",
+};
+
+const IMMUTABLE_ASSET_AGE = 31_536_000; // 1 year, hashed filenames never change
+const SHORT_ASSET_AGE = 86_400; // 1 day for favicon/icons
+
+/**
+ * Cache-Control policy for static responses keyed by path.
+ * - Vite emits hashed files under /assets/<name>-<hash>.<ext>: immutable.
+ * - index.html is revalidated so a new deploy (with new hashes) is picked up.
+ * - favicon/manifest/icons: short-lived public cache (revalidate occasionally).
+ * `undefined` means "leave the framework default" (API/uncategorised paths).
+ */
+export function staticCacheControl(pathname: string): string | undefined {
+  if (pathname.startsWith("/assets/")) return `public, max-age=${IMMUTABLE_ASSET_AGE}, immutable`;
+  if (pathname === "/favicon.svg" || pathname.startsWith("/icons/")) return `public, max-age=${SHORT_ASSET_AGE}`;
+  if (pathname === "/manifest.webmanifest") return "no-cache";
+  if (pathname === "/" || pathname === "/login" || pathname === "/register" || pathname.startsWith("/app")) {
+    return "no-cache";
+  }
+  return undefined;
+}
+
+export function applySecurityHeaders(target: Record<string, string | number>): void {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    if (target[name] === undefined) target[name] = value;
+  }
+}
+
+// Static assets served by the Elysia static plugin arrive without a
+// Content-Type; with X-Content-Type-Options: nosniff (and module-script MIME
+// rules) that breaks stylesheets and JS modules. Assign explicit MIME types.
+const STATIC_MIME_TYPES: Readonly<Record<string, string>> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".map": "application/json; charset=utf-8",
+};
+
+export function staticMimeFor(pathname: string): string | undefined {
+  const dot = pathname.lastIndexOf(".");
+  if (dot === -1) return undefined;
+  return STATIC_MIME_TYPES[pathname.slice(dot).toLowerCase()];
+}

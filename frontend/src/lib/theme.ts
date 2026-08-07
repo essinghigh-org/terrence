@@ -290,6 +290,17 @@ function getStoredThemeId(): ThemeId {
   }
 }
 
+function syncThemeColorMeta(theme: ThemeDefinition): void {
+  if (typeof document === "undefined") return;
+  // Theme colors are "h h% l%" triplets; emit a concrete hsl() for the
+  // browser chrome / PWA UI so the address bar matches the active theme.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta !== null) {
+    const background = theme.colors["background"] ?? "0 0% 100%";
+    meta.setAttribute("content", `hsl(${background})`);
+  }
+}
+
 export function applyTheme(themeId?: unknown): ThemeId {
   const theme = getTheme(themeId ?? getStoredThemeId());
   themeRevision += 1;
@@ -301,6 +312,7 @@ export function applyTheme(themeId?: unknown): ThemeId {
   root.style.colorScheme = theme.mode;
   for (const [name, value] of Object.entries(theme.colors)) root.style.setProperty(`--${name}`, value);
   for (const [name, value] of Object.entries(legacyPalette)) root.style.setProperty(`--${name}`, value);
+  syncThemeColorMeta(theme);
 
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme.id);
