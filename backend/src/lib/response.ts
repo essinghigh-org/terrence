@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { db } from "../db";
-import { proxiedAvatarUrl } from "./avatars";
+import { AvatarService } from "./avatars";
 import type {
   workspaces, stateVersions, apiTokens, variableSets, workspaceVariables,
   projects, runs
@@ -44,7 +44,7 @@ export function userResource(
     ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
     : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
   // Same-origin avatar proxy: the browser never contacts Gravatar directly.
-  const avatarUrl = proxiedAvatarUrl("user-gravatar", rawAvatarUrl) ?? rawAvatarUrl;
+  const avatarUrl = AvatarService.resolveUrl("user-gravatar", rawAvatarUrl) ?? rawAvatarUrl;
 
   return {
     id: user.id,
@@ -609,7 +609,7 @@ export function runResource(
       "triggered-by": (origin as Record<string, unknown> | undefined)?.triggeredBy ?? null,
       "triggered-by-avatar-url": (() => {
         const avatar = (origin as Record<string, unknown> | undefined)?.triggeredByAvatarUrl;
-        return proxiedAvatarUrl("vcs", typeof avatar === "string" ? avatar : null);
+        return AvatarService.resolveUrl("vcs", typeof avatar === "string" ? avatar : null);
       })(),
       variables: ((): unknown[] => {
         if (!Array.isArray(run.variables)) return [];

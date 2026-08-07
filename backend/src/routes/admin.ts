@@ -4,7 +4,7 @@ import { users, organizations, workspaces, runs, adminTerraformVersions, adminSe
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
-import { proxiedAvatarUrl } from "../lib/avatars";
+import { AvatarService } from "../lib/avatars";
 import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
 import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
@@ -322,7 +322,7 @@ function gravatarUrl(email: string | null | undefined): string {
     )
   ).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
   const raw = `https://www.gravatar.com/avatar/${hash}?s=80&d=identicon`;
-  return proxiedAvatarUrl("user-gravatar", raw) ?? raw;
+  return AvatarService.resolveUrl("user-gravatar", raw) ?? raw;
 }
 
 function adminUserResource(u: UserItem): Record<string, unknown> {

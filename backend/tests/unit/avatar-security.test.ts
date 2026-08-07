@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+  AvatarService,
   avatarCacheKey,
   isPrivateIp,
   isPrivateIpv4,
   isPrivateIpv6,
-  proxiedAvatarUrl,
 } from "../../src/lib/avatars";
 
 describe("avatarCacheKey", (): void => {
@@ -23,17 +23,17 @@ describe("avatarCacheKey", (): void => {
   });
 });
 
-describe("proxiedAvatarUrl", (): void => {
+describe("AvatarService.resolveUrl", (): void => {
   it("returns a same-origin opaque URL for http(s) avatars", (): void => {
-    const proxied = proxiedAvatarUrl("vcs", "https://avatars.githubusercontent.com/u/42?v=4");
-    expect(proxied).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
+    const resolved = AvatarService.resolveUrl("vcs", "https://avatars.githubusercontent.com/u/42?v=4");
+    expect(resolved).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 
   it("rejects non-http(s) and malformed URLs (no SSRF via scheme)", (): void => {
-    expect(proxiedAvatarUrl("vcs", "file:///etc/passwd")).toBeNull();
-    expect(proxiedAvatarUrl("vcs", "ftp://example.com/a.png")).toBeNull();
-    expect(proxiedAvatarUrl("vcs", "not a url")).toBeNull();
-    expect(proxiedAvatarUrl("vcs", null)).toBeNull();
+    expect(AvatarService.resolveUrl("vcs", "file:///etc/passwd")).toBeNull();
+    expect(AvatarService.resolveUrl("vcs", "ftp://example.com/a.png")).toBeNull();
+    expect(AvatarService.resolveUrl("vcs", "not a url")).toBeNull();
+    expect(AvatarService.resolveUrl("vcs", null)).toBeNull();
   });
 });
 

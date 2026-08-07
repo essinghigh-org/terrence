@@ -1,8 +1,8 @@
-// Same-origin avatar proxy/cache.
+// Same-origin avatar service (fetch + cache + serve under one abstraction).
 //
 // Serializers never hand the browser a remote avatar URL. They call
-// proxiedAvatarUrl(), which derives an opaque cache key server-side and
-// records the upstream URL internally. The browser only ever loads
+// AvatarService.resolveUrl(), which derives an opaque cache key server-side
+// and records the upstream URL internally. The browser only ever loads
 // /api/v2/avatars/<key>; the key is a SHA-256 over (provider id + canonical
 // URL), so no ?url= parameter exists and an authenticated user cannot turn
 // this endpoint into an arbitrary-fetch SSRF hole (unknown keys 404 without
@@ -67,7 +67,7 @@ function imgPath(key: string): string {
   return join(avatarDir(), key.slice(0, 2), `${key}.img`);
 }
 
-export function hasCachedImage(key: string): boolean {
+function hasCachedImage(key: string): boolean {
   return existsSync(imgPath(key));
 }
 
@@ -78,7 +78,7 @@ export function avatarCacheKey(providerId: string, url: string): string {
 // Write-once memoization for the fire-and-forget record writes from the
 // synchronous serializer path (a page of runs enqueues N distinct records).
 const recordedKeys = new Set<string>();
-export async function writeAvatarRecord(providerId: string, url: string): Promise<string> {
+async function writeAvatarRecord(providerId: string, url: string): Promise<string> {
   const key = avatarCacheKey(providerId, url);
   if (recordedKeys.has(key) || existsSync(metaPath(key))) return key;
   recordedKeys.add(key);
@@ -93,8 +93,8 @@ export async function writeAvatarRecord(providerId: string, url: string): Promis
   return key;
 }
 
-/** Synchronous serializer helper: opaque proxy URL or null. */
-export function proxiedAvatarUrl(providerId: string, url: string | null | undefined): string | null {
+/** Synchronous serializer helper: same-origin service URL or null. */
+function resolveUrl(providerId: string, url: string | null | undefined): string | null {
   if (typeof url !== "string" || url === "") return null;
   let parsed: URL;
   try {
@@ -108,7 +108,7 @@ export function proxiedAvatarUrl(providerId: string, url: string | null | undefi
   return `/api/v2/avatars/${key}`;
 }
 
-export async function readAvatarMeta(key: string): Promise<AvatarMeta | null> {
+async function readAvatarMeta(key: string): Promise<AvatarMeta | null> {
   try {
     const raw = await readFile(metaPath(key), "utf8");
     const parsed = JSON.parse(raw) as Partial<AvatarMeta>;
@@ -239,7 +239,7 @@ export type AvatarFetchResult = Readonly<{
 }>;
 
 /** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
-export async function fetchAndCacheAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   const trusted = await trustedAvatarOrigins();
   const violation = await assertSafeAvatarDestination(meta.url, trusted);
   if (violation !== null) {
@@ -315,12 +315,34 @@ export async function fetchAndCacheAvatar(meta: AvatarMeta): Promise<AvatarFetch
   return { ok: true, status: response.status, message: null, meta: refreshed };
 }
 
-export async function readCachedImageBytes(key: string): Promise<Buffer | null> {
+async function readCachedImageBytes(key: string): Promise<Buffer | null> {
   try {
     return await readFile(imgPath(key));
   } catch {
     return null;
   }
 }
+
+/**
+ * The single abstraction serializers/the route talk to: resolve a remote
+ * avatar URL to a same-origin key, remember it, cache, and serve back — never
+ * handing the browser a third-party URL and never accepting an arbitrary
+ * `?url=`. Higher-level than a dumb proxy: caching + revalidation + serving.
+ */
+export const AvatarService = {
+  cacheKey: avatarCacheKey,
+  /** Synchronous serializer helper: `"/api/v2/avatars/<key>"` or `null`. */
+  resolveUrl,
+  /** Persist a metadata record the server itself saw during serialization. */
+  record: writeAvatarRecord,
+  /** Fetch/revalidate the upstream and refresh the local copy. Never throws. */
+  refresh: refreshAvatar,
+  /** Whether an image body is cached on disk. */
+  hasCached: hasCachedImage,
+  /** Read the persisted metadata for a key, or null. */
+  readMeta: readAvatarMeta,
+  /** Read the cached image bytes for a key, or null. */
+  readBytes: readCachedImageBytes,
+} as const;
 
 export { avatarDir, metaPath, imgPath };

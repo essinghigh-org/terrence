@@ -1,9 +1,6 @@
 import {
   AVATAR_CLIENT_CACHE,
-  fetchAndCacheAvatar,
-  hasCachedImage,
-  readAvatarMeta,
-  readCachedImageBytes,
+  AvatarService,
   type AvatarMeta,
 } from "../lib/avatars";
 
@@ -27,7 +24,7 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
       return notFound();
     }
 
-    const meta = await readAvatarMeta(key);
+    const meta = await AvatarService.readMeta(key);
     if (meta === null) {
       // Unknown key: never fetch anything. Only keys the server itself recorded
       // (while serializing a real user/VCS avatar) are servable — this keeps the
@@ -38,10 +35,10 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
 
     let current: AvatarMeta = meta;
     const fresh = meta.state === "fetched" && meta.expiresAt !== null && Date.now() < meta.expiresAt;
-    if (!hasCachedImage(key) || !fresh) {
-      const result = await fetchAndCacheAvatar(meta);
+    if (!AvatarService.hasCached(key) || !fresh) {
+      const result = await AvatarService.refresh(meta);
       if (!result.ok) {
-        if (hasCachedImage(key)) {
+        if (AvatarService.hasCached(key)) {
           current = result.meta; // upstream unreachable → serve cached copy
         } else {
           const status = result.status >= 400 && result.status < 600 ? result.status : 502;
@@ -53,7 +50,7 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
       }
     }
 
-    const bytes = await readCachedImageBytes(key);
+    const bytes = await AvatarService.readBytes(key);
     if (bytes === null) {
       s.status = 404;
       return notFound();

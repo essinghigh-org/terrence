@@ -12,7 +12,7 @@ import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
-import { proxiedAvatarUrl } from "../lib/avatars";
+import { AvatarService } from "../lib/avatars";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -101,7 +101,7 @@ function gravatarUrl(email: string | null | undefined): string {
   const raw = typeof email === "string" && email !== ""
     ? `https://www.gravatar.com/avatar/${createHash('md5').update(email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
     : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
-  return proxiedAvatarUrl("user-gravatar", raw) ?? raw;
+  return AvatarService.resolveUrl("user-gravatar", raw) ?? raw;
 }
 
 const RUN_VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -482,7 +482,7 @@ export const runRoutes = new Elysia({ name: "runs" })
           "created-at": new Date(event.createdAt).toISOString(),
           "actor-username": event.userId === null ? safeRunEventDetails(event).actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
           "actor-avatar-url": event.userId === null
-            ? proxiedAvatarUrl("vcs", safeRunEventDetails(event).actorAvatarUrl ?? null)
+            ? AvatarService.resolveUrl("vcs", safeRunEventDetails(event).actorAvatarUrl ?? null)
             : gravatarUrl(usernames.get(event.userId)?.email ?? null),
           details: safeRunEventDetails(event),
         },
