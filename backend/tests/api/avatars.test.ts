@@ -15,6 +15,7 @@ let origin: string;
 let server: { url: URL; stop: () => void };
 
 const previousStorageDir = process.env.STORAGE_DIR;
+const previousGithubAppHttpUrl = process.env.GITHUB_APP_HTTP_URL;
 
 beforeAll(async (): Promise<void> => {
   storage = mkdtempSync(join(tmpdir(), "avatar-test-"));
@@ -38,7 +39,8 @@ afterAll(async (): Promise<void> => {
   rmSync(storage, { recursive: true, force: true });
   if (previousStorageDir === undefined) delete process.env.STORAGE_DIR;
   else process.env.STORAGE_DIR = previousStorageDir;
-  delete process.env.GITHUB_APP_HTTP_URL;
+  if (previousGithubAppHttpUrl === undefined) delete process.env.GITHUB_APP_HTTP_URL;
+  else process.env.GITHUB_APP_HTTP_URL = previousGithubAppHttpUrl;
 });
 
 describe("avatar proxy route", (): void => {
@@ -80,24 +82,28 @@ describe("avatar proxy route", (): void => {
   });
 
   it("refuses a non-trusted private destination (SSRF), including shape-mismatch", async (): Promise<void> => {
-    // An UNBOUND provider id gets no private exception even when a GitHub App
-    // origin is configured — trust is integration-scoped, never global.
-    process.env.GITHUB_APP_HTTP_URL = "http://example.com";
-    const key = await AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
-    const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
-    expect([422, 502]).toContain(res.status);
-    delete process.env.GITHUB_APP_HTTP_URL;
-  });
+      // An UNBOUND provider id gets no private exception even when a GitHub App
+      // origin is configured — trust is integration-scoped, never global.
+      process.env.GITHUB_APP_HTTP_URL = "http://example.com";
+      try {
+        const key = await AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
+        const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+        expect([422, 502]).toContain(res.status);
+      } finally {
+        delete process.env.GITHUB_APP_HTTP_URL;
+      }
+    });
 
-  it("scopes the private exception to the matching integration origin", async (): Promise<void> => {
-    // Trusted origin is configured, but the avatar URL is on a DIFFERENT host
-    // than the underlying integration -> still refused (no cross-host trust).
-    process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
-    const key = await AvatarService.record("github-app", "http://127.0.0.1:1/avatar.png");
-    const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
-    expect([422, 502]).toContain(res.status);
-    delete process.env.GITHUB_APP_HTTP_URL;
-  });
+    it("scopes the private exception to the matching integration origin", async (): Promise<void> => {
+      process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);
+      try {
+        const key = await AvatarService.record("github-app", "http://127.0.0.1:1/avatar.png");
+        const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+        expect([422, 502]).toContain(res.status);
+      } finally {
+        delete process.env.GITHUB_APP_HTTP_URL;
+      }
+    });
 
   it("rejects non-image and mislabeled content from the upstream", async (): Promise<void> => {
     process.env.GITHUB_APP_HTTP_URL = origin.slice(0, -1);

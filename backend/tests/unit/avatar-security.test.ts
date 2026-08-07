@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -99,12 +99,20 @@ describe("address classification (SSRF)", (): void => {
     expect(isNonPublicIpv6("ff02::1")).toBeTrue();
   });
 
-  it("rejects IPv6 link-local fe80::/10 (fe80-febf, not just the fe80 prefix)", (): void => {
+  it("rejects IPv6 link-local fe80::/10 and deprecated site-local fec0::/10", (): void => {
     expect(isNonPublicIpv6("fe80::1")).toBeTrue();
     expect(isNonPublicIpv6("fe9f::1")).toBeTrue();   // top hextet 0xfe9f still /10
     expect(isNonPublicIpv6("febf::1")).toBeTrue();   // top of fe80::/10
-    // fec0:: (site-local, legacy) is above the /10 boundary — not link-local.
-    expect(isNonPublicIpv6("fec0::1")).toBeFalse();
+    expect(isNonPublicIpv6("fec0::1")).toBeTrue();   // deprecated site-local (RFC 3879)
+    expect(isNonPublicIpv6("feff::1")).toBeTrue();   // top of fec0::/10
+  });
+
+  it("classifies hex-form IPv4-mapped and IPv4-compatible addresses by the embedded IPv4", (): void => {
+    expect(isNonPublicIpv6("::ffff:127.0.0.1")).toBeTrue();
+    expect(isNonPublicIpv6("::ffff:7f00:1")).toBeTrue();   // hex form of ::ffff:127.0.0.1
+    expect(isNonPublicIpv6("::ffff:8.8.8.8")).toBeFalse();
+    expect(isNonPublicIpv6("::ffff:0808:808")).toBeFalse(); // hex form of ::ffff:8.8.8.8
+    expect(isNonPublicIpv6("::7f00:1")).toBeTrue();         // IPv4-compatible private
   });
 
   it("allows public IPv6", (): void => {
@@ -148,6 +156,10 @@ describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
       key, providerId: "gc", url: `https://x${fetchedAt}.example.com/a.png`, state: "fetched",
       contentType: "image/png", etag: null, lastModified: null, fetchedAt, expiresAt: fetchedAt + 3_600_000, bytes: 120, contentHash: "f".repeat(64),
     }));
+    // Give the fabricated files the entry's "last fetched" mtime so the sweep's
+    // recency (max(mtime, fetchedAt)) reflects the age we intend.
+    const stamp = new Date(fetchedAt);
+    utimesSync(imgPath(key), stamp, stamp);
     return key;
   }
 
@@ -170,7 +182,7 @@ describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
   }
 
   it("drops entries untouched past the max age", async (): Promise<void> => {
-    setUp({ AVATAR_CACHE_MAX_AGE_MS: "3", AVATAR_CACHE_MAX_BYTES: "999999", AVATAR_CACHE_MAX_ENTRIES: "999" });
+    setUp({ AVATAR_CACHE_MAX_AGE_MS: "2000", AVATAR_CACHE_MAX_BYTES: "999999", AVATAR_CACHE_MAX_ENTRIES: "999" });
     const now = Date.now();
     try {
       const oldKey = fabricate(now - 8_000);

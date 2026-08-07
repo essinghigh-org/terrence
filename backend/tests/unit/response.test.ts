@@ -63,6 +63,11 @@ describe("userResource", () => {
     const result = userResource({ id: "user-fallback", username: "y", email: "" });
     const avatarUrl = result.attributes["avatar-url"];
     expect(avatarUrl).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
+    // The default-avatar branch must produce a DIFFERENT key than a
+    // populated-email avatar (different upstream URL), so a regression that
+    // drops the fallback branch fails this test.
+    const populated = userResource({ id: "u-2", username: "z", email: "someone@example.com" });
+    expect(avatarUrl).not.toBe(populated.attributes["avatar-url"]);
   });
 
   it("sets permissions for user type", () => {

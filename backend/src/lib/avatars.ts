@@ -32,7 +32,7 @@
 // serves a stale cached copy if the upstream is unreachable.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile, readdir, stat, unlink } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, stat, unlink, rename } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import http from "node:http";
 import https from "node:https";
@@ -76,16 +76,28 @@ function avatarDir(): string {
   return resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "avatars");
 }
 
+const KEY_RE = /^[0-9a-f]{64}$/;
+
+/** Refuse cache keys that could escape the avatar directory (%2e segments). */
+function assertKey(key: string): string {
+  if (!KEY_RE.test(key)) throw new Error("invalid avatar cache key");
+  return key;
+}
+
 function metaPath(key: string): string {
-  return join(avatarDir(), key.slice(0, 2), `${key}.json`);
+  return join(avatarDir(), assertKey(key).slice(0, 2), `${key}.json`);
 }
 
 function imgPath(key: string): string {
-  return join(avatarDir(), key.slice(0, 2), `${key}.img`);
+  return join(avatarDir(), assertKey(key).slice(0, 2), `${key}.img`);
 }
 
 function hasCachedImage(key: string): boolean {
-  return existsSync(imgPath(key));
+  try {
+    return existsSync(imgPath(key));
+  } catch {
+    return false; // invalid key => nothing cached
+  }
 }
 
 export function avatarCacheKey(providerId: string, url: string): string {
@@ -107,12 +119,16 @@ const pendingWrites = new Map<string, Promise<void>>();
 async function writeMeta(meta: AvatarMeta): Promise<void> {
   const dir = join(avatarDir(), meta.key.slice(0, 2));
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  await writeFile(metaPath(meta.key), JSON.stringify(meta), { mode: 0o600 });
+  const tmp = `${metaPath(meta.key)}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, JSON.stringify(meta), { mode: 0o600 });
+  await rename(tmp, metaPath(meta.key));
 }
 
 function ensureRecorded(providerId: string, url: string): string {
   const key = avatarCacheKey(providerId, url);
   if (pendingWrites.has(key)) return key;
+  // A sweep may have deleted the metadata; re-record in that case.
+  if (existsSync(metaPath(key))) return key;
   const write = (async (): Promise<void> => {
     const meta: AvatarMeta = {
       key, providerId, url, state: "pending",
@@ -121,8 +137,9 @@ function ensureRecorded(providerId: string, url: string): string {
     };
     await writeMeta(meta);
   })();
-  // On failure drop the entry so a later call retries the persistence.
-  void write.catch(() => pendingWrites.delete(key));
+  // Drop the entry once settled: failures retry it, successes free memory
+  // (later calls see the persisted file).
+  void write.catch(() => undefined).finally(() => pendingWrites.delete(key));
   pendingWrites.set(key, write);
   return key;
 }
@@ -253,9 +270,16 @@ export function isNonPublicIpv6(ip: string): boolean {
   const group6 = Number((big >> 112n) & 0xffffn);
   if (big === 0n) return true;                                      // ::
   if (big === 1n) return true;                                      // ::1 loopback
-  if (topByte === 0xff) return true;                                // ff00::/8 multicast
-  if (group6 >= 0xfe80 && group6 <= 0xfebf) return true;            // fe80::/10 link-local
-  if (topByte === 0xfc || topByte === 0xfd) return true;            // fc00::/7 ULA
+  // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible) in hex form.
+  if ((big >> 32n) === 0xffffn || (big >> 32n) === 0n) {
+    const v4 = Number(big & 0xffffffffn);
+    return isNonPublicIpv4(
+      `${(v4 >>> 24) & 0xff}.${(v4 >>> 16) & 0xff}.${(v4 >>> 8) & 0xff}.${v4 & 0xff}`,
+    );
+  }
+  if (topByte === 0xff) return true;                              // ff00::/8 multicast
+  if (group6 >= 0xfe80 && group6 <= 0xfeff) return true;          // fe80::/10 link-local + fec0::/10 site-local (deprecated)
+  if (topByte === 0xfc || topByte === 0xfd) return true;          // fc00::/7 ULA
   return false;
 }
 
@@ -314,6 +338,11 @@ async function authorizedOriginForProvider(providerId: string): Promise<string |
 // ---------------------------------------------------------------------------
 // DNS + connection pinning
 // ---------------------------------------------------------------------------
+/** Node's WHATWG URL.hostname keeps IPv6 brackets ([::1]) — strip them. */
+function unbracketHostname(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
 async function resolveHost(hostname: string): Promise<string[] | null> {
   try {
     const result = await Promise.race([
@@ -346,7 +375,7 @@ async function assertSafeAvatarDestination(url: string, providerId: string): Pro
     return { error: "Avatar URLs must not contain credentials" };
   }
 
-  const hostname = parsed.hostname;
+  const hostname = unbracketHostname(parsed.hostname);
   const expectedOrigin = `${parsed.protocol}//${parsed.host}`;
   const authorized = await authorizedOriginForProvider(providerId);
   const originTrusted = authorized !== null && authorized === expectedOrigin;
@@ -400,7 +429,9 @@ function requestPinned(target: {
     const mod = scheme === "https" ? https : http;
     const connectHost = address.includes(":") ? `[${address}]` : address;
     const defaultPort = scheme === "https" ? 443 : 80;
-    const hostHeader = `${address.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
+    // Bracket based on the value being placed in the Host header (the original
+    // hostname), never the connect address (which may be a resolved IPv6).
+    const hostHeader = `${hostname.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
     const options: https.RequestOptions = {
       protocol: `${scheme}:`,
       host: connectHost,
@@ -416,20 +447,31 @@ function requestPinned(target: {
     const request = mod.request(options, (res: http.IncomingMessage): void => {
       const chunks: Uint8Array[] = [];
       let total = 0;
-      let truncated = false;
+      let settled = false;
       res.on("data", (chunk: Uint8Array): void => {
         total += chunk.length;
         if (total > maxBytes) {
-          truncated = true;
+          // Exceeded the cap: settle immediately with the 413 signal instead of
+          // waiting for the socket (destroy() does not emit end/error).
           res.destroy();
+          if (!settled) {
+            settled = true;
+            resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.alloc(0), truncated: true });
+          }
           return;
         }
         chunks.push(chunk);
       });
       res.on("end", (): void => {
-        resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.concat(chunks), truncated });
+        if (settled) return;
+        settled = true;
+        resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.concat(chunks), truncated: false });
       });
-      res.on("error", (error: Error): void => rejectPromise(error));
+      res.on("error", (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        rejectPromise(error);
+      });
     });
     request.on("error", (error: Error): void => rejectPromise(error));
     request.end();
@@ -458,7 +500,7 @@ export type AvatarFetchResult = Readonly<{
 }>;
 
 /** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
-async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
   if ("error" in decision) {
     return { ok: false, status: 422, message: decision.error, meta };
@@ -466,12 +508,15 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   const pinned = decision.pinned;
   const parsed = new URL(meta.url);
   const scheme = parsed.protocol === "https:" ? "https" : "http";
-  const hostname = parsed.hostname;
+  const hostname = unbracketHostname(parsed.hostname);
   const port = parsed.port !== "" ? Number(parsed.port) : (scheme === "https" ? 443 : 80);
 
+  // Only revalidate when a cached image exists; otherwise the upstream would
+  // answer 304 forever with no body to (re)store.
+  const cached = hasCachedImage(meta.key);
   const headers: Record<string, string> = {};
-  if (meta.etag !== null) headers["If-None-Match"] = meta.etag;
-  if (meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
+  if (cached && meta.etag !== null) headers["If-None-Match"] = meta.etag;
+  if (cached && meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
   // Incoming cookies/Authorization are deliberately never forwarded.
 
   let raw: RawResponse;
@@ -520,7 +565,10 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   // New content => new content hash => new browser ETag (fixes stale-avatar 304).
   const contentHash = createHash("sha256").update(raw.bytes).digest("hex");
   await mkdir(join(avatarDir(), meta.key.slice(0, 2)), { recursive: true, mode: 0o700 });
-  await writeFile(imgPath(meta.key), raw.bytes, { mode: 0o600 });
+  // Atomic write (temp + rename) so a concurrent reader never sees a partial file.
+  const tmpImg = `${imgPath(meta.key)}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpImg, raw.bytes, { mode: 0o600 });
+  await rename(tmpImg, imgPath(meta.key));
   const refreshed: AvatarMeta = {
     ...meta,
     state: "fetched",
@@ -535,6 +583,22 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   await writeMeta(refreshed);
   maybeSweepCache(); // throttled: bounded cache, never append-only
   return { ok: true, status: raw.status, message: null, meta: refreshed };
+}
+
+// One upstream refresh per key at a time: concurrent requests for the same
+// avatar share a single fetch instead of duplicating it / racing the writes.
+const refreshInFlight = new Map<string, Promise<AvatarFetchResult>>();
+
+/** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
+async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+  const running = refreshInFlight.get(meta.key);
+  if (running !== undefined) return running;
+  const run = doRefreshAvatar(meta);
+  refreshInFlight.set(meta.key, run);
+  void run.finally(() => {
+    if (refreshInFlight.get(meta.key) === run) refreshInFlight.delete(meta.key);
+  });
+  return run;
 }
 
 async function readCachedImageBytes(key: string): Promise<Buffer | null> {
@@ -607,7 +671,7 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
         size += imageStat.size;
         last = imageStat.mtimeMs;
       } catch {
-        continue; // image vanished; leave the entry alone
+        delete record.img; // image vanished; treat the record as an orphan
       }
     }
     if (record.json !== undefined) {
@@ -667,11 +731,16 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
 }
 
 let successfulFetchesSinceSweep = 0;
+let sweepInFlight: Promise<{ removed: number }> | null = null;
 function maybeSweepCache(): void {
   successfulFetchesSinceSweep += 1;
   if (successfulFetchesSinceSweep < SWEEP_EVERY_N_FETCHES) return;
+  if (sweepInFlight !== null) return; // don't stack overlapping sweeps
   successfulFetchesSinceSweep = 0;
-  void sweepAvatarCache();
+  sweepInFlight = sweepAvatarCache();
+  void sweepInFlight.finally(() => {
+    sweepInFlight = null;
+  });
 }
 
 /**

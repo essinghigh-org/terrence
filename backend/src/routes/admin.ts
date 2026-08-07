@@ -304,7 +304,7 @@ function samlInput(
   };
 }
 
-function gravatarUrl(email: string | null | undefined): string {
+function gravatarUrl(email: string | null | undefined): string | null {
   const addr = (email ?? "").trim().toLowerCase();
   // Use a simple hash via built-in SHA-256 if available, otherwise fall back to a deterministic placeholder
   const hash = addr === "" ? "00000000000000000000000000000000" : Array.from(
@@ -322,7 +322,7 @@ function gravatarUrl(email: string | null | undefined): string {
     )
   ).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
   const raw = `https://www.gravatar.com/avatar/${hash}?s=80&d=identicon`;
-  return AvatarService.resolveUrl("user-gravatar", raw) ?? raw;
+  return AvatarService.resolveUrl("user-gravatar", raw);
 }
 
 function adminUserResource(u: UserItem): Record<string, unknown> {

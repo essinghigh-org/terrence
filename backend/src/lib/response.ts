@@ -43,8 +43,8 @@ export function userResource(
   const rawAvatarUrl = typeof user.email === "string" && user.email !== ""
     ? `https://www.gravatar.com/avatar/${createHash('md5').update(user.email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
     : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
-  // Same-origin avatar proxy: the browser never contacts Gravatar directly.
-  const avatarUrl = AvatarService.resolveUrl("user-gravatar", rawAvatarUrl) ?? rawAvatarUrl;
+  // Same-origin avatar service: the browser never contacts Gravatar directly.
+  const avatarUrl = AvatarService.resolveUrl("user-gravatar", rawAvatarUrl);
 
   return {
     id: user.id,

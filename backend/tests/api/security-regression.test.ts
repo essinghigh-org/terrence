@@ -205,8 +205,9 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
     expect(res.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(res.headers.get("content-security-policy")).toContain("base-uri 'none'");
     // Avatars are proxied server-side, so img-src stays same-origin.
-    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' data:");
-    expect(res.headers.get("content-security-policy")).not.toContain("https://");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+    expect(imgSrc).toBe("img-src 'self' data:");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("same-origin");
     expect(res.headers.get("x-frame-options")).toBe("DENY");

@@ -4,9 +4,10 @@ import { staticCacheControl, staticMimeFor, buildContentSecurityPolicy } from ".
 describe("buildContentSecurityPolicy", (): void => {
   it("keeps img-src same-origin (avatars are proxied server-side)", (): void => {
     const csp = buildContentSecurityPolicy();
-    expect(csp).toContain("script-src 'self'");
-    expect(csp).toContain("base-uri 'none'");
-    expect(csp).toContain("img-src 'self' data:");
+    const directives = csp.split("; ");
+    expect(directives).toContain("script-src 'self'"); // exact, so a widened script-src fails
+    expect(directives).toContain("base-uri 'none'");
+    expect(directives).toContain("img-src 'self' data:");
     expect(csp).not.toContain("https://");
   });
 });

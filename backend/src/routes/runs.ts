@@ -98,11 +98,11 @@ async function usernamesById(userIds: readonly (string | null)[]): Promise<Reado
   return new Map(actors.map((actor): [string, { username: string; email: string | null }] => [actor.id, { username: actor.username, email: actor.email }]));
 }
 
-function gravatarUrl(email: string | null | undefined): string {
+function gravatarUrl(email: string | null | undefined): string | null {
   const raw = typeof email === "string" && email !== ""
     ? `https://www.gravatar.com/avatar/${createHash('md5').update(email.toLowerCase().trim()).digest('hex')}?d=mp&s=80`
     : `https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&s=80&f=y`;
-  return AvatarService.resolveUrl("user-gravatar", raw) ?? raw;
+  return AvatarService.resolveUrl("user-gravatar", raw);
 }
 
 const RUN_VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -204,7 +204,7 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
   const source = details as Readonly<Record<string, unknown>>;
   return Object.fromEntries(
-    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl"].flatMap((key): readonly [string, string][] =>
+    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId"].flatMap((key): readonly [string, string][] =>
       typeof source[key] === "string" ? [[key, source[key]]] : [],
     ),
   );
