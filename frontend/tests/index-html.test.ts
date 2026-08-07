@@ -6,10 +6,18 @@ const indexHtml = readFileSync(join(import.meta.dir, "../index.html"), "utf8");
 const manifest = readFileSync(join(import.meta.dir, "../public/manifest.webmanifest"), "utf8");
 
 describe("index.html document metadata", (): void => {
-  it("uses a modern interactive viewport", (): void => {
+  it("uses a modern interactive viewport without edge-to-edge cover (no safe-area handling)", (): void => {
     expect(indexHtml).toContain('name="viewport"');
-    expect(indexHtml).toContain("viewport-fit=cover");
     expect(indexHtml).toContain("interactive-widget=resizes-content");
+    // viewport-fit=cover requires explicit env(safe-area-inset-*) padding in
+    // the app chrome, which Terrence doesn't implement — so it must be absent
+    // to avoid content sitting under notches/rounded display corners.
+    expect(indexHtml).not.toContain("viewport-fit=cover");
+  });
+
+  it("defaults static theme-colour to the original-light background", (): void => {
+    expect(indexHtml).toContain('media="(prefers-color-scheme: light)"');
+    expect(indexHtml).toContain('content="hsl(0 0% 100%)"');
   });
 
   it("declares application metadata (name, color-scheme, theme-color)", (): void => {

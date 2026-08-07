@@ -203,12 +203,21 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
     expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(res.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(res.headers.get("content-security-policy")).toContain("base-uri 'none'");
+    // userResource emits Gravatar avatar URLs — the CSP must allow them.
+    expect(res.headers.get("content-security-policy")).toContain("https://www.gravatar.com");
+    expect(res.headers.get("content-security-policy")).toContain("https://secure.gravatar.com");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("same-origin");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
     expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
     expect(res.headers.get("permissions-policy")).toContain("geolocation=()");
     expect(res.headers.get("permissions-policy")).not.toContain("clipboard");
+  });
+
+  it("serves control-plane API responses with Cache-Control: no-store", async () => {
+    const res = await app.handle(new Request("https://localhost/api/v2/ping"));
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("serves the SPA entry page with no-cache revalidation", async () => {

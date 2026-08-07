@@ -30,4 +30,16 @@ describe("theme-color meta synchronisation", (): void => {
     // Should not throw.
     expect(() => applyTheme("original-light")).not.toThrow();
   });
+
+  it("updates every theme-color meta (not just the first)", (): void => {
+    document.head.innerHTML = [
+      '<meta name="theme-color" media="(prefers-color-scheme: light)" content="hsl(0 0% 100%)" />',
+      '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="hsl(222 15% 11%)" />',
+      '<meta name="theme-color" content="hsl(0 0% 100%)" />',
+    ].join("");
+    applyTheme("original-dark");
+    const metas = [...document.querySelectorAll('meta[name="theme-color"]')];
+    expect(metas).toHaveLength(3);
+    for (const meta of metas) expect(meta.getAttribute("content")).toBe("hsl(222 15% 11%)");
+  });
 });

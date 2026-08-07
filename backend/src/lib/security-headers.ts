@@ -7,16 +7,21 @@
 // script-src strict ('self' — no inline/eval).
 const CSP = [
   "default-src 'self'",
-  "base-uri 'self'",
+  "base-uri 'none'",
   "object-src 'none'",
   "frame-src 'none'",
   "frame-ancestors 'none'",
   "form-action 'self'",
   "connect-src 'self'",
-  "img-src 'self' data:",
+  // userResource() emits Gravatar avatar URLs that the layout + account page
+  // render; allow those (avoids blocking every user avatar).
+  "img-src 'self' data: https://www.gravatar.com https://secure.gravatar.com",
   "media-src 'self'",
   "font-src 'self'",
   "script-src 'self'",
+  // See notes: theme colors go through the CSSOM (not blocked), but React
+  // style props like DependencyGraph's borderLeftColor are also CSSOM writes;
+  // keeping unsafe-inline here without touching script-src is intentional.
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 
