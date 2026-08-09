@@ -681,28 +681,40 @@ for (const [col, def] of pcAdditions) {
 // manifests as missing guarded ALTER columns in bun test). The backfill runs
 // concurrently; new writes are encrypted at the route layer anyway.
 void (async (): Promise<void> => {
-  const storedSshKeys = await db.query.sshKeys.findMany();
-  const pendingKeys: { id: string; value: string }[] = [];
-  for (const key of storedSshKeys) {
-    if (!isEncryptedSecret(key.value)) pendingKeys.push({ id: key.id, value: key.value });
-  }
-  if (pendingKeys.length === 1) {
-    const only = pendingKeys[0];
-    if (only !== undefined) {
-      await client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?")
-        .run(await encryptSecret(only.value), only.id);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const storedSshKeys = await db.query.sshKeys.findMany();
+      const pendingKeys: { id: string; value: string }[] = [];
+      for (const key of storedSshKeys) {
+        if (!isEncryptedSecret(key.value)) pendingKeys.push({ id: key.id, value: key.value });
+      }
+      if (pendingKeys.length === 1) {
+        const only = pendingKeys[0];
+        if (only !== undefined) {
+          await client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?")
+            .run(await encryptSecret(only.value), only.id);
+        }
+      } else if (pendingKeys.length > 1) {
+        const encrypted: { id: string; value: string }[] = [];
+        for (const key of pendingKeys) encrypted.push({ id: key.id, value: await encryptSecret(key.value) });
+        const whenClauses = encrypted.map((): string => "WHEN id = ? THEN ?").join(" ");
+        const idPlaceholders = encrypted.map((): string => "?").join(",");
+        const params: string[] = [];
+        for (const row of encrypted) params.push(row.id, row.value);
+        for (const row of encrypted) params.push(row.id);
+        client.prepare(
+          `UPDATE ssh_keys SET value = CASE ${whenClauses} END WHERE id IN (${idPlaceholders})`,
+        ).run(...params);
+      }
+      return;
+    } catch (error) {
+      // Startup backfill is best-effort (route layer encrypts new writes);
+      // retry briefly, then give up rather than leaving an unobserved
+      // rejection or blocking boot.
+      console.error(`[db] ssh-key backfill attempt ${attempt} failed:`, error);
+      if (attempt >= 3) return;
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
     }
-  } else if (pendingKeys.length > 1) {
-    const encrypted: { id: string; value: string }[] = [];
-    for (const key of pendingKeys) encrypted.push({ id: key.id, value: await encryptSecret(key.value) });
-    const whenClauses = encrypted.map((): string => "WHEN id = ? THEN ?").join(" ");
-    const idPlaceholders = encrypted.map((): string => "?").join(",");
-    const params: string[] = [];
-    for (const row of encrypted) params.push(row.id, row.value);
-    for (const row of encrypted) params.push(row.id);
-    client.prepare(
-      `UPDATE ssh_keys SET value = CASE ${whenClauses} END WHERE id IN (${idPlaceholders})`,
-    ).run(...params);
   }
 })();
 

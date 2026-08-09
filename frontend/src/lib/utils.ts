@@ -20,12 +20,19 @@ export function cn(...inputs: readonly DeepReadonly<ClassValue>[]): string {
  * the same day in every time zone — `new Date("2026-08-07")` parses as UTC
  * midnight and displays the previous day in negative-offset zones.
  */
-function toDisplayDate(value: Date | string | number | null | undefined): Date {
+const BARE_ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function toDisplayDate(value: Date | string | number | null | undefined, timeZone?: string): Date {
   if (value instanceof Date) return value;
   if (value == null || value === "") return new Date(NaN);
   if (typeof value === "string") {
-    const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+    const bare = BARE_ISO_DATE.exec(value.trim());
     if (bare !== null) {
+      // When rendering for a pinned display timezone, interpret the calendar
+      // day IN that zone instead of the browser's local zone: a bare date has
+      // no instant, so UTC midnight keeps the same calendar day for the UTC
+      // pin (the only non-local value the preference supports).
+      if (timeZone === "UTC") return new Date(`${value.trim()}T00:00:00Z`);
       // setFullYear avoids the Date constructor's 1900+year normalization for
       // years 00-99; reset the time-of-day afterwards because new Date(0) is
       // 1970-01-01T00:00:00Z, which is a non-midnight local wall time in
@@ -44,7 +51,7 @@ function toDisplayDate(value: Date | string | number | null | undefined): Date {
  * fallback (default "—") so callers never show "Invalid Date".
  */
 export function formatDate(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
-  const date = toDisplayDate(value);
+  const date = toDisplayDate(value, timeZone);
   return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString(undefined, timeZone !== undefined ? { timeZone } : undefined);
 }
 
@@ -53,7 +60,7 @@ export function formatDate(value: Date | string | number | null | undefined, fal
  * renders as the fallback.
  */
 export function formatDateTime(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
-  const date = toDisplayDate(value);
+  const date = toDisplayDate(value, timeZone);
   return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleString(undefined, timeZone !== undefined ? { timeZone } : undefined);
 }
 

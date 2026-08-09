@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from "react";
-
 /**
  * Display timezone preference (review item 14.24). Operators can pin the UI
  * to UTC timestamps instead of the browser's local timezone. The preference
@@ -54,12 +52,4 @@ export function subscribeDisplayTimezone(listener: () => void): () => void {
   return (): void => {
     listeners.delete(listener);
   };
-}
-
-/**
- * Hook for components that render timestamps: re-renders them (and thus the
- * formatted values) when the display timezone preference changes.
- */
-export function useDisplayTimezone(): DisplayTimezone {
-  return useSyncExternalStore(subscribeDisplayTimezone, getDisplayTimezone, getDisplayTimezone);
 }
