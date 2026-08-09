@@ -328,7 +328,7 @@ test("manages team organization access, invites a member, and removes them", asy
   fireEvent.click(view.getByRole("button", { name: "Manage permissions for Developers" }));
   fireEvent.click(view.getByLabelText("Manage Projects"));
   fireEvent.click(view.getByLabelText("Manage Modules"));
-  expect(view.getByLabelText("Manage Workspaces").getAttribute("data-state")).toBe("checked");
+  expect(view.getByLabelText("Manage Workspaces").getAttribute("aria-checked")).toBe("true");
   await act(async (): Promise<void> => {
     fireEvent.click(view.getByRole("button", { name: "Save permissions" }));
   });

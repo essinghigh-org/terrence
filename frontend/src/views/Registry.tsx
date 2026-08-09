@@ -307,9 +307,7 @@ export function Registry(): JSX.Element {
         </div>
         {showPublish && (
           <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
-            <DialogTrigger asChild>
-              <Button type="button">Publish</Button>
-            </DialogTrigger>
+            <DialogTrigger render={<Button type="button">Publish</Button>} />
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Publish {step === "create-module" ? "module" : "version"}</DialogTitle>

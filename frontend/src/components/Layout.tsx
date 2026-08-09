@@ -1071,7 +1071,7 @@ export function Layout({
       <header className="flex h-[52px] shrink-0 items-center justify-between bg-topbar px-2 text-topbar-foreground sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
-              <DialogTrigger asChild>
+              <DialogTrigger render={
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1081,11 +1081,11 @@ export function Layout({
                 >
                   <Menu data-icon="inline-start" />
                 </Button>
-              </DialogTrigger>
+              } />
               <DialogContent
                 id="mobile-app-sidebar"
                 aria-describedby={undefined}
-                className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:rounded-none lg:hidden"
+                className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-closed:slide-out-to-left data-open:slide-in-from-left sm:rounded-none lg:hidden"
               >
                 <DialogTitle className="sr-only">Application navigation</DialogTitle>
                 <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">

@@ -23,6 +23,40 @@ const noop = (): void => {
   // Intentional noop for testing environment alert mock
 };
 
+// jsdom does not implement PointerEvent, but base-ui checkbox click handlers
+// dispatch a synthetic PointerEvent at the hidden input. Real browsers all
+// ship PointerEvent, so mirror the spec surface here.
+if (win.PointerEvent === undefined) {
+  class PointerEventPolyfill extends win.MouseEvent {
+    public readonly pointerId: number;
+    public readonly pointerType: string;
+    public readonly isPrimary: boolean;
+    public readonly width: number;
+    public readonly height: number;
+    public readonly pressure: number;
+    public readonly tangentialPressure: number;
+    public readonly tiltX: number;
+    public readonly tiltY: number;
+    public readonly twist: number;
+
+    public constructor(type: string, eventInitDict: PointerEventInit = {}) {
+      super(type, eventInitDict);
+      this.pointerId = eventInitDict.pointerId ?? 0;
+      this.pointerType = eventInitDict.pointerType ?? "";
+      this.isPrimary = eventInitDict.isPrimary ?? false;
+      this.width = eventInitDict.width ?? 1;
+      this.height = eventInitDict.height ?? 1;
+      this.pressure = eventInitDict.pressure ?? 0;
+      this.tangentialPressure = eventInitDict.tangentialPressure ?? 0;
+      this.tiltX = eventInitDict.tiltX ?? 0;
+      this.tiltY = eventInitDict.tiltY ?? 0;
+      this.twist = eventInitDict.twist ?? 0;
+    }
+  }
+  (win as unknown as Record<string, unknown>)["PointerEvent"] = PointerEventPolyfill;
+  (globalThis as MutableGlobal)["PointerEvent"] = PointerEventPolyfill;
+}
+
 Object.defineProperty(win, "alert", {
   value: noop,
   writable: true,

@@ -218,12 +218,12 @@ export function WorkspaceDestruction({
             This action cannot be undone. Infrastructure managed by the workspace is not destroyed.
           </p>
           <Dialog open={open} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
+            <DialogTrigger render={
               <Button variant="destructive" disabled={!canDelete}>
                 <Trash2 data-icon="inline-start" />
                 Delete workspace
               </Button>
-            </DialogTrigger>
+            } />
             <DialogContent>
               <form onSubmit={deleteWorkspace}>
                 <DialogHeader>

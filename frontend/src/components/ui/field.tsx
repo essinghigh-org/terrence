@@ -4,7 +4,6 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 import { Label } from "@/components/ui/label"
-import { Separator } from "@/components/ui/separator"
 
 function FieldSet({ className, ...props }: Readonly<React.ComponentProps<"fieldset">>): React.JSX.Element {
   return (
@@ -114,19 +113,6 @@ function FieldLabel({
   )
 }
 
-function FieldTitle({ className, ...props }: Readonly<React.ComponentProps<"div">>): React.JSX.Element {
-  return (
-    <div
-      data-slot="field-label"
-      className={cn(
-        "flex w-fit items-center gap-2 text-sm font-medium group-data-[disabled=true]/field:opacity-50",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
 function FieldDescription({ className, ...props }: Readonly<React.ComponentProps<"p">>): React.JSX.Element {
   return (
     <p
@@ -139,36 +125,6 @@ function FieldDescription({ className, ...props }: Readonly<React.ComponentProps
       )}
       {...props}
     />
-  )
-}
-
-function FieldSeparator({
-  children,
-  className,
-  ...props
-}: Readonly<React.ComponentProps<"div"> & {
-  children?: React.ReactNode
-}>): React.JSX.Element {
-  return (
-    <div
-      data-slot="field-separator"
-      data-content={children != null ? "true" : "false"}
-      className={cn(
-        "relative -my-2 h-5 text-sm group-data-[variant=outline]/field-group:-mb-2",
-        className
-      )}
-      {...props}
-    >
-      <Separator className="absolute inset-0 top-1/2" />
-      {children != null && (
-        <span
-          className="relative mx-auto block w-fit bg-background px-2 text-muted-foreground"
-          data-slot="field-separator-content"
-        >
-          {children}
-        </span>
-      )}
-    </div>
   )
 }
 
@@ -232,8 +188,6 @@ export {
   FieldError,
   FieldGroup,
   FieldLegend,
-  FieldSeparator,
   FieldSet,
   FieldContent,
-  FieldTitle,
 }

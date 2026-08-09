@@ -175,8 +175,7 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
   view.rerender(renderComponent(true));
   fireEvent.click(view.getByRole("checkbox", { name: "Allow destroy plans" }));
   await waitFor((): void => {
-    expect(view.getByRole("checkbox", { name: "Allow destroy plans" }).getAttribute("data-state"))
-      .toBe("checked");
+    expect(view.getByRole("checkbox", { name: "Allow destroy plans" }).getAttribute("aria-checked")).toBe("true");
   });
   expect(view.getByRole("button", { name: "Queue destroy plan" }).disabled).toBe(false);
   expect(patchBody).toMatchObject({

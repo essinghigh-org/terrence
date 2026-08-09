@@ -327,8 +327,3 @@ export function applyThemeIfUnchanged(themeId: unknown, revision: number): boole
   applyTheme(themeId);
   return true;
 }
-
-/** @public Compatibility wrapper for callers that only know light/dark. */
-export function applyThemeMode(mode?: unknown): void {
-  applyTheme(mode === "dark" ? "original-dark" : mode === "light" ? "original-light" : undefined);
-}
