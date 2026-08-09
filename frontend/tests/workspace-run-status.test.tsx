@@ -155,3 +155,47 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
   // post_plan_running counts as an active run.
   expect(view.getByText("Active Runs").parentElement!.textContent).toContain("1");
 });
+
+test("KPI totals degrade visibly when the org-wide count cannot be loaded", async () => {
+  let failUnfiltered = false;
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.includes("current-run")) {
+      return json({ data: [{
+        id: "ws-1",
+        attributes: { name: "filtered-only", locked: true },
+        relationships: { project: { data: null } },
+      }] });
+    }
+    if (url.includes("/workspaces?")) {
+      return failUnfiltered
+        ? json({ errors: [{ title: "Count unavailable" }] }, 503)
+        : json({ data: [{
+            id: "ws-1",
+            attributes: { name: "filtered-only", locked: true },
+            relationships: { project: { data: null } },
+          }] });
+    }
+    if (url.includes("/projects?")) return json({ data: [] });
+    if (url.includes("/runs?")) return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+  await waitFor((): void => { expect(view.getByText("filtered-only")).toBeTruthy(); });
+  failUnfiltered = true;
+  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "running" } });
+
+  await waitFor((): void => {
+    expect(view.getByText(/workspace totals are stale/)).toBeTruthy();
+  });
+  expect(view.getByText("Total Workspaces").parentElement!.textContent).toContain("—");
+  expect(view.getByText("Locked Workspaces").parentElement!.textContent).toContain("—");
+});

@@ -81,6 +81,7 @@ export function Workspaces(): React.JSX.Element {
   // itself is server-filtered when one is active (review item 1.9).
   const [totalWorkspaceCount, setTotalWorkspaceCount] = useState(0);
   const [lockedWorkspaceCount, setLockedWorkspaceCount] = useState(0);
+  const [totalsUnavailable, setTotalsUnavailable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectDataError, setProjectDataError] = useState(false);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
@@ -112,7 +113,6 @@ export function Workspaces(): React.JSX.Element {
         fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
         // KPIs must reflect the whole org, not the filtered page: fetch the
         // unfiltered list solely for counting when a status filter is active.
-        // Absent failure degrades to the filtered list (pre-fix behavior).
         statuses === undefined
           ? Promise.resolve(null)
           : fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100`, signal)
@@ -133,9 +133,17 @@ export function Workspaces(): React.JSX.Element {
       ]);
       if (signal?.aborted === true) return;
       setWorkspaces(workspaceData);
-      const totalsSource = totalsData ?? workspaceData;
-      setTotalWorkspaceCount(totalsSource.length);
-      setLockedWorkspaceCount(totalsSource.filter((workspace): boolean => workspace.attributes.locked === true).length);
+      if (statuses === undefined || totalsData !== null) {
+        const totalsSource = totalsData ?? workspaceData;
+        setTotalWorkspaceCount(totalsSource.length);
+        setLockedWorkspaceCount(totalsSource.filter((workspace): boolean => workspace.attributes.locked === true).length);
+        setTotalsUnavailable(false);
+      } else {
+        // Unfiltered counting failed under an active filter: keep the last
+        // verified org-wide totals and surface that they are stale rather
+        // than showing filtered counts as org-wide numbers.
+        setTotalsUnavailable(true);
+      }
       setProjects(projectResult.data);
       setProjectDataError(projectResult.failed);
       setCanManageWorkspaces(canManage);
@@ -313,7 +321,7 @@ export function Workspaces(): React.JSX.Element {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{totalWorkspaceCount}</div>
+          <div className="mt-1 text-2xl font-bold">{totalsUnavailable ? "—" : totalWorkspaceCount}</div>
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
@@ -327,9 +335,15 @@ export function Workspaces(): React.JSX.Element {
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{lockedWorkspaceCount}</div>
+          <div className="mt-1 text-2xl font-bold">{totalsUnavailable ? "—" : lockedWorkspaceCount}</div>
         </div>
       </div>
+
+      {totalsUnavailable && (
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
+          Organization-wide workspace totals are stale: the workspace count could not be refreshed while a status filter is active.
+        </p>
+      )}
 
       <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto]">
         <Input
