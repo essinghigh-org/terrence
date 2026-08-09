@@ -1,8 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": [
-    ".agents/skills/elysia/examples/**"
-  ],
+  "ignore": [],
   "ignoreDependencies": [
     "oxlint",
     "shadcn"

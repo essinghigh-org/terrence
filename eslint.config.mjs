@@ -10,7 +10,6 @@ export default tseslint.config(
       '**/storage/**',
       '**/*.sql.ts',
       '**/.git/**',
-      '**/.agents/**',
       'eslint.config.mjs',
     ],
   },
