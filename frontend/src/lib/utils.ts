@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { resolveDisplayTimeZone } from "./display-timezone";
 
 type DeepReadonly<T> = T extends null | undefined
   ? T
@@ -42,18 +43,18 @@ function toDisplayDate(value: Date | string | number | null | undefined): Date {
  * Format a date for display. Invalid or unparseable input renders as the
  * fallback (default "—") so callers never show "Invalid Date".
  */
-export function formatDate(value: Date | string | number | null | undefined, fallback = "—"): string {
+export function formatDate(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
   const date = toDisplayDate(value);
-  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString();
+  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString(undefined, timeZone !== undefined ? { timeZone } : undefined);
 }
 
 /**
  * Format a date-time for display (locale string with time). Invalid input
  * renders as the fallback.
  */
-export function formatDateTime(value: Date | string | number | null | undefined, fallback = "—"): string {
+export function formatDateTime(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
   const date = toDisplayDate(value);
-  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleString();
+  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleString(undefined, timeZone !== undefined ? { timeZone } : undefined);
 }
 
 /**

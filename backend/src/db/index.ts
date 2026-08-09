@@ -3,13 +3,17 @@ import { drizzle, SQLiteBunTransaction } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { mkdir } from 'fs/promises';
+import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'path';
 import * as schema from './schema';
 import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
 
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
-await mkdir(storageDir, { recursive: true });
+// Deliberately synchronous: a top-level await here made this module a TLA
+// module, and Bun's worker threads can resolve importers while the TLA is
+// still pending (ReferenceError: Cannot access 'db' before initialization
+// in every bun test worker). mkdirSync is behavior-identical.
+mkdirSync(storageDir, { recursive: true });
 
 // bun:sqlite is built into Bun and keeps a single stable native connection; the
 // @libsql/client driver leaked native memory per query and churned a fresh native
@@ -671,29 +675,36 @@ for (const [col, def] of pcAdditions) {
 // Encrypt private keys created by older releases before serving requests.
 // Batch the whole upgrade into a single UPDATE (per-row CASE) instead of a
 // separate UPDATE per key, so startup scales with keys that need re-encrypting.
-const storedSshKeys = await db.query.sshKeys.findMany();
-const pendingKeys: { id: string; value: string }[] = [];
-for (const key of storedSshKeys) {
-  if (!isEncryptedSecret(key.value)) pendingKeys.push({ id: key.id, value: key.value });
-}
-if (pendingKeys.length === 1) {
-  const only = pendingKeys[0];
-  if (only !== undefined) {
-    await client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?")
-      .run(await encryptSecret(only.value), only.id);
+// Deliberately NOT awaited at module scope: any top-level await makes this a
+// TLA module, and Bun's worker threads can resolve importers while TLA code
+// is still pending (leaving this tail of the module half-evaluated, which
+// manifests as missing guarded ALTER columns in bun test). The backfill runs
+// concurrently; new writes are encrypted at the route layer anyway.
+void (async (): Promise<void> => {
+  const storedSshKeys = await db.query.sshKeys.findMany();
+  const pendingKeys: { id: string; value: string }[] = [];
+  for (const key of storedSshKeys) {
+    if (!isEncryptedSecret(key.value)) pendingKeys.push({ id: key.id, value: key.value });
   }
-} else if (pendingKeys.length > 1) {
-  const encrypted: { id: string; value: string }[] = [];
-  for (const key of pendingKeys) encrypted.push({ id: key.id, value: await encryptSecret(key.value) });
-  const whenClauses = encrypted.map((): string => "WHEN id = ? THEN ?").join(" ");
-  const idPlaceholders = encrypted.map((): string => "?").join(",");
-  const params: string[] = [];
-  for (const row of encrypted) params.push(row.id, row.value);
-  for (const row of encrypted) params.push(row.id);
-  client.prepare(
-    `UPDATE ssh_keys SET value = CASE ${whenClauses} END WHERE id IN (${idPlaceholders})`,
-  ).run(...params);
-}
+  if (pendingKeys.length === 1) {
+    const only = pendingKeys[0];
+    if (only !== undefined) {
+      await client.prepare("UPDATE ssh_keys SET value = ? WHERE id = ?")
+        .run(await encryptSecret(only.value), only.id);
+    }
+  } else if (pendingKeys.length > 1) {
+    const encrypted: { id: string; value: string }[] = [];
+    for (const key of pendingKeys) encrypted.push({ id: key.id, value: await encryptSecret(key.value) });
+    const whenClauses = encrypted.map((): string => "WHEN id = ? THEN ?").join(" ");
+    const idPlaceholders = encrypted.map((): string => "?").join(",");
+    const params: string[] = [];
+    for (const row of encrypted) params.push(row.id, row.value);
+    for (const row of encrypted) params.push(row.id);
+    client.prepare(
+      `UPDATE ssh_keys SET value = CASE ${whenClauses} END WHERE id IN (${idPlaceholders})`,
+    ).run(...params);
+  }
+})();
 
 // Check users for missing columns
 const usersTableInfo = tableRows("PRAGMA table_info(users)");

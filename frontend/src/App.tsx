@@ -43,6 +43,7 @@ import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { RunSandboxGate } from "./components/RunSandboxGate";
 import { Toaster, toast } from "./components/ui/toast";
+import { useDisplayTimezone } from "./lib/useDisplayTimezone";
 
 function ProtectedRoute({ children }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
   const token = getAuthToken();
@@ -104,6 +105,8 @@ function AuthSessionManager(): null {
 }
 
 function App(): JSX.Element {
+  useDisplayTimezone();
+
   return (
     <ErrorBoundary>
       <RunSandboxGate>

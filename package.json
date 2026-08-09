@@ -8,7 +8,7 @@
     "dev": "bun run dev:backend & bun run dev:frontend",
     "build": "cd frontend && bun run build",
     "start": "cd backend && bun run index.ts",
-    "test:backend": "cd backend && bun test",
+    "test:backend": "cd backend && bun test --parallel=8",
     "test:frontend": "cd frontend && bun test --parallel=8",
     "test": "bun run test:backend && bun run test:frontend",
     "lint": "eslint .",

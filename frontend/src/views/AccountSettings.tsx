@@ -9,12 +9,14 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User } from "lucide-react";
+import { KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User, Globe2 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
 import { TokenScopeDialog } from "../components/TokenScopeDialog";
 import { DEFAULT_THEME_ID, getTheme, applyTheme, THEMES } from "../lib/theme";
+import { setDisplayTimezone } from "../lib/display-timezone";
+import { useDisplayTimezone } from "../lib/useDisplayTimezone";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -50,6 +52,7 @@ export function AccountSettings(): React.JSX.Element {
   const [updatingProfile, setUpdatingProfile] = useState(false);
   const [themeId, setThemeId] = useState(DEFAULT_THEME_ID);
   const [updatingTheme, setUpdatingTheme] = useState(false);
+  const displayTimezone = useDisplayTimezone();
 
   // Password Form
   const [currentPassword, setCurrentPassword] = useState("");
@@ -462,6 +465,23 @@ export function AccountSettings(): React.JSX.Element {
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {updatingTheme ? "Saving theme…" : "Changes save automatically."}
           </p>
+          <div className="mt-5 flex items-center gap-2 text-sm font-medium">
+            <Globe2 className="size-4" aria-hidden="true" />
+            Date and time
+          </div>
+          <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
+          <select
+            id="account-timezone"
+            value={displayTimezone}
+            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+              setDisplayTimezone(event.target.value === "utc" ? "utc" : "local");
+            }}
+            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <option value="local">Browser local timezone</option>
+            <option value="utc">UTC</option>
+          </select>
+          <p className="text-xs text-muted-foreground">Controls timestamps throughout the application.</p>
         </CardContent>
       </Card>
 

@@ -4,7 +4,14 @@ import { spawn } from "bun";
 import { log } from "./lib/log";
 
 const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
-const BINARY_BASE_DIR = join(STORAGE_DIR, "binaries");
+// TERRENCE_BINARY_CACHE_DIR lets tests share one disk-backed binary cache
+// across the test worker and every spawned backend instead of re-downloading
+// into each per-test tmpfs storage dir (which is charged to cgroup RAM).
+const BINARY_BASE_DIR = resolve(
+  process.env.TERRENCE_BINARY_CACHE_DIR !== undefined && process.env.TERRENCE_BINARY_CACHE_DIR !== ""
+    ? process.env.TERRENCE_BINARY_CACHE_DIR!
+    : join(STORAGE_DIR, "binaries"),
+);
 
 /** Reject a single archive entry whose normalized path escapes the extraction
  * root via an absolute path, a drive letter, or a `..` traversal segment. */

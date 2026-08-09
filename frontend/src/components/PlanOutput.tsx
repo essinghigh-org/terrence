@@ -904,6 +904,32 @@ function summaryCounts(resources: readonly ResourceChange[]): Readonly<{
   return { add, change, destroy, replace };
 }
 
+/**
+ * Render the plan resource summary as a copy-pasteable Markdown block.
+ * Mirrors the on-screen summary order: import, create, change, destroy.
+ */
+export function planSummaryMarkdown(counts: Readonly<{
+  add: number;
+  change: number;
+  destroy: number;
+  replace: number;
+  importCount: number;
+}>): string {
+  return [
+    "## Plan summary",
+    "",
+    ...([
+      { count: counts.importCount, label: "to import" },
+      { count: counts.add, label: "to create" },
+      { count: counts.change, label: "to change" },
+      { count: counts.destroy, label: "to destroy" },
+    ] as const)
+      .filter((item): boolean => item.count > 0)
+      .map((item): string => `- ${item.count} ${item.label}`),
+    "",
+  ].join("\n");
+}
+
 function resourceMatches(
   resource: ResourceChange,
   operation: Operation | "all",
@@ -964,6 +990,7 @@ export function PlanOutput({
   const [retry, setRetry] = useState(0);
   const [search, setSearch] = useState("");
   const [operation, setOperation] = useState<Operation | "all">("all");
+  const [summaryCopied, setSummaryCopied] = useState(false);
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
 
@@ -1143,6 +1170,25 @@ export function PlanOutput({
     <section aria-label="Plan output" className="border-t border-gray-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="Copy plan summary as markdown"
+            title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
+            className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+            onClick={(): void => {
+              const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
+              if (clipboard !== undefined) {
+                void clipboard.writeText(planSummaryMarkdown({ ...counts, importCount })).then((): void => {
+                  setSummaryCopied(true);
+                  window.setTimeout((): void => setSummaryCopied(false), 2_000);
+                });
+              }
+            }}
+          >
+            {summaryCopied
+              ? <Check className="size-3.5" aria-hidden="true" />
+              : <Copy className="size-3.5" aria-hidden="true" />}
+          </button>
         </div>
         <span className="text-xs text-gray-500">
           Terraform {planJson.terraform_version ?? "unknown"}

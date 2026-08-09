@@ -255,6 +255,11 @@ test("workspace core routes persist settings and execute from the configured sub
         NODE_ENV: "production",
         PUBLIC_URL: "https://tfe.example.test",
         SIMULATED_RUNS: "false",
+        // Fake tofu is fabricated under this spawn's storage dir; keep the
+        // binary cache test-local (setup.ts defaults it to the shared cache).
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+        // Run queue executes the fabricated runs in the spawned app.
+        TERRENCE_DISABLE_WORKER: "0",
         // Let the sandboxed fake-tofu write its cwd record file.
         TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
         TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",

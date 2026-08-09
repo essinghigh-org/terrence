@@ -61,6 +61,9 @@ test("downloads a verified binary once and reuses the cached copy", async () => 
         ...Bun.env,
         TEST_DIR: testDir,
         STORAGE_DIR: join(testDir, "storage"),
+        // Keep the binary cache test-local: setup.ts points it at the shared
+        // disk cache, and this test mocks fetch to assert download-once.
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -111,6 +114,7 @@ test("does not silently substitute the system binary for an exact version", asyn
         TEST_DIR: testDir,
         STORAGE_DIR: join(testDir, "storage"),
         ALLOW_TOOL_FALLBACK: "false",
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
       },
       stdout: "pipe",
       stderr: "pipe",

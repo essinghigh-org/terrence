@@ -69,6 +69,29 @@ test("lists extensible light/dark themes and persists a selection", async () => 
   expect(document.documentElement.style.getPropertyValue("--topbar-foreground")).toBe("60 30% 96%");
 });
 
+test("changes the display timezone locally without an account update", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/account/details") return account();
+    if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
+    if (url === "/api/v2/account/sessions") return json({ data: [] });
+    if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
+  const select = await view.findByLabelText("Timezone") as HTMLSelectElement;
+
+  expect(select.value).toBe("local");
+  fireEvent.change(select, { target: { value: "utc" } });
+
+  await waitFor((): void => {
+    expect(select.value).toBe("utc");
+  });
+  expect(localStorage.getItem("terrence-display-timezone")).toBe("utc");
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+});
 test("ignores an account theme read that started before a newer theme selection", (): void => {
   const accountReadRevision = getThemeRevision();
   applyTheme("dracula");

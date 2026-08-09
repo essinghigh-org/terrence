@@ -573,10 +573,16 @@ export const app = new Elysia()
   .use(oidcRoutes)
   .use(policyEvaluationRoutes);
 
-// Start the background worker queue
-import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
-  startWorkerQueue();
-  log.info("Worker queue started");
-}).catch((error: unknown): void => {
-  log.error("Failed to start worker queue", { error: String(error) });
-});
+// Start the background worker queue. Deferred out of module evaluation:
+// ./db/index.ts is a top-level-await module, and the dynamic import weave
+// can fire this before `db` finishes initializing (TDZ ReferenceError that
+// 500s every request in worker-thread test runs). A 0ms timer guarantees
+// the module graph has fully evaluated before the first poll.
+setTimeout((): void => {
+  import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
+    startWorkerQueue();
+    log.info("Worker queue started");
+  }).catch((error: unknown): void => {
+    log.error("Failed to start worker queue", { error: String(error) });
+  });
+}, 0);

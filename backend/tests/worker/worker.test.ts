@@ -20,6 +20,10 @@ async function runWorkerScript(script: string, env: Record<string, string> = {})
         TEST_DIR: testDir,
         DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
         STORAGE_DIR: join(testDir, "storage"),
+        // These scripts fabricate a fake tofu under their own storage dir,
+        // so pin the binary cache back to the per-test dir (setup.ts points
+        // it at the shared disk cache by default).
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
         // Let the sandboxed fake-tofu write its record files.
         TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
         TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",

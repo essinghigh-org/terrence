@@ -7,6 +7,14 @@ import { tmpdir } from "node:os";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const BACKEND_DIR = join(REPO_ROOT, "backend");
+// Shared disk-backed caches (backend/storage is gitignored and lives on the
+// real filesystem, not tmpfs): binaries downloaded once are reused by every
+// spawned backend, and terraform provider plugins are downloaded once per
+// machine instead of per workdir. Both are charged to cgroup RAM when they
+// land in /tmp, so keeping them off tmpfs is what keeps the 8 GiB cgroup
+// from OOM-killing the host gateway during e2e runs.
+const SHARED_BINARY_CACHE = join(BACKEND_DIR, "storage", "binaries");
+const SHARED_PLUGIN_CACHE = join(BACKEND_DIR, "storage", "e2e-plugin-cache");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolveFn) => setTimeout(resolveFn, ms));
 
@@ -122,6 +130,10 @@ async function startBackend(workDir: string): Promise<Backend> {
       TERRENCE_RUN_SANDBOX: "false",
       TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
       SIMULATED_RUNS: "false",
+      TERRENCE_BINARY_CACHE_DIR: SHARED_BINARY_CACHE,
+      // Real backend: the worker queue must run (setup.ts disables it for
+      // test workers; spawned backends opt back in).
+      TERRENCE_DISABLE_WORKER: "0",
     },
     stdout: openSync(logPath, "w"),
     stderr: openSync(logPath, "w"),
@@ -1080,6 +1092,7 @@ describe("tfe provider e2e", () => {
       const cliEnv: Record<string, string> = {
         ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
         TF_IN_AUTOMATION: "1",
+        TF_PLUGIN_CACHE_DIR: SHARED_PLUGIN_CACHE,
       };
 
       const backend = await startBackend(workDir);

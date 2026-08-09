@@ -7,6 +7,7 @@ import {
   Circle,
   Clock,
   History,
+  Link2,
   MessageSquare,
   XCircle,
 } from "lucide-react";
@@ -486,6 +487,7 @@ export function RunDetail({
   const [creatorUsername, setCreatorUsername] = useState("");
   const [creatorAvatarUrl, setCreatorAvatarUrl] = useState("");
   const [pendingAction, setPendingAction] = useState("");
+  const [copiedPermalink, setCopiedPermalink] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [planSummary, setPlanSummary] = useState<Readonly<{
     runId: string;
@@ -495,6 +497,19 @@ export function RunDetail({
   const handlePlanSummaryChange = useCallback((summary: PlanOutputSummary | null): void => {
     setPlanSummary(summary === null ? null : { runId, summary });
   }, [runId]);
+
+  const runPermalink = `${window.location.origin}${orgPath}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(runId)}`;
+
+  async function copyRunPermalink(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(runPermalink);
+      setCopiedPermalink(true);
+      toast.add({ title: "Run permalink copied", type: "success" });
+      window.setTimeout((): void => setCopiedPermalink(false), 2000);
+    } catch {
+      toast.add({ title: "Could not copy link", type: "error" });
+    }
+  }
 
   useEffect((): void => {
     setRunEvents([]);
@@ -955,37 +970,50 @@ export function RunDetail({
             </div>
           )}
         </div>
-        {(canCancel || canForceCancel || canOverridePolicy) && (
-          <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
-            {canCancel && (
-              <Button
-                variant="outline"
-                disabled={pendingAction !== ""}
-                onClick={(): void => { void performRunAction("cancel", "Run canceled"); }}
-              >
-                Cancel run
-              </Button>
-            )}
-            {canForceCancel && (
-              <Button
-                variant="destructive"
-                disabled={pendingAction !== ""}
-                onClick={(): void => { void performRunAction("force-cancel", "Run force canceled"); }}
-              >
-                Force cancel
-              </Button>
-            )}
-            {canOverridePolicy && (
-              <Button
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-                disabled={pendingAction !== ""}
-                onClick={(): void => { void performRunAction("override-policy", "Policy check overridden"); }}
-              >
-                Override policy
-              </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            aria-label="Copy run permalink"
+            disabled={pendingAction !== ""}
+            onClick={(): void => { void copyRunPermalink(); }}
+          >
+            <Link2 className="size-3.5" aria-hidden="true" />
+            {copiedPermalink ? "Copied" : "Copy link"}
+          </Button>
+          {(canCancel || canForceCancel || canOverridePolicy) && (
+            <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
+                {canCancel && (
+                  <Button
+                    variant="outline"
+                    disabled={pendingAction !== ""}
+                    onClick={(): void => { void performRunAction("cancel", "Run canceled"); }}
+                  >
+                    Cancel run
+                  </Button>
+                )}
+                {canForceCancel && (
+                  <Button
+                    variant="destructive"
+                    disabled={pendingAction !== ""}
+                    onClick={(): void => { void performRunAction("force-cancel", "Run force canceled"); }}
+                  >
+                    Force cancel
+                  </Button>
+                )}
+                {canOverridePolicy && (
+                  <Button
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                    disabled={pendingAction !== ""}
+                    onClick={(): void => { void performRunAction("override-policy", "Policy check overridden"); }}
+                  >
+                    Override policy
+                  </Button>
+                )}
+              </div>
             )}
           </div>
-        )}
       </header>
 
       <dl className="mb-5 grid overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
