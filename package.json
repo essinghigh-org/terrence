@@ -1,7 +1,7 @@
 {
-  "name": "terraform-homelab",
+  "name": "terrence",
   "version": "1.0.0",
-  "description": "Homelab clone of Terraform Enterprise",
+  "description": "Self-hosted Terraform Enterprise alternative", 
   "scripts": {
     "dev:backend": "cd backend && bun run --watch index.ts",
     "dev:frontend": "cd frontend && bun run dev",
