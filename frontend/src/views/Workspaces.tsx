@@ -57,10 +57,18 @@ type RunSummary = Readonly<{
   relationships: Readonly<{ workspace: Readonly<{ data: Readonly<{ id: string }> }> }>;
 }>;
 
+// The "running" set mirrors the executor's active statuses (worker.ts
+// blockerStatuses minus the completed-plan states, which belong to on-hold):
+// pre-plan/post-plan task execution, policy phases, queued apply, etc.
 const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
   errored: ["errored"],
-  running: ["pending", "fetching", "planning", "cost_estimating", "policy_checking", "applying"],
+  running: [
+    "queuing", "pending", "fetching", "fetching_completed", "plan_queued",
+    "pre_plan_running", "pre_plan_completed", "planning",
+    "cost_estimating", "cost_estimated", "policy_checking", "policy_checked",
+    "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying",
+  ],
   "on-hold": ["planned", "planned_and_saved"],
   completed: ["applied", "planned_and_finished", "discarded", "canceled"],
 };
@@ -69,6 +77,10 @@ export function Workspaces(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // Org-wide totals are independent of the status filter; the workspace list
+  // itself is server-filtered when one is active (review item 1.9).
+  const [totalWorkspaceCount, setTotalWorkspaceCount] = useState(0);
+  const [lockedWorkspaceCount, setLockedWorkspaceCount] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectDataError, setProjectDataError] = useState(false);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
@@ -96,8 +108,15 @@ export function Workspaces(): React.JSX.Element {
       const query = statuses === undefined
         ? "?page%5Bsize%5D=100"
         : `?page%5Bsize%5D=100&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
-      const [workspaceData, projectResult, runResult, canManage] = await Promise.all([
+      const [workspaceData, totalsData, projectResult, runResult, canManage] = await Promise.all([
         fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
+        // KPIs must reflect the whole org, not the filtered page: fetch the
+        // unfiltered list solely for counting when a status filter is active.
+        // Absent failure degrades to the filtered list (pre-fix behavior).
+        statuses === undefined
+          ? Promise.resolve(null)
+          : fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100`, signal)
+            .catch((): null => null),
         fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
           .then((data): Readonly<{ data: Project[]; failed: false }> => ({ data, failed: false }))
           .catch((): Readonly<{ data: Project[]; failed: true }> => ({ data: [], failed: true })),
@@ -114,6 +133,9 @@ export function Workspaces(): React.JSX.Element {
       ]);
       if (signal?.aborted === true) return;
       setWorkspaces(workspaceData);
+      const totalsSource = totalsData ?? workspaceData;
+      setTotalWorkspaceCount(totalsSource.length);
+      setLockedWorkspaceCount(totalsSource.filter((workspace): boolean => workspace.attributes.locked === true).length);
       setProjects(projectResult.data);
       setProjectDataError(projectResult.failed);
       setCanManageWorkspaces(canManage);
@@ -186,9 +208,7 @@ export function Workspaces(): React.JSX.Element {
     return count;
   }, [latestRuns]);
 
-  const lockedWorkspacesCount = useMemo((): number => {
-    return workspaces.filter((ws): boolean => ws.attributes.locked === true).length;
-  }, [workspaces]);
+
 
   const loadTags = async (workspace: Workspace): Promise<void> => {
     try {
@@ -293,7 +313,7 @@ export function Workspaces(): React.JSX.Element {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{workspaces.length}</div>
+          <div className="mt-1 text-2xl font-bold">{totalWorkspaceCount}</div>
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
@@ -307,7 +327,7 @@ export function Workspaces(): React.JSX.Element {
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{lockedWorkspacesCount}</div>
+          <div className="mt-1 text-2xl font-bold">{lockedWorkspaceCount}</div>
         </div>
       </div>
 

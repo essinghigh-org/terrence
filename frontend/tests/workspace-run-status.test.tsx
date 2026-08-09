@@ -105,3 +105,53 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
   expect(view.getByText("Projects could not be refreshed. Workspace results are still available.")).toBeTruthy();
   expect(view.queryByText(/Workspace data is unavailable/)).toBeNull();
 });
+
+test("KPI totals stay org-wide when a status filter is active", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.includes("current-run")) {
+      // Server-filtered view: only the applying workspace matches.
+      return json({ data: [{
+        id: "ws-1",
+        attributes: { name: "filtered-only", locked: true },
+        relationships: { project: { data: null } },
+      }] });
+    }
+    if (url.includes("/workspaces?")) {
+      // Unfiltered: the org-wide set used purely for the KPI cards.
+      return json({ data: [
+        { id: "ws-1", attributes: { name: "filtered-only", locked: true }, relationships: { project: { data: null } } },
+        { id: "ws-2", attributes: { name: "idle-ws", locked: false }, relationships: { project: { data: null } } },
+      ] });
+    }
+    if (url.includes("/projects?")) return json({ data: [] });
+    if (url.includes("/runs?")) {
+      return json({ data: [
+        { id: "run-1", attributes: { status: "post_plan_running" }, relationships: { workspace: { data: { id: "ws-1" } } } },
+        { id: "run-2", attributes: { status: "planned" }, relationships: { workspace: { data: { id: "ws-2" } } } },
+      ] });
+    }
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "running" } });
+
+  await waitFor((): void => { expect(view.getByText("Post Plan Running")).toBeTruthy(); });
+  const totalCard = view.getByText("Total Workspaces").parentElement!;
+  const lockedCard = view.getByText("Locked Workspaces").parentElement!;
+  expect(totalCard.textContent).toContain("2");
+  expect(lockedCard.textContent).toContain("1");
+  // The table still shows only the server-filtered workspace.
+  expect(view.queryByText("idle-ws")).toBeNull();
+  expect(view.getByText("filtered-only")).toBeTruthy();
+  // post_plan_running counts as an active run.
+  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("1");
+});
