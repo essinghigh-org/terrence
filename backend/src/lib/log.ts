@@ -1,10 +1,26 @@
 // Initialize log level
-const LOG_LEVEL = (process.env.LOG_LEVEL ?? "info").toLowerCase();
 const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
+
+/** Resolve LOG_LEVEL defensively: an unknown value previously produced an
+ * index of -1, which silently disabled every log line. Fall back to the
+ * default and warn instead. Empty/unset means default. */
+function resolveLogLevel(): LogLevel {
+  const configured = (process.env.LOG_LEVEL ?? "").trim().toLowerCase();
+  if (configured === "") return DEFAULT_LOG_LEVEL;
+  if ((LOG_LEVELS as readonly string[]).includes(configured)) return configured as LogLevel;
+  console.warn(
+    `[terrence] Unknown LOG_LEVEL ${JSON.stringify(process.env.LOG_LEVEL)}; ` +
+      `expected one of: ${LOG_LEVELS.join(", ")}. Falling back to "${DEFAULT_LOG_LEVEL}".`,
+  );
+  return DEFAULT_LOG_LEVEL;
+}
+
+const LOG_LEVEL = resolveLogLevel();
 
 function isLogLevelEnabled(level: LogLevel): boolean {
-  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL as LogLevel);
+  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL);
 }
 
 /** Serialize log meta defensively: BigInt throws in JSON.stringify and
