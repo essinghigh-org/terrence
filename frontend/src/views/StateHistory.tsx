@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Upload } from "lucide-react";
@@ -49,7 +50,7 @@ type LoadState =
 function formatDate(value: unknown): string {
   if (typeof value !== "string" || value === "") return "—";
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+  return formatDateTime(date);
 }
 
 export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = true }: StateHistoryProps): React.JSX.Element {

@@ -21,7 +21,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -299,7 +299,7 @@ export function Workspaces(): React.JSX.Element {
     const value = run?.attributes["created-at"];
     if (value === undefined) return "";
     const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
+    return formatDateTime(date, "");
   };
 
   return (

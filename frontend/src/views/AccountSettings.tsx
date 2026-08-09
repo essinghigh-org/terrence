@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useLocation, useOutletContext } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
+import { formatDateTime } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "../components/ui/card";
@@ -29,7 +30,7 @@ type BrowserSession = Readonly<{
 
 function formatSessionDate(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+  return formatDateTime(date, "Unknown");
 }
 
 export function AccountSettings(): React.JSX.Element {

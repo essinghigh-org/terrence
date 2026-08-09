@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { formatDate } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -194,9 +195,7 @@ export function RegistryModules(): React.JSX.Element {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {m.attributes["created-at"] === undefined
-                        ? ""
-                        : new Date(m.attributes["created-at"]).toLocaleDateString()}
+                      {formatDate(m.attributes["created-at"], "")}
                     </TableCell>
                     <TableCell>
                       {canManage && (

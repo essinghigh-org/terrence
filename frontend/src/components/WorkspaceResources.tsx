@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ApiError, fetchAllApiPages, fetchApi } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
@@ -66,7 +66,7 @@ function outputValue(output: Output): string {
 
 function formatDate(value: string | undefined): string {
   const date = new Date(value ?? "");
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+  return formatDateTime(date);
 }
 
 function isAborted(signal: Readonly<AbortSignal> | undefined): boolean {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "../lib/api";
+import { formatDateTime } from "../lib/utils";
 import type { LayoutOutletContext } from "../components/Layout";
 import {
   Shield,
@@ -660,7 +661,7 @@ function AuditAdmin(props: Readonly<{ auditLogs: DataItem[]; }>): React.JSX.Elem
                       ) : (
                         auditLogs.map((log): React.JSX.Element => (
                           <tr key={log.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 text-xs text-gray-500">{new Date(log.attributes["created-at"] ?? "").toLocaleString()}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{formatDateTime(log.attributes["created-at"])}</td>
                             <td className="px-4 py-3 font-medium text-gray-900">{log.attributes.action}</td>
                             <td className="px-4 py-3 text-gray-600">{log.attributes["resource-type"]}</td>
                             <td className="px-4 py-3 text-xs font-mono text-gray-400">{log.attributes["resource-id"] ?? "—"}</td>

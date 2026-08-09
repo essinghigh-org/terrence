@@ -28,6 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
+import { formatDate } from "@/lib/utils";
 
 const messageFrom = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -310,7 +311,7 @@ export function WorkspaceRunTriggers({
                   <TableRow key={trigger.id}>
                     <TableCell className="font-medium">{namesById.get(sourceId) ?? sourceId}</TableCell>
                     <TableCell className="text-muted-foreground">
-                      {createdAt == null ? "—" : new Date(createdAt).toLocaleDateString()}
+                      {formatDate(createdAt)}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

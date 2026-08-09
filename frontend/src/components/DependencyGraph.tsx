@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 export type DependencyGraphResource = Readonly<{
   address: string;
@@ -234,7 +234,7 @@ function iconFor(providerType: string): LucideIcon {
 
 function formatDate(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+  return formatDateTime(date);
 }
 
 function toFlowNodes(

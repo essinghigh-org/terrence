@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
+import { formatDateTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -247,7 +248,7 @@ function sourceLabel(source: string | undefined): string {
 function formatDate(value: string | undefined): string {
   if (value === undefined || value === "") return "—";
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+  return formatDateTime(date);
 }
 
 function formatDuration(start: string | undefined, end: string | undefined): string {

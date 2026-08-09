@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { formatDate } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -429,7 +430,7 @@ export function AgentPools(): React.JSX.Element {
                     <TableRow key={token.id}>
                       <TableCell className="font-medium text-xs">{token.attributes.description}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {new Date(token.attributes["created-at"]).toLocaleDateString()}
+                        {formatDate(token.attributes["created-at"])}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

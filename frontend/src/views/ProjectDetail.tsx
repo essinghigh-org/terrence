@@ -27,7 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 
 export type ProjectSection = "overview" | "workspaces" | "settings" | "variable-sets";
 
@@ -82,7 +82,7 @@ const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
 
 function runDate(value: string | undefined): string {
   const date = new Date(value ?? "");
-  return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
+  return formatDateTime(date, "");
 }
 
 export function ProjectDetail({
@@ -419,7 +419,7 @@ export function ProjectDetail({
                 </div>
                 <div>
                   <p className="text-xs font-medium text-muted-foreground">Created</p>
-                  <p className="mt-1 text-sm">{project?.attributes["created-at"] !== undefined ? new Date(project.attributes["created-at"]).toLocaleDateString() : "—"}</p>
+                  <p className="mt-1 text-sm">{formatDate(project?.attributes["created-at"])}</p>
                 </div>
               </CardContent>
             </Card>

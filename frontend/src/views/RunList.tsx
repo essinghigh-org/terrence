@@ -8,6 +8,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
+import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -118,7 +119,7 @@ function statusLabel(status: string): string {
 function formatDate(value: string | undefined): string {
   if (value === undefined || value === "") return "—";
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString();
+  return formatDateTime(date);
 }
 
 function StatusIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {

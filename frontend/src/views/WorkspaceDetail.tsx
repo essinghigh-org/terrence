@@ -42,6 +42,7 @@ import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
+import { formatDate, formatDateTime } from "../lib/utils";
 
 export type WorkspaceSection =
   | "overview"
@@ -623,7 +624,7 @@ export function WorkspaceDetail({
                       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
                         {typeof latestRunCreatedAt === "string" && latestRunCreatedAt !== "" && (
                           <time dateTime={latestRunCreatedAt}>
-                            {new Date(latestRunCreatedAt).toLocaleString()}
+                            {formatDateTime(latestRunCreatedAt)}
                           </time>
                         )}
                         {latestRun.attributes.source !== undefined && (
@@ -704,7 +705,7 @@ export function WorkspaceDetail({
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Created</div>
                     <div className="text-[13px] text-gray-900">
-                       {typeof createdAt === "string" && createdAt !== "" ? new Date(createdAt).toLocaleDateString() : "—"}
+                       {formatDate(createdAt)}
                     </div>
                   </div>
                 </div>

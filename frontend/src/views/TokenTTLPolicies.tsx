@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { formatDate } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -49,13 +50,6 @@ function formatMaxTtl(maxTtlMs: number): string {
     return `${maxTtlMs / MS_PER_SECOND}s`;
   }
   return `${maxTtlMs} ms`;
-}
-
-function formatDate(value?: string): string {
-  if (value === undefined || value === "") return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString();
 }
 
 export function TokenTTLPolicies(): React.JSX.Element {

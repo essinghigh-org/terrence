@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
+import { formatDate } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -172,7 +173,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
                   <TableCell className="font-medium">{tag.attributes.key}</TableCell>
                   <TableCell>{tag.attributes["disable-overrides"] ? "No" : "Yes"}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {new Date(tag.attributes["created-at"]).toLocaleDateString()}
+                    {formatDate(tag.attributes["created-at"])}
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
