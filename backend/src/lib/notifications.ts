@@ -136,7 +136,7 @@ export async function deliverRunNotifications(
     configuration.enabled === true && configuration.triggers.includes(trigger));
   const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
   const runUrl = new URL(
-    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
     baseUrl,
   ).toString();
   const updatedAt = new Date().toISOString();
@@ -302,8 +302,10 @@ async function deliverChangeRequestNotifications(
   const matching = allConfigurations.filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes("team:change_request"));
   const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  // No change-request detail route exists in the frontend yet, so link to the
+  // workspace page until a dedicated change-request UI is built (review item 1.4).
   const changeRequestUrl = new URL(
-    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/${encodeURIComponent(workspace.name)}/change-requests/${encodeURIComponent(changeRequest.id)}`,
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}`,
     baseUrl,
   ).toString();
 
