@@ -6,6 +6,33 @@ import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+
+// Single source of truth for the reported application version:
+// BUILD_VERSION env wins, otherwise the root package.json version,
+// otherwise "dev". Read once at first call and cached; a missing or
+// unparseable package.json must never crash the metadata endpoint.
+let cachedAppVersion: string | undefined;
+function appVersion(): string {
+  if (cachedAppVersion !== undefined) return cachedAppVersion;
+  const fromEnv = process.env.BUILD_VERSION;
+  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
+    cachedAppVersion = fromEnv;
+    return cachedAppVersion;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(join(import.meta.dir, "../../../package.json"), "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim() !== "") {
+      cachedAppVersion = parsed.version.trim();
+      return cachedAppVersion;
+    }
+  } catch {
+    // fall through to "dev"
+  }
+  cachedAppVersion = "dev";
+  return cachedAppVersion;
+}
 
 type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
@@ -238,7 +265,7 @@ export const healthRoutes = new Elysia({ name: "health" })
   .get("/api/v1/health/readiness", async ({ set }: SetCtx): Promise<unknown> => readinessResponse(set))
   .get("/api/v1/nodes/readiness", async ({ set }: SetCtx): Promise<unknown> => readinessResponse(set))
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
-    version: process.env.BUILD_VERSION ?? "dev",
+    version: appVersion(),
     build: process.env.BUILD_SHA ?? "unknown",
   }))
   .get("/api/meta/ip-ranges", (): { api: string[]; notifications: string[]; sentinel: string[]; vcs: string[] } => ({

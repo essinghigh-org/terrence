@@ -27,6 +27,8 @@ type Organization = Readonly<{
   }>;
 }>;
 
+type MetadataDocument = Readonly<{ version?: unknown }>;
+
 const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin"]);
 
 export function Dashboard(): React.JSX.Element {
@@ -110,6 +112,21 @@ export function Dashboard(): React.JSX.Element {
   };
 
   const reservedName = RESERVED_ORGANIZATION_NAMES.has(name.trim().toLowerCase());
+
+  const [appVersion, setAppVersion] = useState("");
+  useEffect((): (() => void) | undefined => {
+    const controller = new AbortController();
+    fetchApi("/api/v1/metadata", { signal: controller.signal })
+      .then((response): void => {
+        const version = (response as MetadataDocument).version;
+        if (typeof version === "string") {
+          const safe = version.replace(/[^A-Za-z0-9._-]/g, "");
+          if (safe !== "") setAppVersion(safe);
+        }
+      })
+      .catch((): void => { /* ignore */ });
+    return (): void => { controller.abort(); };
+  }, []);
 
   return (
     <div className="flex w-full flex-col gap-6">
@@ -211,7 +228,7 @@ export function Dashboard(): React.JSX.Element {
         </Table>
       </div>
 
-      <p className="mt-auto text-xs text-muted-foreground">Terrence v0.1.0-dev</p>
+      <p className="mt-auto text-xs text-muted-foreground">Terrence{appVersion === "" ? "" : ` v${appVersion}`}</p>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
