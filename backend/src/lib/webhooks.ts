@@ -15,17 +15,8 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
-import { auditLog } from "./utils";
+import { auditLog , type DeepReadonly } from "./utils";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends ReadonlySet<infer Item>
-  ? ReadonlySet<DeepReadonly<Item>>
-  : T extends (infer Item)[]
-  ? readonly DeepReadonly<Item>[]
-  : T extends object
-  ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-  : T;
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
 type WebhookDetails = Readonly<{

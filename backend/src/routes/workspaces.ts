@@ -10,20 +10,13 @@ import {
   type WorkspaceResourcePermissions,
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData , type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, isExecutionMode, parseSettingOverwrites } from "./projects";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 

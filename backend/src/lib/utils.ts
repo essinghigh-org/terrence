@@ -26,13 +26,43 @@ import {
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
 
-type DeepReadonly<T> = T extends null | undefined | boolean | number | string
-  ? T
-  : T extends readonly (infer Item)[]
-    ? readonly DeepReadonly<Item>[]
-    : { readonly [Key in keyof T]: DeepReadonly<T[Key]> };
+export type DeepReadonly<T> =
+  T extends ((...args: readonly unknown[]) => unknown) | boolean | number | string | symbol | bigint | null | undefined
+    ? T
+    : T extends ReadonlySet<infer Item>
+      ? ReadonlySet<DeepReadonly<Item>>
+      : T extends readonly (infer Item)[]
+        ? readonly DeepReadonly<Item>[]
+        : T extends object
+          ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+          : T;
 
 const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUBLIC_URL !== "" ? new URL(process.env.PUBLIC_URL) : null;
+
+/** Minimal Elysia `set` shape shared by JSON:API error helpers. */
+export type ErrorSet = Readonly<{ status?: number | string }>;
+
+export type JsonApiErrorBody = { errors: { status: string; title: string; detail?: string }[] };
+
+export function errorBody(status: number, title: string, detail?: string): JsonApiErrorBody {
+  return { errors: [{ status: String(status), title, ...(detail === undefined ? {} : { detail }) }] };
+}
+
+/** JSON:API error response that also sets the HTTP status. */
+export function apiError(set: ErrorSet, status: number, title: string, detail?: string): JsonApiErrorBody {
+  (set as { status: number }).status = status;
+  return errorBody(status, title, detail);
+}
+
+export function notFound(set?: ErrorSet): JsonApiErrorBody {
+  if (set !== undefined) (set as { status: number }).status = 404;
+  return errorBody(404, "Not Found");
+}
+
+export function forbidden(set?: ErrorSet): JsonApiErrorBody {
+  if (set !== undefined) (set as { status: number }).status = 403;
+  return errorBody(403, "Forbidden");
+}
 
 export async function auditLog(
   action: string,

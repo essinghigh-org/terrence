@@ -1,3 +1,4 @@
+import { notFound, type JsonApiErrorBody } from "../lib/utils";
 import {
   AVATAR_CLIENT_CACHE,
   AvatarService,
@@ -6,17 +7,13 @@ import {
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
 
-function notFound(): { errors: { status: string; title: string }[] } {
-  return { errors: [{ status: "404", title: "Not Found" }] };
-}
-
 type AvatarHandlerCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   request: { headers: Headers };
   set: { status: number | string; headers: Record<string, string | number> };
 }>;
 
-export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx): Promise<Response | { errors: { status: string; title: string }[] }> => {
+export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx): Promise<Response | JsonApiErrorBody> => {
   const key = params.key ?? "";
   const s = set;
   if (!KEY_PATTERN.test(key)) {

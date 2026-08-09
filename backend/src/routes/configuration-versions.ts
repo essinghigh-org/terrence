@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray } from "drizzle-orm";
-import { apiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination } from "../lib/utils";
+import { apiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { authPlugin } from "../auth";
@@ -24,11 +24,6 @@ type ParamCtx = Readonly<{
 }>;
 
 type ConfigurationVersion = typeof configurationVersions.$inferSelect;
-type DeepReadonly<T> = T extends null | undefined | boolean | number | string
-  ? T
-  : T extends readonly (infer Item)[]
-    ? readonly DeepReadonly<Item>[]
-    : { readonly [Key in keyof T]: DeepReadonly<T[Key]> };
 
 function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
   const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;

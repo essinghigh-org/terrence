@@ -8,7 +8,8 @@ import {
   workspaces,
   type users,
 } from "../db/schema";
-import { checkWorkspacePermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
+import { checkWorkspacePermission, findAuthorizedRun, findAuthorizedWorkspace , type DeepReadonly } from "../lib/utils";
+import { notFound, forbidden } from "../lib/utils";
 
 type SetObject = Readonly<{
   status?: number | string;
@@ -23,23 +24,8 @@ type ParamContext = Readonly<{
   set: SetObject;
 }>;
 
-type DeepReadonly<T> = T extends readonly (infer Value)[]
-  ? readonly DeepReadonly<Value>[]
-  : T extends object
-    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-    : T;
 
 type Assessment = DeepReadonly<typeof assessmentResults.$inferSelect>;
-
-function notFound(set: SetObject): Record<string, unknown> {
-  (set as { status: number }).status = 404;
-  return { errors: [{ status: "404", title: "Not Found" }] };
-}
-
-function forbidden(set: SetObject): Record<string, unknown> {
-  (set as { status: number }).status = 403;
-  return { errors: [{ status: "403", title: "Forbidden" }] };
-}
 
 function assessmentResource(result: Assessment): Record<string, unknown> {
   return {

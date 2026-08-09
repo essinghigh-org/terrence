@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { hyokConfigurations, hyokCustomerKeyVersions, organizations, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type ParamCtx = Readonly<{
@@ -15,11 +15,6 @@ type ParamCtx = Readonly<{
 }>;
 
 type HyokRow = typeof hyokConfigurations.$inferSelect;
-
-function notFound(set: { status?: number | string }): { errors: { status: string; title: string }[] } {
-  (set as { status: number }).status = 404;
-  return { errors: [{ status: "404", title: "Not Found" }] };
-}
 
 // go-tfe HYOKConfiguration's model reads Organization.Name, AgentPool.ID and the
 // polymorphic oidc-configuration relationship (type-tagged). Key versions are

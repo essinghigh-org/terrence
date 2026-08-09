@@ -4,7 +4,7 @@ import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
@@ -28,11 +28,6 @@ type ParamCtx = Readonly<{
 }>;
 
 
-type DeepReadonly<T> = T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;

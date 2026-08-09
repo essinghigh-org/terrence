@@ -16,7 +16,7 @@ import {
   teams,
   type users,
 } from "../db/schema";
-import { pageRequest, pagination } from "../lib/utils";
+import { pageRequest, pagination, apiError } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -29,21 +29,10 @@ type ParamCtx = Readonly<{
 type ScimSettings = Readonly<typeof scimSettings.$inferSelect>;
 type ScimToken = Readonly<typeof scimTokens.$inferSelect>;
 type MappedTeam = Readonly<{ id: string; orgId: string }>;
-type RateWindow = Readonly<{ count: number; startedAt: number }>;
-type RateWindowStore = Readonly<{
-  get: (key: string) => RateWindow | undefined;
-  set: (key: string, value: RateWindow) => unknown;
-}>;
 
 const SCIM_SETTINGS_ID = "scim";
 const DAY_MS = 86_400_000;
-const settingsWindows = new Map<string, RateWindow>();
-const mappingWindows = new Map<string, RateWindow>();
 
-function error(set: SetObj, status: number, title: string, detail?: string): Record<string, unknown> {
-  (set as { status: number }).status = status;
-  return { errors: [{ status: String(status), title, ...(detail === undefined ? {} : { detail }) }] };
-}
 
 function requireAdmin(
   user: ParamCtx["user"],
@@ -51,27 +40,9 @@ function requireAdmin(
   authenticateFirst = false,
 ): Record<string, unknown> | undefined {
   if (user === null || user === undefined) {
-    return error(set, authenticateFirst ? 401 : 404, authenticateFirst ? "Unauthorized" : "Not Found");
+    return apiError(set, authenticateFirst ? 401 : 404, authenticateFirst ? "Unauthorized" : "Not Found");
   }
-  return user.isSiteAdmin === true ? undefined : error(set, 404, "Not Found");
-}
-
-// ponytail: process-local windows are sufficient for the single-node server; use a shared limiter for multi-node deployments.
-function rateLimited(
-  windows: RateWindowStore,
-  key: string,
-  limit: number,
-  duration: number,
-  set: SetObj,
-): Record<string, unknown> | undefined {
-  const now = Date.now();
-  const current = windows.get(key);
-  if (current === undefined || now - current.startedAt >= duration) {
-    windows.set(key, { count: 1, startedAt: now });
-    return;
-  }
-  if (current.count >= limit) return error(set, 429, "Too Many Requests");
-  windows.set(key, { ...current, count: current.count + 1 });
+  return user.isSiteAdmin === true ? undefined : apiError(set, 404, "Not Found");
 }
 
 async function currentSettings(): Promise<ScimSettings> {
@@ -184,46 +155,42 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .get("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(settingsWindows, user?.id ?? "", 20, 1_000, set);
-    if (limited !== undefined) return limited;
     return { data: await settingsResource(await currentSettings()) };
   })
   .patch("/api/v2/admin/scim-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(settingsWindows, user?.id ?? "", 20, 1_000, set);
-    if (limited !== undefined) return limited;
     const input = jsonApiAttributes(body, "scim-settings");
-    if ("error" in input) return error(set, 422, "Unprocessable Entity", input.error);
+    if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
     const current = await currentSettings();
     const attributes = input.attributes;
 
     if (attributes.enabled !== undefined && typeof attributes.enabled !== "boolean") {
-      return error(set, 422, "Unprocessable Entity", "enabled must be a boolean");
+      return apiError(set, 422, "Unprocessable Entity", "enabled must be a boolean");
     }
     if (attributes.enabled === false) {
-      return error(set, 422, "Unprocessable Entity", "Use DELETE to disable SCIM");
+      return apiError(set, 422, "Unprocessable Entity", "Use DELETE to disable SCIM");
     }
     if (attributes.paused !== undefined && typeof attributes.paused !== "boolean") {
-      return error(set, 422, "Unprocessable Entity", "paused must be a boolean");
+      return apiError(set, 422, "Unprocessable Entity", "paused must be a boolean");
     }
     const requestedGroup = attributes["site-admin-group-scim-id"];
     if (requestedGroup !== undefined && requestedGroup !== null && typeof requestedGroup !== "string") {
-      return error(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must be a string or null");
+      return apiError(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must be a string or null");
     }
     if (requestedGroup === "") {
-      return error(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must not be empty");
+      return apiError(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must not be empty");
     }
     if (attributes.enabled === true && !current.enabled) {
       const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
-      if (saml?.enabled !== true) return error(set, 422, "Unprocessable Entity", "SAML must be enabled before SCIM");
+      if (saml?.enabled !== true) return apiError(set, 422, "Unprocessable Entity", "SAML must be enabled before SCIM");
     }
     const enabled = attributes.enabled === true || current.enabled;
     const paused = typeof attributes.paused === "boolean" ? attributes.paused : current.paused;
-    if (paused && !enabled) return error(set, 422, "Unprocessable Entity", "SCIM must be enabled before it can be paused");
+    if (paused && !enabled) return apiError(set, 422, "Unprocessable Entity", "SCIM must be enabled before it can be paused");
     if (typeof requestedGroup === "string") {
       const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, requestedGroup) });
-      if (group === undefined) return error(set, 422, "Unprocessable Entity", "SCIM group not found");
+      if (group === undefined) return apiError(set, 422, "Unprocessable Entity", "SCIM group not found");
     }
 
     await db.update(scimSettings).set({
@@ -239,8 +206,6 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .delete("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(settingsWindows, user?.id ?? "", 20, 1_000, set);
-    if (limited !== undefined) return limited;
     await currentSettings();
     await db.transaction(async (tx): Promise<void> => {
       await tx.update(scimSettings).set({
@@ -269,25 +234,25 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const token = await db.query.scimTokens.findFirst({
       where: eq(scimTokens.id, params.token_id ?? ""),
     });
-    return token === undefined ? error(set, 404, "Not Found") : { data: tokenResource(token) };
+    return token === undefined ? apiError(set, 404, "Not Found") : { data: tokenResource(token) };
   })
   .post("/api/v2/admin/scim-tokens", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
     const input = jsonApiAttributes(body, "authentication-tokens");
-    if ("error" in input) return error(set, 400, "Bad Request", input.error);
+    if ("error" in input) return apiError(set, 400, "Bad Request", input.error);
     const description = input.attributes.description;
     if (description !== undefined && typeof description !== "string") {
-      return error(set, 400, "Bad Request", "description must be a string");
+      return apiError(set, 400, "Bad Request", "description must be a string");
     }
     const now = Date.now();
     const rawExpiry = input.attributes["expired-at"];
     if (rawExpiry !== undefined && typeof rawExpiry !== "string") {
-      return error(set, 400, "Bad Request", "expired-at must be an ISO-8601 timestamp");
+      return apiError(set, 400, "Bad Request", "expired-at must be an ISO-8601 timestamp");
     }
     const expiresAt = typeof rawExpiry === "string" ? Date.parse(rawExpiry) : now + (365 * DAY_MS);
     if (!Number.isFinite(expiresAt) || expiresAt - now < 29 * DAY_MS || expiresAt - now > 365 * DAY_MS) {
-      return error(set, 400, "Bad Request", "expired-at must be between 29 and 365 days in the future");
+      return apiError(set, 400, "Bad Request", "expired-at must be between 29 and 365 days in the future");
     }
     const rawToken = `scim-${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
     const token = {
@@ -308,7 +273,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const deleted = await db.delete(scimTokens)
       .where(eq(scimTokens.id, params.token_id ?? ""))
       .returning({ id: scimTokens.id });
-    if (deleted.length === 0) return error(set, 404, "Not Found");
+    if (deleted.length === 0) return apiError(set, 404, "Not Found");
     (set as { status: number }).status = 204;
     return;
   })
@@ -336,9 +301,9 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     const teamId = params.external_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined) return error(set, 404, "Not Found");
+    if (team === undefined) return apiError(set, 404, "Not Found");
     const mapping = await db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, team.id) });
-    if (mapping === undefined) return error(set, 404, "Not Found");
+    if (mapping === undefined) return apiError(set, 404, "Not Found");
     const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, mapping.scimGroupId) });
     return {
       data: {
@@ -355,34 +320,32 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .post("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(mappingWindows, user?.id ?? "", 10, 60_000, set);
-    if (limited !== undefined) return limited;
     const input = jsonApiAttributes(body, "scim-group-mapping");
-    if ("error" in input) return error(set, 422, "Unprocessable Entity", input.error);
+    if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
     const groupId = input.attributes["scim-group-id"];
     if (typeof groupId !== "string" || groupId === "") {
-      return error(set, 422, "Unprocessable Entity", "scim-group-id must be a non-empty string");
+      return apiError(set, 422, "Unprocessable Entity", "scim-group-id must be a non-empty string");
     }
     const [team, group, settings] = await Promise.all([
       db.query.teams.findFirst({ where: eq(teams.id, params.external_id ?? "") }),
       db.query.scimGroups.findFirst({ where: eq(scimGroups.id, groupId) }),
       currentSettings(),
     ]);
-    if (team === undefined || group === undefined) return error(set, 404, "Not Found");
-    if (!settings.enabled) return error(set, 422, "Unprocessable Entity", "SCIM is not enabled");
+    if (team === undefined || group === undefined) return apiError(set, 404, "Not Found");
+    if (!settings.enabled) return apiError(set, 422, "Unprocessable Entity", "SCIM is not enabled");
     if (team.name.toLocaleLowerCase() === "owners" || settings.siteAdminGroupScimId === group.id) {
-      return error(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped");
+      return apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped");
     }
     const existing = await db.query.teamScimGroupMappings.findFirst({
       where: eq(teamScimGroupMappings.teamId, team.id),
     });
-    if (existing !== undefined) return error(set, 409, "Conflict", "Team already has a SCIM group mapping");
+    if (existing !== undefined) return apiError(set, 409, "Conflict", "Team already has a SCIM group mapping");
     const memberCount = (await db.select({ value: count() }).from(scimGroupMemberships)
       .where(eq(scimGroupMemberships.groupId, group.id)))[0]?.value ?? 0;
-    if (memberCount > 1_000) return error(set, 413, "Payload Too Large");
+    if (memberCount > 1_000) return apiError(set, 413, "Payload Too Large");
     const linkCount = (await db.select({ value: count() }).from(teamScimGroupMappings)
       .where(eq(teamScimGroupMappings.scimGroupId, group.id)))[0]?.value ?? 0;
-    if (linkCount >= 10_000) return error(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached");
+    if (linkCount >= 10_000) return apiError(set, 422, "Unprocessable Entity", "SCIM group mapping limit reached");
 
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(teamScimGroupMappings).values({
@@ -399,19 +362,17 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .patch("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, body, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(mappingWindows, user?.id ?? "", 10, 60_000, set);
-    if (limited !== undefined) return limited;
     const input = jsonApiAttributes(body, "scim-group-mapping");
-    if ("error" in input) return error(set, 422, "Unprocessable Entity", input.error);
+    if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
     const paused = input.attributes["scim-sync-paused"];
-    if (typeof paused !== "boolean") return error(set, 422, "Unprocessable Entity", "scim-sync-paused must be a boolean");
+    if (typeof paused !== "boolean") return apiError(set, 422, "Unprocessable Entity", "scim-sync-paused must be a boolean");
     const teamId = params.external_id ?? "";
     const [team, mapping] = await Promise.all([
       db.query.teams.findFirst({ where: eq(teams.id, teamId) }),
       db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, teamId) }),
     ]);
-    if (team === undefined) return error(set, 404, "Not Found");
-    if (mapping === undefined) return error(set, 409, "Conflict", "Team does not have a SCIM group mapping");
+    if (team === undefined) return apiError(set, 404, "Not Found");
+    if (mapping === undefined) return apiError(set, 409, "Conflict", "Team does not have a SCIM group mapping");
     if (mapping.syncPaused === paused) {
       (set as { status: number }).status = 204;
       return;
@@ -429,15 +390,13 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .delete("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;
-    const limited = rateLimited(mappingWindows, user?.id ?? "", 10, 60_000, set);
-    if (limited !== undefined) return limited;
     const teamId = params.external_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined) return error(set, 404, "Not Found");
+    if (team === undefined) return apiError(set, 404, "Not Found");
     const deleted = await db.delete(teamScimGroupMappings)
       .where(eq(teamScimGroupMappings.teamId, team.id))
       .returning({ teamId: teamScimGroupMappings.teamId });
-    if (deleted.length === 0) return error(set, 409, "Conflict", "Team does not have a SCIM group mapping");
+    if (deleted.length === 0) return apiError(set, 409, "Conflict", "Team does not have a SCIM group mapping");
     (set as { status: number }).status = 204;
     return;
   });

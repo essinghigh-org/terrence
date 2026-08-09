@@ -5,16 +5,8 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { policies, policySetVersions } from "../db/schema";
 import type { policySets } from "../db/schema";
+import type { DeepReadonly } from "./utils";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends ReadonlySet<infer Item>
-  ? ReadonlySet<DeepReadonly<Item>>
-  : T extends (infer Item)[]
-  ? readonly DeepReadonly<Item>[]
-  : T extends object
-  ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-  : T;
 
 export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket";
 export type PolicyWebhookDetails = {

@@ -3,15 +3,8 @@ import { eq, and } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { organizations, projects, stacks, agentPools } from "../db/schema";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission , type DeepReadonly } from "../lib/utils";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-    ? readonly DeepReadonly<R>[]
-    : T extends object
-      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-      : T;
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
 type ParamCtx = Readonly<{

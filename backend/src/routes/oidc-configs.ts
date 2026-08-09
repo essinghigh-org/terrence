@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { oidcConfigs, organizations, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type ParamCtx = Readonly<{
@@ -15,11 +15,6 @@ type ParamCtx = Readonly<{
 }>;
 
 type OidcRow = typeof oidcConfigs.$inferSelect;
-
-function notFound(set: { status?: number | string }): { errors: { status: string; title: string }[] } {
-  (set as { status: number }).status = 404;
-  return { errors: [{ status: "404", title: "Not Found" }] };
-}
 
 // go-tfe OIDC configuration resources carry a pointer `organization`
 // relationship whose Name the provider dereferences.

@@ -10,7 +10,7 @@ import {
   workspaces,
 } from "../db/schema";
 import { postNotification, type NotificationDelivery } from "../lib/notifications";
-import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -173,11 +173,6 @@ function createValues(
     token: typeof attributes.token === "string" ? attributes.token : null,
     createdAt: Date.now(),
   };
-}
-
-function notFound(set: SetObj): { errors: { status: string; title: string }[] } {
-  (set as { status: number }).status = 404;
-  return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
 export const notificationRoutes = new Elysia({ name: "notifications" })

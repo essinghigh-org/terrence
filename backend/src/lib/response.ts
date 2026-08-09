@@ -9,16 +9,9 @@ import { organizations, workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables, stackVariableSets
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
-import { apiURL, signedApiURL } from "./utils";
+import { apiURL, signedApiURL , type DeepReadonly } from "./utils";
 import { parseStatePayload } from "./validation";
 
-type DeepReadonly<T> = T extends ((...args: readonly unknown[]) => unknown) | boolean | number | string | null | undefined
-  ? T
-  : T extends readonly (infer R)[]
-    ? readonly DeepReadonly<R>[]
-    : T extends (infer R)[]
-      ? readonly DeepReadonly<R>[]
-      : { readonly [K in keyof T]: DeepReadonly<T[K]> };
 
 type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;

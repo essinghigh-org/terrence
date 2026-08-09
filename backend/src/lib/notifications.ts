@@ -11,7 +11,7 @@ import {
   users,
   workspaces,
 } from "../db/schema";
-import { validateExternalUrl } from "./utils";
+import { validateExternalUrl , type DeepReadonly } from "./utils";
 
 type NotificationConfiguration = Readonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -170,11 +170,6 @@ export function queueRunNotification(runId: string, trigger: string, status?: st
   });
 }
 
-type DeepReadonly<T> = T extends readonly (infer Value)[]
-  ? readonly DeepReadonly<Value>[]
-  : T extends object
-    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-    : T;
 
 type AssessmentResult = DeepReadonly<typeof assessmentResults.$inferSelect>;
 

@@ -25,6 +25,7 @@ import {
   writePlanJsonArtifact,
   type PlanJson,
 } from "./plan-json";
+import type { DeepReadonly } from "./utils";
 
 export type AgentJobCompletion = Readonly<{
   status: "completed" | "errored";
@@ -40,11 +41,6 @@ export type AgentJobCompletion = Readonly<{
   result: Readonly<Record<string, unknown>>;
 }>;
 
-type DeepReadonly<T> = T extends readonly (infer Value)[]
-  ? readonly DeepReadonly<Value>[]
-  : T extends object
-    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-    : T;
 
 type Agent = DeepReadonly<typeof agents.$inferSelect>;
 type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;

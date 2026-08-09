@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizations, orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type ParamCtx = Readonly<{
@@ -27,11 +27,6 @@ function ttlResource(r: TtlRow): Record<string, unknown> {
       "updated-at": new Date(r.updatedAt).toISOString(),
     },
   };
-}
-
-function notFound(set: { status?: number | string }): { errors: { status: string; title: string }[] } {
-  (set as { status: number }).status = 404;
-  return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
 export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })

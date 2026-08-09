@@ -3,14 +3,9 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { organizations, registryPartnerships, type users } from "../db/schema";
+import type { DeepReadonly } from "../lib/utils";
+import { apiError } from "../lib/utils";
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -23,10 +18,6 @@ type ParamCtx = Readonly<{
 type Organization = DeepReadonly<typeof organizations.$inferSelect>;
 type Partnership = DeepReadonly<typeof registryPartnerships.$inferSelect>;
 
-function error(set: ParamCtx["set"], status: number, title: string, detail?: string): Record<string, unknown> {
-  (set as { status: number }).status = status;
-  return { errors: [{ status: String(status), title, ...(detail === undefined ? {} : { detail }) }] };
-}
 
 function dataObject(body: unknown): Record<string, unknown> {
   if (body === null || typeof body !== "object") return {};
@@ -190,7 +181,7 @@ function explicitSharingIdentifiers(body: unknown): Readonly<{ producer: string;
 export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sharing" })
   .use(authPlugin)
   .get("/api/v2/admin/module-sharing", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 403, "Forbidden");
+    if (user?.isSiteAdmin !== true) return apiError(set, 403, "Forbidden");
     const rows = await db.query.registryPartnerships.findMany({ where: eq(registryPartnerships.modules, true) });
     const orgs = await db.query.organizations.findMany();
     const byId = new Map(orgs.map((org): [string, Organization] => [org.id, org]));
@@ -203,15 +194,15 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
     };
   })
   .post("/api/v2/admin/module-sharing", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 403, "Forbidden");
+    if (user?.isSiteAdmin !== true) return apiError(set, 403, "Forbidden");
     const identifiers = explicitSharingIdentifiers(body);
-    if (identifiers === null) return error(set, 422, "Unprocessable Entity", "Producing and consuming organization IDs are required");
+    if (identifiers === null) return apiError(set, 422, "Unprocessable Entity", "Producing and consuming organization IDs are required");
     const [producer, consumer] = await Promise.all([
       findOrganization(identifiers.producer),
       findOrganization(identifiers.consumer),
     ]);
     if (producer === undefined || consumer === undefined || producer.id === consumer.id) {
-      return error(set, 422, "Unprocessable Entity", "Sharing organizations must exist and be different");
+      return apiError(set, 422, "Unprocessable Entity", "Sharing organizations must exist and be different");
     }
     const existing = await db.query.registryPartnerships.findFirst({
       where: and(eq(registryPartnerships.producerOrgId, producer.id), eq(registryPartnerships.consumerOrgId, consumer.id)),
@@ -231,10 +222,10 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
     return { data: partnershipResource({ ...partnership, modules: true }, producer, consumer) };
   })
   .delete("/api/v2/admin/module-sharing/:id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 403, "Forbidden");
+    if (user?.isSiteAdmin !== true) return apiError(set, 403, "Forbidden");
     const partnership = await db.query.registryPartnerships.findFirst({ where: eq(registryPartnerships.id, params.id ?? "") });
-    if (partnership === undefined) return error(set, 404, "Not Found");
-    if (!partnership.modules) return error(set, 404, "Not Found");
+    if (partnership === undefined) return apiError(set, 404, "Not Found");
+    if (!partnership.modules) return apiError(set, 404, "Not Found");
     if (partnership.providers) {
       await db.update(registryPartnerships).set({ modules: false }).where(eq(registryPartnerships.id, partnership.id));
     } else {
@@ -244,39 +235,39 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
     return undefined;
   })
   .get("/api/v2/admin/organizations/:org_name/relationships/:kind", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
+    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
     const kind = params.kind;
-    if (kind !== "module-consumers" && kind !== "provider-consumers") return error(set, 404, "Not Found");
+    if (kind !== "module-consumers" && kind !== "provider-consumers") return apiError(set, 404, "Not Found");
     const producer = await findOrganizationByName(params.org_name ?? "");
-    if (producer === undefined) return error(set, 404, "Not Found");
+    if (producer === undefined) return apiError(set, 404, "Not Found");
     return { data: await consumerResources(producer.id, kind === "module-consumers" ? "modules" : "providers") };
   })
   .patch("/api/v2/admin/organizations/:org_name/relationships/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
+    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
     const producer = await findOrganizationByName(params.org_name ?? "");
     const identifiers = relationshipIdentifiers(body);
-    if (producer === undefined) return error(set, 404, "Not Found");
-    if (identifiers === null) return error(set, 422, "Unprocessable Entity", "data must contain organization resource identifiers");
+    if (producer === undefined) return apiError(set, 404, "Not Found");
+    if (identifiers === null) return apiError(set, 422, "Unprocessable Entity", "data must contain organization resource identifiers");
     const consumers = await resolveOrganizations(identifiers);
     if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
-      return error(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
+      return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
     }
     await replaceConsumers(producer, "modules", consumers);
     (set as { status: number }).status = 204;
     return undefined;
   })
   .patch("/api/v2/admin/organizations/:org_name/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
+    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
     const producer = await findOrganizationByName(params.org_name ?? "");
     const attrs = attributes(body);
     const identifiers = stringArray(attrs["module-consuming-organization-ids"]);
-    if (producer === undefined) return error(set, 404, "Not Found");
+    if (producer === undefined) return apiError(set, 404, "Not Found");
     if (dataObject(body).type !== "module-partnerships" || identifiers === null) {
-      return error(set, 422, "Unprocessable Entity", "A module-partnerships payload with consumer IDs is required");
+      return apiError(set, 422, "Unprocessable Entity", "A module-partnerships payload with consumer IDs is required");
     }
     const consumers = await resolveOrganizations(identifiers);
     if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
-      return error(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
+      return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
     }
     await replaceConsumers(producer, "modules", consumers);
     const rows = await db.query.registryPartnerships.findMany({
@@ -291,14 +282,14 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
     };
   })
   .put("/api/v2/admin/organizations/:org_name/registry-partnerships", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return error(set, 404, "Not Found");
+    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
     const producer = await findOrganizationByName(params.org_name ?? "");
     const attrs = attributes(body);
     const moduleIdentifiers = stringArray(attrs["module-consumers"] ?? attrs.module_consumers);
     const providerIdentifiers = stringArray(attrs["provider-consumers"] ?? attrs.provider_consumers);
-    if (producer === undefined) return error(set, 404, "Not Found");
+    if (producer === undefined) return apiError(set, 404, "Not Found");
     if (dataObject(body).type !== "registry-partnerships" || moduleIdentifiers === null || providerIdentifiers === null) {
-      return error(set, 422, "Unprocessable Entity", "A registry-partnerships payload with module and provider consumers is required");
+      return apiError(set, 422, "Unprocessable Entity", "A registry-partnerships payload with module and provider consumers is required");
     }
     const [moduleConsumers, providerConsumers] = await Promise.all([
       resolveOrganizations(moduleIdentifiers),
@@ -309,7 +300,7 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
       || providerConsumers === null
       || [...moduleConsumers, ...providerConsumers].some((consumer): boolean => consumer.id === producer.id)
     ) {
-      return error(set, 422, "Unprocessable Entity", "Registry consumers must identify other organizations");
+      return apiError(set, 422, "Unprocessable Entity", "Registry consumers must identify other organizations");
     }
     await replaceConsumers(producer, "modules", moduleConsumers);
     await replaceConsumers(producer, "providers", providerConsumers);

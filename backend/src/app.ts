@@ -124,6 +124,11 @@ const SENSITIVE_RATE_DURATION_MS = 60_000;
 // NATs, corporate proxies), so the 5/min credential limiter would break
 // legitimate flows; give them their own, higher-bound limiter.
 const SSO_GET_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SSO_GET_MAX", 60);
+// SCIM admin settings endpoints: 20/min per principal (mirrors the former
+// hand-rolled fixed-window limiter in scim-admin.ts).
+const SCIM_SETTINGS_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_SETTINGS_MAX", 20);
+// SCIM team-group mapping writes: 10 per 60s per principal.
+const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10);
 // The five SSO endpoints are sensitive no matter the verb: the protected GETs
 // mutate challenge state and the POSTs consume assertion/form-post payloads.
 // Share one set so path matching and rate limiting never drift apart.
@@ -209,6 +214,18 @@ function sensitiveSsoPath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "GET" && SSO_AUTH_PATHS.has(path)) return path;
   return undefined;
+}
+
+function scimSettingsPath(request: CustomRequest): string | undefined {
+  const path = new URL(request.url).pathname;
+  if (path !== "/api/v2/admin/scim-settings") return undefined;
+  return request.method === "GET" || request.method === "PATCH" || request.method === "DELETE" ? path : undefined;
+}
+
+function scimMappingPath(request: CustomRequest): string | undefined {
+  const path = new URL(request.url).pathname;
+  if (request.method !== "POST" && request.method !== "PATCH" && request.method !== "DELETE") return undefined;
+  return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
 }
 
 function sensitivePath(request: CustomRequest): string | undefined {
@@ -314,6 +331,38 @@ export const app = new Elysia()
       }],
     },
     skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
+  }))
+  .use(rateLimit({
+    context: fixedWindowContext(),
+    duration: 1_000,
+    max: SCIM_SETTINGS_RATE_LIMIT,
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+      return `scim-settings:${scimSettingsPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+    },
+    responseMessage: {
+      errors: [{
+        detail: "You have exceeded the API's rate limit.",
+        status: "429",
+        title: "Too Many Requests",
+      }],
+    },
+    skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
+  }))
+  .use(rateLimit({
+    context: fixedWindowContext(),
+    duration: 60_000,
+    max: SCIM_MAPPING_RATE_LIMIT,
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+      return `scim-mapping:${scimMappingPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+    },
+    responseMessage: {
+      errors: [{
+        detail: "You have exceeded the API's rate limit.",
+        status: "429",
+        title: "Too Many Requests",
+      }],
+    },
+    skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
   }))
   .use(oauthPlugin)
   .onRequest(({ request, set }: RequestContext): void => {

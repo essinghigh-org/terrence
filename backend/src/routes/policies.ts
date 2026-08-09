@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
 import { eq, and, inArray, asc, isNull } from "drizzle-orm";
-import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL } from "../lib/utils";
+import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL , type DeepReadonly } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -23,11 +23,6 @@ type ParamCtx = Readonly<{
   readonly set: SetObj;
 }>;
 
-type DeepReadonly<T> = T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 type PsItem = DeepReadonly<typeof policySets.$inferSelect>;
 type PolItem = DeepReadonly<typeof policies.$inferSelect>;

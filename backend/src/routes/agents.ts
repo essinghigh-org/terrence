@@ -14,7 +14,7 @@ import {
   type users,
 } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission , type DeepReadonly } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { createHash } from "node:crypto";
 import { authPlugin } from "../auth";
@@ -142,11 +142,6 @@ type TokenItem = Readonly<{
   readonly lastUsedAt: number | null;
 }>;
 
-type DeepReadonly<T> = T extends readonly (infer Value)[]
-  ? readonly DeepReadonly<Value>[]
-  : T extends object
-    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-    : T;
 
 function agentJobResource(details: DeepReadonly<ClaimedAgentJob>): Record<string, unknown> {
   const {

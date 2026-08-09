@@ -28,6 +28,7 @@ import {
   checkOrgPermission,
   checkRegistryReadPermission,
   validateVersion,
+  type DeepReadonly,
 } from "../lib/utils";
 import { join } from "path";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "fs/promises";
@@ -51,13 +52,6 @@ import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 
 const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "cv");
 
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 

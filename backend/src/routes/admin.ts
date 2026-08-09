@@ -8,7 +8,7 @@ import { AvatarService } from "../lib/avatars";
 import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
 import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
-import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination } from "../lib/utils";
+import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import { createHash } from "node:crypto";
@@ -25,11 +25,6 @@ type ParamCtx = Readonly<{
   readonly set: SetObj;
 }>;
 
-type DeepReadonly<T> = T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
 
 type UserItem = DeepReadonly<typeof users.$inferSelect>;
 type OrgItem = DeepReadonly<typeof organizations.$inferSelect>;
