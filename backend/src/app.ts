@@ -124,8 +124,8 @@ const SENSITIVE_RATE_DURATION_MS = 60_000;
 // NATs, corporate proxies), so the 5/min credential limiter would break
 // legitimate flows; give them their own, higher-bound limiter.
 const SSO_GET_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SSO_GET_MAX", 60);
-// SCIM admin settings endpoints: 20/min per principal (mirrors the former
-// hand-rolled fixed-window limiter in scim-admin.ts).
+// SCIM admin settings endpoints: 20 per 1s window per principal (mirrors the
+// former hand-rolled fixed-window limiter in scim-admin.ts exactly).
 const SCIM_SETTINGS_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_SETTINGS_MAX", 20);
 // SCIM team-group mapping writes: 10 per 60s per principal.
 const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10);
@@ -348,12 +348,16 @@ export const app = new Elysia()
     },
     skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
   }))
+  // Both SCIM limiters use the process-local fixedWindowContext store, so they
+  // enforce per-instance bounds: single-node deployments get the documented
+  // limits, multi-replica deployments should account for the worker count
+  // (each replica carries its own window).
   .use(rateLimit({
     context: fixedWindowContext(),
     duration: 60_000,
     max: SCIM_MAPPING_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {
-      return `scim-mapping:${scimMappingPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+      return `scim-mapping:${principalRateLimitKey(request, server)}`;
     },
     responseMessage: {
       errors: [{

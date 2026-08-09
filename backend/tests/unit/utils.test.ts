@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { signedApiURL, validSignedApiURL, workspaceRelationshipIds, validateExternalUrl } from "../../src/lib/utils";
+import { signedApiURL, validSignedApiURL, workspaceRelationshipIds, validateExternalUrl, type DeepReadonly } from "../../src/lib/utils";
 
 // An empty (but not-expired) signed URL is always valid against the same
 // SIGNED_URL_SECRET the module uses, so we use signedApiURL itself as a
@@ -173,5 +173,19 @@ describe("validateExternalUrl", () => {
 
   it("allows private IPs when allowPrivate is true", () => {
     expect(validateExternalUrl("http://127.0.0.1:3000/hook", true)).toBeNull();
+  });
+});
+
+describe("DeepReadonly", () => {
+  it("preserves callable function types instead of mapping them as objects", () => {
+    type Handler = DeepReadonly<(value: string) => number>;
+    const handler: Handler = (value: string): number => value.length;
+    expect(handler("abcd")).toBe(4);
+  });
+
+  it("keeps scalar and array branches readonly", () => {
+    type List = DeepReadonly<{ readonly items: string[] }>;
+    const list: List = { items: ["a"] };
+    expect(list.items[0]).toBe("a");
   });
 });
