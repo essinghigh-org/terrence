@@ -148,7 +148,7 @@ For GitHub commit statuses, the GitHub App also needs repository **Commit status
 
 ## API
 
-The API follows the TFE JSON:API spec. The full specification is documented in [SPEC.md](./SPEC.md).
+The API follows the **Terraform Enterprise** (TFE) JSON:API spec, the self-hosted product, not Terraform Cloud. Where TFE and Terraform Cloud disagree, Terrence implements the TFE behavior; endpoints, attributes, and error shapes are kept compatible with `go-tfe` so existing TFE tooling works unchanged. The full specification is documented in [SPEC.md](./SPEC.md).
 
 ## Testing
 
