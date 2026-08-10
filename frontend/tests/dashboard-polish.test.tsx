@@ -13,6 +13,7 @@ const urlOf = (input: string | URL | Request): string =>
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+  window.localStorage.removeItem("terrence-last-org");
 });
 
 test("creates an organization and opens the working destination", async () => {
@@ -56,4 +57,53 @@ test("creates an organization and opens the working destination", async () => {
     name: "acme",
     "default-iac-binary": "terraform",
   });
+});
+
+test("resumes the last selected organization on a fresh page load", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations?page[size]=100") {
+      return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  window.localStorage.setItem("terrence-last-org", "acme");
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app"]}>
+      <Routes>
+        <Route path="/app" element={<Dashboard />} />
+        <Route path="/app/:orgName" element={<p>Organization opened</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Organization opened")).toBeTruthy();
+  });
+});
+
+test("does not resume an organization that no longer exists", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations?page[size]=100") {
+      return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  window.localStorage.setItem("terrence-last-org", "deleted-org");
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app"]}>
+      <Routes>
+        <Route path="/app" element={<Dashboard />} />
+        <Route path="/app/:orgName" element={<p>Organization opened</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("acme")).toBeTruthy();
+  });
+  expect(view.queryByText("Organization opened")).toBeNull();
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Building2, Plus, Search } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -18,6 +18,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { getLastOrganization } from "@/lib/lastOrganization";
 
 type Organization = Readonly<{
   id: string;
@@ -33,6 +34,7 @@ const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin"]);
 
 export function Dashboard(): React.JSX.Element {
   const navigate = useNavigate();
+  const location = useLocation();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -64,6 +66,19 @@ export function Dashboard(): React.JSX.Element {
       controller.abort();
     };
   }, [loadOrganizations]);
+
+  // Resume the last organization on a fresh page load (location.key ===
+  // "default"), skipping redirect when the operator deliberately opened the
+  // picker via the sidebar "Organizations" link or the home logo. The stored
+  // org is only honored if it still exists.
+  useEffect((): void => {
+    if (loading || location.key !== "default") return;
+    const lastOrg = getLastOrganization();
+    if (lastOrg === "") return;
+    if (organizations.some((organization): boolean => organization.attributes.name === lastOrg)) {
+      void navigate(`/app/${encodeURIComponent(lastOrg)}`, { replace: true });
+    }
+  }, [loading, location.key, organizations, navigate]);
 
   const visibleOrganizations = useMemo((): Organization[] => {
     const needle = search.trim().toLowerCase();

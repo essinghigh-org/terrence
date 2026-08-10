@@ -79,6 +79,7 @@ import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
+import { setLastOrganization } from "../lib/lastOrganization";
 import { cn } from "../lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
@@ -304,6 +305,14 @@ export function Layout({
   const inSiteAdministration =
     location.pathname === "/app/admin" || location.pathname.startsWith("/app/admin/");
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
+
+  // Remember the last organization the operator worked in so a fresh page
+  // load (or the next visit) can resume there instead of the org picker.
+  useEffect((): void => {
+    if (hasOrg && orgName !== undefined && orgName !== "") {
+      setLastOrganization(orgName);
+    }
+  }, [hasOrg, orgName]);
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
     : "";
