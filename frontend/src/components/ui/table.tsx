@@ -2,18 +2,25 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: Readonly<React.ComponentProps<"table">>): React.JSX.Element {
+export type TableDensity = "comfortable" | "dense"
+
+const TableDensityContext = React.createContext<TableDensity>("comfortable")
+
+function Table({ className, density = "comfortable", ...props }: Readonly<React.ComponentProps<"table"> & { readonly density?: TableDensity }>): React.JSX.Element {
   return (
-    <div
-      data-slot="table-container"
-      className="relative w-full overflow-x-auto"
-    >
-      <table
-        data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
-        {...props}
-      />
-    </div>
+    <TableDensityContext.Provider value={density}>
+      <div
+        data-slot="table-container"
+        className="relative w-full overflow-x-auto"
+      >
+        <table
+          data-slot="table"
+          data-density={density}
+          className={cn("w-full caption-bottom text-sm", className)}
+          {...props}
+        />
+      </div>
+    </TableDensityContext.Provider>
   )
 }
 
@@ -64,11 +71,14 @@ function TableRow({ className, ...props }: Readonly<React.ComponentProps<"tr">>)
 }
 
 function TableHead({ className, ...props }: Readonly<React.ComponentProps<"th">>): React.JSX.Element {
+  const density = React.useContext(TableDensityContext)
   return (
     <th
       data-slot="table-head"
       className={cn(
-        "h-11 px-4 text-left align-middle text-xs font-medium tracking-wide text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        density === "dense"
+          ? "h-8 px-3 text-left align-middle text-xs font-medium tracking-wide text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0"
+          : "h-11 px-4 text-left align-middle text-xs font-medium tracking-wide text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
@@ -77,11 +87,14 @@ function TableHead({ className, ...props }: Readonly<React.ComponentProps<"th">>
 }
 
 function TableCell({ className, ...props }: Readonly<React.ComponentProps<"td">>): React.JSX.Element {
+  const density = React.useContext(TableDensityContext)
   return (
     <td
       data-slot="table-cell"
       className={cn(
-        "px-4 py-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        density === "dense"
+          ? "px-3 py-1.5 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0"
+          : "px-4 py-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}

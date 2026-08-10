@@ -588,3 +588,45 @@ test("ignores an organization response after navigating to another organization"
   expect(view.getByDisplayValue("platform")).toBeTruthy();
   expect(view.queryByDisplayValue("acme")).toBeNull();
 });
+
+test("toggles dense table density and persists the preference", async () => {
+  window.localStorage.removeItem("terrence-table-prefs:workspaces");
+  const workspace = {
+    id: "workspace-1",
+    attributes: { name: "production", locked: false, "tag-names": [] },
+    relationships: { project: { data: { id: "project-default", type: "projects" } } },
+  };
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: [workspace] });
+    if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { name: "acme", permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("production")).toBeTruthy(); });
+  // Default is comfortable.
+  expect(view.getByRole("table").getAttribute("data-density")).toBe("comfortable");
+
+  fireEvent.click(view.getByRole("button", { name: "Switch to dense table density" }));
+  expect(view.getByRole("table").getAttribute("data-density")).toBe("dense");
+  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
+  expect(stored.density).toBe("dense");
+
+  fireEvent.click(view.getByRole("button", { name: "Switch to comfortable table density" }));
+  expect(view.getByRole("table").getAttribute("data-density")).toBe("comfortable");
+  expect(JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string).density)
+    .toBe("comfortable");
+
+  window.localStorage.removeItem("terrence-table-prefs:workspaces");
+});

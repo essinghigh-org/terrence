@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Pencil, Plus, Tags, Trash2, X } from "lucide-react";
+import { Pencil, Plus, Rows3, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { Badge } from "@/components/ui/badge";
@@ -19,8 +19,10 @@ import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { TableDensity } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { getTablePreferences, setTablePreferences } from "@/lib/table-preferences";
 import { cn, formatDateTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
@@ -92,6 +94,10 @@ export function Workspaces(): React.JSX.Element {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
+  const [density, setDensity] = useState<TableDensity>(() => {
+    const prefs = getTablePreferences("workspaces");
+    return prefs?.density ?? "comfortable";
+  });
   const [createOpen, setCreateOpen] = useState(false);
   const [tagWorkspace, setTagWorkspace] = useState<Workspace | null>(null);
   const [tagBindings, setTagBindings] = useState<TagBinding[]>([]);
@@ -174,6 +180,17 @@ export function Workspaces(): React.JSX.Element {
       controller.abort();
     };
   }, [loadData, orgName]);
+
+  // Persist table density (kanban 14.22); column visibility is wired later
+  // by the column chooser, so only density is stored today. Existing column
+  // preferences are preserved when present.
+  useEffect((): void => {
+    const existing = getTablePreferences("workspaces");
+    setTablePreferences("workspaces", {
+      density,
+      visibleColumns: existing?.visibleColumns ?? [],
+    });
+  }, [density]);
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
     const needle = search.trim().toLowerCase();
@@ -345,7 +362,7 @@ export function Workspaces(): React.JSX.Element {
         </p>
       )}
 
-      <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto]">
+      <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto_auto]">
         <Input
           aria-label="Search workspaces"
           placeholder="Search by workspace name or tag"
@@ -378,6 +395,17 @@ export function Workspaces(): React.JSX.Element {
           <X data-icon="inline-start" />
           Clear
         </Button>
+        <Button
+          variant="outline"
+          aria-label={density === "dense" ? "Switch to comfortable table density" : "Switch to dense table density"}
+          title={density === "dense" ? "Dense rows (click for comfortable)" : "Comfortable rows (click for dense)"}
+          onClick={(): void => {
+            setDensity((current): TableDensity => current === "dense" ? "comfortable" : "dense");
+          }}
+        >
+          <Rows3 data-icon="inline-start" />
+          {density === "dense" ? "Dense" : "Comfortable"}
+        </Button>
       </section>
 
       {runStatusError && (
@@ -398,7 +426,7 @@ export function Workspaces(): React.JSX.Element {
       )}
 
       <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
-        <Table className="min-w-[64rem]">
+        <Table className="min-w-[64rem]" density={density}>
           <TableHeader>
             <TableRow>
               <TableHead>Workspace</TableHead>
