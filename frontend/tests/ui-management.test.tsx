@@ -773,3 +773,78 @@ test("saves, applies, and deletes a named workspace view", async () => {
 
   window.localStorage.removeItem("terrence-saved-views:acme");
 });
+
+test("column chooser hides and restores table columns with persistence", async () => {
+  window.localStorage.removeItem("terrence-table-prefs:workspaces");
+  const workspace = {
+    id: "workspace-1",
+    attributes: { name: "production", locked: false, "tag-names": [], "vcs-repo": { identifier: "acme/terraform-aws" } },
+    relationships: { project: { data: { id: "project-default", type: "projects" } } },
+  };
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.includes("/workspaces?page%5Bsize%5D=100")) return json({ data: [workspace] });
+    if (url.includes("/projects?")) return json({ data: [] });
+    if (url.includes("/runs?")) return json({ data: [] });
+    if (url.endsWith("/api/v2/organizations/acme")) {
+      return json({ data: { attributes: { name: "acme", permissions: {} } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("production")).toBeTruthy(); });
+  // All columns visible by default.
+  expect(view.getByRole("columnheader", { name: "Repository" })).toBeTruthy();
+  expect(view.getByRole("columnheader", { name: "Status" })).toBeTruthy();
+  expect(view.getByText("acme/terraform-aws")).toBeTruthy();
+
+  await act(async (): Promise<void> => {
+    fireEvent.mouseDown(view.getByRole("button", { name: "Choose visible columns" }));
+    fireEvent.click(view.getByRole("button", { name: "Choose visible columns" }));
+  });
+  // Toggle Repository + Status off. jsdom does not compute the accessible
+  // name for base-ui checkbox items, so match by text content.
+  const menuItem = (columnName: string): HTMLElement | undefined =>
+    view.getAllByRole("menuitemcheckbox").find((item): boolean => item.textContent === columnName);
+  await waitFor((): void => { expect(menuItem("Repository")).toBeTruthy(); });
+  await act(async (): Promise<void> => {
+    fireEvent.click(menuItem("Repository"));
+    fireEvent.click(menuItem("Status"));
+  });
+
+  await waitFor((): void => {
+    expect(view.queryByRole("columnheader", { name: "Repository" })).toBeNull();
+    expect(view.queryByRole("columnheader", { name: "Status" })).toBeNull();
+    expect(view.queryByText("acme/terraform-aws")).toBeNull();
+  });
+  const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
+  expect(stored.visibleColumns).not.toContain("repository");
+  expect(stored.visibleColumns).not.toContain("status");
+  expect(stored.visibleColumns).toContain("project");
+
+  // Workspace + Manage stay visible; re-enable restores.
+  expect(view.getByRole("columnheader", { name: "Workspace" })).toBeTruthy();
+  const columnsButton = (): HTMLElement => view.getByRole("button", { name: "Choose visible columns" });
+  if (columnsButton().getAttribute("aria-expanded") !== "true") {
+    await act(async (): Promise<void> => {
+      fireEvent.mouseDown(columnsButton());
+      fireEvent.click(columnsButton());
+    });
+    await waitFor((): void => { expect(columnsButton().getAttribute("aria-expanded")).toBe("true"); });
+  }
+  await act(async (): Promise<void> => {
+    fireEvent.click(menuItem("Repository")!);
+  });
+  await waitFor((): void => {
+    expect(view.getByRole("columnheader", { name: "Repository" })).toBeTruthy();
+  });
+
+  window.localStorage.removeItem("terrence-table-prefs:workspaces");
+});

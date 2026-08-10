@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Bookmark, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
+import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
@@ -30,6 +39,20 @@ import { cn, formatDateTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
+/** Toggleable table columns (kanban 14.21). "workspace" is always shown. */
+const WORKSPACE_TABLE_COLUMNS: Readonly<{ id: string; label: string }[]> = [
+  { id: "repository", label: "Repository" },
+  { id: "tags", label: "Tags" },
+  { id: "project", label: "Project" },
+  { id: "latest-change", label: "Latest change" },
+  { id: "status", label: "Status" },
+];
+
+function defaultVisibleColumns(): string[] {
+  const prefs = getTablePreferences("workspaces");
+  if (prefs !== null && prefs.visibleColumns.length > 0) return prefs.visibleColumns;
+  return WORKSPACE_TABLE_COLUMNS.map((column): string => column.id);
+}
 type Organization = Readonly<{
   attributes: Readonly<{
     permissions?: Readonly<{ "can-manage-workspaces"?: boolean }>;
@@ -103,6 +126,7 @@ export function Workspaces(): React.JSX.Element {
   });
   const [pinsRevision, setPinsRevision] = useState(0);
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => getSavedViews(orgName));
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
   const [activeViewName, setActiveViewName] = useState("");
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [viewName, setViewName] = useState("");
@@ -189,16 +213,16 @@ export function Workspaces(): React.JSX.Element {
     };
   }, [loadData, orgName]);
 
-  // Persist table density (kanban 14.22); column visibility is wired later
-  // by the column chooser, so only density is stored today. Existing column
-  // preferences are preserved when present.
+  // Persist table density and column visibility (kanban 14.22/14.21).
   useEffect((): void => {
     const existing = getTablePreferences("workspaces");
     setTablePreferences("workspaces", {
       density,
-      visibleColumns: existing?.visibleColumns ?? [],
+      visibleColumns: visibleColumns.length === 0
+        ? (existing?.visibleColumns ?? WORKSPACE_TABLE_COLUMNS.map((column): string => column.id))
+        : visibleColumns,
     });
-  }, [density]);
+  }, [density, visibleColumns]);
 
   // Saved views are org-scoped, so refresh them when the org changes.
   useEffect((): void => {
@@ -486,6 +510,40 @@ export function Workspaces(): React.JSX.Element {
           <Bookmark data-icon="inline-start" />
           Save view
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={(
+              <Button
+                variant="outline"
+                aria-label="Choose visible columns"
+                title="Choose which columns are visible"
+              >
+                <Columns3 data-icon="inline-start" />
+                Columns
+              </Button>
+            )}
+          />
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {WORKSPACE_TABLE_COLUMNS.map((column): React.JSX.Element => (
+                <DropdownMenuCheckboxItem
+                  key={column.id}
+                  checked={visibleColumns.includes(column.id)}
+                  onCheckedChange={(checked: boolean): void => {
+                    setVisibleColumns((current): string[] =>
+                      checked
+                        ? [...current, column.id]
+                        : current.filter((id: string): boolean => id !== column.id));
+                  }}
+                >
+                  {column.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           variant="outline"
           aria-label={density === "dense" ? "Switch to comfortable table density" : "Switch to dense table density"}
@@ -521,11 +579,11 @@ export function Workspaces(): React.JSX.Element {
           <TableHeader>
             <TableRow>
               <TableHead>Workspace</TableHead>
-              <TableHead>Repository</TableHead>
-              <TableHead>Tags</TableHead>
-              <TableHead>Project</TableHead>
-              <TableHead>Latest change</TableHead>
-              <TableHead>Status</TableHead>
+              {visibleColumns.includes("repository") && <TableHead>Repository</TableHead>}
+              {visibleColumns.includes("tags") && <TableHead>Tags</TableHead>}
+              {visibleColumns.includes("project") && <TableHead>Project</TableHead>}
+              {visibleColumns.includes("latest-change") && <TableHead>Latest change</TableHead>}
+              {visibleColumns.includes("status") && <TableHead>Status</TableHead>}
               <TableHead className="text-right">Manage</TableHead>
             </TableRow>
           </TableHeader>
@@ -592,46 +650,56 @@ export function Workspaces(): React.JSX.Element {
                     </Button>
                   </div>
                 </TableCell>
-                <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
-                <TableCell>
-                  <div className="flex max-w-56 flex-wrap gap-1">
-                    {(workspace.attributes["tag-names"] ?? []).map((tag): React.JSX.Element => (
-                      <Badge key={tag} variant="secondary" className="max-w-48 truncate">{tag}</Badge>
-                    ))}
-                    {(workspace.attributes["tag-names"] ?? []).length === 0 && <span className="text-muted-foreground">None</span>}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {workspace.relationships?.project?.data?.id === undefined ? (
-                    projectName(workspace)
-                  ) : (
-                    <Link
-                      to={`/app/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(workspace.relationships.project.data.id)}`}
-                      className="text-primary hover:underline"
-                    >
-                      {projectName(workspace)}
-                    </Link>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {latestRuns.get(workspace.id) === undefined ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    <div className="max-w-64">
-                      <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
-                      {runDate(latestRuns.get(workspace.id)) !== "" && (
-                        <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id))}</p>
-                      )}
+                {visibleColumns.includes("repository") && (
+                  <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                )}
+                {visibleColumns.includes("tags") && (
+                  <TableCell>
+                    <div className="flex max-w-56 flex-wrap gap-1">
+                      {(workspace.attributes["tag-names"] ?? []).map((tag): React.JSX.Element => (
+                        <Badge key={tag} variant="secondary" className="max-w-48 truncate">{tag}</Badge>
+                      ))}
+                      {(workspace.attributes["tag-names"] ?? []).length === 0 && <span className="text-muted-foreground">None</span>}
                     </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {latestRuns.get(workspace.id) === undefined ? (
-                    <span className="text-muted-foreground">No runs</span>
-                  ) : (
-                    <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />
-                  )}
-                </TableCell>
+                  </TableCell>
+                )}
+                {visibleColumns.includes("project") && (
+                  <TableCell>
+                    {workspace.relationships?.project?.data?.id === undefined ? (
+                      projectName(workspace)
+                    ) : (
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(workspace.relationships.project.data.id)}`}
+                        className="text-primary hover:underline"
+                      >
+                        {projectName(workspace)}
+                      </Link>
+                    )}
+                  </TableCell>
+                )}
+                {visibleColumns.includes("latest-change") && (
+                  <TableCell>
+                    {latestRuns.get(workspace.id) === undefined ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <div className="max-w-64">
+                        <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
+                        {runDate(latestRuns.get(workspace.id)) !== "" && (
+                          <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id))}</p>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
+                )}
+                {visibleColumns.includes("status") && (
+                  <TableCell>
+                    {latestRuns.get(workspace.id) === undefined ? (
+                      <span className="text-muted-foreground">No runs</span>
+                    ) : (
+                      <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />
+                    )}
+                  </TableCell>
+                )}
                 <TableCell className="text-right">
                   {workspace.attributes.permissions?.["can-update"] === true ? (
                     <Button
