@@ -26,6 +26,7 @@ import { HyokConfigurations } from "./views/HyokConfigurations";
 import { AuditTrailTokens } from "./views/AuditTrailTokens";
 import { PolicySetsTags } from "./views/PolicySetsTags";
 import { AdminDashboard } from "./views/AdminDashboard";
+import { CompatibilityDashboard } from "./views/CompatibilityDashboard";
 import { AdminSmtpSettings } from "./views/AdminSmtpSettings";
 import { AdminScimSettings } from "./views/AdminScimSettings";
 import { ModuleSharing } from "./views/ModuleSharing";
@@ -124,6 +125,7 @@ function App(): JSX.Element {
             <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
             <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
             <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
+            <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
             <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
             <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
             <Route path="admin/smtp" element={<AdminSmtpSettings />} />

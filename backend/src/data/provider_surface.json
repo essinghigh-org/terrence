@@ -1,0 +1,472 @@
+{
+  "_comment": "Authoritative hashicorp/tfe v0.79.0 provider surface, generated from `terraform providers schema -json`. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "provider": "hashicorp/tfe v0.79.0",
+  "resource_count": 72,
+  "data_source_count": 43,
+  "resources_covered": 72,
+  "data_sources_covered": 43,
+  "resources": [
+    {
+      "name": "tfe_admin_organization_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_admin_smtp_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_pool",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_pool_allowed_projects",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_pool_allowed_workspaces",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_pool_excluded_workspaces",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_audit_trail_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_aws_oidc_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_azure_oidc_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_data_retention_policy",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_gcp_oidc_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_hyok_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_no_code_module",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_notification_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_oauth_client",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_opa_version",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_org_max_token_ttl_policy",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_default_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_membership",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_module_sharing",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_run_task",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_run_task_global_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_policy",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_policy_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_policy_set_parameter",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_notification_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_oauth_client",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_policy_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_policy_set_exclusion",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project_variable_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_provider_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_gpg_key",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_module",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_provider",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_run_trigger",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_saml_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_group_mapping",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_sentinel_policy",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_sentinel_version",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_ssh_key",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_stack",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_stack_variable_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_tag_policy_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_tag_policy_set_exclusion",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_access",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_member",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_members",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_notification_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_organization_member",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_organization_members",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_project_access",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_terraform_version",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_test_variable",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_variable",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_variable_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_vault_oidc_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_policy_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_policy_set_exclusion",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_run",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_run_task",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_variable_set",
+      "status": "covered"
+    }
+  ],
+  "data_sources": [
+    {
+      "name": "tfe_admin_smtp_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_agent_pool",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_current_user",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_github_app_installation",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_hyok_customer_key_version",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_hyok_encrypted_data_key",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_ip_ranges",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_no_code_module",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_oauth_client",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_org_max_token_ttl_policy",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_audit_configuration",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_members",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_membership",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_run_task",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_run_task_global_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organization_tags",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_organizations",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_outputs",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_policy_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_project",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_projects",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_provider_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_gpg_key",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_gpg_keys",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_module",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_provider",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_registry_providers",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_saml_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_group",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_settings",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_scim_token",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_slug",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_ssh_key",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_access",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_team_project_access",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_teams",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_variable_set",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_variables",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_ids",
+      "status": "covered"
+    },
+    {
+      "name": "tfe_workspace_run_task",
+      "status": "covered"
+    }
+  ]
+}

@@ -509,6 +509,12 @@ export function Layout({
           to: "/app/admin/versions",
         },
         {
+          active: isActivePath(location.pathname, "/app/admin/compatibility"),
+          icon: ShieldCheck,
+          label: "Provider compatibility",
+          to: "/app/admin/compatibility",
+        },
+        {
           active: isActivePath(location.pathname, "/app/admin/audit"),
           icon: HistoryIcon,
           label: "Audit Logs",
