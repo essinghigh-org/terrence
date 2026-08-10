@@ -217,8 +217,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               value={iacBinary}
               onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setIacBinary(event.target.value); }}
             >
-              <option value="tofu">OpenTofu (tofu)</option>
-              <option value="terraform">Terraform (terraform)</option>
+              <option value="tofu">OpenTofu</option>
+              <option value="terraform">Terraform</option>
             </select>
           </div>
 

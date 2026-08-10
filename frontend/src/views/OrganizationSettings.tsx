@@ -602,8 +602,8 @@ export function OrganizationSettings(): React.JSX.Element {
                         onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
                         disabled={!canUpdateOrganization}
                       >
-                        <option value="tofu">OpenTofu (tofu)</option>
-                        <option value="terraform">Terraform (terraform)</option>
+                        <option value="tofu">OpenTofu</option>
+                        <option value="terraform">Terraform</option>
                       </select>
                       <p className="text-[13px] text-gray-500 mt-1">The engine used by default for new workspaces.</p>
                     </div>
