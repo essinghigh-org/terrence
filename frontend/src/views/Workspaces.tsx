@@ -20,6 +20,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { TableDensity } from "@/components/ui/table";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getTablePreferences, setTablePreferences } from "@/lib/table-preferences";
@@ -455,7 +456,7 @@ export function Workspaces(): React.JSX.Element {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} className="py-12 text-center"><Spinner /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="p-0"><TableSkeleton rows={4} cols={7} /></TableCell></TableRow>
             ) : loadError !== "" && workspaces.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">

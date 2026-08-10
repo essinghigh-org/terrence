@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getLastOrganization } from "@/lib/lastOrganization";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 
 type Organization = Readonly<{
   id: string;
@@ -189,8 +190,8 @@ export function Dashboard(): React.JSX.Element {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={3} className="h-28 text-center">
-                  <Spinner aria-label="Loading organizations" />
+                <TableCell colSpan={3} className="p-0">
+                  <TableSkeleton rows={3} cols={3} label="Loading organizations" />
                 </TableCell>
               </TableRow>
             ) : loadError !== "" && organizations.length === 0 ? (

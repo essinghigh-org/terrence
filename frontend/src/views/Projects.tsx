@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { toast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -231,7 +232,7 @@ export function Projects(): React.JSX.Element {
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <Spinner className="mx-auto my-12" />
+            <TableSkeleton rows={5} cols={4} />
           ) : (
             <Table>
               <TableHeader>

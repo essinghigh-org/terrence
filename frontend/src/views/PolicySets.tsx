@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
@@ -189,8 +190,8 @@ export function PolicySets(): React.JSX.Element {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    <Spinner className="mx-auto size-6 text-primary" />
+                  <TableCell colSpan={6} className="p-0">
+                    <TableSkeleton rows={3} cols={6} />
                   </TableCell>
                 </TableRow>
               ) : policySets.length === 0 ? (

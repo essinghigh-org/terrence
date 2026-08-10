@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
@@ -150,9 +151,7 @@ export function ProviderSets(): React.JSX.Element {
       <Card>
         <CardContent>
           {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
+            <TableSkeleton rows={4} cols={4} />
           ) : error !== "" ? (
             <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
           ) : sets.length === 0 ? (
