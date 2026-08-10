@@ -710,3 +710,66 @@ test("shows recent workspace shortcuts in the org sidebar", async () => {
 
   window.localStorage.removeItem("terrence-recent-workspaces");
 });
+
+test("saves, applies, and deletes a named workspace view", async () => {
+  window.localStorage.removeItem("terrence-saved-views:acme");
+  const workspaces = [
+    { id: "ws-1", attributes: { name: "alpha", locked: false, "tag-names": [] } },
+    { id: "ws-2", attributes: { name: "beta", locked: false, "tag-names": [] } },
+  ];
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: workspaces });
+    if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { name: "acme", permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("alpha")).toBeTruthy(); });
+
+  // Filter to a state worth saving, then open the save dialog.
+  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "errored" } });
+  fireEvent.click(view.getByRole("button", { name: "Save current filters as a view" }));
+  const dialog = view.getByRole("dialog");
+  await act(async (): Promise<void> => {
+    fireEvent.input(view.getByLabelText("View name"), { target: { value: "Errored only" } });
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save view" }));
+
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Errored only" })).toBeTruthy();
+  });
+  expect(window.localStorage.getItem("terrence-saved-views:acme")).not.toBeNull();
+  const stored = JSON.parse(window.localStorage.getItem("terrence-saved-views:acme") as string);
+  expect(stored).toEqual([{ name: "Errored only", search: "", statusFilter: "errored", projectFilter: "" }]);
+
+  // Apply the view from the chip (resets filters to the saved state).
+  await act(async (): Promise<void> => {
+    fireEvent.input(view.getByLabelText("Search workspaces"), { target: { value: "zzz" } });
+  });
+  await act(async (): Promise<void> => { fireEvent.click(view.getByRole("button", { name: "Errored only" })); });
+  await waitFor((): void => {
+    expect((view.getByLabelText("Search workspaces") as HTMLInputElement).value).toBe("");
+    expect((view.getByLabelText("Status filter") as HTMLSelectElement).value).toBe("errored");
+  });
+  expect(view.getByRole("button", { name: "Errored only" }).getAttribute("aria-pressed")).toBe("true");
+
+  // Deleting the view removes the chip and clears the active state.
+  fireEvent.click(view.getByRole("button", { name: "Delete saved view Errored only" }));
+  await waitFor((): void => {
+    expect(view.queryByRole("button", { name: "Errored only" })).toBeNull();
+  });
+  expect(window.localStorage.getItem("terrence-saved-views:acme")).toBe("[]");
+
+  window.localStorage.removeItem("terrence-saved-views:acme");
+});

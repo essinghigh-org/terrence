@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
+import { Bookmark, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getTablePreferences, setTablePreferences } from "@/lib/table-preferences";
 import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/lib/workspace-shortcuts";
+import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
 import { cn, formatDateTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
@@ -101,6 +102,10 @@ export function Workspaces(): React.JSX.Element {
     return prefs?.density ?? "comfortable";
   });
   const [pinsRevision, setPinsRevision] = useState(0);
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => getSavedViews(orgName));
+  const [activeViewName, setActiveViewName] = useState("");
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [viewName, setViewName] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [tagWorkspace, setTagWorkspace] = useState<Workspace | null>(null);
   const [tagBindings, setTagBindings] = useState<TagBinding[]>([]);
@@ -194,6 +199,40 @@ export function Workspaces(): React.JSX.Element {
       visibleColumns: existing?.visibleColumns ?? [],
     });
   }, [density]);
+
+  // Saved views are org-scoped, so refresh them when the org changes.
+  useEffect((): void => {
+    setSavedViews(getSavedViews(orgName));
+    setActiveViewName("");
+  }, [orgName]);
+
+  const applySavedView = (view: SavedView): void => {
+    setSearch(view.search);
+    setStatusFilter(view.statusFilter);
+    setProjectFilter(view.projectFilter);
+    setActiveViewName(view.name);
+  };
+
+  const handleSaveView = (): void => {
+    const name = viewName.trim();
+    if (name === "") return;
+    const updated = saveView(orgName, {
+      name,
+      search,
+      statusFilter,
+      projectFilter,
+    });
+    setSavedViews(updated);
+    setActiveViewName(name);
+    setViewDialogOpen(false);
+    setViewName("");
+  };
+
+  const handleDeleteView = (name: string): void => {
+    const updated = deleteView(orgName, name);
+    setSavedViews(updated);
+    if (activeViewName === name) setActiveViewName("");
+  };
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
     const needle = search.trim().toLowerCase();
@@ -379,11 +418,38 @@ export function Workspaces(): React.JSX.Element {
       )}
 
       <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto_auto]">
+        {savedViews.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 md:col-span-5">
+            <span className="text-sm font-medium">Saved views:</span>
+            {savedViews.map((view): React.JSX.Element => (
+              <span key={view.name} className="inline-flex items-center gap-1">
+                <Button
+                  variant={activeViewName === view.name ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={(): void => { applySavedView(view); }}
+                  aria-pressed={activeViewName === view.name}
+                >
+                  {view.name}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-6 p-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Delete saved view ${view.name}`}
+                  onClick={(): void => { handleDeleteView(view.name); }}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </Button>
+              </span>
+            ))}
+          </div>
+        )}
         <Input
           aria-label="Search workspaces"
           placeholder="Search by workspace name or tag"
           value={search}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
+          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setSearch(event.currentTarget.value); }}
         />
         <Select aria-label="Status filter" value={statusFilter} onValueChange={setStatusFilter}>
           <option value="">All statuses</option>
@@ -410,6 +476,15 @@ export function Workspaces(): React.JSX.Element {
         >
           <X data-icon="inline-start" />
           Clear
+        </Button>
+        <Button
+          variant="outline"
+          aria-label="Save current filters as a view"
+          title="Save current filters as a named view"
+          onClick={(): void => { setViewDialogOpen(true); }}
+        >
+          <Bookmark data-icon="inline-start" />
+          Save view
         </Button>
         <Button
           variant="outline"
@@ -669,6 +744,46 @@ export function Workspaces(): React.JSX.Element {
               )}
             </TableBody>
           </Table>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={viewDialogOpen}
+        onOpenChange={(open: boolean): void => {
+          setViewDialogOpen(open);
+          if (!open) setViewName("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save view</DialogTitle>
+            <DialogDescription>
+              Save the current search, status, and project filters as a named view.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event): void => {
+              event.preventDefault();
+              handleSaveView();
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="saved-view-name">View name</FieldLabel>
+                <Input
+                  id="saved-view-name"
+                  value={viewName}
+                  autoFocus
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setViewName(event.currentTarget.value); }}
+                  placeholder="e.g. Production attention"
+                />
+              </Field>
+            </FieldGroup>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={(): void => { setViewDialogOpen(false); }}>Cancel</Button>
+              <Button type="submit" disabled={viewName.trim() === ""}>Save view</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
