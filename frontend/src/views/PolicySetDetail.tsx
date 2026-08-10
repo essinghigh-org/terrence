@@ -434,7 +434,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                 </TableHeader>
                 <TableBody>
                   {isGlobal ? (attachedExclusionIds.length === 0 ? (
-                    <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">This global policy set applies to all workspaces — no exclusions.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={2} className="h-16 text-center text-muted-foreground">This global policy set applies to every workspace.</TableCell></TableRow>
                   ) : attachedExclusionIds.map((id): React.JSX.Element => (
                     <TableRow key={id}>
                       <TableCell>{workspaces.find((w): boolean => w.id === id)?.attributes.name ?? id}</TableCell>

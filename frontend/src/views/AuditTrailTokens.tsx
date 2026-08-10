@@ -164,7 +164,7 @@ export function AuditTrailTokens(): React.JSX.Element {
             Your new token
           </div>
           <pre className="break-all whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-sm">{generatedToken}</pre>
-          <p className="text-xs text-muted-foreground">The token is only shown once — copy it now and store it somewhere safe.</p>
+          <p className="text-xs text-muted-foreground">The token is only shown once. Copy it now and store it somewhere safe.</p>
         </div>
       )}
 

@@ -155,7 +155,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
           </div>
         ) : tags.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-            No reserved keys. There are no reserved keys within this organization.
+            No reserved keys in this organization.
           </p>
         ) : (
           <Table>

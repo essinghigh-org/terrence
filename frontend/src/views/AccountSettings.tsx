@@ -722,7 +722,7 @@ export function AccountSettings(): React.JSX.Element {
             <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md text-sm space-y-1">
               <p className="font-semibold flex items-center gap-1">
                 <ShieldCheck className="w-4 h-4" />
-                Token created — copy it now, it won't be shown again.
+                Token created. Copy it now; it won't be shown again.
               </p>
               <code className="block bg-blue-100 px-2 py-1 rounded text-xs break-all select-all">
                 {createdTokenSecret}
