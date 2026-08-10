@@ -381,7 +381,7 @@ export function ProjectDetail({
                 aria-label={tab.label.toLowerCase()}
                 aria-current={isSettings && tab.id === "settings" ? "page" : activeSection === tab.id ? "page" : undefined}
                 className={cn(
-                  "border-b-2 pb-3 text-sm font-medium transition-colors",
+                  "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   (isSettings && tab.id === "settings") || activeSection === tab.id
                     ? "border-primary text-primary"
                     : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",

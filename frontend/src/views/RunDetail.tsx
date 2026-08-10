@@ -488,7 +488,7 @@ function PhaseMeta({
             type="button"
             onClick={onToggleLogWrap}
             aria-pressed={logWrap}
-            className="font-medium text-blue-700 hover:underline"
+            className="rounded-sm font-medium text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Wrap {logWrap ? "on" : "off"}
           </button>

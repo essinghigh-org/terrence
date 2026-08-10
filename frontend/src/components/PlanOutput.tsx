@@ -1099,7 +1099,7 @@ export function PlanOutput({
         <p className="mt-1 text-xs text-red-700">{loadState.message}</p>
         <button
           type="button"
-          className="mt-3 rounded border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+          className="mt-3 rounded border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(): void => {
             setLoadState({ kind: "loading" });
             setRetry((value): number => value + 1);

@@ -289,7 +289,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             onClick={(): void => { setActiveTab(tab.id); }}
             aria-current={activeTab === tab.id ? "page" : undefined}
             className={cn(
-              "border-b-2 pb-3 text-sm font-medium transition-colors",
+              "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
               activeTab === tab.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >

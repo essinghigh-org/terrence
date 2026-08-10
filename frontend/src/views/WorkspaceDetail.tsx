@@ -584,7 +584,7 @@ export function WorkspaceDetail({
                 aria-label={tab.label.toLowerCase()}
                 aria-current={activeSection === tab.id ? "page" : undefined}
                 className={cn(
-                  "border-b-2 pb-3 text-sm font-medium transition-colors",
+                  "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   activeSection === tab.id
                     ? "border-primary text-primary"
                     : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
