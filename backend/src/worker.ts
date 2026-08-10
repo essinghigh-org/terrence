@@ -2346,9 +2346,23 @@ export async function pollWorkerQueue(): Promise<string[]> {
   return claimedRunIds;
 }
 
+/**
+ * Worker queue poll interval. The queue loop (startWorkerQueue) claims
+ * pending runs and drains assessment/auto-destroy queues on this cadence.
+ * Configurable for low-power homelab installs that want a gentler query
+ * load; clamped to >= 100ms so a misconfiguration cannot hot-loop the DB
+ * (kanban 3.7).
+ */
+const WORKER_POLL_INTERVAL_MS = ((): number => {
+  const raw = process.env.TERRENCE_WORKER_POLL_MS;
+  if (raw === undefined || raw === "") return 1500;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 100 ? parsed : 1500;
+})();
+
 export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
-  // background DB activity (the 1.5s poll loop otherwise injects queries
+  // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
   if (process.env.TERRENCE_DISABLE_WORKER === "1") return;
   if (isWorkerLoopRunning) return;
@@ -2366,7 +2380,7 @@ export function startWorkerQueue(): void {
     } catch (err: unknown) {
       console.error("[terrence worker] Queue error", err);
     } finally {
-      setTimeout((): void => { void poll(); }, 1500);
+      setTimeout((): void => { void poll(); }, WORKER_POLL_INTERVAL_MS);
     }
   };
 

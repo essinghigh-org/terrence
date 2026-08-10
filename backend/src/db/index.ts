@@ -85,6 +85,15 @@ export function setQueryLogging(enabled: boolean): void {
 
 export const db = drizzle(client, { schema });
 
+/**
+ * Fold the WAL back into the main database file. Called on graceful
+ * shutdown so backups and migrations see a single self-contained file
+ * instead of a live -wal sidecar (kanban 4.17).
+ */
+export function checkpointWal(): void {
+  client.run("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
 // bun:sqlite's native transaction() rolls back only when its callback throws
 // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
 // an async callback that throws would silently COMMIT partial writes. Wrap it with

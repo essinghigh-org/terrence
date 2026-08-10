@@ -26,3 +26,20 @@ app
 console.log(
   `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`
 );
+
+// Graceful shutdown: Docker/systemd send SIGTERM; a WAL checkpoint here
+// means the main DB file is complete the moment the process exits, so a
+// backup taken right after stop never misses -wal tail pages (kanban 4.17).
+import { checkpointWal } from "./src/db";
+
+function shutdown(signal: "SIGTERM" | "SIGINT"): void {
+  console.log(`[terrence] ${signal} received; checkpointing WAL before shutdown`);
+  try {
+    checkpointWal();
+  } catch (error: unknown) {
+    console.error("[terrence] WAL checkpoint failed", error);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", (): void => shutdown("SIGTERM"));
+process.on("SIGINT", (): void => shutdown("SIGINT"));
