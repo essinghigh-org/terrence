@@ -130,7 +130,7 @@ export function AdminScimSettings(): React.JSX.Element {
           ) : loadError !== "" ? (
             <div className="py-8 text-center text-sm text-muted-foreground">{loadError}</div>
           ) : (
-            <div className="space-y-4">
+            <form onSubmit={(event): void => { event.preventDefault(); void save(); }} className="space-y-4">
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div className="text-sm">
                   <div className="font-medium">Enabled</div>
@@ -177,11 +177,11 @@ export function AdminScimSettings(): React.JSX.Element {
               {saved && <div className="text-sm text-green-600">Saved</div>}
 
               <div className="flex justify-end">
-                <Button onClick={save} disabled={saving || loading}>
+                <Button type="submit" disabled={saving || loading}>
                   {saving ? <Spinner /> : "Save"}
                 </Button>
               </div>
-            </div>
+            </form>
           )}
         </CardContent>
       </Card>

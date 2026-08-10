@@ -295,7 +295,7 @@ export function HyokConfigurations(): React.JSX.Element {
               Encrypt workspace run data with a customer-managed KMS key.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <form id="hyok-create-form" onSubmit={(event): void => { event.preventDefault(); void submit(); }} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="hyok-name">Name</Label>
               <Input id="hyok-name" value={form.name} onChange={set("name")} placeholder="my-hyok-config" />
@@ -337,10 +337,10 @@ export function HyokConfigurations(): React.JSX.Element {
                 ))}
               </select>
             </div>
-          </div>
+          </form>
           <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={submit} disabled={saving}>
+            <Button type="button" variant="outline" onClick={(): void => { setDialogOpen(false); }}>Cancel</Button>
+            <Button type="submit" form="hyok-create-form" disabled={saving}>
               {saving ? "Saving…" : "Create HYOK configuration"}
             </Button>
           </DialogFooter>

@@ -222,7 +222,7 @@ export function OidcConfigurations(): React.JSX.Element {
               Configure the identity provider credentials for this organization.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <form id="oidc-create-form" onSubmit={(event): void => { event.preventDefault(); void createConfig(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="oidc-provider-type">Provider</label>
               <Select id="oidc-provider-type" value={configType} onValueChange={setConfigType}>
@@ -258,10 +258,10 @@ export function OidcConfigurations(): React.JSX.Element {
               </>
             )}
             {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
-          </div>
+          </form>
           <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={createConfig} disabled={creating}>
+            <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
+            <Button type="submit" form="oidc-create-form" disabled={creating}>
               {creating ? <Spinner /> : "Create configuration"}
             </Button>
           </DialogFooter>

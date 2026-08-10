@@ -208,7 +208,7 @@ export function ProviderSets(): React.JSX.Element {
               Provider sets let Terraform workers fetch provider binaries from the specified source.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <form id="provider-set-create-form" onSubmit={(event): void => { event.preventDefault(); void createProviderSet(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="provider-set-name">Name</label>
               <Input id="provider-set-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider-set" />
@@ -229,10 +229,10 @@ export function ProviderSets(): React.JSX.Element {
               <input id="provider-set-global" type="checkbox" className="h-4 w-4" checked={global} onChange={(e): void => { setGlobal(e.target.checked); }} />
             </div>
             {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
-          </div>
+          </form>
           <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={createProviderSet} disabled={creating}>
+            <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
+            <Button type="submit" form="provider-set-create-form" disabled={creating}>
               {creating ? <Spinner /> : "Create provider set"}
             </Button>
           </DialogFooter>

@@ -206,7 +206,7 @@ export function AgentPoolScoping(): React.JSX.Element {
               Create a new agent pool with a name and optional organization-wide scoping.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <form id="agent-pool-create-form" onSubmit={(event): void => { event.preventDefault(); void createAgentPool(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="agent-pool-name">Name</label>
               <Input id="agent-pool-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-agent-pool" />
@@ -219,10 +219,10 @@ export function AgentPoolScoping(): React.JSX.Element {
               <input id="agent-pool-org-scoped" type="checkbox" className="h-4 w-4" checked={organizationScoped} onChange={(e): void => { setOrganizationScoped(e.target.checked); }} />
             </div>
             {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
-          </div>
+          </form>
           <DialogFooter>
-            <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
-            <Button onClick={createAgentPool} disabled={creating}>
+            <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
+            <Button type="submit" form="agent-pool-create-form" disabled={creating}>
               {creating ? <Spinner /> : "Create agent pool"}
             </Button>
           </DialogFooter>
