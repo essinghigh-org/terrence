@@ -108,8 +108,8 @@ function noCodeUpgradeTarget(source: string | null): NoCodeUpgradeTarget | undef
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
-  console.error(
-    "[terrence] Run sandbox is REQUIRED (TERRENCE_RUN_SANDBOX not set to false) but Landlock is unavailable. "
+  log.error(
+    "Run sandbox is REQUIRED (TERRENCE_RUN_SANDBOX not set to false) but Landlock is unavailable. "
     + "Runs will FAIL until Landlock is enabled on the host kernel or TERRENCE_RUN_SANDBOX=false is set explicitly. "
     + "See https://docs.kernel.org/userspace-api/landlock.html",
   );
@@ -506,7 +506,7 @@ function buildSanitizedEnv(
 
   for (const v of workspaceVars) {
     if (protectedKeys.includes(v.key.toUpperCase())) {
-      console.warn(`[terrence] Blocked workspace variable targeting protected key: ${v.key}`);
+      log.warn("Blocked workspace variable targeting protected key", { key: v.key });
       continue;
     }
     if (v.category === "env") {
@@ -606,11 +606,11 @@ async function extractTarArchive(
     for (const line of verboseLines) {
       const firstChar = line.charAt(0);
       if (firstChar === "l" || firstChar === "h" || firstChar === "c" || firstChar === "b" || firstChar === "p" || firstChar === "s") {
-        console.error(`[terrence] Security error: Archive contains forbidden link/special member: '${line}'`);
+        log.error("Security error: archive contains forbidden link/special member", { member: line });
         return false;
       }
       if (line.includes(" -> ") || line.includes(" link to ")) {
-        console.error(`[terrence] Security error: Archive contains link member: '${line}'`);
+        log.error("Security error: archive contains link member", { member: line });
         return false;
       }
     }
@@ -623,7 +623,7 @@ async function extractTarArchive(
     const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     for (const m of members) {
       if (m.startsWith("/") || m.includes("..")) {
-        console.error(`[terrence] Security error: Archive contains dangerous path '${m}'`);
+        log.error("Security error: archive contains dangerous path", { path: m });
         return false;
       }
     }
@@ -635,7 +635,7 @@ async function extractTarArchive(
     }
     return ok;
   } catch (err: unknown) {
-    console.error("[terrence] Tar extraction error", err);
+    log.error("Tar extraction error", { error: err });
     return false;
   }
 }
@@ -665,7 +665,7 @@ async function unnestArchiveDirectory(
       log.info(`Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
     }
   } catch (err: unknown) {
-    console.warn("[terrence] Could not unnest archive directory:", err);
+    log.warn("Could not unnest archive directory", { error: err });
   }
 }
 
@@ -1354,7 +1354,7 @@ export async function executeApply(runId: string): Promise<void> {
   });
 
   if (workspace === undefined) {
-    console.error(`[terrence] Workspace missing for run ${runId}`);
+    log.error("Workspace missing for run", { runId });
     return;
   }
 
@@ -1482,7 +1482,7 @@ export async function executeApply(runId: string): Promise<void> {
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`Run ${runId} apply failed`, error);
+    log.error("Run apply failed", { runId, error });
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
   } finally {
@@ -2206,7 +2206,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
     if (updated.length === 0) continue;
     claimed.push(assessment.id);
     executeAssessment(assessment.id).catch((error: unknown): void => {
-      console.error(`[terrence worker] Assessment ${assessment.id} failed:`, error);
+      log.error("Assessment failed", { assessmentId: assessment.id, error });
     });
   }
   return claimed;
@@ -2339,7 +2339,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       claimedRunIds.push(run.id);
       claimedWorkspaceIds.add(run.workspaceId);
       // Advance through plan_queued then dispatch to planning
-      executeRun(run.id).catch((err: unknown): void => { console.error(`Worker error on run ${run.id}`, err); });
+      executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
     }
   }
 
@@ -2378,7 +2378,7 @@ export function startWorkerQueue(): void {
         }),
       ]);
     } catch (err: unknown) {
-      console.error("[terrence worker] Queue error", err);
+      log.error("Queue error", { error: err });
     } finally {
       setTimeout((): void => { void poll(); }, WORKER_POLL_INTERVAL_MS);
     }

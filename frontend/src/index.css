@@ -170,3 +170,17 @@
     --border: 220 12% 40%;
   }
 }
+
+/* Reduced motion (kanban 14.15): collapse animation and transition durations
+ * for running indicators and interactive transitions. Keeps the UI usable
+ * under vestibular-trigger settings without removing state feedback. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

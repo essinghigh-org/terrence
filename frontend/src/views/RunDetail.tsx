@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -10,6 +10,7 @@ import {
   History,
   Link2,
   Maximize2,
+  RotateCcw,
   MessageSquare,
   X,
   XCircle,
@@ -80,6 +81,8 @@ type RunAttributes = {
   "trigger-reason"?: string;
   "triggered-by"?: string | null;
   "triggered-by-avatar-url"?: string | null;
+  "workspace-locked"?: boolean;
+  "workspace-locked-reason"?: string | null;
 };
 
 type RunResource = {
@@ -88,6 +91,9 @@ type RunResource = {
   relationships?: {
     "created-by"?: {
       data: { id: string; type: string } | null;
+    };
+    workspace?: {
+      data: { id: string; type: string };
     };
   };
 };
@@ -493,6 +499,7 @@ function PhaseMeta({
 export function RunDetail({
   showBreadcrumb = true,
 }: Readonly<{ readonly showBreadcrumb?: boolean }>): React.JSX.Element {
+  const navigate = useNavigate();
   const {
     orgName: rawOrgName,
     workspaceName: rawWorkspaceName,
@@ -508,6 +515,8 @@ export function RunDetail({
   const [apply, setApply] = useState<PhaseResource | null>(null);
   const [planLogs, setPlanLogs] = useState("");
   const [applyLogs, setApplyLogs] = useState("");
+  const [rerunPending, setRerunPending] = useState(false);
+  const [rerunError, setRerunError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
@@ -842,6 +851,48 @@ export function RunDetail({
     && permissions?.["can-override-policy-check"] === true;
   const canComment = fresh && permissions?.["can-comment"] === true;
 
+  // Statuses where a run is actively heading toward apply; re-running another
+  // run from this page while one is in flight would queue a duplicate.
+  const runInFlight = [
+    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+    "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+    "post_plan_completed", "confirmed", "apply_queued", "applying",
+  ].includes(status);
+
+  const workspaceId = (run.relationships as { workspace?: { data?: { id?: string } } } | undefined)
+    ?.workspace?.data?.id ?? "";
+  const canRerun = workspaceId !== ""
+    && !runInFlight
+    && attributes["is-destroy"] !== true;
+
+  const performRerun = async (): Promise<void> => {
+    if (workspaceId === "" || rerunPending) return;
+    setRerunPending(true);
+    setRerunError("");
+    try {
+      const body = await fetchApi("/api/v2/runs", {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            attributes: { message: `Re-run of ${runId}` },
+            relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } },
+          },
+        }),
+      });
+      const newRunId = (body as { data?: { id?: string } }).data?.id;
+      if (typeof newRunId === "string" && newRunId !== "") {
+        navigate(`${workspacePath}/runs/${encodeURIComponent(newRunId)}`);
+      } else {
+        setRerunError("The run was created but the response did not include a run id.");
+      }
+    } catch (err: unknown) {
+      setRerunError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRerunPending(false);
+    }
+  };
+
   const timestamps = attributes["status-timestamps"] ?? {};
   const planStatus = plan?.attributes.status ?? phaseStatusFromRun(status, "plan", timestamps);
   const applyStatus = apply?.attributes.status ?? phaseStatusFromRun(status, "apply", timestamps);
@@ -942,6 +993,28 @@ export function RunDetail({
   const showApply = attributes["plan-only"] !== true
     && status !== "planned_and_finished"
     && !terminatedBeforeApply;
+
+  // Explain why Apply is disabled (kanban 15.10), mirroring the gate at top:
+  // fresh && is-confirmable && can-apply, plus policy/lock/task states.
+  const applyDisabledReasons: string[] = [];
+  const applyGated = showApply && !canApply && applyStatus !== "finished";
+  if (applyGated) {
+    if (["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning"].includes(status)) {
+      applyDisabledReasons.push("Plan, policy checks, and pre-apply tasks are still running. Apply becomes available once they finish.");
+    }
+    if (status === "policy_soft_failed") {
+      applyDisabledReasons.push("A policy check soft-failed. Someone with override permission must override it before this run can be applied.");
+    }
+    if (attributes["workspace-locked"] === true) {
+      applyDisabledReasons.push(`Workspace is locked: ${typeof attributes["workspace-locked-reason"] === "string" ? attributes["workspace-locked-reason"] : "Locked manually"}`);
+    }
+    if (permissions?.["can-apply"] !== true) {
+      applyDisabledReasons.push("You do not have permission to apply in this workspace.");
+    }
+    if (!fresh) {
+      applyDisabledReasons.push("This run is no longer current. Start a new run to apply these changes.");
+    }
+  }
   const successfulStatus = ["applied", "planned_and_finished"].includes(status);
   const showCombinedEmptyActivity = TERMINAL_STATUSES.has(status)
     && runEvents.length === 0
@@ -1050,6 +1123,21 @@ export function RunDetail({
             <Link2 className="size-3.5" aria-hidden="true" />
             {copiedPermalink ? "Copied" : "Copy link"}
           </Button>
+          {canRerun && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={rerunPending || pendingAction !== ""}
+              onClick={(): void => { void performRerun(); }}
+            >
+              <RotateCcw className="size-3.5" aria-hidden="true" />
+              {rerunPending ? "Queuing…" : "Re-run"}
+            </Button>
+          )}
+          {rerunError !== "" && (
+            <p role="alert" className="w-full text-xs text-red-600">{rerunError}</p>
+          )}
           {(canCancel || canForceCancel || canOverridePolicy) && (
             <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
                 {canCancel && (
@@ -1433,6 +1521,17 @@ export function RunDetail({
                 </div>
               </div>
             </summary>
+
+            {applyDisabledReasons.length > 0 && (
+              <div className="border-b border-gray-200 bg-gray-50 px-5 py-3">
+                <p className="text-sm font-medium text-gray-700">Why is Apply disabled?</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-gray-600">
+                  {applyDisabledReasons.map((reason: string): React.JSX.Element => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {applyStatus !== "pending" && (
               <ApplyOutput

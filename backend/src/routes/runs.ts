@@ -495,6 +495,11 @@ export const runRoutes = new Elysia({ name: "runs" })
       runDurationBaseline(authorized.run),
     ]);
     const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline);
+    const detailAttributes = data.attributes as Record<string, unknown>;
+    detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
+    detailAttributes["workspace-locked-reason"] = authorized.workspace.locked === true
+      ? (authorized.workspace.lockedReason ?? "Locked manually")
+      : null;
     const included = await includedUsersForRuns([authorized.run]);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
