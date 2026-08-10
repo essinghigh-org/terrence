@@ -3,7 +3,7 @@ import { drizzle, SQLiteBunTransaction } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { mkdirSync, statSync } from 'node:fs';
+import { mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve } from 'path';
 import * as schema from './schema';
 import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
@@ -1005,10 +1005,34 @@ runSql('PRAGMA foreign_keys = ON');
 // scheme (e.g. workspaces `w-*` -> `ws-*`, users `u-*` -> `usr-*`, orgs `o-*`
 // -> `org-*`, raw-UUID runs/state refs -> prefixed). Both the primary key and
 // every column that foreign-keys to it are rewritten so relational integrity
-// holds after upgrade. Idempotent: rows already in the current shape are left
-// untouched, so this is a no-op once the data is migrated.
+// holds after upgrade. Runs additionally have filesystem sidecars keyed by id
+// (plan-json/{id}.json, run-logs/{id}.json.gz); those are renamed alongside
+// the row so artifact lookups stay consistent. Idempotent: rows already in
+// the current shape are left untouched, so this is a no-op once the data is
+// migrated.
 // ---------------------------------------------------------------------------
 {
+  // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
+  const STORAGE_DIR: string = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+  const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
+    { dir: join(STORAGE_DIR, "plan-json"), suffix: ".json" },
+    { dir: join(STORAGE_DIR, "run-logs"), suffix: ".json.gz" },
+  ];
+  let sidecarsRenamed = 0;
+  const renameRunSidecars = (map: Map<string, string>): void => {
+    for (const [oldId, newId] of map) {
+      for (const { dir, suffix } of RUN_SIDECAR_DIRS) {
+        try {
+          renameSync(join(dir, `${oldId}${suffix}`), join(dir, `${newId}${suffix}`));
+          sidecarsRenamed += 1;
+        } catch (error: unknown) {
+          if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+          console.warn(`[terrence] Failed to rename run sidecar ${oldId}${suffix}: ${String(error)}`);
+        }
+      }
+    }
+  };
+
   const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
     { table: "organizations", prefix: "org-", fullUuidSuffix: true },
     { table: "users", prefix: "usr-", fullUuidSuffix: true },
@@ -1064,12 +1088,13 @@ runSql('PRAGMA foreign_keys = ON');
         }
         const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
         for (const [old, next] of map) pkStmt.run(next, old);
+        if (parent === "runs") renameRunSidecars(map);
       }
     } finally {
       client.run("PRAGMA foreign_keys = ON");
     }
     const entityNames = [...rekeyMaps.keys()].join(", ");
     const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
-    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames}).`);
+    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarsRenamed > 0 ? `; renamed ${sidecarsRenamed} run sidecar files` : ""}.`);
   }
 }
