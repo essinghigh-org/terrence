@@ -155,3 +155,18 @@
   box-shadow: var(--xy-controls-box-shadow-default);
   overflow: hidden;
 }
+
+/* High-contrast mode (OS setting): strengthen muted text and subtle borders so
+ * secondary content clears WCAG AA. Theme tokens already darken status shades
+ * in light mode; this adds the final safety net for muted foregrounds. */
+@media (prefers-contrast: more) {
+  :root {
+    --muted-foreground: 220 7% 30%;
+  }
+  .dark {
+    --muted-foreground: 210 12% 82%;
+  }
+  .dark {
+    --border: 220 12% 40%;
+  }
+}

@@ -194,10 +194,21 @@ const defaultTheme = ((): ThemeDefinition => {
 const color = (name: string): string => `hsl(var(--${name}))`;
 const tint = (name: string, amount: number): string =>
   `color-mix(in srgb, ${color(name)} ${amount}%, ${color("background")})`;
+const shade = (name: string, amount: number): string =>
+  `color-mix(in srgb, ${color(name)} ${amount}%, ${color("code-background")})`;
 
 // The older UI uses Tailwind's gray/status palette directly. These aliases keep it
 // in the selected theme until those components are moved to semantic classes.
-const legacyPalette: Readonly<Record<string, string>> = {
+//
+// Text-tier status shades (600+) are darkened in light mode so they clear WCAG:
+//   - icons need >= 3:1  (amber-600 / emerald-600)
+//   - small text needs >= 4.5:1 (amber-700+, emerald-700+, green-700+)
+// In dark mode the tokens are already light-on-dark (>= 9:1), so they map to the
+// raw token — no darkening needed.
+const legacyPalette = (mode: "light" | "dark"): Readonly<Record<string, string>> => {
+  const warn = (lightPct: number): string => (mode === "light" ? shade("warning", lightPct) : color("warning"));
+  const succ = (lightPct: number): string => (mode === "light" ? shade("success", lightPct) : color("success"));
+  return {
   "color-white": color("card"),
   "color-black": color("code-background"),
   "color-gray-50": color("background"),
@@ -236,11 +247,11 @@ const legacyPalette: Readonly<Record<string, string>> = {
   "color-amber-300": tint("warning", 38),
   "color-amber-400": color("warning"),
   "color-amber-500": color("warning"),
-  "color-amber-600": color("warning"),
-  "color-amber-700": color("warning"),
-  "color-amber-800": color("warning"),
-  "color-amber-900": color("warning"),
-  "color-amber-950": tint("warning", 60),
+  "color-amber-600": warn(80),
+  "color-amber-700": warn(55),
+  "color-amber-800": warn(45),
+  "color-amber-900": warn(38),
+  "color-amber-950": warn(30),
   "color-blue-50": tint("primary", 8),
   "color-blue-100": tint("primary", 14),
   "color-blue-200": tint("primary", 24),
@@ -252,22 +263,23 @@ const legacyPalette: Readonly<Record<string, string>> = {
   "color-blue-800": color("primary"),
   "color-green-50": tint("success", 8),
   "color-green-200": tint("success", 24),
-  "color-green-700": color("success"),
-  "color-green-800": color("success"),
+  "color-green-700": succ(68),
+  "color-green-800": succ(58),
   "color-emerald-50": tint("success", 8),
   "color-emerald-100": tint("success", 14),
   "color-emerald-300": tint("success", 38),
   "color-emerald-400": color("success"),
   "color-emerald-500": color("success"),
-  "color-emerald-600": color("success"),
-  "color-emerald-700": color("success"),
-  "color-emerald-800": color("success"),
-  "color-emerald-950": tint("success", 60),
+  "color-emerald-600": succ(80),
+  "color-emerald-700": succ(66),
+  "color-emerald-800": succ(55),
+  "color-emerald-950": succ(42),
   "color-purple-50": tint("accent", 8),
   "color-purple-200": tint("accent", 24),
   "color-purple-700": color("accent"),
   "color-sky-300": color("primary"),
   "color-sky-400": color("primary"),
+  };
 };
 
 export function getTheme(themeId: unknown): ThemeDefinition {
@@ -310,7 +322,7 @@ export function applyTheme(themeId?: unknown): ThemeId {
   root.classList.toggle("dark", theme.mode === "dark");
   root.style.colorScheme = theme.mode;
   for (const [name, value] of Object.entries(theme.colors)) root.style.setProperty(`--${name}`, value);
-  for (const [name, value] of Object.entries(legacyPalette)) root.style.setProperty(`--${name}`, value);
+  for (const [name, value] of Object.entries(legacyPalette(theme.mode))) root.style.setProperty(`--${name}`, value);
   syncThemeColorMeta(theme);
 
   try {
