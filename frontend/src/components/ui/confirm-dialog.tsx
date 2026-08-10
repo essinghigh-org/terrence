@@ -23,6 +23,7 @@ export type ConfirmDialogProps = Readonly<{
   confirmVariant?: "destructive" | "default" | "outline";
   requireText?: string | undefined;
   requireTextLabel?: string;
+  requireCheckbox?: string | undefined;
   onConfirm: () => void | Promise<void>;
   loading?: boolean;
 }>;
@@ -37,18 +38,23 @@ export function ConfirmDialog({
   confirmVariant = "destructive",
   requireText,
   requireTextLabel,
+  requireCheckbox,
   onConfirm,
   loading = false,
 }: ConfirmDialogProps): React.JSX.Element {
   const [typedText, setTypedText] = useState("");
+  const [checked, setChecked] = useState(false);
 
   useEffect((): void => {
     if (open) {
       setTypedText("");
+      setChecked(false);
     }
   }, [open]);
 
-  const isConfirmed = requireText !== undefined ? typedText.trim() === requireText.trim() : true;
+  const textConfirmed = requireText === undefined || typedText.trim() === requireText.trim();
+  const checkboxConfirmed = requireCheckbox === undefined || checked;
+  const isConfirmed = textConfirmed && checkboxConfirmed;
 
   const handleFormSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
@@ -99,6 +105,23 @@ export function ConfirmDialog({
                 autoFocus
                 autoComplete="off"
               />
+            </div>
+          )}
+
+          {requireCheckbox !== undefined && (
+            <div className="my-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+              <input
+                id="confirm-dialog-checkbox"
+                type="checkbox"
+                checked={checked}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
+                  setChecked(e.target.checked);
+                }}
+                className="mt-0.5 size-4 shrink-0 accent-destructive"
+              />
+              <Label htmlFor="confirm-dialog-checkbox" className="text-xs font-medium leading-relaxed text-foreground">
+                {requireCheckbox}
+              </Label>
             </div>
           )}
 

@@ -33,6 +33,7 @@ import {
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
 import { ApiError, fetchApi } from "../lib/api";
+import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 
 type RunActions = {
   "is-cancelable"?: boolean;
@@ -847,6 +848,11 @@ export function RunDetail({
       setPendingAction("");
     }
   }
+
+  useUnsavedChangesWarning(
+    commentBody.trim() !== "",
+    "You have an unsaved comment draft. Are you sure you want to leave this page?",
+  );
 
   if (run !== null && run.id !== runId) return <div className="p-8 text-gray-500">Loading run...</div>;
   if (loading && run === null) return (

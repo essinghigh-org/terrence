@@ -1207,6 +1207,7 @@ export function OrganizationSettings(): React.JSX.Element {
         }
         confirmText="Delete Organization"
         confirmVariant="destructive"
+        requireCheckbox="I understand this permanently deletes the organization and all of its data."
         requireText={orgNameParam}
         loading={deletingOrg}
         onConfirm={deleteOrg}

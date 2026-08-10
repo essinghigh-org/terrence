@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useUnsavedChangesWarning } from "@/lib/use-unsaved-changes";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -100,9 +101,34 @@ export function WorkspaceSettings({
   );
   const [remoteStateLoadError, setRemoteStateLoadError] = useState("");
   const [remoteStateReload, setRemoteStateReload] = useState(0);
+  const [savedSnapshot, setSavedSnapshot] = useState<WorkspaceSettingsResource>(workspace);
+  const [savedConsumerKeys, setSavedConsumerKeys] = useState("");
 
   const normalizedName = name.trim();
   const invalidName = normalizedName === "" || !/^[A-Za-z0-9_-]+$/.test(normalizedName);
+
+  const dirty =
+    name !== savedSnapshot.attributes.name
+    || description !== (savedSnapshot.attributes.description ?? "")
+    || iacBinary !== (savedSnapshot.attributes["iac-binary"] === "terraform" ? "terraform" : "tofu")
+    || terraformVersion !== (savedSnapshot.attributes["terraform-version"] ?? "latest")
+    || executionMode !== (
+      savedSnapshot.attributes["execution-mode"] === "agent"
+        ? "agent"
+        : savedSnapshot.attributes["execution-mode"] === "local" ? "local" : "remote"
+    )
+    || workingDirectory !== (savedSnapshot.attributes["working-directory"] ?? "")
+    || remoteStateSharing !== (
+      savedSnapshot.attributes["global-remote-state"] === true
+        ? "global"
+        : savedSnapshot.attributes["project-remote-state"] === true ? "project" : "specific"
+    )
+    || autoApply !== (savedSnapshot.attributes["auto-apply"] === true)
+    || autoApplyRunTrigger !== (savedSnapshot.attributes["auto-apply-run-trigger"] === true)
+    || (remoteStateSharing === "specific"
+      && [...remoteStateConsumerIds].sort().join(",") !== savedConsumerKeys);
+
+  useUnsavedChangesWarning(dirty);
 
   useEffect((): (() => void) | undefined => {
     if (!canUpdate) {
@@ -144,6 +170,15 @@ export function WorkspaceSettings({
             .filter((id): boolean => id !== ""),
         ),
       ]);
+      setSavedConsumerKeys(
+        [
+          ...new Set(
+            (Array.isArray(consumers.data) ? consumers.data : [])
+              .map((consumer): string => consumer.id)
+              .filter((id): boolean => id !== ""),
+          ),
+        ].sort().join(","),
+      );
       setRemoteStateLoadState("ready");
     }).catch((caught: unknown): void => {
       if (controller.signal.aborted) return;
@@ -188,6 +223,7 @@ export function WorkspaceSettings({
         }),
       }) as { data: WorkspaceSettingsResource };
       onSaved(response.data);
+      setSavedSnapshot(response.data);
       setName(response.data.attributes.name);
       setDescription(response.data.attributes.description ?? "");
       setExecutionMode(
@@ -213,6 +249,7 @@ export function WorkspaceSettings({
                 .map((id): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })),
             }),
           });
+          setSavedConsumerKeys([...remoteStateConsumerIds].sort().join(","));
         } catch (caught: unknown) {
           const detail = caught instanceof Error ? `: ${caught.message}` : ".";
           const message = `Workspace settings were saved, but approved workspaces could not be updated${detail}`;
