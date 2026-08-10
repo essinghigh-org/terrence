@@ -2,7 +2,10 @@
  * debt-report.ts — list all `ponytail` markers with file/line (kanban 26.7).
  *
  * Scans backend/src and frontend/src for lines containing a `ponytail:`
- * marker comment and prints them grouped by file. With `--fail`, exits 1
+ * marker comment and prints them grouped by file. Markers may carry a
+ * mechanical category suffix — `ponytail(perf):`, `ponytail(scale):`,
+ * `ponytail(compat):`, etc. (kanban 26.6) — which the report enumerates so
+ * the debt backlog can be queried mechanically. With `--fail`, exits 1
  * when any markers exist (for CI/pre-commit gate use); the default exit
  * code is 0 (informational listing).
  *
@@ -15,12 +18,15 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOTS = ["backend/src", "frontend/src"];
-const MARKER = /ponytail\s*:/;
+const MARKER = /ponytail\s*:\s*/;
+// ponytail(perf):  ponytail(scale):  ponytail(compat):  ...
+const CATEGORY = /ponytail\(\s*([a-z0-9-]+)\s*\)\s*:/;
 
 interface MarkerHit {
     file: string;
     line: number;
     text: string;
+    category: string | null;
 }
 
 function walk(dir: string): string[] {
@@ -46,7 +52,13 @@ function collect(): MarkerHit[] {
             const lines = readFileSync(file, "utf8").split("\n");
             for (let i = 0; i < lines.length; i++) {
                 if (MARKER.test(lines[i])) {
-                    hits.push({ file: relative(process.cwd(), file), line: i + 1, text: lines[i].trim() });
+                    const categoryMatch = lines[i].match(CATEGORY);
+                    hits.push({
+                        file: relative(process.cwd(), file),
+                        line: i + 1,
+                        text: lines[i].trim(),
+                        category: categoryMatch?.[1] ?? null,
+                    });
                 }
             }
         }
@@ -65,9 +77,21 @@ if (json) {
         console.log("No ponytail markers found. Codebase is clean.");
     }
     for (const h of hits) {
-        console.log(`${h.file}:${h.line}: ${h.text}`);
+        const tag = h.category === null ? "ponytail" : `ponytail(${h.category})`;
+        console.log(`${h.file}:${h.line}: [${tag}] ${h.text}`);
     }
     console.log(`\n${hits.length} ponytail marker(s) in ${ROOTS.join(", ")}.`);
+    if (hits.length > 0) {
+        const categories = new Map<string, number>();
+        for (const h of hits) {
+            const key = h.category ?? "uncategorized";
+            categories.set(key, (categories.get(key) ?? 0) + 1);
+        }
+        console.log("By category:");
+        for (const [category, count] of [...categories.entries()].sort()) {
+            console.log(`  ${category}: ${count}`);
+        }
+    }
 }
 
 process.exit(failOnDebt && hits.length > 0 ? 1 : 0);
