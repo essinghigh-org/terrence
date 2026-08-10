@@ -40,6 +40,7 @@ import { systemAdminRoutes } from "./routes/system-admin";
 import { policyRoutes } from "./routes/policies";
 import { permissionSimulatorRoutes } from "./routes/permission-simulator";
 import { workspaceScorecardRoutes } from "./routes/workspace-scorecards";
+import { workspaceActivityRoutes } from "./routes/workspace-activity";
 import { agentRoutes } from "./routes/agents";
 import { runTaskRoutes } from "./routes/run-tasks";
 import { oauthClientRoutes } from "./routes/oauth-clients";
@@ -555,6 +556,7 @@ export const app = new Elysia()
   .use(policyRoutes)
   .use(permissionSimulatorRoutes)
   .use(workspaceScorecardRoutes)
+  .use(workspaceActivityRoutes)
   .use(agentRoutes)
   .use(runTaskRoutes)
   .use(oauthClientRoutes)
