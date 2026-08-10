@@ -630,3 +630,83 @@ test("toggles dense table density and persists the preference", async () => {
 
   window.localStorage.removeItem("terrence-table-prefs:workspaces");
 });
+
+test("pins a workspace (star) and sorts it to the top", async () => {
+  window.localStorage.removeItem("terrence-pinned-workspaces");
+  const workspaces = [
+    { id: "ws-1", attributes: { name: "alpha", locked: false, "tag-names": [] } },
+    { id: "ws-2", attributes: { name: "beta", locked: false, "tag-names": [] } },
+  ];
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: workspaces });
+    if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { name: "acme", permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("alpha")).toBeTruthy(); });
+
+  // Initial order matches the API (alpha, beta).
+  const rows = (): string[] =>
+    Array.from(view.getAllByRole("row"))
+      .map((row): string => row.textContent ?? "")
+      .filter((text): boolean => text.includes("alpha") || text.includes("beta"));
+  expect(rows()[0]).toContain("alpha");
+
+  fireEvent.click(view.getByRole("button", { name: "Pin beta" }));
+  // After pinning, beta floats to the top.
+  await waitFor((): void => { expect(rows()[0]).toContain("beta"); });
+  expect(view.getByRole("button", { name: "Unpin beta" })).toBeTruthy();
+  const stored = JSON.parse(window.localStorage.getItem("terrence-pinned-workspaces") as string);
+  expect(stored).toEqual([{ orgName: "acme", workspaceName: "beta", visitedAt: 0 }]);
+
+  fireEvent.click(view.getByRole("button", { name: "Unpin beta" }));
+  await waitFor((): void => { expect(rows()[0]).toContain("alpha"); });
+
+  window.localStorage.removeItem("terrence-pinned-workspaces");
+});
+
+test("shows recent workspace shortcuts in the org sidebar", async () => {
+  window.localStorage.removeItem("terrence-recent-workspaces");
+  // Simulate a prior visit to the "cache" workspace.
+  window.localStorage.setItem("terrence-recent-workspaces", JSON.stringify([
+    { orgName: "acme", workspaceName: "cache", visitedAt: Date.now() },
+  ]));
+
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/account/details") {
+      return json({ data: { attributes: { username: "tester", "is-site-admin": false } } });
+    }
+    if (url === "/api/v2/organizations?page[size]=100") return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
+    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const { Layout } = await import("../src/components/Layout");
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Layout><p>Workspaces page</p></Layout>} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("link", { name: "cache" })).toBeTruthy();
+  });
+  expect(view.getByRole("link", { name: "cache" }).getAttribute("href"))
+    .toBe("/app/acme/workspaces/cache");
+
+  window.localStorage.removeItem("terrence-recent-workspaces");
+});

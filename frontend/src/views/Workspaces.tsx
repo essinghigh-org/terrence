@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Pencil, Plus, Rows3, Tags, Trash2, X } from "lucide-react";
+import { Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import type { TableDensity } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getTablePreferences, setTablePreferences } from "@/lib/table-preferences";
+import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/lib/workspace-shortcuts";
 import { cn, formatDateTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
@@ -98,6 +99,7 @@ export function Workspaces(): React.JSX.Element {
     const prefs = getTablePreferences("workspaces");
     return prefs?.density ?? "comfortable";
   });
+  const [pinsRevision, setPinsRevision] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [tagWorkspace, setTagWorkspace] = useState<Workspace | null>(null);
   const [tagBindings, setTagBindings] = useState<TagBinding[]>([]);
@@ -194,7 +196,12 @@ export function Workspaces(): React.JSX.Element {
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
     const needle = search.trim().toLowerCase();
-    return workspaces.filter((workspace): boolean => {
+    const pinnedNames = new Set(
+      getPinnedWorkspaces()
+        .filter((entry): boolean => entry.orgName === orgName)
+        .map((entry): string => entry.workspaceName),
+    );
+    const matches = workspaces.filter((workspace): boolean => {
       const projectId = workspace.relationships?.project?.data?.id ?? "";
       const tags = workspace.attributes["tag-names"] ?? [];
       const matchesSearch = needle === ""
@@ -202,7 +209,15 @@ export function Workspaces(): React.JSX.Element {
         || tags.some((tag): boolean => tag.toLowerCase().includes(needle));
       return matchesSearch && (projectFilter === "" || projectId === projectFilter);
     });
-  }, [projectFilter, search, workspaces]);
+    // Pinned workspaces float to the top (kanban 26.12); order is otherwise
+    // stable (API order).
+    return matches.sort((a, b): number => {
+      const aPinned = pinnedNames.has(a.attributes.name);
+      const bPinned = pinnedNames.has(b.attributes.name);
+      if (aPinned === bPinned) return 0;
+      return aPinned ? -1 : 1;
+    });
+  }, [orgName, pinsRevision, projectFilter, search, workspaces]);
 
   const activeRunsCount = useMemo((): number => {
     let count = 0;
@@ -473,6 +488,32 @@ export function Workspaces(): React.JSX.Element {
                       {workspace.attributes.name}
                     </Link>
                     {workspace.attributes.locked === true && <Badge variant="outline">Locked</Badge>}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                      aria-label={isWorkspacePinned(orgName, workspace.attributes.name)
+                        ? `Unpin ${workspace.attributes.name}`
+                        : `Pin ${workspace.attributes.name}`}
+                      title={isWorkspacePinned(orgName, workspace.attributes.name)
+                        ? "Unpin from sidebar shortcuts"
+                        : "Pin to sidebar shortcuts"}
+                      onClick={(): void => {
+                        const pinned = isWorkspacePinned(orgName, workspace.attributes.name);
+                        setWorkspacePinned(orgName, workspace.attributes.name, !pinned);
+                        setPinsRevision((value: number): number => value + 1);
+                      }}
+                    >
+                      <Star
+                        className={cn(
+                          "size-3.5",
+                          isWorkspacePinned(orgName, workspace.attributes.name)
+                            ? "fill-amber-400 text-amber-500"
+                            : "text-muted-foreground",
+                        )}
+                        aria-hidden="true"
+                      />
+                    </Button>
                   </div>
                 </TableCell>
                 <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>

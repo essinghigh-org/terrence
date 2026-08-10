@@ -80,6 +80,7 @@ import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
 import { setLastOrganization } from "../lib/lastOrganization";
+import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
@@ -201,6 +202,7 @@ export function Layout({
   const [workspacePermissionPath, setWorkspacePermissionPath] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [visitsRevision, setVisitsRevision] = useState(0);
 
   useEffect(() => {
     applyTheme();
@@ -313,6 +315,14 @@ export function Layout({
       setLastOrganization(orgName);
     }
   }, [hasOrg, orgName]);
+
+  // Record workspace visits for the sidebar "Recent" section (kanban 26.11).
+  useEffect((): void => {
+    if (hasWorkspace && orgName !== undefined && orgName !== "" && workspaceName !== undefined && workspaceName !== "") {
+      recordWorkspaceVisit(orgName, workspaceName);
+      setVisitsRevision((value: number): number => value + 1);
+    }
+  }, [hasWorkspace, orgName, workspaceName]);
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
     : "";
@@ -1025,8 +1035,46 @@ export function Layout({
         (link.label !== "Projects" || canReadProjects)
         && (link.label !== "No-code modules" || canManageWorkspaces));
 
+      // Sidebar shortcuts are re-read on every navigation (visitsRevision
+      // bumps when a workspace is visited, so the list stays current).
+      void visitsRevision;
+      const pinned = getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName);
+      const recent = getRecentWorkspaces()
+        .filter((entry): boolean => entry.orgName === orgName)
+        .filter((entry): boolean => !pinned.some((pinnedEntry): boolean => pinnedEntry.workspaceName === entry.workspaceName))
+        .slice(0, 4);
+
+      const shortcutLinks = [...pinned, ...recent].map((entry): { label: string; to: string; icon: typeof FolderGit2 } => ({
+        label: entry.workspaceName,
+        to: `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(entry.workspaceName)}`,
+        icon: Box,
+      }));
+
       return (
         <>
+          {shortcutLinks.length > 0 && (
+            <>
+              <div
+                className={cn(
+                  "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
+                  sidebarCollapsed && "lg:sr-only",
+                )}
+              >
+                {pinned.length > 0 ? "Pinned & recent" : "Recent"}
+              </div>
+              {shortcutLinks.map((link): JSX.Element => (
+                <SidebarNavLink
+                  key={link.to}
+                  active={false}
+                  collapsed={sidebarCollapsed}
+                  icon={link.icon}
+                  label={link.label}
+                  onNavigate={closeMobileNavigation}
+                  to={link.to}
+                />
+              ))}
+            </>
+          )}
           <div
             className={cn(
               "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
