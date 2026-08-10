@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, organizations, workspaces } from "../db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { users, organizations, workspaces, workspaceTags, policySetWorkspaces } from "../db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/utils";
 import { authPlugin } from "../auth";
 
@@ -14,9 +14,16 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
-const SUPPORTED_ENGINE_VERSIONS = new Set([
-  "latest", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16",
-]);
+const SUPPORTED_ENGINE_MAJOR_MINOR = new Set(["1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16"]);
+
+/** "1.9.8" -> "1.9", "latest" -> "latest". Patch versions match their major.minor. */
+function engineMajorMinor(version: string | null | undefined): string {
+  if (version === null || version === undefined || version === "") return "unknown";
+  const normalized = version.startsWith("v") ? version.slice(1) : version;
+  const [major, minor] = normalized.split(".");
+  if (major === undefined || minor === undefined) return normalized;
+  return `${major}.${minor}`;
+}
 
 /**
  * Workspace compliance scorecards (kanban 21.12). Read-only aggregation over
@@ -46,21 +53,23 @@ export const workspaceScorecardRoutes = new Elysia()
     const orgWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id) });
     if (orgWorkspaces.length === 0) return { data: [] };
 
-    // Direct tag rows (workspace_tags) for all org workspaces.
-    const { workspaceTags } = await import("../db/schema");
-    const tagRows = await db.query.workspaceTags.findMany({
-      where: inArray(workspaceTags.workspaceId, orgWorkspaces.map((w): string => w.id)),
-    });
-    const ownerTags = new Set(
-      tagRows.filter((tag): boolean => tag.key === "owner").map((tag): string => tag.workspaceId),
-    );
+    const workspaceIds = orgWorkspaces.map((w): string => w.id);
 
-    // Policy attachments (policy_set_workspaces) for all org workspaces.
-    const { policySetWorkspaces } = await import("../db/schema");
-    const policyRows = await db.query.policySetWorkspaces.findMany({
-      columns: { workspaceId: true },
-      where: inArray(policySetWorkspaces.workspaceId, orgWorkspaces.map((w): string => w.id)),
-    });
+    // Direct owner tag rows + policy attachments for all org workspaces.
+    const [tagRows, policyRows] = await Promise.all([
+      db.query.workspaceTags.findMany({
+        columns: { workspaceId: true, key: true },
+        where: and(
+          inArray(workspaceTags.workspaceId, workspaceIds),
+          eq(workspaceTags.key, "owner"),
+        ),
+      }),
+      db.query.policySetWorkspaces.findMany({
+        columns: { workspaceId: true },
+        where: inArray(policySetWorkspaces.workspaceId, workspaceIds),
+      }),
+    ]);
+    const ownerTags = new Set(tagRows.map((tag): string => tag.workspaceId));
     const workspacesWithPolicies = new Set(policyRows.map((row): string => row.workspaceId));
 
     const data = orgWorkspaces.map((workspace): Record<string, unknown> => {
@@ -68,7 +77,8 @@ export const workspaceScorecardRoutes = new Elysia()
       const policyAttached = workspacesWithPolicies.has(workspace.id);
       const assessmentEnabled = workspace.assessmentsEnabled === true;
       const hasOwnerTag = ownerTags.has(workspace.id);
-      const supportedVersion = SUPPORTED_ENGINE_VERSIONS.has(workspace.terraformVersion ?? "");
+      const supportedVersion = workspace.terraformVersion === "latest"
+        || SUPPORTED_ENGINE_MAJOR_MINOR.has(engineMajorMinor(workspace.terraformVersion));
       const passed = [
         vcsConnected, policyAttached, assessmentEnabled, hasOwnerTag, supportedVersion,
       ].filter(Boolean).length;

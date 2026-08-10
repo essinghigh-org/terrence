@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, runs, auditLogs } from "../db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { findAuthorizedWorkspace } from "../lib/utils";
 import { authPlugin } from "../auth";
 
@@ -11,8 +11,24 @@ type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId?: string | null;
+  teamId?: string | null;
   set: SetObj;
 }>;
+
+// Audit rows carry free-form `details` that may include internal state only
+// the audit trail itself should expose wholesale. The activity feed surfaces
+// a small allowlist so operators can tell what changed without leaking
+// unrelated event payloads to every workspace reader.
+const ACTIVITY_DETAIL_ALLOWLIST = new Set(["name", "reason", "fromStatus", "toStatus", "projectId", "workspaceId"]);
+
+function safeActivityDetails(details: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (details === null || details === undefined) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (ACTIVITY_DETAIL_ALLOWLIST.has(key)) out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 /**
  * Workspace activity feed (kanban 16.9). Aggregates the audit trail for the
@@ -26,10 +42,11 @@ export const workspaceActivityRoutes = new Elysia()
     params,
     user,
     orgId,
+    teamId,
     set,
   }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, null);
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (ws === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -37,7 +54,10 @@ export const workspaceActivityRoutes = new Elysia()
 
     const [workspaceEvents, runEvents] = await Promise.all([
       db.query.auditLogs.findMany({
-        where: eq(auditLogs.resourceId, workspaceId),
+        where: and(
+          eq(auditLogs.resourceId, workspaceId),
+          eq(auditLogs.resourceType, "workspaces"),
+        ),
         orderBy: [desc(auditLogs.createdAt)],
         limit: 50,
       }),
@@ -73,7 +93,7 @@ export const workspaceActivityRoutes = new Elysia()
         at: event.createdAt,
         action: event.action,
         resourceType: event.resourceType,
-        details: event.details as Record<string, unknown> | null,
+        details: safeActivityDetails(event.details as Record<string, unknown> | null),
       })),
     ].sort((a, b): number => b.at - a.at).slice(0, 50);
 

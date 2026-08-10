@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, notInArray } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, notInArray, isNull } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
@@ -48,6 +48,8 @@ export async function runDurationBaseline(
     where: and(
       eq(runs.workspaceId, run.workspaceId),
       eq(runs.isDestroy, run.isDestroy === true),
+      eq(runs.planOnly, run.planOnly === true),
+      isNull(runs.softDeletedAt),
       inArray(runs.status, BASELINE_TERMINAL_STATUSES),
       ne(runs.id, run.id),
     ),

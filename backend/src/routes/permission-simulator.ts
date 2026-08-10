@@ -85,11 +85,12 @@ export const permissionSimulatorRoutes = new Elysia()
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "workspace does not exist in this organization" }] };
     }
 
-    // evaluate against the team's workspace permissions; teamId carries the
-    // team access for checkWorkspacePermission's team-based resolution
+    // Evaluate purely as the team: the caller's own identity must not leak
+    // into the simulation, so userId is deliberately undefined while teamId
+    // carries the team access for checkWorkspacePermission's team resolution.
     const results = await Promise.all(requestedActions.map(async (action: WorkspacePermission) => ({
       action,
-      granted: await checkWorkspacePermission(workspace, user?.id, orgId ?? null, rawTeamId, action),
+      granted: await checkWorkspacePermission(workspace, undefined, orgId ?? null, rawTeamId, action),
     })));
 
     return {
