@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { resolveDisplayTimeZone } from "./display-timezone";
+import { resolveDisplayTimeFormat } from "./display-time-format";
 
 type DeepReadonly<T> = T extends null | undefined
   ? T
@@ -86,11 +87,22 @@ export function formatDate(value: Date | string | number | null | undefined, fal
 
 /**
  * Format a date-time for display (locale string with time). Invalid input
- * renders as the fallback.
+ * renders as the fallback. The hour cycle follows the operator's display
+ * time format preference (12h/24h, default 24h) so a 12-hour render always
+ * carries an AM/PM suffix instead of the ambiguous suffixed-less cycle some
+ * locales default to.
  */
-export function formatDateTime(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
+export function formatDateTime(
+  value: Date | string | number | null | undefined,
+  fallback = "—",
+  timeZone = resolveDisplayTimeZone(),
+  timeFormat: "12" | "24" = resolveDisplayTimeFormat(),
+): string {
   const date = toDisplayDate(value, timeZone);
-  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleString(undefined, timeZone !== undefined ? { timeZone } : undefined);
+  if (Number.isNaN(date.valueOf())) return fallback;
+  const options: Intl.DateTimeFormatOptions = { hour12: timeFormat === "12" };
+  if (timeZone !== undefined) options.timeZone = timeZone;
+  return date.toLocaleString(undefined, options);
 }
 
 /**

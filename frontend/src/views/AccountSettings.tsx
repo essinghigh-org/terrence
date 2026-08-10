@@ -16,7 +16,9 @@ import { QrCodeImage } from "../components/QrCodeImage";
 import { TokenScopeDialog } from "../components/TokenScopeDialog";
 import { DEFAULT_THEME_ID, getTheme, applyTheme, THEMES } from "../lib/theme";
 import { setDisplayTimezone } from "../lib/display-timezone";
+import { setDisplayTimeFormat } from "../lib/display-time-format";
 import { useDisplayTimezone } from "../lib/useDisplayTimezone";
+import { useDisplayTimeFormat } from "../lib/useDisplayTimeFormat";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -53,6 +55,7 @@ export function AccountSettings(): React.JSX.Element {
   const [themeId, setThemeId] = useState(DEFAULT_THEME_ID);
   const [updatingTheme, setUpdatingTheme] = useState(false);
   const displayTimezone = useDisplayTimezone();
+  const timeFormat = useDisplayTimeFormat();
 
   // Password Form
   const [currentPassword, setCurrentPassword] = useState("");
@@ -482,6 +485,18 @@ export function AccountSettings(): React.JSX.Element {
           >
             <option value="local">Browser local timezone</option>
             <option value="utc">UTC</option>
+          </select>
+          <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
+          <select
+            id="account-time-format"
+            value={timeFormat}
+            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+              setDisplayTimeFormat(event.target.value === "12" ? "12" : "24");
+            }}
+            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <option value="24">24-hour (e.g. 14:30)</option>
+            <option value="12">12-hour (e.g. 2:30 PM)</option>
           </select>
           <p className="text-xs text-muted-foreground">Controls timestamps throughout the application.</p>
         </CardContent>

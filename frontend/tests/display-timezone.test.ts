@@ -26,10 +26,10 @@ afterEach((): void => {
 });
 
 describe("display timezone preference", () => {
-  it("defaults to the browser-local timezone", () => {
+  it("defaults to the browser-local timezone and 24h hour cycle", () => {
     expect(getDisplayTimezone()).toBe("local");
     expect(resolveDisplayTimeZone()).toBeUndefined();
-    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString());
+    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString(undefined, { hour12: false }));
   });
 
   it("uses UTC for shared date formatting when selected", () => {
@@ -40,7 +40,7 @@ describe("display timezone preference", () => {
       const date = new Date(${JSON.stringify(timestamp)});
       console.log(JSON.stringify({
         actual: formatDateTime(${JSON.stringify(timestamp)}),
-        expected: date.toLocaleString(undefined, { timeZone: "UTC" }),
+        expected: date.toLocaleString(undefined, { timeZone: "UTC", hour12: false }),
       }));
     `);
     expect(result.actual).toBe(result.expected);

@@ -70,9 +70,9 @@ describe("formatDate", () => {
 });
 
 describe("formatDateTime", () => {
-  it("renders time plus date like the locale's own string", () => {
+  it("renders time plus date like the locale's own string in the default 24h cycle", () => {
     const d = new Date(2026, 7, 7, 22, 14, 3);
-    expect(formatDateTime(d)).toBe(d.toLocaleString());
+    expect(formatDateTime(d)).toBe(d.toLocaleString(undefined, { hour12: false }));
   });
 
   it("falls back for invalid input", () => {
@@ -84,7 +84,7 @@ describe("formatDateTime", () => {
       const script = `
         const { formatDateTime } = await import("./frontend/src/lib/utils.ts");
         const out = formatDateTime("2026-08-07");
-        const local = new Date(2026, 7, 7, 0, 0, 0).toLocaleString();
+        const local = new Date(2026, 7, 7, 0, 0, 0).toLocaleString(undefined, { hour12: false });
         const naive = new Date("2026-08-07").toLocaleString();
         console.log(JSON.stringify({ sameLocal: out === local, drifted: naive === local }));
       `;
