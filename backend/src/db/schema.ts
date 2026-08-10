@@ -267,6 +267,13 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  // Ownership metadata (kanban 16.12): operational attribution beyond RBAC.
+  // ownedByType is "team" | "user" | "service" | null; ownedById references
+  // the team or user row when applicable. This is informational, not
+  // permission-enforcing.
+  ownedByType: text("owned_by_type"),
+  ownedById: text("owned_by_id"),
+  contactEmail: text("contact_email"),
   updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

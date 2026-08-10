@@ -272,6 +272,18 @@ if (!existingWsCols.has("updated_at")) {
   runSql("ALTER TABLE workspaces ADD COLUMN updated_at INTEGER");
 }
 
+// Ownership metadata (kanban 16.12): informational attribution columns.
+const wsOwnershipAdditions: [string, string][] = [
+  ["owned_by_type", "text"],
+  ["owned_by_id", "text"],
+  ["contact_email", "text"],
+];
+for (const [col, def] of wsOwnershipAdditions) {
+  if (!existingWsCols.has(col)) {
+    runSql(`ALTER TABLE workspaces ADD COLUMN ${col} ${def}`);
+  }
+}
+
 const organizationTableInfo = tableRows("PRAGMA table_info(organizations)");
 const existingOrganizationColumns = getColumnNames(organizationTableInfo);
 const organizationAdditions: [string, string][] = [

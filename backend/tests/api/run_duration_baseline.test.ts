@@ -37,7 +37,7 @@ describe("run duration baseline (kanban 15.12)", () => {
     await db.delete(organizations);
   });
 
-  function insertRun(overrides: Partial<typeof runs.$inferInsert>): Promise<[{ id: string }]> {
+  function insertRun(overrides: Partial<typeof runs.$inferInsert>): Promise<{ id: string }[]> {
     return db.insert(runs).values({
       id: `run-${Math.random().toString(36).slice(2, 10)}`,
       workspaceId,
@@ -49,21 +49,21 @@ describe("run duration baseline (kanban 15.12)", () => {
   }
 
   it("returns null when the run has no terminal timestamps", async () => {
-    const [run] = await insertRun({ statusTimestamps: { "pending-at": "2026-01-01T00:00:00Z" } });
-    const row = await db.query.runs.findFirst({ where: eq(runs.id, run.id) });
+    const inserted = await insertRun({ statusTimestamps: { "pending-at": "2026-01-01T00:00:00Z" } });
+    const row = await db.query.runs.findFirst({ where: eq(runs.id, inserted[0]!.id) });
     expect(row).toBeDefined();
     const baseline = await runDurationBaseline(row!);
     expect(baseline).toBeNull();
   });
 
   it("returns null with fewer than 3 comparable runs", async () => {
-    const [run] = await insertRun({
+    const inserted = await insertRun({
       statusTimestamps: {
         "planned-at": "2026-01-01T00:00:00Z",
         "applied-at": "2026-01-01T00:05:00Z",
       },
     });
-    const row = await db.query.runs.findFirst({ where: eq(runs.id, run.id) });
+    const row = await db.query.runs.findFirst({ where: eq(runs.id, inserted[0]!.id) });
     // No comparable history in this workspace yet.
     const baseline = await runDurationBaseline(row!);
     expect(baseline).toBeNull();
@@ -80,13 +80,13 @@ describe("run duration baseline (kanban 15.12)", () => {
       });
     }
     // This run takes 10 minutes: median 60s, so >2x.
-    const [slow] = await insertRun({
+    const slowInserted = await insertRun({
       statusTimestamps: {
         "planned-at": "2026-02-02T00:00:00Z",
         "applied-at": "2026-02-02T00:10:00Z",
       },
     });
-    const slowRow = await db.query.runs.findFirst({ where: eq(runs.id, slow.id) });
+    const slowRow = await db.query.runs.findFirst({ where: eq(runs.id, slowInserted[0]!.id) });
     const baseline = await runDurationBaseline(slowRow!);
     expect(baseline).not.toBeNull();
     expect(baseline!["median-duration-seconds"]).toBe(60);
@@ -94,13 +94,13 @@ describe("run duration baseline (kanban 15.12)", () => {
     expect(baseline!["is-slow"]).toBe(true);
 
     // A normal 60s run is not slow.
-    const [normal] = await insertRun({
+    const normalInserted = await insertRun({
       statusTimestamps: {
         "planned-at": "2026-02-03T00:00:00Z",
         "applied-at": "2026-02-03T00:01:00Z",
       },
     });
-    const normalRow = await db.query.runs.findFirst({ where: eq(runs.id, normal.id) });
+    const normalRow = await db.query.runs.findFirst({ where: eq(runs.id, normalInserted[0]!.id) });
     const normalBaseline = await runDurationBaseline(normalRow!);
     expect(normalBaseline).not.toBeNull();
     expect(normalBaseline!["is-slow"]).toBe(false);

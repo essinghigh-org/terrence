@@ -72,6 +72,9 @@ type Workspace = {
     locked?: boolean;
     "locked-reason"?: string | null;
     description?: string | null;
+    "owned-by-type"?: "team" | "user" | "service" | null;
+    "owned-by-id"?: string | null;
+    "contact-email"?: string | null;
     "execution-mode"?: string;
     "iac-binary"?: string;
     "terraform-version"?: string;
@@ -453,6 +456,23 @@ export function WorkspaceDetail({
               <Copy aria-hidden="true" />
             </Button>
           </div>
+          {(() => {
+            const ownedByType = workspace.attributes["owned-by-type"];
+            const ownedById = workspace.attributes["owned-by-id"];
+            const contactEmail = workspace.attributes["contact-email"];
+            if (ownedByType === null && ownedById === null && contactEmail === null) return null;
+            const ownerParts: string[] = [];
+            if (ownedByType !== null && ownedByType !== undefined) {
+              ownerParts.push(`${ownedByType} ${ownedById ?? ""}`.trim());
+            }
+            if (contactEmail !== null && contactEmail !== undefined) ownerParts.push(contactEmail);
+            if (ownerParts.length === 0) return null;
+            return (
+              <div className="mt-1 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Owner:</span> {ownerParts.join(" · ")}
+              </div>
+            );
+          })()}
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-3">

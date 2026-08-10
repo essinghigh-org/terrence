@@ -601,6 +601,21 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const rawAutoDestroyActivityDuration = attributes["auto-destroy-activity-duration"];
     const rawSettingOverwrites = attributes["setting-overwrites"];
     const rawVcsRepo = attributes["vcs-repo"];
+    const ownedByType = attributes["owned-by-type"];
+    const ownedById = attributes["owned-by-id"];
+    const contactEmail = attributes["contact-email"];
+    if (
+      ownedByType !== undefined && ownedByType !== null
+      && !["team", "user", "service"].includes(ownedByType as string)
+    ) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-type must be team, user, or service" }] };
+    }
+    if (ownedById !== undefined && ownedById !== null && typeof ownedById !== "string") {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-id must be a string or null" }] };
+    }
+    if (contactEmail !== undefined && contactEmail !== null && (typeof contactEmail !== "string" || contactEmail.length > 254)) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "contact-email must be a string under 255 characters" }] };
+    }
     if (name === "" || !/^[A-Za-z0-9_-]+$/.test(name)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid workspace name" }] };
     }
@@ -734,6 +749,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         : rawAutoDestroyActivityDuration,
       inheritsProjectAutoDestroy,
       settingOverwrites: workspaceSettingOverwrites,
+      ownedByType: ownedByType === undefined || ownedByType === null ? null : ownedByType as "team" | "user" | "service",
+      ownedById: ownedById === undefined || ownedById === null ? null : ownedById as string,
+      contactEmail: contactEmail === undefined || contactEmail === null ? null : contactEmail as string,
       createdAt: Date.now(),
     });
     if (tagBindings !== undefined && tagBindings.length > 0) {
@@ -1489,6 +1507,12 @@ async function updateWorkspaceResponse(
   if (rawAutoDestroyActivityDuration !== undefined && rawAutoDestroyActivityDuration !== null && !isAutoDestroyDuration(rawAutoDestroyActivityDuration)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "auto-destroy-activity-duration must be null or a duration such as 14d or 24h" }] }; }
   if (rawInheritsProjectAutoDestroy !== undefined && typeof rawInheritsProjectAutoDestroy !== "boolean") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "inherits-project-auto-destroy must be a boolean" }] }; }
   if (rawAutoDestroyActivityDuration !== undefined && rawInheritsProjectAutoDestroy === true) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "An auto-destroy override cannot also inherit from the project" }] }; }
+  const rawOwnedByType = attributes["owned-by-type"];
+  if (rawOwnedByType !== undefined && rawOwnedByType !== null && !["team", "user", "service"].includes(rawOwnedByType as string)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-type must be team, user, or service" }] }; }
+  const rawOwnedById = attributes["owned-by-id"];
+  if (rawOwnedById !== undefined && rawOwnedById !== null && typeof rawOwnedById !== "string") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "owned-by-id must be a string or null" }] }; }
+  const rawContactEmail = attributes["contact-email"];
+  if (rawContactEmail !== undefined && rawContactEmail !== null && (typeof rawContactEmail !== "string" || rawContactEmail.length > 254)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "contact-email must be a string under 255 characters" }] }; }
 
   let normalizedWorkingDirectory = workspace.workingDirectory;
   if (workingDirectory !== undefined && typeof workingDirectory === "string") {
@@ -1637,6 +1661,15 @@ async function updateWorkspaceResponse(
     sourceUrl: typeof sourceUrl === "string" ? sourceUrl : (sourceUrl === null ? null : workspace.sourceUrl),
     source: source ?? workspace.source,
     iacBinary: typeof iacBinary === "string" ? iacBinary : (iacBinary === null ? null : workspace.iacBinary),
+    ownedByType: typeof attributes["owned-by-type"] === "string"
+      ? attributes["owned-by-type"] as "team" | "user" | "service"
+      : (attributes["owned-by-type"] === null ? null : workspace.ownedByType),
+    ownedById: typeof attributes["owned-by-id"] === "string"
+      ? attributes["owned-by-id"] as string
+      : (attributes["owned-by-id"] === null ? null : workspace.ownedById),
+    contactEmail: typeof attributes["contact-email"] === "string"
+      ? attributes["contact-email"] as string
+      : (attributes["contact-email"] === null ? null : workspace.contactEmail),
   };
 
   await db.update(workspaces).set(updated).where(eq(workspaces.id, workspace.id));

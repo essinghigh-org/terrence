@@ -273,6 +273,9 @@ export async function workspaceResource(
       "created-at": new Date(workspace.createdAt).toISOString(),
       source: workspace.source ?? "tfe-api",
       "structured-run-output-enabled": true,
+      "owned-by-type": workspace.ownedByType ?? null,
+      "owned-by-id": workspace.ownedById ?? null,
+      "contact-email": workspace.contactEmail ?? null,
     },
     relationships: {
       organization: {
