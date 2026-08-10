@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
 import { DegradedBanner } from "../components/DegradedBanner";
+import { EmptyState } from "../components/EmptyState";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import {
@@ -407,27 +408,20 @@ export function RunList({
 
       <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
         {runs.length === 0 ? (
-          <div className="p-12 text-center text-gray-500">
-            <h2 className="mb-1 text-base font-medium text-gray-950">No runs yet</h2>
-            <p className={canStartRun ? "mb-4 text-sm" : "text-sm"}>
-              {canStartRun
-                ? "There is no run history for this workspace."
-                : "There is no run history for this workspace, and you do not have permission to start one."}
-            </p>
-            {canStartRun && (
-              <Button
-                className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
-                onClick={openNewRunDialog}
-              >
-                Start new run
-              </Button>
-            )}
-          </div>
+          <EmptyState
+            title="No runs yet"
+            description={canStartRun
+              ? "There is no run history for this workspace."
+              : "There is no run history for this workspace, and you do not have permission to start one."}
+            {...(canStartRun ? { actionLabel: "Start new run", onAction: openNewRunDialog } : {})}
+            docsHref="https://developer.hashicorp.com/terraform/cloud-docs/run"
+          />
         ) : filteredRuns.length === 0 ? (
-          <div className="p-10 text-center">
-            <h2 className="text-sm font-medium text-gray-950">No matching runs</h2>
-            <p className="mt-1 text-sm text-gray-500">Try a different message, status, source, or run ID.</p>
-          </div>
+          <EmptyState
+            compact
+            title="No matching runs"
+            description="Try a different message, status, source, or run ID."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[920px] border-collapse text-left text-sm">

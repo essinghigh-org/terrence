@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button, buttonVariants } from "../components/ui/button";
+import { EmptyState } from "../components/EmptyState";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
   Card,
@@ -617,16 +618,23 @@ export function WorkspaceDetail({
                   {latestRunLoading ? (
                     <p className="text-sm text-gray-500">Loading run history…</p>
                   ) : latestRun === null ? (
-                    <>
-                      <p className="font-medium text-gray-950">
-                        {latestRunError ? "Run history unavailable" : "No runs yet"}
-                      </p>
-                      <p className="mt-1 text-sm text-gray-500">
-                        {latestRunError
-                          ? "Could not refresh this workspace’s run history. It will retry automatically."
-                          : "Start a run to plan your infrastructure changes."}
-                      </p>
-                    </>
+                    <div className="py-4">
+                      {latestRunError ? (
+                        <>
+                          <p className="font-medium text-gray-950">Run history unavailable</p>
+                          <p className="mt-1 text-sm text-gray-500">
+                            Could not refresh this workspace’s run history. It will retry automatically.
+                          </p>
+                        </>
+                      ) : (
+                        <EmptyState
+                          compact
+                          title="No runs yet"
+                          description="Start a run to plan your infrastructure changes."
+                          docsHref="https://developer.hashicorp.com/terraform/cloud-docs/run"
+                        />
+                      )}
+                    </div>
                   ) : (
                     <>
                       {latestRunPath === null ? (

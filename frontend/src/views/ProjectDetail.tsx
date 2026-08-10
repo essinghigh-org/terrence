@@ -11,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/EmptyState";
 import {
   Dialog,
   DialogContent,
@@ -433,7 +434,12 @@ export function ProjectDetail({
               </CardHeader>
               <CardContent className="p-0">
                 {workspaces.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-sm text-muted-foreground">No workspaces in this project yet.</p>
+                  <EmptyState
+                    compact
+                    title="No workspaces in this project yet"
+                    description="Create a workspace in this project to manage its infrastructure."
+                    docsHref="https://developer.hashicorp.com/terraform/cloud-docs/workspaces"
+                  />
                 ) : (
                   <Table>
                     <TableHeader>
@@ -490,7 +496,12 @@ export function ProjectDetail({
             </CardHeader>
             <CardContent className="p-0">
               {workspaces.length === 0 ? (
-                <p className="px-5 py-8 text-center text-sm text-muted-foreground">No workspaces in this project yet.</p>
+                <EmptyState
+                  compact
+                  title="No workspaces in this project yet"
+                  description="Create a workspace in this project to manage its infrastructure."
+                  docsHref="https://developer.hashicorp.com/terraform/cloud-docs/workspaces"
+                />
               ) : (
                 <Table>
                   <TableHeader>

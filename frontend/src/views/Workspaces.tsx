@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
+import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -599,17 +600,17 @@ export function Workspaces(): React.JSX.Element {
               </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
-                  <p className="font-medium text-foreground">
-                    {hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
-                  </p>
-                  <p>
-                    {hasFilters
+                <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                  <EmptyState
+                    compact
+                    title={hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
+                    description={hasFilters
                       ? "Clear or adjust the filters to see more workspaces."
                       : canManageWorkspaces
                         ? "Create your first workspace to get started."
                         : "No workspaces are available in this organization."}
-                  </p>
+                    {...(!hasFilters ? { docsHref: "https://developer.hashicorp.com/terraform/cloud-docs/workspaces" } : {})}
+                  />
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.map((workspace): React.JSX.Element => (
