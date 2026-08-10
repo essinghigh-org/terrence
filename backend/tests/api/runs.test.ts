@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { workspaceVariables, workspaces, runs, stateVersions } from "../../src/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 let workspaceId = "";
 let userToken: string;
@@ -343,33 +343,33 @@ describe("Run list sorting (kanban 14.8)", () => {
     return document.data.map((run): string => run.id);
   };
 
+  const createRunFromApi = async (message: string): Promise<string> => {
+    const res = await app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`,
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { message },
+            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+          },
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { data: { id: string } }).data.id;
+  };
+
   beforeAll(async () => {
     // Isolate this workspace's list so the sort assertions are deterministic.
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
 
-    const createRun = async (message: string): Promise<string> => {
-      const res = await app.handle(
-        new Request("http://localhost/api/v2/runs", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/vnd.api+json",
-            "Authorization": `Bearer ${userToken}`,
-          },
-          body: JSON.stringify({
-            data: {
-              attributes: { message },
-              relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
-            },
-          }),
-        }),
-      );
-      expect(res.status).toBe(201);
-      return ((await res.json()) as { data: { id: string } }).data.id;
-    };
-
-    erroredId = await createRun("run-sort-errored");
-    appliedId = await createRun("run-sort-applied");
-    pendingId = await createRun("run-sort-pending");
+    erroredId = await createRunFromApi("run-sort-errored");
+    appliedId = await createRunFromApi("run-sort-applied");
+    pendingId = await createRunFromApi("run-sort-pending");
     await db.update(runs).set({ status: "errored", createdAt: base - 3000 }).where(eq(runs.id, erroredId));
     await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(eq(runs.id, appliedId));
     await db.update(runs).set({ status: "pending", createdAt: base - 1000 }).where(eq(runs.id, pendingId));
@@ -404,5 +404,17 @@ describe("Run list sorting (kanban 14.8)", () => {
   it("falls back to newest-first for unknown sort keys", async () => {
     const ids = await listRunIds("message");
     expect(ids).toEqual([pendingId, appliedId, erroredId]);
+  });
+
+  it("breaks createdAt ties deterministically by run id", async () => {
+    // Two runs sharing status and createdAt must still come back in a stable
+    // order; the tiebreaker is id descending (newest id first).
+    const twinIds = [await createRunFromApi("run-sort-twin-a"), await createRunFromApi("run-sort-twin-b")];
+    await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(inArray(runs.id, twinIds));
+    const ids = await listRunIds("status");
+    // appliedId shares the twins' status and createdAt, so all three must be
+    // ordered purely by the id-descending tiebreaker.
+    const tieExpected = [appliedId, ...twinIds].sort((a, b): number => b.localeCompare(a));
+    expect(ids).toEqual([...tieExpected, erroredId, pendingId]);
   });
 });

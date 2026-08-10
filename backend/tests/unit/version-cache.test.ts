@@ -50,6 +50,16 @@ describe("version cache persistence (kanban 6.10)", () => {
     expect(loaded.terraform?.versions).toEqual(["1.8.5"]);
   });
 
+  it("drops entries whose versions array contains non-string members", () => {
+    writeFileSync(file, JSON.stringify({
+      tofu: { versions: ["1.9.0", 42], fetchedAt: Date.now() },
+      terraform: { versions: ["1.8.5"], fetchedAt: Date.now() },
+    }));
+    const loaded = loadVersionCacheFile(file);
+    expect(loaded.tofu).toBeUndefined();
+    expect(loaded.terraform?.versions).toEqual(["1.8.5"]);
+  });
+
   it("degrades to an empty cache for unparseable content", () => {
     writeFileSync(file, "{ not json");
     expect(loadVersionCacheFile(file)).toEqual({});

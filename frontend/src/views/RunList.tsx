@@ -459,7 +459,7 @@ export function RunList({
                       type="button"
                       onClick={(): void => { toggleSort("status"); }}
                       className="inline-flex items-center gap-1 hover:text-gray-950"
-                      aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : "descending"}`}
+                      aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
                     >
                       Status
                       {sortArrows("status")}
@@ -470,7 +470,7 @@ export function RunList({
                       type="button"
                       onClick={(): void => { toggleSort("created-at"); }}
                       className="inline-flex items-center gap-1 hover:text-gray-950"
-                      aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : "descending"}`}
+                      aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
                     >
                       Created
                       {sortArrows("created-at")}

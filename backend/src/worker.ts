@@ -2350,8 +2350,8 @@ export async function pollWorkerQueue(): Promise<string[]> {
  * Worker queue poll interval. The queue loop (startWorkerQueue) claims
  * pending runs and drains assessment/auto-destroy queues on this cadence.
  * Configurable for low-power homelab installs that want a gentler query
- * load; clamped to >= 100ms so a misconfiguration cannot hot-loop the DB
- * (kanban 3.7).
+ * load; invalid, empty, or sub-100ms values fall back to 1500ms so a
+ * misconfiguration cannot hot-loop the DB (kanban 3.7).
  */
 const WORKER_POLL_INTERVAL_MS = ((): number => {
   const raw = process.env.TERRENCE_WORKER_POLL_MS;

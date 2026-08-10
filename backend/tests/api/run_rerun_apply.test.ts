@@ -79,6 +79,38 @@ describe("run detail lock fields + re-run (kanban 15.10 / 15.13)", () => {
     await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
   });
 
+  it("rejects run creation and apply while the workspace is locked", async () => {
+    await db.update(workspaces).set({ locked: true, lockedReason: "Maintenance window" }).where(eq(workspaces.id, workspaceId));
+    try {
+      const createRes = await requestWithToken("/api/v2/runs", {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            attributes: { message: "should-not-queue" },
+            relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } },
+          },
+        }),
+      });
+      expect(createRes.status).toBe(422);
+      const createBody = await createRes.json() as { errors: { detail?: string }[] };
+      expect(createBody.errors[0]?.detail).toBe("Workspace is locked: Maintenance window");
+
+      const inserted = await db.insert(runs).values({
+        id: `run-rr-lockapply-${suffix}`,
+        workspaceId,
+        status: "planned",
+        message: "rr lock apply",
+        createdAt: Date.now(),
+      }).returning();
+      const applyRes = await requestWithToken(`/api/v2/runs/${inserted[0]!.id}/actions/apply`, { method: "POST" });
+      expect(applyRes.status).toBe(422);
+      const applyBody = await applyRes.json() as { errors: { detail?: string }[] };
+      expect(applyBody.errors[0]?.detail).toBe("Workspace is locked: Maintenance window");
+    } finally {
+      await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
+    }
+  });
+
   it("queues a re-run via POST /api/v2/runs with workspace relationship", async () => {
     const res = await requestWithToken("/api/v2/runs", {
       method: "POST",

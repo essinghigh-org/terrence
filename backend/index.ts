@@ -33,13 +33,21 @@ console.log(
 import { checkpointWal } from "./src/db";
 
 function shutdown(signal: "SIGTERM" | "SIGINT"): void {
-  console.log(`[terrence] ${signal} received; checkpointing WAL before shutdown`);
+  console.log(`[terrence] ${signal} received; stopping server and checkpointing WAL before shutdown`);
+  let checkpointFailed = false;
   try {
+    // Stop accepting new connections and wait for in-flight handlers so the
+    // checkpoint below sees a quiesced database.
+    app.server?.stop(true);
     checkpointWal();
   } catch (error: unknown) {
+    checkpointFailed = true;
     console.error("[terrence] WAL checkpoint failed", error);
   }
-  process.exit(0);
+  // A failed checkpoint means the main DB file may miss recent writes; exit
+  // non-zero so supervisors (systemd restart policies, Docker HEALTHCHECK)
+  // can react instead of treating a flaky shutdown as success.
+  process.exit(checkpointFailed ? 1 : 0);
 }
 process.on("SIGTERM", (): void => shutdown("SIGTERM"));
 process.on("SIGINT", (): void => shutdown("SIGINT"));

@@ -75,11 +75,11 @@ function fileSize(): number | null {
 }
 
 function run(): void {
-    if (!checkpoint && !existsSync(dbPath)) {
+    if (!existsSync(dbPath)) {
         throw new Error(`database file does not exist: ${dbPath}`);
     }
     const engine = checkpoint
-        ? new Database(dbPath, { create: true })
+        ? new Database(dbPath)
         : new Database(dbPath, { readonly: true });
     const walMode = checkpoint ? "TRUNCATE" : "PASSIVE";
     const pragma = full ? "integrity_check" : "quick_check";
@@ -88,13 +88,18 @@ function run(): void {
         const value = "quick_check" in row ? String(row.quick_check) : "integrity_check" in row ? String(row.integrity_check) : String(Object.values(row)[0] ?? "");
         return value;
     });
-    const ok = detail.length > 0 && detail.every((value): boolean => value === "ok");
+    const baseOk = detail.length > 0 && detail.every((value): boolean => value === "ok");
+    const wal = walStats(engine, walMode);
+    // A checkpoint that could not flush everything (busy count > 0) means the
+    // DB file is not complete; report it as a failure instead of claiming OK.
+    const busy = checkpoint && typeof wal.busy === "number" ? wal.busy : 0;
+    const ok = baseOk && busy === 0;
     const result: CheckResult = {
         database: dbPath,
         mode: full ? "integrity_check" : "quick_check",
         result: ok ? "ok" : "error",
-        detail,
-        wal: walStats(engine, walMode),
+        detail: busy > 0 ? [...detail, `wal_checkpoint busy: ${busy} frames could not be flushed`] : detail,
+        wal,
         dbSizeBytes: fileSize(),
     };
     engine.close();

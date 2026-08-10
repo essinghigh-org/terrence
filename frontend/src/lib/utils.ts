@@ -71,7 +71,7 @@ export function formatRelativeTime(value: Date | string | number | null | undefi
   if (totalMinutes < 1) text = phrase(totalSeconds, "second");
   else if (totalMinutes < 60) text = phrase(totalMinutes, "minute");
   else if (totalHours < 24) text = phrase(totalHours, "hour");
-  else if (totalDays < 7) text = phrase(totalDays, "day");
+  else if (Math.abs(diffMs) < 7 * 86400000) text = phrase(totalDays, "day");
   else return formatDate(value);
   return past ? `${text} ago` : `in ${text}`;
 }

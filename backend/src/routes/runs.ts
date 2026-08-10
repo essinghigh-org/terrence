@@ -327,6 +327,10 @@ export async function createRun(
   if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
   if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  if (workspace.locked === true) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
+  }
   if (isDestroy && workspace.allowDestroyPlan === false) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
@@ -386,7 +390,8 @@ export async function createRun(
  * `?sort=-created-at`, `?sort=status`, `?sort=-status`; a `-` prefix means
  * descending. Unknown keys fall back to newest-first so the parameter stays
  * additive and never breaks existing clients. Status sorts lexicographically
- * with created-at descending as the tiebreaker.
+ * with created-at descending as the tiebreaker, and every ordering ends with
+ * the run id descending so equal timestamps still return a stable page order.
  */
 function parseRunSort(request: RequestWithUrl): ReturnType<typeof desc>[] {
   const raw = new URL(request.url).searchParams.get("sort") ?? "-created-at";
@@ -394,13 +399,24 @@ function parseRunSort(request: RequestWithUrl): ReturnType<typeof desc>[] {
   const key = descending ? raw.slice(1) : raw;
   if (key === "status") {
     return descending
-      ? [desc(runs.status), desc(runs.createdAt)]
-      : [asc(runs.status), desc(runs.createdAt)];
+      ? [desc(runs.status), desc(runs.createdAt), desc(runs.id)]
+      : [asc(runs.status), desc(runs.createdAt), desc(runs.id)];
   }
   if (key === "created-at") {
-    return [descending ? desc(runs.createdAt) : asc(runs.createdAt)];
+    return [descending ? desc(runs.createdAt) : asc(runs.createdAt), desc(runs.id)];
   }
-  return [desc(runs.createdAt)];
+  return [desc(runs.createdAt), desc(runs.id)];
+}
+
+/**
+ * Human-readable detail for the workspace-locked rejection used by run
+ * creation and apply. Mirrors the single-run detail payload's
+ * workspace-locked-reason attribute (unit tests assert both places agree).
+ */
+function lockedWorkspaceDetail(reason: string | null | undefined): string {
+  return reason !== undefined && reason !== null && reason !== ""
+    ? `Workspace is locked: ${reason}`
+    : "Workspace is locked";
 }
 
 export const runRoutes = new Elysia({ name: "runs" })
@@ -643,6 +659,10 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (authorized.workspace.locked === true) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
+    }
     const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
     let agentPoolId: string | null = null;

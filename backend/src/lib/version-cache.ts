@@ -42,6 +42,7 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
     const entry = parsed[tool];
     if (entry === undefined) continue;
     if (!Array.isArray(entry.versions)
+      || !entry.versions.every((v: unknown): boolean => typeof v === "string")
       || typeof entry.fetchedAt !== "number"
       || !Number.isFinite(entry.fetchedAt)) {
       delete parsed[tool];

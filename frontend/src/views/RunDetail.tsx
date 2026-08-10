@@ -690,6 +690,7 @@ export function RunDetail({
   useEffect((): (() => void) => {
     let stopped = false;
     let timer: number | undefined;
+    let refreshing = false;
     const controller = new AbortController();
     const runChanged = activeRunId.current !== runId;
     activeRunId.current = runId;
@@ -715,16 +716,30 @@ export function RunDetail({
     setFresh(false);
 
     const refresh = async (): Promise<void> => {
-      const status = await loadRun(controller.signal);
-      if (!stopped && !controller.signal.aborted && status !== "not_found"
-        && (status === null || !TERMINAL_STATUSES.has(status))) {
-        // Pause polling while the tab is hidden; visibilitychange resumes it.
-        if (document.hidden) return;
-        timer = window.setTimeout((): void => { void refresh(); }, 3000);
+      // Guard against overlapping loops: a visibility-triggered refresh can
+      // fire while a timer refresh is still awaiting loadRun.
+      if (stopped || controller.signal.aborted || refreshing) return;
+      refreshing = true;
+      try {
+        const status = await loadRun(controller.signal);
+        if (!stopped && !controller.signal.aborted && status !== "not_found"
+          && (status === null || !TERMINAL_STATUSES.has(status))) {
+          // Pause polling while the tab is hidden; visibilitychange resumes it.
+          if (document.hidden) return;
+          timer = window.setTimeout((): void => { void refresh(); }, 3000);
+        }
+      } finally {
+        refreshing = false;
       }
     };
     const onVisibilityChange = (): void => {
-      if (!document.hidden && !stopped) { void refresh(); }
+      if (!document.hidden && !stopped) {
+        // Drop any pending timer so a visibility resume starts exactly one
+        // fresh refresh instead of stacking on the scheduled one.
+        if (timer !== undefined) window.clearTimeout(timer);
+        timer = undefined;
+        void refresh();
+      }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     void refresh();
@@ -869,7 +884,8 @@ export function RunDetail({
     ?.workspace?.data?.id ?? "";
   const canRerun = workspaceId !== ""
     && !runInFlight
-    && attributes["is-destroy"] !== true;
+    && attributes["is-destroy"] !== true
+    && attributes["workspace-locked"] !== true;
 
   const performRerun = async (): Promise<void> => {
     if (workspaceId === "" || rerunPending) return;
