@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
+import { DegradedBanner } from "../components/DegradedBanner";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import {
@@ -397,12 +398,11 @@ export function RunList({
       </div>
 
       {error !== "" && runs.length > 0 && (
-        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <span>Run history may be out of date.</span>
-          <Button variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
-            Try again
-          </Button>
-        </div>
+        <DegradedBanner
+          title="Run history may be out of date."
+          actionLabel="Try again"
+          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
+        />
       )}
 
       <div className="overflow-hidden rounded-md border border-gray-200 bg-white">

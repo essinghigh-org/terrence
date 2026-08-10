@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
 import { Breadcrumbs } from "../components/Breadcrumbs";
+import { DegradedBanner } from "../components/DegradedBanner";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -1055,20 +1056,18 @@ export function RunDetail({
       )}
 
       {!fresh && loadError !== "" && (
-        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <span>Run data may be out of date. Actions are disabled until it refreshes.</span>
-          <Button variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
-            Try again
-          </Button>
-        </div>
+        <DegradedBanner
+          title="Run data may be out of date. Actions are disabled until it refreshes."
+          actionLabel="Try again"
+          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
+        />
       )}
       {fresh && auxiliaryError && (
-        <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <span>Some run details could not be refreshed.</span>
-          <Button variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
-            Try again
-          </Button>
-        </div>
+        <DegradedBanner
+          title="Some run details could not be refreshed."
+          actionLabel="Try again"
+          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
+        />
       )}
 
       <header className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-5 lg:flex-row lg:items-start lg:justify-between">
