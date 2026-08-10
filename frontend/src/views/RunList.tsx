@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
+  ArrowUpRight,
   CheckCircle2,
   Clock,
   Search,
@@ -32,6 +33,7 @@ type RunItem = {
     "trigger-reason"?: string;
     "branch"?: string | null;
     "commit-sha"?: string | null;
+    "commit-url"?: string | null;
     "triggered-by"?: string | null;
     "triggered-by-avatar-url"?: string | null;
     operation?: string;
@@ -423,7 +425,20 @@ export function RunList({
                               {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
                                 <>
                                   <span aria-hidden="true">|</span>
-                                  <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
+                                  {run.attributes["commit-url"] !== null && run.attributes["commit-url"] !== undefined && run.attributes["commit-url"] !== "" ? (
+                                    <a
+                                      href={run.attributes["commit-url"]}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={run.attributes["commit-sha"]}
+                                      className="inline-flex items-center gap-0.5 text-primary underline decoration-primary/40 hover:no-underline"
+                                    >
+                                      {run.attributes["commit-sha"].slice(0, 7)}
+                                      <ArrowUpRight className="size-3" aria-hidden="true" />
+                                    </a>
+                                  ) : (
+                                    <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
+                                  )}
                                 </>
                               )}
                             </>

@@ -58,6 +58,7 @@ function originForConfiguration(
     triggerReason,
     ...(typeof ingress?.branch === "string" ? { branch: ingress.branch } : {}),
     ...(typeof ingress?.commitSha === "string" ? { commitSha: ingress.commitSha } : {}),
+    ...(typeof ingress?.commitUrl === "string" ? { commitUrl: ingress.commitUrl } : {}),
     ...(typeof ingress?.senderUsername === "string" ? { triggeredBy: ingress.senderUsername } : {}),
     ...(typeof ingress?.senderAvatarUrl === "string" ? { triggeredByAvatarUrl: ingress.senderAvatarUrl } : {}),
     ...(typeof ingress?.senderProviderId === "string" ? { triggeredByProviderId: ingress.senderProviderId } : {}),
