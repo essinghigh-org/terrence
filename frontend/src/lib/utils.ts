@@ -61,17 +61,20 @@ export function formatRelativeTime(value: Date | string | number | null | undefi
   if (Number.isNaN(date.getTime())) return "—";
   const diffMs = date.getTime() - now.getTime();
   const past = diffMs < 0;
-  const totalSeconds = Math.max(1, Math.round(Math.abs(diffMs) / 1000));
+  const diffMsAbs = Math.abs(diffMs);
+  const totalSeconds = Math.max(1, Math.round(diffMsAbs / 1000));
   if (totalSeconds < 5) return "just now";
-  const totalMinutes = Math.round(totalSeconds / 60);
-  const totalHours = Math.round(totalMinutes / 60);
-  const totalDays = Math.round(totalHours / 24);
+  // Round every unit independently from the raw delta so a value like
+  // 1h 29m 30s resolves to "1 hour" instead of cascading into "2 hours".
+  const totalMinutes = Math.round(diffMsAbs / 60000);
+  const totalHours = Math.round(diffMsAbs / 3600000);
+  const totalDays = Math.round(diffMsAbs / 86400000);
   const phrase = (count: number, unit: string): string => `${count} ${unit}${count === 1 ? "" : "s"}`;
   let text: string;
   if (totalMinutes < 1) text = phrase(totalSeconds, "second");
   else if (totalMinutes < 60) text = phrase(totalMinutes, "minute");
   else if (totalHours < 24) text = phrase(totalHours, "hour");
-  else if (Math.abs(diffMs) < 7 * 86400000) text = phrase(totalDays, "day");
+  else if (diffMsAbs < 7 * 86400000) text = phrase(totalDays, "day");
   else return formatDate(value);
   return past ? `${text} ago` : `in ${text}`;
 }

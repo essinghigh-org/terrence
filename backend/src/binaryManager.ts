@@ -64,24 +64,41 @@ export function integrityFilePath(targetDir: string): string {
   return join(targetDir, ".integrity.json");
 }
 
-/** Read and validate the integrity file for an installation directory.
- * Returns `null` when the file is absent or malformed. */
-export async function readBinaryIntegrity(targetDir: string): Promise<BinaryIntegrity | null> {
+/** Result of reading an installation's integrity sidecar.
+ * - `ok`: the file parsed and its tool/version/digest fields are well-formed.
+ * - `missing`: no sidecar exists (installation predates integrity tracking).
+ * - `invalid`: the sidecar exists but is unreadable, malformed, or describes
+ *   the wrong tool/version — the installation must not be trusted.
+ */
+export type IntegrityRead =
+  | { status: "ok"; integrity: BinaryIntegrity }
+  | { status: "missing" }
+  | { status: "invalid" };
+
+/** Read and validate the integrity file for an installation directory. */
+export async function readBinaryIntegrity(targetDir: string): Promise<IntegrityRead> {
+  let raw: string;
   try {
-    const raw = await readFile(integrityFilePath(targetDir), "utf8");
-    const parsed = JSON.parse(raw) as Partial<BinaryIntegrity>;
-    if (
-      (parsed.tool === "tofu" || parsed.tool === "terraform")
-      && typeof parsed.version === "string"
-      && typeof parsed.binarySha256 === "string"
-      && /^[0-9a-f]{64}$/.test(parsed.binarySha256)
-    ) {
-      return { tool: parsed.tool, version: parsed.version, binarySha256: parsed.binarySha256 };
-    }
-  } catch {
-    // Absent or unreadable integrity file: treat as unverified.
+    raw = await readFile(integrityFilePath(targetDir), "utf8");
+  } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code) : "";
+    return { status: code === "ENOENT" ? "missing" : "invalid" };
   }
-  return null;
+  let parsed: Partial<BinaryIntegrity>;
+  try {
+    parsed = JSON.parse(raw) as Partial<BinaryIntegrity>;
+  } catch {
+    return { status: "invalid" };
+  }
+  if (
+    (parsed.tool === "tofu" || parsed.tool === "terraform")
+    && typeof parsed.version === "string"
+    && typeof parsed.binarySha256 === "string"
+    && /^[0-9a-f]{64}$/.test(parsed.binarySha256)
+  ) {
+    return { status: "ok", integrity: { tool: parsed.tool, version: parsed.version, binarySha256: parsed.binarySha256 } };
+  }
+  return { status: "invalid" };
 }
 
 /** True when the on-disk binary matches the persisted digest. */
@@ -108,9 +125,10 @@ async function writeBinaryIntegrity(targetDir: string, integrity: BinaryIntegrit
 }
 
 /** Sweep the binary cache, deleting any installation whose executable no
- * longer matches its persisted digest. Returns the removed version dirs.
- * Installations without an integrity file are left in place and logged once
- * (they predate integrity tracking). */
+ * longer matches its persisted digest, or whose integrity sidecar exists but
+ * is malformed or describes a different tool/version. Returns the removed
+ * version dirs. Installations without a sidecar are left in place and logged
+ * once (they predate integrity tracking). */
 export async function revalidateInstalledBinaries(
   baseDir: string = BINARY_BASE_DIR,
 ): Promise<string[]> {
@@ -125,14 +143,22 @@ export async function revalidateInstalledBinaries(
         const binaryPath = join(targetDir, toolDir);
         if (!(await exists(binaryPath))) continue;
         const integrity = await readBinaryIntegrity(targetDir);
-        if (integrity === null) {
+        if (integrity.status === "missing") {
           log.warn(
             `[terrence] Installed ${toolDir} v${version} has no integrity metadata; ` +
             "it will be re-verified on next use",
           );
           continue;
         }
-        if (!(await verifyBinaryIntegrity(binaryPath, integrity))) {
+        if (integrity.status === "invalid") {
+          log.warn(
+            `[terrence] Installed ${toolDir} v${version} has malformed integrity metadata; removing for re-download`,
+          );
+          await rm(targetDir, { recursive: true, force: true });
+          removed.push(`${toolDir}/${version}`);
+          continue;
+        }
+        if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
           log.warn(
             `[terrence] Installed ${toolDir} v${version} failed integrity check; removing for re-download`,
           );
@@ -473,12 +499,19 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   if (await exists(binaryPath)) {
     // Cached binary: re-validate against the persisted digest before use so a
     // tampered or partially-written executable is never trusted "because it
-    // exists" (kanban 6.5). A mismatch deletes the install and falls through
-    // to a fresh download below.
+    // exists" (kanban 6.5). A missing sidecar is a pre-integrity install:
+    // used as-is with a warning (the startup sweep keeps those too); malformed
+    // metadata or a digest mismatch deletes the install and falls through to
+    // a fresh download.
     const integrity = await readBinaryIntegrity(targetDir);
-    if (integrity === null) {
+    if (integrity.status === "missing") {
       log.warn(`[terrence] Using unverified cached ${tool} v${version} at ${binaryPath} (no integrity metadata)`);
-    } else if (!(await verifyBinaryIntegrity(binaryPath, integrity))) {
+      return { binaryPath, tool, version };
+    }
+    if (integrity.status === "invalid") {
+      log.warn(`[terrence] Cached ${tool} v${version} has malformed integrity metadata; re-downloading`);
+      await rm(targetDir, { recursive: true, force: true });
+    } else if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
       log.warn(`[terrence] Cached ${tool} v${version} failed integrity check; re-downloading`);
       await rm(targetDir, { recursive: true, force: true });
     } else {
@@ -566,19 +599,38 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
     } catch {}
 
     if (exitCode === 0 && (await exists(binaryPath))) {
-      await chmod(binaryPath, 0o755);
-      // Record the on-disk digest so future runs can re-validate the cache
-      // without re-downloading (kanban 6.5).
-      const binaryBuffer = await Bun.file(binaryPath).arrayBuffer();
-      await writeBinaryIntegrity(targetDir, {
-        tool,
-        version,
-        binarySha256: await calculateSha256(binaryBuffer),
-      });
-      log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
-      return { binaryPath, tool, version };
+      try {
+        await chmod(binaryPath, 0o755);
+        // Record the on-disk digest so future runs can re-validate the cache
+        // without re-downloading (kanban 6.5).
+        const binaryBuffer = await Bun.file(binaryPath).arrayBuffer();
+        await writeBinaryIntegrity(targetDir, {
+          tool,
+          version,
+          binarySha256: await calculateSha256(binaryBuffer),
+        });
+        log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
+        return { binaryPath, tool, version };
+      } catch (integrityErr: unknown) {
+        // Extraction succeeded but the install cannot be trusted (integrity
+        // metadata unreadable/unwritable); remove the whole directory so the
+        // next attempt starts clean and nothing half-recorded is reused.
+        try {
+          await rm(targetDir, { recursive: true, force: true });
+        } catch {
+          // Cleanup failure is secondary — install error is primary.
+        }
+        throw integrityErr;
+      }
     } else {
       console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
+      // A partial extraction is never trusted: remove whatever was unpacked
+      // so the cache cannot contain a half-written binary.
+      try {
+        await rm(targetDir, { recursive: true, force: true });
+      } catch {
+        // Cleanup failure is secondary — the unzip error is already reported.
+      }
     }
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);

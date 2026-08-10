@@ -36,11 +36,11 @@ interface CheckResult {
     mode: "quick_check" | "integrity_check";
     result: "ok" | "error";
     detail: string[];
-    wal: Readonly<{ checkpoint: "PASSIVE" | "TRUNCATE"; busy: number; log: number; checkpointed: number; walSizeBytes: number | null }>;
+    wal: Readonly<{ checkpoint: "NOOP" | "PASSIVE" | "TRUNCATE"; busy: number; log: number; checkpointed: number; walSizeBytes: number | null }>;
     dbSizeBytes: number | null;
 }
 
-function walStats(engine: Database, mode: "PASSIVE" | "TRUNCATE"): CheckResult["wal"] {
+function walStats(engine: Database, mode: "NOOP" | "PASSIVE" | "TRUNCATE"): CheckResult["wal"] {
     let busy = -1;
     let log = -1;
     let checkpointed = -1;
@@ -81,7 +81,18 @@ function run(): void {
     const engine = checkpoint
         ? new Database(dbPath)
         : new Database(dbPath, { readonly: true });
-    const walMode = checkpoint ? "TRUNCATE" : "PASSIVE";
+    // With --checkpoint the WAL is truncated immediately after opening the
+    // writable connection, BEFORE any integrity pragma, so quick_check /
+    // integrity_check run against the fully-checkpointed main DB file.
+    let checkpointBusy = 0;
+    if (checkpoint) {
+        try {
+            const row = engine.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | null;
+            checkpointBusy = row !== null && row !== undefined ? row.busy : 0;
+        } catch {
+            // Non-WAL database: nothing to checkpoint.
+        }
+    }
     const pragma = full ? "integrity_check" : "quick_check";
     const rows = engine.query(`PRAGMA ${pragma}`).all() as ({ quick_check?: string; integrity_check?: string } | Record<string, unknown>)[];
     const detail = rows.map((row): string => {
@@ -89,17 +100,19 @@ function run(): void {
         return value;
     });
     const baseOk = detail.length > 0 && detail.every((value): boolean => value === "ok");
-    const wal = walStats(engine, walMode);
+    // Statistics use the non-mutating NOOP mode so a routine (non --checkpoint)
+    // run never writes to the database, exactly as the read-only open promises.
+    const wal = walStats(engine, "NOOP");
     // A checkpoint that could not flush everything (busy count > 0) means the
     // DB file is not complete; report it as a failure instead of claiming OK.
-    const busy = checkpoint && typeof wal.busy === "number" ? wal.busy : 0;
+    const busy = checkpoint && checkpointBusy > 0 ? checkpointBusy : 0;
     const ok = baseOk && busy === 0;
     const result: CheckResult = {
         database: dbPath,
         mode: full ? "integrity_check" : "quick_check",
         result: ok ? "ok" : "error",
         detail: busy > 0 ? [...detail, `wal_checkpoint busy: ${busy} frames could not be flushed`] : detail,
-        wal,
+        wal: { ...wal, checkpoint: checkpoint ? "TRUNCATE" : "NOOP" },
         dbSizeBytes: fileSize(),
     };
     engine.close();

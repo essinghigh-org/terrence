@@ -32,13 +32,28 @@ console.log(
 // backup taken right after stop never misses -wal tail pages (kanban 4.17).
 import { checkpointWal } from "./src/db";
 
-function shutdown(signal: "SIGTERM" | "SIGINT"): void {
+async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   console.log(`[terrence] ${signal} received; stopping server and checkpointing WAL before shutdown`);
   let checkpointFailed = false;
   try {
-    // Stop accepting new connections and wait for in-flight handlers so the
-    // checkpoint below sees a quiesced database.
-    app.server?.stop(true);
+    const server = app.server;
+    if (server !== null && server !== undefined) {
+      // Stop accepting new connections and wait for in-flight handlers so the
+      // checkpoint below sees a quiesced database. Bound the wait: if the
+      // graceful stop has not completed within the deadline, force-close.
+      const graceful = server.stop(false);
+      const deadline = new Promise<"timeout">((resolve): void => {
+        setTimeout((): void => resolve("timeout"), 5000);
+      });
+      const outcome = await Promise.race([
+        graceful.then((): "drained" => "drained"),
+        deadline,
+      ]);
+      if (outcome === "timeout") {
+        console.warn("[terrence] Graceful stop timed out; forcing connection close");
+        await server.stop(true);
+      }
+    }
     checkpointWal();
   } catch (error: unknown) {
     checkpointFailed = true;
@@ -49,5 +64,5 @@ function shutdown(signal: "SIGTERM" | "SIGINT"): void {
   // can react instead of treating a flaky shutdown as success.
   process.exit(checkpointFailed ? 1 : 0);
 }
-process.on("SIGTERM", (): void => shutdown("SIGTERM"));
-process.on("SIGINT", (): void => shutdown("SIGINT"));
+process.on("SIGTERM", (): void => { void shutdown("SIGTERM"); });
+process.on("SIGINT", (): void => { void shutdown("SIGINT"); });

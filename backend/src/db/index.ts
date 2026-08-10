@@ -92,7 +92,15 @@ export const db = drizzle(client, { schema });
  * instead of a live -wal sidecar (kanban 4.17).
  */
 export function checkpointWal(): void {
-  client.run("PRAGMA wal_checkpoint(TRUNCATE)");
+  // wal_checkpoint(TRUNCATE) reports { busy, log, checkpointed }; a nonzero
+  // busy count means frames could not be flushed (a concurrent writer or a
+  // read transaction still holding the WAL), so the main DB file is not yet
+  // complete. Fail loudly instead of discarding the result (kanban 4.17).
+  interface WalCheckpointRow { busy: number; log: number; checkpointed: number; }
+  const row = client.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as WalCheckpointRow | null | undefined;
+  if (row !== null && row !== undefined && row.busy > 0) {
+    throw new Error(`WAL checkpoint left ${row.busy} frame(s) busy; main DB file may be incomplete`);
+  }
 }
 
 /**

@@ -528,6 +528,7 @@ export function RunDetail({
   // whichever control opened it so focus can return there after close.
   const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
   const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
@@ -583,6 +584,34 @@ export function RunDetail({
       if (event.key === "Escape") {
         event.preventDefault();
         setFullscreenLog(null);
+        return;
+      }
+      // Trap Tab/Shift+Tab inside the dialog so keyboard focus can never
+      // escape into the page behind the overlay.
+      if (event.key === "Tab") {
+        const container = fullscreenContainerRef.current;
+        if (container === null) return;
+        const focusable = Array.from(
+          container.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+          ),
+        );
+        if (focusable.length === 0) {
+          event.preventDefault();
+          return;
+        }
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
+        const active = document.activeElement;
+        if (event.shiftKey) {
+          if (active === null || active === first || !container.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === null || active === last || !container.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -750,7 +779,14 @@ export function RunDetail({
       }
     };
     const onVisibilityChange = (): void => {
-      if (!document.hidden && !stopped) {
+      if (document.hidden) {
+        // Tab hidden mid-poll: drop any pending timer so a scheduled refresh
+        // can never fire (and fetch) while the page is invisible.
+        if (timer !== undefined) window.clearTimeout(timer);
+        timer = undefined;
+        return;
+      }
+      if (!stopped) {
         // Drop any pending timer so a visibility resume starts exactly one
         // fresh refresh instead of stacking on the scheduled one.
         if (timer !== undefined) window.clearTimeout(timer);
@@ -1821,6 +1857,7 @@ export function RunDetail({
 
       {fullscreenLog !== null && (
         <div
+          ref={fullscreenContainerRef}
           role="dialog"
           aria-modal="true"
           aria-label={fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}

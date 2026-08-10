@@ -13,6 +13,7 @@ describe("run detail lock fields + re-run (kanban 15.10 / 15.13)", () => {
   const orgId = `org-rr-${suffix}`;
   const workspaceId = `ws-rr-${suffix}`;
   const token = `rr-token-${suffix}`;
+  const tokenId = crypto.randomUUID();
 
   const requestWithToken = (path: string, init: RequestInit = {}): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -29,7 +30,7 @@ describe("run detail lock fields + re-run (kanban 15.10 / 15.13)", () => {
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId: adminId },
+      { id: tokenId, token: createHash("sha256").update(token).digest("hex"), userId: adminId },
     ]);
     await db.insert(organizations).values([
       { id: orgId, name: `rr-org-${suffix}`, email: "ops@example.com" },
@@ -40,11 +41,13 @@ describe("run detail lock fields + re-run (kanban 15.10 / 15.13)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(runs);
-    await db.delete(workspaces);
-    await db.delete(organizations);
-    await db.delete(apiTokens);
-    await db.delete(users);
+    // Scoped teardown: only records owned by this suite's fixture, so a
+    // parallel suite's rows can never be clobbered by this cleanup.
+    await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(organizations).where(eq(organizations.id, orgId));
+    await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+    await db.delete(users).where(eq(users.id, adminId));
   });
 
   it("surfaces workspace-locked fields on run detail", async () => {

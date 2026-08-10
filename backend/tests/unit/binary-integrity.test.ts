@@ -36,7 +36,7 @@ test("unexpectedZipMembers accepts only the expected binary (kanban 6.7)", (): v
   expect(unexpectedZipMembers(["tofu\\..\\evil"], "tofu")).toEqual(["tofu\\..\\evil"]);
 });
 
-test("readBinaryIntegrity parses a valid file and rejects malformed ones (kanban 6.5)", async (): Promise<void> => {
+test("readBinaryIntegrity distinguishes ok/missing/invalid sidecars (kanban 6.5)", async (): Promise<void> => {
   const dir = await tempDir();
 
   await writeFile(
@@ -45,21 +45,25 @@ test("readBinaryIntegrity parses a valid file and rejects malformed ones (kanban
     "utf8",
   );
   const valid = await readBinaryIntegrity(dir);
-  expect(valid).not.toBeNull();
-  expect(valid?.binarySha256).toBe("a".repeat(64));
+  expect(valid.status).toBe("ok");
+  if (valid.status === "ok") {
+    expect(valid.integrity.tool).toBe("tofu");
+    expect(valid.integrity.version).toBe("1.9.3");
+    expect(valid.integrity.binarySha256).toBe("a".repeat(64));
+  }
 
   await writeFile(integrityFilePath(dir), "{not json", "utf8");
-  expect(await readBinaryIntegrity(dir)).toBeNull();
+  expect((await readBinaryIntegrity(dir)).status).toBe("invalid");
 
   await writeFile(
     integrityFilePath(dir),
     JSON.stringify({ tool: "tofu", version: "1.9.3", binarySha256: "not-a-hex-digest" }),
     "utf8",
   );
-  expect(await readBinaryIntegrity(dir)).toBeNull();
+  expect((await readBinaryIntegrity(dir)).status).toBe("invalid");
 
   await rm(integrityFilePath(dir), { force: true });
-  expect(await readBinaryIntegrity(dir)).toBeNull();
+  expect((await readBinaryIntegrity(dir)).status).toBe("missing");
 });
 
 test("verifyBinaryIntegrity compares the on-disk file digest (kanban 6.5)", async (): Promise<void> => {

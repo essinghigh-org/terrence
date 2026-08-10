@@ -177,13 +177,13 @@ export function RunList({
   const [runReplace, setRunReplace] = useState("");
   const [creating, setCreating] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const [sort, setSort] = useState<"created-at" | "-created-at" | "status" | "-status">("-created-at");
+  const [sort, setSort] = useState<"" | "created-at" | "-created-at" | "status" | "-status">("");
 
   const loadRuns = useCallback(async (signal: AbortSignal): Promise<void> => {
     try {
       const endpoint = `/api/v2/workspaces/${workspaceId}/runs`;
       const firstUrl = new URL(endpoint, "http://terrence.local");
-      firstUrl.searchParams.set("sort", sort);
+      if (sort !== "") firstUrl.searchParams.set("sort", sort);
       const response = await fetchApi(`${firstUrl.pathname}${firstUrl.search}`, signal === undefined ? {} : { signal }) as {
         data?: RunItem[];
         included?: IncludedUser[];
@@ -273,14 +273,16 @@ export function RunList({
 
   /**
    * Cycle a sortable column: first click sorts descending (newest/highest
-   * first, matching the default created-at order), second click ascending.
-   * Switching columns resets to that column's descending order. Sort is
-   * applied server-side via the TFE-compatible ?sort= parameter.
+   * first, matching the default created-at order), second click ascending,
+   * third click returns to the unset default (server order). Switching
+   * columns resets to that column's descending order. Sort is applied
+   * server-side via the TFE-compatible ?sort= parameter; an unset sort sends
+   * no parameter at all.
    */
   const toggleSort = (column: "created-at" | "status"): void => {
     setSort((current) => {
-      if (current === column) return `-${column}` as const;
       if (current === `-${column}`) return column;
+      if (current === column) return "";
       return `-${column}` as const;
     });
   };

@@ -373,7 +373,22 @@ export async function createRun(
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : "Triggered via UI";
   const origin = originForConfiguration(configurationVersion);
-  await db.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+  // The lock was validated above, but that check and the insert below are
+  // separate statements; re-validate inside the insert transaction so a
+  // concurrent workspace lock can never slip a queued run past the 422.
+  const lockConflict = await db.transaction(async (tx): Promise<{ lockedReason: string | null } | null> => {
+    const fresh = await tx.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { locked: true, lockedReason: true },
+    });
+    if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
+    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    return null;
+  });
+  if (lockConflict !== null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
+  }
   await auditLog("create", "runs", id, user?.id ?? null, workspace.orgId, {
     workspaceId,
     status: "pending",
@@ -534,10 +549,15 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline);
     const detailAttributes = data.attributes as Record<string, unknown>;
+    const lockedReason = authorized.workspace.lockedReason;
     detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
-    detailAttributes["workspace-locked-reason"] = authorized.workspace.locked === true
-      ? (authorized.workspace.lockedReason ?? "Locked manually")
-      : null;
+    // Mirror lockedWorkspaceDetail: an absent or empty reason reads as
+    // manually locked rather than leaking a bare empty string.
+    detailAttributes["workspace-locked-reason"] = authorized.workspace.locked !== true
+      ? null
+      : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
+        ? lockedReason
+        : "Locked manually";
     const included = await includedUsersForRuns([authorized.run]);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })

@@ -3,6 +3,7 @@ import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens } from "../../src/db/schema";
+import { inArray } from "drizzle-orm";
 
 describe("admin database metrics (kanban 4.18)", () => {
   const suffix = Date.now().toString(36);
@@ -10,6 +11,8 @@ describe("admin database metrics (kanban 4.18)", () => {
   const userId = `dbm-user-${suffix}`;
   const adminToken = `dbm-admin-token-${suffix}`;
   const userToken = `dbm-user-token-${suffix}`;
+  const adminTokenId = crypto.randomUUID();
+  const userTokenId = crypto.randomUUID();
 
   const request = (token: string): Promise<Response> =>
     app.handle(new Request("http://terrence.test/api/v2/admin/database-metrics", {
@@ -24,14 +27,15 @@ describe("admin database metrics (kanban 4.18)", () => {
       { id: userId, username: userId, passwordHash: "unused", isSiteAdmin: false },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: createHash("sha256").update(adminToken).digest("hex"), userId: adminId },
-      { id: crypto.randomUUID(), token: createHash("sha256").update(userToken).digest("hex"), userId },
+      { id: adminTokenId, token: createHash("sha256").update(adminToken).digest("hex"), userId: adminId },
+      { id: userTokenId, token: createHash("sha256").update(userToken).digest("hex"), userId },
     ]);
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens);
-    await db.delete(users);
+    // Scoped teardown: only this suite's tokens/users, never shared tables.
+    await db.delete(apiTokens).where(inArray(apiTokens.id, [adminTokenId, userTokenId]));
+    await db.delete(users).where(inArray(users.id, [adminId, userId]));
   });
 
   it("serves database size metrics to site admins", async () => {

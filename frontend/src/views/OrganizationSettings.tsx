@@ -747,7 +747,7 @@ export function OrganizationSettings(): React.JSX.Element {
                   <Button
                     variant="outline"
                     disabled={!canDestroyOrganization}
-                    onClick={deleteOrg}
+                    onClick={(): void => setConfirmDeleteOrgOpen(true)}
                     className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 h-9"
                   >
                     <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
