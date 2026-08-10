@@ -15,6 +15,13 @@ services:
       - DATABASE_URL=file:/app/backend/storage/terrence.db
       - NODE_ENV=production
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+    # Sane resource limits for a self-hosted instance. Terraform plans and
+    # applies can be memory-hungry, so size mem_limit for your largest
+    # expected configuration and leave headroom for the worker. cpus is a
+    # relative share of the host's cores (Compose v2; omit or raise both for
+    # large configurations).
+    mem_limit: 4g
+    cpus: "2.0"
     # No healthcheck override: the image's own Bun-based HEALTHCHECK (Dockerfile)
     # is authoritative. This image ships no curl binary.
 

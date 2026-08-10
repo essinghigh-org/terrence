@@ -105,7 +105,27 @@ docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 - **Team Management**: RBAC via teams with org, project, and workspace permissions
 - **SSH Keys**: Upload and assign SSH keys to workspaces
 - **Notification Configurations**: Webhook, email, and Slack notifications
-- **Policy Sets**: OPA/Rego policy enforcement per workspace
+- **Policy Sets**: Sentinel and OPA/Rego policy enforcement per workspace
+
+Terrence evaluates policies at run time after plan generation. Each policy set
+kind uses its own execution tool, so the supported capability differs by kind:
+
+- **Sentinel** (the TFE-compatible default kind): evaluated with the
+  `sentinel apply` CLI against the generated plan JSON, which is exposed as
+  the `tfplan` global. Policy-set parameters are passed as `-param` entries
+  and evaluation is bounded by a 30 second timeout. Set
+  `SENTINEL_BINARY_PATH` to pin a specific binary. VCS-synced sets must carry
+  a `sentinel.hcl` manifest and at least one `.sentinel` file.
+- **OPA/Rego**: evaluated with the `opa eval` CLI, which receives the
+  generated plan JSON as `--input`. A policy whose evaluated result contains
+  a non-empty `violations` array marks the check as failed. VCS-synced sets
+  must contain at least one `.rego` file.
+
+Both CLIs must be installed on the worker host (`opa` and `sentinel` on
+`PATH`). A check whose evaluation tool is missing or errors is recorded as
+`errored` rather than silently passing. Each policy's enforcement level
+(`hard-mandatory`, `soft-mandatory`, or `advisory`) decides whether a failed
+check blocks the run.
 - **Run Triggers**: Cross-workspace dependency triggers
 - **Cost Estimation**: Infracost integration for plan cost estimates
 - **Admin Dashboard**: User, org, workspace, and run management

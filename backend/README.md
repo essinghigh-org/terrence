@@ -16,6 +16,14 @@ Set `ENCRYPTION_PASSWORD` to a stable deployment secret to protect stored SSH
 private keys. When it is omitted, Terrence creates a local key with owner-only
 permissions at `STORAGE_DIR/.encryption-key`.
 
+**Scope of at-rest protection:** the key encrypts SSH private keys at rest, so
+a database-only leak (for example a copied `terrence.db`) does not expose the
+keys. Because the key file sits beside the database on the same volume, it
+does not protect against full-volume theft: an attacker who copies the whole
+`STORAGE_DIR` volume also copies the key. To defend against volume theft,
+supply `ENCRYPTION_PASSWORD` from a managed secret store or separate volume
+instead of relying on the auto-generated key.
+
 ## Initial administrator
 
 On a fresh database, set `ADMIN_PASSWORD` to create a local site administrator
