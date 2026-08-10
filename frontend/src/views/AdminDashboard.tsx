@@ -291,7 +291,7 @@ function SecurityOverview(props: Readonly<{
 function UsersAdmin(props: Readonly<{
   users: DataItem[];
   setCreateDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setDeleteUserId: React.Dispatch<React.SetStateAction<string | null>>;
+  setDeleteUserId: React.Dispatch<React.SetStateAction<{ id: string; label: string } | null>>;
   loadAdminData: () => Promise<void>;
 }>): React.JSX.Element {
   const { users, setCreateDialogOpen, setDeleteUserId, loadAdminData } = props;
@@ -410,7 +410,7 @@ function UsersAdmin(props: Readonly<{
                                   variant="destructive"
                                   className="h-7 text-xs"
                                   aria-label="Delete user"
-                                  onClick={(): void => { setDeleteUserId(u.id); }}
+                                  onClick={(): void => { setDeleteUserId({ id: u.id, label: u.attributes.username ?? u.id }); }}
                                 >
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
@@ -599,7 +599,7 @@ function VersionsAdmin(props: Readonly<{
   newSha: string;
   setNewSha: React.Dispatch<React.SetStateAction<string>>;
   tfVersions: DataItem[];
-  setVersionToDelete: React.Dispatch<React.SetStateAction<string | null>>;
+  setVersionToDelete: React.Dispatch<React.SetStateAction<{ id: string; label: string } | null>>;
 }>): React.JSX.Element {
   const { handleAddVersion, newVersion, setNewVersion, newUrl, setNewUrl, newSha, setNewSha, tfVersions, setVersionToDelete } = props;
   return (
@@ -677,7 +677,7 @@ function VersionsAdmin(props: Readonly<{
                                 variant="ghost"
                                 className="text-red-600 hover:text-red-700"
                                 aria-label="Delete version"
-                                onClick={(): void => { setVersionToDelete(v.id); }}
+                                onClick={(): void => { setVersionToDelete({ id: v.id, label: v.attributes.version ?? v.id }); }}
                               >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -1482,7 +1482,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+  const [deleteUserId, setDeleteUserId] = useState<{ id: string; label: string } | null>(null);
 
   // Auth config state
   const [samlEnabled, setSamlEnabled] = useState(false);
@@ -1720,7 +1720,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     }
   };
 
-  const [versionToDelete, setVersionToDelete] = useState<string | null>(null);
+  const [versionToDelete, setVersionToDelete] = useState<{ id: string; label: string } | null>(null);
 
   const handleDeleteVersion = async (id: string): Promise<void> => {
     try {
@@ -2248,12 +2248,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         open={versionToDelete !== null}
         onOpenChange={(open): void => { if (!open) setVersionToDelete(null); }}
         title="Delete Terraform Version"
-        description="Are you sure you want to delete this registered Terraform binary version?"
+        description={`Permanently delete version "${versionToDelete?.label ?? ""}" from the registered binaries? This cannot be undone; runs pinned to it will fail until a replacement version is registered.`}
         confirmText="Delete Version"
         confirmVariant="destructive"
         onConfirm={async (): Promise<void> => {
           if (versionToDelete !== null) {
-            await handleDeleteVersion(versionToDelete);
+            await handleDeleteVersion(versionToDelete.id);
           }
         }}
       />
@@ -2323,12 +2323,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         open={deleteUserId !== null}
         onOpenChange={(open): void => { if (!open) setDeleteUserId(null); }}
         title="Delete User"
-        description="Are you sure you want to permanently delete this user? This action cannot be undone. All associated data will be removed."
+        description={`Permanently delete user "${deleteUserId?.label ?? ""}"? This action cannot be undone. All associated data will be removed.`}
         confirmText="Delete User"
         confirmVariant="destructive"
         onConfirm={async (): Promise<void> => {
           if (deleteUserId !== null) {
-            await handleDeleteUser(deleteUserId);
+            await handleDeleteUser(deleteUserId.id);
           }
         }}
       />
