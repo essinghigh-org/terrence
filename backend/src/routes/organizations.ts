@@ -6,6 +6,7 @@ import { organizationResource, organizationName } from "../lib/response";
 import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermissionsMany, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
 import { currentTokenScopes } from "../lib/request-scope";
 import { isUniqueConstraintError } from "../lib/validation";
+import { invalidateOrganizationName } from "../lib/metadata-cache";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -560,6 +561,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         aggregatedCommitStatusEnabled: updated.aggregatedCommitStatusEnabled,
         sendPassingStatusesForUntriggeredSpeculativePlans: updated.sendPassingStatusesForUntriggeredSpeculativePlans,
       }).where(eq(organizations.id, org.id));
+      // The cached org name would otherwise stay stale for the TTL window.
+      invalidateOrganizationName(org.id);
       return { data: await organizationResourceForPrincipal(updated, user?.id, orgId, teamId) };
     } catch (e: unknown) {
       if (isUniqueConstraintError(e)) {
@@ -602,6 +605,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       await t.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
       await t.delete(organizations).where(eq(organizations.id, org.id));
     });
+    invalidateOrganizationName(org.id);
     (set as { status: number }).status = 204;
     return {};
   })

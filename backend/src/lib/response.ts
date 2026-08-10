@@ -11,6 +11,7 @@ import { organizations, workspaceTags, variableSetWorkspaces,
 import { eq, asc } from "drizzle-orm";
 import { apiURL, signedApiURL , type DeepReadonly } from "./utils";
 import { parseStatePayload } from "./validation";
+import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 
 
 type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null }>;
@@ -20,11 +21,15 @@ type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 // so every "organizations" resource reference carries the name in `id`. go-tfe decodes
 // `Organization.Name` from the JSON:API primary (`data.id`) field.
 export async function organizationName(orgId: string): Promise<string | null> {
+  const cached = cachedOrganizationName(orgId);
+  if (cached !== undefined) return cached;
   const org = await db.query.organizations.findFirst({
     where: eq(organizations.id, orgId),
     columns: { name: true },
   });
-  return org?.name ?? null;
+  const name = org?.name ?? null;
+  cacheOrganizationName(orgId, name);
+  return name;
 }
 
 // Keep the precise nested response type available to callers and contract tests.
