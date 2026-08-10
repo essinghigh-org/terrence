@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   Clock,
+  Copy,
   Search,
   XCircle,
 } from "lucide-react";
@@ -41,6 +42,8 @@ type RunItem = {
     "plan-only"?: boolean;
     "refresh-only"?: boolean;
     "allow-empty-apply"?: boolean;
+    "target-addrs"?: string[] | null;
+    "replace-addrs"?: string[] | null;
   };
   relationships?: {
     "created-by"?: {
@@ -118,6 +121,19 @@ function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
 }
 
+/**
+ * Split a comma/space-separated address input into individual resource
+ * addresses (e.g. "aws_instance.web, aws_instance.db"). Empty segments are
+ * dropped, matching the backend's RUN_ADDRESS_PATTERN expectations.
+ */
+function parseAddressList(value: string): string[] | null {
+  const parts = value
+    .split(/[\s,]+/)
+    .map((part: string): string => part.trim())
+    .filter((part: string): boolean => part !== "");
+  return parts.length > 0 ? [...new Set(parts)] : null;
+}
+
 function formatDate(value: string | undefined): string {
   if (value === undefined || value === "") return "—";
   const date = new Date(value);
@@ -158,6 +174,9 @@ export function RunList({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [runMessage, setRunMessage] = useState("");
   const [runType, setRunType] = useState<RunType>("standard");
+  const [runDestroy, setRunDestroy] = useState(false);
+  const [runTargets, setRunTargets] = useState("");
+  const [runReplace, setRunReplace] = useState("");
   const [creating, setCreating] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
@@ -230,8 +249,25 @@ export function RunList({
   }, [loadRuns, refreshVersion]);
 
   useEffect((): void => {
-    if (canStartRun && searchParams.get("new-run") === "true") setDialogOpen(true);
+    if (canStartRun && searchParams.get("new-run") === "true") {
+      openNewRunDialog();
+    }
   }, [canStartRun, searchParams]);
+
+  /**
+   * Open the dialog with a clean slate (used by "Start new run" and the
+   * new-run=true URL hook). Cloning from an existing run uses
+   * cloneRunSettings instead, which leaves the previous clone's edits intact
+   * only when the dialog stays open.
+   */
+  const openNewRunDialog = (): void => {
+    setRunMessage("");
+    setRunType("standard");
+    setRunDestroy(false);
+    setRunTargets("");
+    setRunReplace("");
+    setDialogOpen(true);
+  };
 
   const filteredRuns = useMemo((): RunItem[] => {
     const query = filter.trim().toLocaleLowerCase();
@@ -266,6 +302,9 @@ export function RunList({
               "refresh-only": runType === "refresh",
               "allow-empty-apply": runType === "empty",
               "auto-apply": runType === "plan" ? false : undefined,
+              "is-destroy": runDestroy,
+              "target-addrs": parseAddressList(runTargets),
+              "replace-addrs": parseAddressList(runReplace),
             },
             relationships: {
               workspace: { data: { type: "workspaces", id: workspaceId } },
@@ -276,6 +315,9 @@ export function RunList({
       handleDialogOpenChange(false);
       setRunMessage("");
       setRunType("standard");
+      setRunDestroy(false);
+      setRunTargets("");
+      setRunReplace("");
       toast.add({ title: "Run started", type: "success" });
       setRefreshVersion((value: number): number => value + 1);
       if (typeof response.data?.id === "string" && response.data.id !== "") {
@@ -292,6 +334,26 @@ export function RunList({
       setCreating(false);
     }
   }
+
+  /**
+   * Prefill the new-run dialog from an existing run's settings so a recurring
+   * operation (same targets, replace addresses, refresh/destroy mode) can be
+   * repeated without retyping them.
+   */
+  const cloneRunSettings = (run: RunItem): void => {
+    setRunMessage(run.attributes.message ?? "");
+    setRunType(run.attributes["plan-only"] === true
+      ? "plan"
+      : run.attributes["refresh-only"] === true
+        ? "refresh"
+        : run.attributes["allow-empty-apply"] === true
+          ? "empty"
+          : "standard");
+    setRunDestroy(run.attributes["is-destroy"] === true);
+    setRunTargets((run.attributes["target-addrs"] ?? []).join(", "));
+    setRunReplace((run.attributes["replace-addrs"] ?? []).join(", "));
+    setDialogOpen(true);
+  };
 
   const handleDialogOpenChange = (open: boolean): void => {
     setDialogOpen(open);
@@ -333,7 +395,7 @@ export function RunList({
         {canStartRun && (
           <Button
             className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
-            onClick={(): void => { setDialogOpen(true); }}
+            onClick={openNewRunDialog}
           >
             Start new run
           </Button>
@@ -361,7 +423,7 @@ export function RunList({
             {canStartRun && (
               <Button
                 className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
-                onClick={(): void => { setDialogOpen(true); }}
+                onClick={openNewRunDialog}
               >
                 Start new run
               </Button>
@@ -379,7 +441,8 @@ export function RunList({
                 <tr className="border-b border-gray-200 bg-background text-xs font-semibold tracking-wide text-gray-800">
                   <th className="border-r border-gray-200 px-4 py-3">Run</th>
                   <th className="border-r border-gray-200 px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Created</th>
+                  <th className="border-r border-gray-200 px-4 py-3">Created</th>
+                  {canStartRun && <th className="px-4 py-3">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -452,9 +515,24 @@ export function RunList({
                         {statusLabel(run.attributes.status)}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-[13px] text-gray-500">
+                    <td className="border-r border-gray-200 px-4 py-3 text-[13px] text-gray-500">
                       <time dateTime={run.attributes["created-at"]}>{formatDate(run.attributes["created-at"])}</time>
                     </td>
+                    {canStartRun && (
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs text-gray-500 hover:text-gray-900"
+                          onClick={(): void => { cloneRunSettings(run); }}
+                          title="Start a new run with this run's settings (type, destroy, targets, replace addresses)"
+                        >
+                          <Copy className="size-3.5" aria-hidden="true" />
+                          Clone
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -514,6 +592,45 @@ export function RunList({
                   </label>
                 ))}
               </fieldset>
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 p-3 transition-colors hover:border-gray-300 hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={runDestroy}
+                  onChange={(event): void => { setRunDestroy(event.target.checked); }}
+                  disabled={!canStartRun}
+                  aria-label="Destroy infrastructure"
+                  className="mt-0.5 size-4 accent-blue-600"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-gray-950">Destroy infrastructure</span>
+                  <span className="mt-0.5 block text-xs text-gray-500">
+                    Plan a destroy of all managed resources and apply it. Target and replace addresses still apply.
+                    {runDestroy && runType === "plan" && (
+                      <span className="mt-0.5 block text-amber-700">A speculative plan-only destroy will not apply changes.</span>
+                    )}
+                  </span>
+                </span>
+              </label>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="run-targets" className="text-sm font-medium">Target addresses</label>
+                <Input
+                  id="run-targets"
+                  placeholder="aws_instance.web, aws_instance.db"
+                  value={runTargets}
+                  onChange={(event): void => { setRunTargets(event.target.value); }}
+                />
+                <p className="text-xs text-gray-500">Comma-separated resource addresses to limit this run to.</p>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="run-replace" className="text-sm font-medium">Replace addresses</label>
+                <Input
+                  id="run-replace"
+                  placeholder="aws_instance.web"
+                  value={runReplace}
+                  onChange={(event): void => { setRunReplace(event.target.value); }}
+                />
+                <p className="text-xs text-gray-500">Comma-separated resource addresses to force replacement of.</p>
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={(): void => { handleDialogOpenChange(false); }}>Cancel</Button>

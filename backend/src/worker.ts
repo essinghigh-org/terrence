@@ -819,10 +819,11 @@ const RUN_TASK_POLL_INTERVAL_MS = 100;
 
 /**
  * Poll the run-task table until the caller (or a callback mechanism) records a
- * settled status. This worker has no pub/sub or Redis dependency, so a bounded,
- * fixed-interval poll is the only signal source for an external task CLI that
- * does not write back via the REST callback. The loop is strictly bounded by
- * `timeoutMs`, and the interval is kept constant to avoid hot-looping the DB.
+ * settled status. This worker has no pub/sub or Redis dependency, so a bounded
+ * poll is the only signal source for an external task CLI that does not write
+ * back via the REST callback. The loop is strictly bounded by `timeoutMs`, and
+ * the poll interval starts at 100ms and backs off exponentially up to 5s so a
+ * long-running task stops hammering the DB.
  */
 async function waitForTaskSettlement(
   resultId: string,

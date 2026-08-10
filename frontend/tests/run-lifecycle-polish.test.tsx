@@ -326,6 +326,86 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
   });
 });
 
+test("clones an existing run's settings into the new-run dialog", async () => {
+  let createBody: unknown;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/workspaces/ws-1/runs") {
+      return json({
+        data: [
+          {
+            id: "run-targeted",
+            type: "runs",
+            attributes: {
+              message: "Targeted DB migration",
+              status: "applied",
+              "plan-only": true,
+              "is-destroy": true,
+              "target-addrs": ["aws_instance.db"],
+              "replace-addrs": ["aws_instance.web", "aws_instance.api"],
+            },
+          },
+        ],
+      });
+    }
+    if (url === "/api/v2/runs" && init?.method === "POST") {
+      if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+      createBody = JSON.parse(init.body) as unknown;
+      return json({ data: { id: "run-cloned" } }, 201);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/runs"
+          element={<RunList workspaceId="ws-1" orgName="acme" workspaceName="production" canStartRun />}
+        />
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
+          element={<p>Cloned run detail</p>}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: /Clone/ })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: /Clone/ }));
+
+  await waitFor((): void => {
+    expect(view.getByRole("dialog")).toBeTruthy();
+  });
+  // The cloned run's message, plan-only radio, destroy checkbox and address
+  // fields are prefilled from the source run.
+  expect((view.getByLabelText("Run name") as HTMLInputElement).value).toBe("Targeted DB migration");
+  expect((view.getByRole("radio", { name: "Plan only" }) as HTMLInputElement).checked).toBe(true);
+  expect((view.getByRole("checkbox", { name: "Destroy infrastructure" }) as HTMLInputElement).checked).toBe(true);
+  expect((view.getByLabelText("Target addresses") as HTMLInputElement).value).toBe("aws_instance.db");
+  expect((view.getByLabelText("Replace addresses") as HTMLInputElement).value)
+    .toBe("aws_instance.web, aws_instance.api");
+
+  fireEvent.click(view.getByRole("button", { name: "Start run" }));
+  await waitFor((): void => {
+    expect(view.getByText("Cloned run detail")).toBeTruthy();
+  });
+  expect(createBody).toMatchObject({
+    data: {
+      attributes: {
+        message: "Targeted DB migration",
+        "plan-only": true,
+        "is-destroy": true,
+        "target-addrs": ["aws_instance.db"],
+        "replace-addrs": ["aws_instance.web", "aws_instance.api"],
+      },
+    },
+  });
+});
+
 test("closing a deep-linked new-run dialog clears the query", async () => {
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs") return json({ data: [] });
