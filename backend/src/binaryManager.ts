@@ -2,6 +2,7 @@ import { isAbsolute, join, relative, resolve, sep } from "path";
 import { mkdir, exists, chmod, unlink, readdir, rm } from "fs/promises";
 import { spawn } from "bun";
 import { log } from "./lib/log";
+import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
 
 const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
 // TERRENCE_BINARY_CACHE_DIR lets tests share one disk-backed binary cache
@@ -141,13 +142,24 @@ async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string>
   }
 }
 
-// Short-lived cache for available versions
+// Available-versions cache. Persistent across restarts (kanban 6.10): the
+// tofu path paginates the full GitHub release history (up to 100 requests),
+// so a fresh fetch is deliberately reused for a long TTL. The cache file
+// lives in the storage dir and is seeded into memory at startup.
 const versionCache = new Map<string, { versions: string[]; fetchedAt: number }>();
-const VERSION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const VERSION_CACHE_FILE = join(STORAGE_DIR, "version-cache.json");
+function resolveVersionCacheTtl(): number {
+  const configured = Number(process.env.TERRENCE_VERSION_CACHE_TTL_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 24 * 60 * 60 * 1000;
+}
+const VERSION_CACHE_TTL_MS = resolveVersionCacheTtl();
+for (const [tool, entry] of Object.entries(loadVersionCacheFile(VERSION_CACHE_FILE))) {
+  if (tool === "tofu" || tool === "terraform") versionCache.set(tool, entry);
+}
 
 async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
   const cached = versionCache.get(tool);
-  if (cached !== undefined && Date.now() - cached.fetchedAt < VERSION_CACHE_TTL_MS) {
+  if (cached !== undefined && isVersionCacheFresh(cached, VERSION_CACHE_TTL_MS)) {
     return cached.versions;
   }
 
@@ -188,6 +200,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
     }
     versions.sort(compareSemver);
     versionCache.set(tool, { versions, fetchedAt: Date.now() });
+    saveVersionCacheFile(VERSION_CACHE_FILE, tool, { versions, fetchedAt: Date.now() });
     return versions;
   } catch {
     if (cached !== undefined) return cached.versions;

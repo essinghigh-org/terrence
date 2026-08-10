@@ -75,6 +75,7 @@ Terrence runs with no environment variables in development. All supported variab
 | `TERRENCE_ENABLE_LOCAL_SIGNUP` | — | When `true`, enable account registration via `POST /api/v2/users`. Default off; only `ADMIN_PASSWORD` bootstrap creates the first admin. |
 | `TERRENCE_DISABLE_WORKER` | — | When `1`, run UI/API without the worker (drain mode). Pending runs stay queued until the flag is removed and the service restarted. |
 | `TERRENCE_WORKER_POLL_MS` | `1500` | Worker queue poll interval in ms (clamped to >= 100). Lower is snappier but queries the DB more often; raise on low-power homelab boxes. |
+| `TERRENCE_VERSION_CACHE_TTL_MS` | `86400000` | How long fetched tofu/terraform version lists are reused (ms). The tofu path paginates the full GitHub release history, so a long TTL avoids refetching after restarts; set 0 to disable caching. |
 
 ### Database Migrations
 
