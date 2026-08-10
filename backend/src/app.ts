@@ -39,6 +39,7 @@ import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
 import { systemAdminRoutes } from "./routes/system-admin";
 import { policyRoutes } from "./routes/policies";
 import { permissionSimulatorRoutes } from "./routes/permission-simulator";
+import { workspaceScorecardRoutes } from "./routes/workspace-scorecards";
 import { agentRoutes } from "./routes/agents";
 import { runTaskRoutes } from "./routes/run-tasks";
 import { oauthClientRoutes } from "./routes/oauth-clients";
@@ -553,6 +554,7 @@ export const app = new Elysia()
   .use(systemAdminRoutes)
   .use(policyRoutes)
   .use(permissionSimulatorRoutes)
+  .use(workspaceScorecardRoutes)
   .use(agentRoutes)
   .use(runTaskRoutes)
   .use(oauthClientRoutes)
