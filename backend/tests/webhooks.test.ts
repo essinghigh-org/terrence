@@ -428,6 +428,43 @@ describe("GitHub Webhooks", () => {
     expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
   });
 
+  test("empty commit on a matching branch creates no run", async () => {
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", {
+      ...pushPayload,
+      commits: [{ added: [], modified: [], removed: [] }],
+    }, deliveryId);
+    await waitForDelivery(deliveryId);
+    expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
+    expect((await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, workspaceId) })).length).toBe(0);
+    expect(tarballFetches).toBe(0);
+    expect(commitStatuses).toHaveLength(0);
+  });
+
+  test("empty-commit tag push matching the tags regex still creates a run", async () => {
+    await db.update(workspaces).set({
+      vcsRepo: {
+        identifier: "hashicorp/terraform",
+        branch: "main",
+        githubAppInstallationId: installationId,
+        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+      },
+    }).where(eq(workspaces.id, workspaceId));
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", {
+      ...pushPayload,
+      ref: "refs/tags/v2.3.4",
+      commits: [],
+    }, deliveryId);
+    const runList = await waitForRuns((items): boolean => items.some((run): boolean => !run.planOnly));
+    await waitForDelivery(deliveryId);
+    const run = runList.find((item): boolean => item.workspaceId === workspaceId && !item.planOnly);
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    expect(run.message).toBe("Update Terraform");
+    expect(tarballFetches).toBe(1);
+  });
+
   test("trigger patterns use repository-root glob matching", async () => {
     await db.update(workspaces).set({ triggerPatterns: ["/**/networking/*.tf"] }).where(eq(workspaces.id, workspaceId));
     const deliveryId = crypto.randomUUID();

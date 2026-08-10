@@ -230,6 +230,39 @@ describe("GitLab and Bitbucket webhooks", () => {
     }))?.status).toBe("uploaded");
   });
 
+  test("empty-commit GitLab push creates no run", async () => {
+    const rawBody = JSON.stringify({
+      ...gitlabPayload,
+      commits: [{
+        id: gitlabPayload.checkout_sha,
+        message: "trigger workflows",
+        url: `https://gitlab.example/platform/infrastructure/-/commit/${gitlabPayload.checkout_sha}`,
+        added: [],
+        modified: [],
+        removed: [],
+      }],
+    });
+    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-gitlab-event": "Push Hook",
+        "x-gitlab-token": "gitlab-secret",
+      },
+      body: rawBody,
+    }));
+    expect(response.status).toBe(200);
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const runCount = (await db.query.runs.findMany({ where: eq(runs.workspaceId, gitlabWorkspaceId) })).length;
+      if (runCount > 0) break;
+      await Bun.sleep(25);
+    }
+    expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, gitlabWorkspaceId) }))).toHaveLength(0);
+    expect((await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, gitlabWorkspaceId) }))).toHaveLength(0);
+    expect(fetches).toHaveLength(0);
+  });
+
   test("rejects an invalid GitLab token without creating a run", async () => {
     const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
       method: "POST",

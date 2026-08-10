@@ -123,6 +123,11 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
     const tag = ref.startsWith("refs/tags/") ? ref.slice("refs/tags/".length) : undefined;
     if ((branch === undefined && tag === undefined) || branch === "" || tag === "") return undefined;
+    // A branch push whose commits carry no file changes (e.g. `git commit
+    // --allow-empty`) has nothing to plan or apply. The payload file lists are
+    // authoritative, so an empty diff means the working tree is unchanged.
+    // Tag pushes carry no branch and are governed by the tags regex instead.
+    if (branch !== undefined && filesChanged.size === 0) return undefined;
     return {
       ...(branch === undefined ? {} : { branch }),
       cloneUrl,
@@ -187,6 +192,10 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
     const tag = ref.startsWith("refs/tags/") ? ref.slice("refs/tags/".length) : undefined;
     if ((branch === undefined && tag === undefined) || branch === "" || tag === "") return undefined;
+    // Branch pushes with no file changes (empty commits) have nothing to plan
+    // or apply. The payload file lists are authoritative; tag pushes carry no
+    // branch and are governed by the tags regex instead.
+    if (branch !== undefined && filesChanged.size === 0) return undefined;
     return {
       kind: "push",
       details: {
