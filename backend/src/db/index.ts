@@ -741,6 +741,7 @@ if (!existingUsersCols.has("theme")) runSql("ALTER TABLE users ADD COLUMN theme 
 const teamsTableInfo = tableRows("PRAGMA table_info(teams)");
 const existingTeamsCols = getColumnNames(teamsTableInfo);
 if (!existingTeamsCols.has("allow_member_token_management")) runSql("ALTER TABLE teams ADD COLUMN allow_member_token_management INTEGER DEFAULT 0");
+if (!existingTeamsCols.has("policy_override_delegation_expires_at")) runSql("ALTER TABLE teams ADD COLUMN policy_override_delegation_expires_at INTEGER");
 
 // Check oauth_clients for missing columns
 const oauthTableInfo = tableRows("PRAGMA table_info(oauth_clients)");

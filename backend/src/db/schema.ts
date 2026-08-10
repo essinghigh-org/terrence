@@ -173,6 +173,10 @@ export const teams = sqliteTable("teams", {
   ssoTeamId: text("sso_team_id"),
   organizationAccess: text("organization_access", { mode: "json" }).$type<Record<string, boolean>>().notNull().default({}),
   allowMemberTokenManagement: integer("allow_member_token_management", { mode: "boolean" }).default(false),
+  // Time-bound policy-override delegation (kanban 18.7): when set, the
+  // team's delegate-policy-overrides grant expires at this epoch-millis time.
+  // null/0 means no expiry (grant is permanent).
+  policyOverrideDelegationExpiresAt: integer("policy_override_delegation_expires_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("teams_org_name_idx").on(table.orgId, table.name),

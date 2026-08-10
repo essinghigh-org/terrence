@@ -752,7 +752,7 @@ function deriveWorkspaceIdsForRequired(
     if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
       && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return null;
     const delegateTeamIds = required === "policy-override"
-      ? new Set(team.organizationAccess["delegate-policy-overrides"] === true ? [team.id] : [])
+      ? new Set(teamOverrideDelegationActive(team) ? [team.id] : [])
       : null;
     return [...new Set(base.tokenTeamWorkspaces
       .filter((entry): boolean =>
@@ -776,14 +776,30 @@ function deriveWorkspaceIdsForRequired(
     && teamData.userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))) return null;
   const delegateTeamIds = required === "policy-override"
     ? new Set(teamData.userTeams
-      .filter((team): boolean => team.organizationAccess["delegate-policy-overrides"] === true)
-      .map((team): string => team.id))
+      .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
+      .map((t: DeepReadonly<typeof teams.$inferSelect>): string => t.id))
     : null;
   return [...new Set(teamData.teamWorkspaces
     .filter((entry): boolean =>
       teamWorkspaceAllows(entry.access, entry.permissions, required)
       && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
     .map((entry): string => entry.workspaceId))];
+}
+
+/**
+ * Whether a team's policy-override delegation grant is currently effective
+ * (kanban 18.7). The grant must be requested AND, when the team carries an
+ * explicit delegation expiry, must not have lapsed. Expiry is stored as
+ * epoch-millis; null/undefined/0 means no expiry (permanent grant), matching
+ * the pre-existing semantics before time-bounded delegations existed.
+ */
+function teamOverrideDelegationActive(
+  team: Readonly<{ organizationAccess?: Record<string, boolean> | null; policyOverrideDelegationExpiresAt?: number | null }>,
+): boolean {
+  if (team.organizationAccess?.["delegate-policy-overrides"] !== true) return false;
+  const expiresAt = team.policyOverrideDelegationExpiresAt;
+  if (expiresAt === undefined || expiresAt === null || expiresAt === 0) return true;
+  return Date.now() < expiresAt;
 }
 
 async function workspaceIdsForPermissionUnscoped(

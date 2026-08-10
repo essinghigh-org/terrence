@@ -28,6 +28,7 @@ type TeamItem = Readonly<{
   readonly ssoTeamId: string | null;
   readonly organizationAccess: Readonly<Record<string, boolean>>;
   readonly allowMemberTokenManagement?: boolean | null;
+  readonly policyOverrideDelegationExpiresAt?: number | null;
 }>;
 
 type TwItem = Readonly<{
@@ -123,6 +124,7 @@ async function teamResource(team: TeamItem, userCount: number, linkage?: TeamLin
       "sso-team-id": team.ssoTeamId,
       "organization-access": organizationAccessResource(team),
       "allow-member-token-management": team.allowMemberTokenManagement === true,
+      "policy-override-delegation-expires-at": team.policyOverrideDelegationExpiresAt ?? null,
       "users-count": userCount,
       permissions: { "can-update": true, "can-destroy": true },
       ...(scim?.enabled === true ? {
@@ -300,6 +302,23 @@ export const teamRoutes = new Elysia({ name: "teams" })
       if (attributes.visibility === undefined && typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
       if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
       if (rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
+    }
+    // Time-bounded policy-override delegation (kanban 18.7): epoch-millis
+    // expiry (or null/0 to clear and return to a permanent grant). Requires
+    // manage-organization-access, same as the delegation grant itself.
+    if (attributes["policy-override-delegation-expires-at"] !== undefined) {
+      if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
+        (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const rawExpiry = attributes["policy-override-delegation-expires-at"];
+      if (rawExpiry === null) {
+        updates.policyOverrideDelegationExpiresAt = null;
+      } else if (typeof rawExpiry === "number" && Number.isFinite(rawExpiry)) {
+        if (rawExpiry <= 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a future epoch-millis timestamp, or null" }] }; }
+        updates.policyOverrideDelegationExpiresAt = Math.floor(rawExpiry);
+      } else {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "policy-override-delegation-expires-at must be a number or null" }] };
+      }
     }
     if (Object.keys(updates).length > 0) await db.update(teams).set(updates).where(eq(teams.id, teamId));
     const updated = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
