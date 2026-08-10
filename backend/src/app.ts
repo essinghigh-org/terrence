@@ -591,4 +591,16 @@ setTimeout((): void => {
   }).catch((error: unknown): void => {
     log.error("Failed to start worker queue", { error: String(error) });
   });
+  // Fire-and-forget sweep of the installed-binary cache (kanban 6.5):
+  // removes installs whose executable no longer matches its persisted
+  // digest so tampered binaries are re-downloaded before first use.
+  import("./binaryManager").then(({ revalidateInstalledBinaries }): void => {
+    void revalidateInstalledBinaries().then((removed: string[]): void => {
+      if (removed.length > 0) {
+        log.warn(`[terrence] Removed ${removed.length} binary install(s) failing integrity check: ${removed.join(", ")}`);
+      }
+    });
+  }).catch((error: unknown): void => {
+    log.warn(`[terrence] Binary integrity sweep unavailable: ${String(error)}`);
+  });
 }, 0);
