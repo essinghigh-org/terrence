@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
+import { Breadcrumbs } from "../components/Breadcrumbs";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -468,6 +469,9 @@ function PhaseMeta({
       ? "Canceled"
       : "Finished";
   const hasLogUrl = logUrl !== null && logUrl !== undefined && logUrl !== "";
+  const phaseDurationLabel = started !== undefined && completed !== undefined
+    ? formatDuration(started, completed)
+    : null;
   if (started === undefined && completed === undefined && !hasLogUrl) return <></>;
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-gray-500">
@@ -475,7 +479,7 @@ function PhaseMeta({
         <span>Started <time dateTime={started} title={formatDateTime(started)}>{formatRelativeTime(started)}</time></span>
       )}
       {completed !== undefined && (
-        <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time></span>
+        <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time>{phaseDurationLabel !== null && phaseDurationLabel !== "Unavailable" && (<span title="Phase duration"> · {phaseDurationLabel}</span>)}</span>
       )}
       {hasLogUrl && (
         <>
@@ -1039,17 +1043,16 @@ export function RunDetail({
 
   return (
     <div className="w-full">
-      {showBreadcrumb && <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap items-center gap-1.5 text-xs font-medium text-gray-500">
-        <Link to={orgPath} className="hover:text-gray-900 hover:underline">{orgName}</Link>
-        <span aria-hidden="true" className="text-gray-300">/</span>
-        <Link to={workspacePath} className="hover:text-gray-900 hover:underline">
-          {workspaceName}
-        </Link>
-        <span aria-hidden="true" className="text-gray-300">/</span>
-        <span className="text-gray-900">Runs</span>
-        <span aria-hidden="true" className="text-gray-300">/</span>
-        <span className="font-mono text-gray-900">{runId}</span>
-      </nav>}
+      {showBreadcrumb && (
+        <Breadcrumbs
+          items={[
+            { label: orgName, to: orgPath },
+            { label: workspaceName, to: workspacePath },
+            { label: "Runs", to: `${workspacePath}/runs` },
+            { label: runId },
+          ]}
+        />
+      )}
 
       {!fresh && loadError !== "" && (
         <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
