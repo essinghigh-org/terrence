@@ -73,6 +73,7 @@ Terrence runs without any environment variables in development. The table below 
 | `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub Enterprise API URL |
 | `ADMIN_PASSWORD` | — | Bootstrap admin password on first start (min 10 chars). Used when `TERRENCE_ENABLE_LOCAL_SIGNUP` is not set. |
 | `TERRENCE_ENABLE_LOCAL_SIGNUP` | — | When `true`, local account registration via `POST /api/v2/users` is enabled. Defaults to disabled (only `ADMIN_PASSWORD` bootstrap can create the first admin). |
+| `TERRENCE_DISABLE_WORKER` | — | When `1`, start UI/API without executing queued jobs (drain/DR mode). Pending runs remain queued; nothing is claimed or executed until the flag is removed and the service restarted. |
 
 ### Database Migrations
 
