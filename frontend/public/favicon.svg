@@ -13,8 +13,7 @@
       <stop offset="100%" stop-color="#1e1b4b"/>
     </linearGradient>
   </defs>
-  <!-- Isometric Box / Infrastructure Cube Logo -->
-  <path d="M16 2L29 9.5V22.5L16 30L3 22.5V9.5L16 2Z" fill="url(#grad-top)" opacity="0.15"/>
+  <!-- Isometric Box / Infrastructure Cube Logo (transparent background) -->
   <!-- Top Face -->
   <polygon points="16,3 28,10 16,17 4,10" fill="url(#grad-top)"/>
   <!-- Left Face -->
