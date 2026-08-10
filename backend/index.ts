@@ -1,6 +1,5 @@
 import { app } from "./src/app";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
-import { startWorkerQueue } from "./src/worker";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 
 const rawPort = process.env.PORT;
@@ -9,10 +8,12 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`Invalid PORT configuration: "${String(process.env.PORT)}". PORT must be a valid integer between 1 and 65535.`);
 }
 
-// Start background worker queue only when the server is actually running
+// The background worker queue is started by src/app.ts (deferred out of
+// module evaluation so the TLA module graph fully resolves first). Do NOT
+// add a second startWorkerQueue() call here — the worker must have exactly
+// one startup location.
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
-startWorkerQueue();
 
 app
   .listen({
