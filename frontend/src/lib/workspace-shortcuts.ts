@@ -16,6 +16,21 @@ const RECENT_KEY = "terrence-recent-workspaces";
 const PINNED_KEY = "terrence-pinned-workspaces";
 const MAX_RECENT = 8;
 
+type ShortcutListener = () => void;
+const listeners = new Set<ShortcutListener>();
+
+/** Subscribe to recent/pinned shortcut changes (Layout refreshes its sidebar). */
+export function subscribeWorkspaceShortcuts(listener: ShortcutListener): () => void {
+  listeners.add(listener);
+  return (): void => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyShortcutChange(): void {
+  for (const listener of listeners) listener();
+}
+
 export function getRecentWorkspaces(): WorkspaceVisit[] {
   try {
     const raw = window.localStorage.getItem(RECENT_KEY);
@@ -43,6 +58,7 @@ export function recordWorkspaceVisit(orgName: string, workspaceName: string): vo
     );
     entries.unshift({ orgName, workspaceName, visitedAt: Date.now() });
     window.localStorage.setItem(RECENT_KEY, JSON.stringify(entries.slice(0, MAX_RECENT)));
+    notifyShortcutChange();
   } catch {
     // localStorage unavailable; shortcuts are a convenience.
   }
@@ -79,6 +95,7 @@ export function setWorkspacePinned(orgName: string, workspaceName: string, pinne
     );
     if (pinned) entries.push({ orgName, workspaceName, visitedAt: 0 });
     window.localStorage.setItem(PINNED_KEY, JSON.stringify(entries));
+    notifyShortcutChange();
   } catch {
     // localStorage unavailable; shortcuts are a convenience.
   }

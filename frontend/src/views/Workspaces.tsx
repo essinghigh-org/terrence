@@ -50,7 +50,9 @@ const WORKSPACE_TABLE_COLUMNS: Readonly<{ id: string; label: string }[]> = [
 
 function defaultVisibleColumns(): string[] {
   const prefs = getTablePreferences("workspaces");
-  if (prefs !== null && prefs.visibleColumns.length > 0) return prefs.visibleColumns;
+  // Any stored value, including an empty array (all optional columns hidden),
+  // wins over the defaults; only a missing preference falls back.
+  if (prefs !== null) return prefs.visibleColumns;
   return WORKSPACE_TABLE_COLUMNS.map((column): string => column.id);
 }
 type Organization = Readonly<{
@@ -214,14 +216,10 @@ export function Workspaces(): React.JSX.Element {
   }, [loadData, orgName]);
 
   // Persist table density and column visibility (kanban 14.22/14.21).
+  // An empty column list is a valid choice (all optional columns hidden);
+  // it must be persisted as-is, never replaced with the defaults.
   useEffect((): void => {
-    const existing = getTablePreferences("workspaces");
-    setTablePreferences("workspaces", {
-      density,
-      visibleColumns: visibleColumns.length === 0
-        ? (existing?.visibleColumns ?? WORKSPACE_TABLE_COLUMNS.map((column): string => column.id))
-        : visibleColumns,
-    });
+    setTablePreferences("workspaces", { density, visibleColumns });
   }, [density, visibleColumns]);
 
   // Saved views are org-scoped, so refresh them when the org changes.
@@ -473,9 +471,15 @@ export function Workspaces(): React.JSX.Element {
           aria-label="Search workspaces"
           placeholder="Search by workspace name or tag"
           value={search}
-          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setSearch(event.currentTarget.value); }}
+          onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+            setSearch(event.currentTarget.value);
+            setActiveViewName("");
+          }}
         />
-        <Select aria-label="Status filter" value={statusFilter} onValueChange={setStatusFilter}>
+        <Select aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
+          setStatusFilter(value);
+          setActiveViewName("");
+        }}>
           <option value="">All statuses</option>
           <option value="attention">Needs attention</option>
           <option value="errored">Errored</option>
@@ -483,7 +487,10 @@ export function Workspaces(): React.JSX.Element {
           <option value="on-hold">On hold</option>
           <option value="completed">Completed</option>
         </Select>
-        <Select aria-label="Project filter" value={projectFilter} onValueChange={setProjectFilter}>
+        <Select aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
+          setProjectFilter(value);
+          setActiveViewName("");
+        }}>
           <option value="">All projects</option>
           {projects.map((project): React.JSX.Element => (
             <option key={project.id} value={project.id}>{project.attributes.name}</option>
@@ -496,6 +503,7 @@ export function Workspaces(): React.JSX.Element {
             setSearch("");
             setStatusFilter("");
             setProjectFilter("");
+            setActiveViewName("");
           }}
         >
           <X data-icon="inline-start" />

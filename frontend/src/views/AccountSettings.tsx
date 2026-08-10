@@ -419,12 +419,12 @@ export function AccountSettings(): React.JSX.Element {
           <form id="account-profile-form" onSubmit={(event): void => { event.preventDefault(); void handleProfileSave(); }}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Username</label>
-                <Input value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
+                <label htmlFor="account-username" className="text-sm font-medium">Username</label>
+                <Input id="account-username" value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Email</label>
-                <Input value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional" />
+                <label htmlFor="account-email" className="text-sm font-medium">Email</label>
+                <Input id="account-email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional" />
               </div>
             </div>
           </form>

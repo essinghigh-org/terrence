@@ -80,7 +80,7 @@ import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
 import { setLastOrganization } from "../lib/lastOrganization";
-import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit } from "../lib/workspace-shortcuts";
+import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
@@ -323,6 +323,12 @@ export function Layout({
       setVisitsRevision((value: number): number => value + 1);
     }
   }, [hasWorkspace, orgName, workspaceName]);
+
+  // Pin toggles happen on the Workspaces page (a different component), so the
+  // sidebar also refreshes when shortcut storage changes anywhere (26.12).
+  useEffect((): (() => void) => subscribeWorkspaceShortcuts((): void => {
+    setVisitsRevision((value: number): number => value + 1);
+  }), []);
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
     : "";
