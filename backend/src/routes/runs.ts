@@ -16,6 +16,70 @@ import { AvatarService } from "../lib/avatars";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
+// Statuses whose timestamps contain a terminal plan/apply marker that can be
+// measured as "run duration". Speculative runs (plan_only) finish at
+// planned_and_finished; applying runs finish at applied (or errored/failed).
+const BASELINE_TERMINAL_STATUSES = [
+  "applied", "planned_and_finished", "planned_and_saved", "errored", "failed", "canceled",
+];
+
+/**
+ * Compare this run's duration against the median of the workspace's recent
+ * completed runs of the same kind (destroy vs non-destroy). Returns null when
+ * there is not enough history to be meaningful (fewer than 3 comparable runs
+ * or this run has no measurable duration).
+ */
+export async function runDurationBaseline(
+  run: Readonly<typeof runs.$inferSelect>,
+): Promise<Readonly<{
+  "duration-seconds": number;
+  "median-duration-seconds": number;
+  "is-slow": boolean;
+}> | null> {
+  const timestamps = (run.statusTimestamps ?? {}) as Readonly<Record<string, string | undefined>>;
+  const start = timestamps["planned-at"] ?? timestamps["pending-at"];
+  const end = timestamps["applied-at"] ?? timestamps["planned-finished-at"] ?? timestamps["applied-finished-at"] ?? timestamps["errored-at"];
+  if (typeof start !== "string" || typeof end !== "string") return null;
+  const durationMs = Date.parse(end) - Date.parse(start);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+
+  const comparable = await db.query.runs.findMany({
+    columns: { statusTimestamps: true },
+    where: and(
+      eq(runs.workspaceId, run.workspaceId),
+      eq(runs.isDestroy, run.isDestroy === true),
+      inArray(runs.status, BASELINE_TERMINAL_STATUSES),
+      ne(runs.id, run.id),
+    ),
+    orderBy: [desc(runs.createdAt)],
+    limit: 20,
+  });
+  const durations: number[] = [];
+  for (const other of comparable) {
+    const ts = (other.statusTimestamps ?? {}) as Readonly<Record<string, string | undefined>>;
+    const otherStart = ts["planned-at"] ?? ts["pending-at"];
+    const otherEnd = ts["applied-at"] ?? ts["planned-finished-at"] ?? ts["applied-finished-at"] ?? ts["errored-at"];
+    if (typeof otherStart === "string" && typeof otherEnd === "string") {
+      const ms = Date.parse(otherEnd) - Date.parse(otherStart);
+      if (Number.isFinite(ms) && ms > 0) durations.push(ms);
+    }
+  }
+  if (durations.length < 3) return null;
+
+  const sorted = [...durations].sort((a, b): number => a - b);
+  const middle = (sorted.length - 1) / 2;
+  const lower = sorted[Math.floor(middle)] ?? 0;
+  const upper = sorted[Math.ceil(middle)] ?? 0;
+  const median = (lower + upper) / 2;
+  if (!Number.isFinite(median) || median <= 0) return null;
+
+  return {
+    "duration-seconds": Math.round(durationMs / 1000),
+    "median-duration-seconds": Math.round(median / 1000),
+    "is-slow": durationMs > median * 2,
+  };
+}
+
 type ParamCtx = Readonly<{
   readonly params: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
@@ -422,12 +486,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const [canApply, canOverridePolicy, origins] = await Promise.all([
+    const [canApply, canOverridePolicy, origins, baseline] = await Promise.all([
       checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "apply"),
       checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"),
       originsForRuns([authorized.run]),
+      runDurationBaseline(authorized.run),
     ]);
-    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id));
+    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline);
     const included = await includedUsersForRuns([authorized.run]);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })

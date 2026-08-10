@@ -556,6 +556,11 @@ export function runResource(
   canApply: boolean,
   canOverridePolicy = false,
   origin?: RunOrigin,
+  baseline?: Readonly<{
+    "median-duration-seconds"?: number | null;
+    "duration-seconds"?: number | null;
+    "is-slow"?: boolean;
+  }> | null,
 ): Record<string, unknown> {
   const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
   const isConfirmable = ["planned", "planned_and_saved"].includes(run.status);
@@ -602,6 +607,13 @@ export function runResource(
       "debugging-mode": run.debuggingMode,
       "is-destroy": run.isDestroy === true,
       "created-at": new Date(run.createdAt).toISOString(),
+      "duration-baseline": baseline === undefined || baseline === null
+        ? undefined
+        : {
+            "duration-seconds": baseline["duration-seconds"] ?? null,
+            "median-duration-seconds": baseline["median-duration-seconds"] ?? null,
+            "is-slow": baseline["is-slow"] === true,
+          },
       "trigger-reason": (origin as Record<string, unknown> | undefined)?.triggerReason ?? "manual",
       "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
       "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,

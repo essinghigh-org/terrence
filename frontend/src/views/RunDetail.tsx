@@ -57,6 +57,11 @@ type RunAttributes = {
   "commit-sha"?: string | null;
   "commit-url"?: string | null;
   "created-at"?: string;
+  "duration-baseline"?: {
+    "duration-seconds"?: number | null;
+    "median-duration-seconds"?: number | null;
+    "is-slow"?: boolean;
+  } | null;
   "has-changes"?: boolean;
   "is-destroy"?: boolean;
   message?: string | null;
@@ -261,6 +266,17 @@ function formatDuration(start: string | undefined, end: string | undefined): str
   const milliseconds = Date.parse(end) - Date.parse(start);
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "Unavailable";
   const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 1) return "Less than a minute";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${hours} hour${hours === 1 ? "" : "s"}${remainder === 0 ? "" : ` ${remainder} min`}`;
+}
+
+/** Format a duration stored as seconds (e.g. "300" -> "5 minutes"). */
+function formatDurationSeconds(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds)) return "Unavailable";
+  const minutes = Math.floor(totalSeconds / 60);
   if (minutes < 1) return "Less than a minute";
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   const hours = Math.floor(minutes / 60);
@@ -1050,6 +1066,17 @@ export function RunDetail({
             {attributes["plan-only"] === true ? "Plan duration" : "Plan & apply duration"}
           </dt>
           <dd className="mt-1 text-sm font-semibold text-gray-950">{duration}</dd>
+          {(() => {
+            const baseline = attributes["duration-baseline"];
+            if (baseline?.["is-slow"] !== true || baseline["median-duration-seconds"] === null || baseline["median-duration-seconds"] === undefined) {
+              return null;
+            }
+            return (
+              <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                Slower than typical (median {formatDurationSeconds(baseline["median-duration-seconds"])})
+              </p>
+            );
+          })()}
         </div>
         <div className="border-b border-gray-200 px-5 py-4 sm:border-b-0 sm:border-r">
           <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Resources changed</dt>

@@ -673,3 +673,64 @@ test("clears stale activity immediately when navigating to another run", async (
     expect(view.getByText("No run activity or comments yet.")).toBeTruthy();
   });
 });
+
+test("shows a slow-run indicator when duration exceeds the recent baseline", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/runs/run-slow") {
+      return json({
+        data: {
+          id: "run-slow",
+          type: "runs",
+          attributes: {
+            message: "Slow run",
+            status: "applied",
+            actions: {
+              "is-cancelable": false,
+              "is-confirmable": false,
+              "is-discardable": false,
+              "is-force-cancelable": false,
+            },
+            "created-at": "2026-07-29T10:00:00.000Z",
+            "status-timestamps": {
+              "planned-at": "2026-07-29T09:00:00.000Z",
+              "applied-at": "2026-07-29T09:10:00.000Z",
+            },
+            "duration-baseline": {
+              "duration-seconds": 600,
+              "median-duration-seconds": 60,
+              "is-slow": true,
+            },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/runs/run-slow/plan") {
+      return json({
+        data: { attributes: { status: "finished", "resource-additions": 0, "resource-changes": 0, "resource-destructions": 0, "resource-imports": 0 } },
+      });
+    }
+    if (url === "/api/v2/applies/apply-run-slow") {
+      return json({ data: { attributes: { status: "finished", "resource-additions": 0, "resource-changes": 0, "resource-destructions": 0, "resource-imports": 0 } } });
+    }
+    if (url === "/api/v2/runs/run-slow/logs") return json({ data: [] });
+    if (url.endsWith("/cost-estimate")) return json({ data: null });
+    return json({ data: [] });
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-slow"]}>
+      <Routes>
+        <Route
+          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
+          element={<RunDetail />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText(/Slower than typical/)).toBeTruthy();
+  });
+  expect(view.getByText(/median 1 minute/)).toBeTruthy();
+});
