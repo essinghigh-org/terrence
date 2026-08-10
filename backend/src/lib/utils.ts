@@ -1066,7 +1066,7 @@ export async function findLogCapability(runId: string, token: string): Promise<t
   return expected.length === actual.length && timingSafeEqual(expected, actual) ? run : undefined;
 }
 
-type RequestWithUrl = Readonly<{ readonly url: string }>;
+export type RequestWithUrl = Readonly<{ readonly url: string }>;
 
 export function pageRequest(request: RequestWithUrl): { number: number; size: number } {
   const params = new URL(request.url).searchParams;

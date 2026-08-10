@@ -4,10 +4,10 @@ import { db } from "../../src/db";
 import { workspaceVariables, workspaces, runs, stateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
-describe("TFE API v2 - Runs", () => {
-  let workspaceId = "";
-  let userToken: string;
+let workspaceId = "";
+let userToken: string;
 
+describe("TFE API v2 - Runs", () => {
   beforeAll(async () => {
     // Clear and setup
     const { configurationVersions, users, apiTokens, logs, workspaceTags, organizationMemberships, organizations } = await import("../../src/db/schema");
@@ -322,5 +322,87 @@ describe("TFE API v2 - Runs", () => {
     // A valid replacement address (indexed) must be accepted.
     const okReplaceAddr = await post({ "replace-addrs": [`aws_instance.web["example"]`] });
     expect(okReplaceAddr.status).toBe(201);
+  });
+});
+
+describe("Run list sorting (kanban 14.8)", () => {
+  const base = Date.now();
+  let erroredId = "";
+  let appliedId = "";
+  let pendingId = "";
+
+  const listRunIds = async (sort: string | null): Promise<string[]> => {
+    const url = sort === null
+      ? "http://localhost/api/v2/workspaces/ws-run-test/runs"
+      : `http://localhost/api/v2/workspaces/ws-run-test/runs?sort=${encodeURIComponent(sort)}`;
+    const response = await app.handle(
+      new Request(url, { headers: { "Authorization": `Bearer ${userToken}` } }),
+    );
+    expect(response.status).toBe(200);
+    const document = await response.json() as { data: { id: string }[] };
+    return document.data.map((run): string => run.id);
+  };
+
+  beforeAll(async () => {
+    // Isolate this workspace's list so the sort assertions are deterministic.
+    await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+
+    const createRun = async (message: string): Promise<string> => {
+      const res = await app.handle(
+        new Request("http://localhost/api/v2/runs", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            "Authorization": `Bearer ${userToken}`,
+          },
+          body: JSON.stringify({
+            data: {
+              attributes: { message },
+              relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+            },
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { data: { id: string } }).data.id;
+    };
+
+    erroredId = await createRun("run-sort-errored");
+    appliedId = await createRun("run-sort-applied");
+    pendingId = await createRun("run-sort-pending");
+    await db.update(runs).set({ status: "errored", createdAt: base - 3000 }).where(eq(runs.id, erroredId));
+    await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(eq(runs.id, appliedId));
+    await db.update(runs).set({ status: "pending", createdAt: base - 1000 }).where(eq(runs.id, pendingId));
+    // The API rate limit is a 30 req/s window keyed by principal; let the
+    // window opened by the earlier suite tests (same token) close before we
+    // start asserting on list endpoints.
+    await Bun.sleep(1100);
+  });
+
+  it("defaults to newest-first", async () => {
+    const ids = await listRunIds(null);
+    expect(ids).toEqual([pendingId, appliedId, erroredId]);
+  });
+
+  it("honors explicit descending via -created-at", async () => {
+    const ids = await listRunIds("-created-at");
+    expect(ids).toEqual([pendingId, appliedId, erroredId]);
+  });
+
+  it("sorts ascending with created-at", async () => {
+    const ids = await listRunIds("created-at");
+    expect(ids).toEqual([erroredId, appliedId, pendingId]);
+  });
+
+  it("sorts by status lexicographically with created-at tiebreaker", async () => {
+    const ids = await listRunIds("status");
+    expect(ids).toEqual([appliedId, erroredId, pendingId]);
+    const descIds = await listRunIds("-status");
+    expect(descIds).toEqual([pendingId, erroredId, appliedId]);
+  });
+
+  it("falls back to newest-first for unknown sort keys", async () => {
+    const ids = await listRunIds("message");
+    expect(ids).toEqual([pendingId, appliedId, erroredId]);
   });
 });

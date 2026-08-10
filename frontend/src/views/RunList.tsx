@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   ArrowUpRight,
   CheckCircle2,
   Clock,
@@ -175,11 +177,14 @@ export function RunList({
   const [runReplace, setRunReplace] = useState("");
   const [creating, setCreating] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [sort, setSort] = useState<"created-at" | "-created-at" | "status" | "-status">("-created-at");
 
   const loadRuns = useCallback(async (signal: AbortSignal): Promise<void> => {
     try {
       const endpoint = `/api/v2/workspaces/${workspaceId}/runs`;
-      const response = await fetchApi(endpoint, signal === undefined ? {} : { signal }) as {
+      const firstUrl = new URL(endpoint, "http://terrence.local");
+      firstUrl.searchParams.set("sort", sort);
+      const response = await fetchApi(`${firstUrl.pathname}${firstUrl.search}`, signal === undefined ? {} : { signal }) as {
         data?: RunItem[];
         included?: IncludedUser[];
         meta?: { pagination?: Record<string, unknown> };
@@ -197,6 +202,7 @@ export function RunList({
         while (typeof nextPage === "number" && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted) {
           const nextUrl = new URL(endpoint, "http://terrence.local");
           nextUrl.searchParams.set("page[number]", String(nextPage));
+          nextUrl.searchParams.set("sort", sort);
           const nextPath = `${nextUrl.pathname}${nextUrl.search}`;
           const nextRes = await fetchApi(nextPath, signal === undefined ? {} : { signal }) as {
             data?: RunItem[];
@@ -222,7 +228,7 @@ export function RunList({
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, sort]);
 
   useEffect((): (() => void) => {
     let stopped = false;
@@ -263,6 +269,26 @@ export function RunList({
     setRunTargets("");
     setRunReplace("");
     setDialogOpen(true);
+  };
+
+  /**
+   * Cycle a sortable column: first click sorts descending (newest/highest
+   * first, matching the default created-at order), second click ascending.
+   * Switching columns resets to that column's descending order. Sort is
+   * applied server-side via the TFE-compatible ?sort= parameter.
+   */
+  const toggleSort = (column: "created-at" | "status"): void => {
+    setSort((current) => {
+      if (current === column) return `-${column}` as const;
+      if (current === `-${column}`) return column;
+      return `-${column}` as const;
+    });
+  };
+
+  const sortArrows = (column: "created-at" | "status"): React.JSX.Element | null => {
+    if (sort === column) return <ArrowUp className="size-3" aria-hidden="true" />;
+    if (sort === `-${column}`) return <ArrowDown className="size-3" aria-hidden="true" />;
+    return null;
   };
 
   const filteredRuns = useMemo((): RunItem[] => {
@@ -428,8 +454,28 @@ export function RunList({
               <thead>
                 <tr className="border-b border-gray-200 bg-background text-xs font-semibold tracking-wide text-gray-800">
                   <th className="border-r border-gray-200 px-4 py-3">Run</th>
-                  <th className="border-r border-gray-200 px-4 py-3">Status</th>
-                  <th className="border-r border-gray-200 px-4 py-3">Created</th>
+                  <th className="border-r border-gray-200 px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={(): void => { toggleSort("status"); }}
+                      className="inline-flex items-center gap-1 hover:text-gray-950"
+                      aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : "descending"}`}
+                    >
+                      Status
+                      {sortArrows("status")}
+                    </button>
+                  </th>
+                  <th className="border-r border-gray-200 px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={(): void => { toggleSort("created-at"); }}
+                      className="inline-flex items-center gap-1 hover:text-gray-950"
+                      aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : "descending"}`}
+                    >
+                      Created
+                      {sortArrows("created-at")}
+                    </button>
+                  </th>
                   {canStartRun && <th className="px-4 py-3">Actions</th>}
                 </tr>
               </thead>

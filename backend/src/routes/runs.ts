@@ -4,7 +4,7 @@ import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray, isNull } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
@@ -381,6 +381,28 @@ export async function createRun(
   return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
 }
 
+/**
+ * TFE-compatible run list sorting (kanban 14.8). Accepts `?sort=created-at`,
+ * `?sort=-created-at`, `?sort=status`, `?sort=-status`; a `-` prefix means
+ * descending. Unknown keys fall back to newest-first so the parameter stays
+ * additive and never breaks existing clients. Status sorts lexicographically
+ * with created-at descending as the tiebreaker.
+ */
+function parseRunSort(request: RequestWithUrl): ReturnType<typeof desc>[] {
+  const raw = new URL(request.url).searchParams.get("sort") ?? "-created-at";
+  const descending = raw.startsWith("-");
+  const key = descending ? raw.slice(1) : raw;
+  if (key === "status") {
+    return descending
+      ? [desc(runs.status), desc(runs.createdAt)]
+      : [asc(runs.status), desc(runs.createdAt)];
+  }
+  if (key === "created-at") {
+    return [descending ? desc(runs.createdAt) : asc(runs.createdAt)];
+  }
+  return [desc(runs.createdAt)];
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -391,7 +413,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const { number, size } = pageRequest(request);
     const where = workspaceRunHistoryWhere(request, workspaceId);
     const [workspaceRuns, countRows] = await Promise.all([
-      db.query.runs.findMany({ where, orderBy: [desc(runs.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
@@ -412,7 +434,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
     const where = inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
     const [orgRuns, countRows] = await Promise.all([
-      db.query.runs.findMany({ where, orderBy: [desc(runs.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;

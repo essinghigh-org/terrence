@@ -280,7 +280,7 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
   let createBody: unknown;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
-    if (url === "/api/v2/workspaces/ws-1/runs") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     if (url === "/api/v2/runs" && init?.method === "POST") {
       if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
       createBody = JSON.parse(init.body) as unknown;
@@ -330,7 +330,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
   let createBody: unknown;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
-    if (url === "/api/v2/workspaces/ws-1/runs") {
+    if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at") {
       return json({
         data: [
           {
@@ -408,7 +408,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
 
 test("closing a deep-linked new-run dialog clears the query", async () => {
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs") return json({ data: [] });
+    if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
   }) as typeof fetch;
 
@@ -441,7 +441,7 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
 
 test("does not offer run creation without workspace permission", async () => {
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs") return json({ data: [] });
+    if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
   }) as typeof fetch;
 
