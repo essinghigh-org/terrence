@@ -292,7 +292,7 @@ function matchesConstraints(version: string, constraintExpr: string): boolean {
   return constraints.every((c: string): boolean => matchesConstraint(version, c));
 }
 
-async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string> {
+export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string> {
   try {
     if (tool === "tofu") {
       assertNotRateLimited("releases/latest");
@@ -307,7 +307,6 @@ async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string>
         const tag = typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
         if (tag !== undefined && validateVersion(tag)) return tag;
       }
-      return "1.7.2";
     } else {
       const res = await fetch("https://checkpoint-api.hashicorp.com/v1/check/terraform", {
         headers: { "User-Agent": "terrence-iac-manager" },
@@ -318,11 +317,40 @@ async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<string>
         const currentVersion = data.current_version;
         if (typeof currentVersion === "string" && validateVersion(currentVersion)) return currentVersion;
       }
-      return "1.9.3";
     }
   } catch (err: unknown) {
-    log.warn(`Could not resolve latest version for ${tool}, using default`, { tool, error: err instanceof Error ? err.message : String(err) });
-    return tool === "tofu" ? "1.7.2" : "1.9.3";
+    log.warn(`Could not resolve latest version for ${tool} from upstream; using last-known-good`, {
+      tool,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  // Kanban 6.9: never fall back to a hard-coded version that goes stale.
+  // Prefer the last-known-good discovery cache, then an already-installed
+  // binary; only fail explicitly when neither exists.
+  const fallback = await lastKnownGoodVersion(tool);
+  if (fallback !== undefined) return fallback;
+  throw new Error(`Could not resolve latest version for ${tool}: upstream unreachable and no cached or installed version exists`);
+}
+
+// Highest version from the persistent discovery cache (kanban 6.10), then
+// from the installed-binary directory. Returns undefined when neither has
+// usable data.
+async function lastKnownGoodVersion(tool: "tofu" | "terraform"): Promise<string | undefined> {
+  const cached = (versionCache.get(tool)?.versions ?? []).reduce(
+    (best: string | undefined, candidate: string): string | undefined =>
+      best === undefined || compareSemver(candidate, best) > 0 ? candidate : best,
+    undefined,
+  );
+  if (cached !== undefined) return cached;
+  try {
+    const entries = await readdir(join(BINARY_BASE_DIR, tool));
+    return entries.reduce(
+      (best: string | undefined, entry: string): string | undefined =>
+        validateVersion(entry) && (best === undefined || compareSemver(entry, best) > 0) ? entry : best,
+      undefined,
+    );
+  } catch {
+    return undefined;
   }
 }
 

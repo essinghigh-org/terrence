@@ -332,7 +332,9 @@ async function canRegisterAgent(
     where: and(eq(agentPoolTokens.agentPoolId, pool.id), eq(agentPoolTokens.token, tokenHash)),
   });
   if (token === undefined) return false;
-  await db.update(agentPoolTokens).set({ lastUsedAt: Date.now() }).where(eq(agentPoolTokens.id, token.id));
+  if (token.lastUsedAt === null || Date.now() - token.lastUsedAt >= 60_000) {
+    await db.update(agentPoolTokens).set({ lastUsedAt: Date.now() }).where(eq(agentPoolTokens.id, token.id));
+  }
   return true;
 }
 

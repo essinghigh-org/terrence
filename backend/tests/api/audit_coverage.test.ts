@@ -7,6 +7,7 @@ import {
   auditLogs,
   organizations,
   runs,
+  stateVersions,
   users,
   workspaces,
 } from "../../src/db/schema";
@@ -185,6 +186,39 @@ describe("audit coverage", () => {
         source: "tfe-api",
       },
     });
+  });
+
+  it("audits raw state downloads with actor identity (kanban 17.8)", async () => {
+    const stateVersionId = `audit-state-${suffix}`;
+    await db.insert(stateVersions).values({
+      id: stateVersionId,
+      workspaceId,
+      serial: 1,
+      status: "finalized",
+      jsonState: JSON.stringify({ version: 4, terraform_version: "1.9.3" }),
+      statePayload: JSON.stringify({ version: 4, serial: 1 }),
+    });
+
+    const [jsonResponse, downloadResponse] = await Promise.all([
+      request(`/api/v2/state-versions/${stateVersionId}/json-download`),
+      request(`/api/v2/state-versions/${stateVersionId}/download`),
+    ]);
+    expect(jsonResponse.status).toBe(200);
+    expect(downloadResponse.status).toBe(200);
+
+    const reads = await db.query.auditLogs.findMany({
+      where: and(
+        eq(auditLogs.action, "read"),
+        eq(auditLogs.resourceType, "state-version"),
+        eq(auditLogs.resourceId, stateVersionId),
+      ),
+    });
+    expect(reads).toHaveLength(2);
+    const endpoints = new Set(reads.map((read): unknown => (read.details as Record<string, unknown>).endpoint));
+    expect(endpoints).toEqual(new Set(["json-download", "download"]));
+    for (const read of reads) {
+      expect(read).toMatchObject({ orgId, userId, details: { workspaceId } });
+    }
   });
 
   it("audits successful run transitions and exposes safe actor-aware run events", async () => {

@@ -48,6 +48,12 @@ type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
 type Database = Readonly<typeof db>;
 
 const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
+// Agent liveness is persisted at most this often per agent. The offline
+// sweep cutoff (AGENT_HEARTBEAT_TIMEOUT_MS) must stay comfortably above
+// this interval so a throttled agent is never swept as unavailable.
+const AGENT_PING_WRITE_INTERVAL_MS = 15_000;
+// Agent-pool tokens mirror the user-token lastUsedAt throttle (auth.ts).
+const AGENT_TOKEN_LAST_USED_INTERVAL_MS = 60_000;
 
 type AgentPolicyEvaluation = Readonly<{
   policySets: readonly Readonly<{
@@ -408,14 +414,25 @@ export async function authenticateAgent(
   });
   if (token === undefined) return undefined;
   const now = Date.now();
-  const [, refreshedAgents] = await Promise.all([
-    db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id)),
-    db.update(agents).set({
+  if (token.lastUsedAt === null || now - token.lastUsedAt >= AGENT_TOKEN_LAST_USED_INTERVAL_MS) {
+    await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id));
+  }
+  let refreshedAgent: Agent | undefined;
+  // Persist the liveness heartbeat at most once per interval; within the
+  // window the agent is kept fresh in memory only. Status transitions out
+  // of "unknown" always persist so a recovered agent is visible promptly.
+  if (
+    agent.lastPingAt === null
+    || now - agent.lastPingAt >= AGENT_PING_WRITE_INTERVAL_MS
+    || agent.status === "unknown"
+  ) {
+    const rows = await db.update(agents).set({
       lastPingAt: now,
       status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
-    }).where(eq(agents.id, agent.id)).returning(),
-  ]);
-  return refreshedAgents[0] ?? agent;
+    }).where(eq(agents.id, agent.id)).returning();
+    refreshedAgent = rows[0] as Agent | undefined;
+  }
+  return refreshedAgent ?? { ...agent, lastPingAt: now };
 }
 
 async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undefined> {

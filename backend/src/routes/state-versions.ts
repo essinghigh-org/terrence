@@ -12,6 +12,7 @@ import {
   decodeStatePayload,
   parseStatePayload,
   validSignedApiURL,
+  auditLog,
 } from "../lib/utils";
 import { authPlugin } from "../auth";
 
@@ -199,6 +200,11 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
+    await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
+      workspaceId: sv.workspaceId,
+      endpoint: "json-download",
+      stateVersionSerial: sv.serial,
+    });
     return sv.jsonState;
   })
   .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -229,6 +235,11 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     const payload = decodeStatePayload(sv.statePayload);
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
+    await auditLog("read", "state-version", stateVersionId, user?.id ?? null, ws.orgId, {
+      workspaceId: sv.workspaceId,
+      endpoint: "download",
+      stateVersionSerial: sv.serial,
+    });
     return payload;
   })
   .put("/api/v2/state-versions/:state_version_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
