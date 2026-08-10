@@ -845,6 +845,74 @@ async function waitForTaskSettlement(
   return undefined;
 }
 
+const VCS_CONFIGURATION_SOURCES = ["github", "gitlab", "bitbucket"] as const;
+type VcsConfigurationSource = typeof VCS_CONFIGURATION_SOURCES[number];
+
+/** Bound for waiting on a push-webhook configuration download to settle. */
+const VCS_CONFIGURATION_WAIT_MS = 60_000;
+const VCS_CONFIGURATION_POLL_MS = 250;
+
+/**
+ * VCS push webhooks insert the run BEFORE the tarball download settles
+ * (webhooks.ts queues the download after the run row is written). If the
+ * worker claims such a run first, the archive is not on disk yet; planning
+ * against the empty workdir would produce a destroy-everything plan. Wait
+ * for the download (pending -> uploaded/errored) and fail the run loudly
+ * when the download failed or produced no readable archive, instead of
+ * planning against missing code.
+ */
+async function waitForVcsConfigurationDownload(
+  runId: string,
+  cv: Readonly<typeof configurationVersions.$inferSelect>,
+): Promise<Readonly<typeof configurationVersions.$inferSelect>> {
+  const archiveReady = async (c: Readonly<typeof configurationVersions.$inferSelect>): Promise<boolean> =>
+    typeof c.archivePath === "string" && c.archivePath !== "" && (await exists(c.archivePath));
+
+  // Observable signal for tests (regression suite polls for this marker
+  // before settling a simulated download) and a useful live log line.
+  await writeLog(runId, "plan", "[terrence] Waiting for VCS configuration download to complete...");
+
+  const deadline = Date.now() + VCS_CONFIGURATION_WAIT_MS;
+  let current = cv;
+  // The webhook writes the tarball BEFORE flipping the status
+  // (downloadAndSaveTarball: copyFile, then status = uploaded), so a
+  // present archive must not be mistaken for a settled download: keep
+  // polling until the status leaves "pending".
+  while (current.status === "pending" && Date.now() < deadline) {
+    await Bun.sleep(VCS_CONFIGURATION_POLL_MS);
+    const latest = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, current.id),
+    });
+    if (latest === undefined) {
+      throw new Error(`Configuration version '${current.id}' disappeared while waiting for its download.`);
+    }
+    current = latest;
+  }
+
+  if (current.status === "errored") {
+    throw new Error(`VCS configuration download failed: ${current.error ?? "unknown error"}`);
+  }
+  if (current.status === "pending") {
+    throw new Error(
+      `VCS configuration download for ${current.id} did not complete within ${VCS_CONFIGURATION_WAIT_MS / 1000}s.`,
+    );
+  }
+  // "archived"/"backing_data_soft_deleted" configurations are allowed to
+  // have no local archive: the refetch logic below restores it on demand.
+  // Any other settled status must come with a readable archive, or the run
+  // would plan against an empty workdir.
+  if (
+    current.status !== "archived"
+    && current.status !== "backing_data_soft_deleted"
+    && !(await archiveReady(current))
+  ) {
+    throw new Error(
+      `VCS configuration download for ${current.id} completed without a readable archive (status ${current.status}).`,
+    );
+  }
+  return current;
+}
+
 export async function executeRun(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -875,6 +943,13 @@ export async function executeRun(runId: string): Promise<void> {
       let cv = await db.query.configurationVersions.findFirst({
         where: eq(configurationVersions.id, run.configurationVersionId),
       });
+
+      // Push webhooks can create the run before the tarball download settles
+      // (see waitForVcsConfigurationDownload): wait for it rather than
+      // planning against an empty workdir.
+      if (cv !== undefined && VCS_CONFIGURATION_SOURCES.includes(cv.source as VcsConfigurationSource)) {
+        cv = await waitForVcsConfigurationDownload(runId, cv);
+      }
 
       if (
         cv !== undefined
