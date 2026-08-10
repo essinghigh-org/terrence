@@ -122,6 +122,67 @@ function ProviderStatusRow(props: Readonly<{ label: string; enabled: boolean }>)
   );
 }
 
+type DatabaseMetrics = Readonly<{
+  sizeBytes: number;
+  walSizeBytes: number | null;
+  journalMode: string;
+  pageSize: number;
+  pageCount: number;
+  path: string;
+}>;
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function DatabaseStorageCard(): React.JSX.Element {
+  const [metrics, setMetrics] = useState<DatabaseMetrics | null>(null);
+  useEffect((): (() => void) => {
+    let cancelled = false;
+    void fetchApi("/api/v2/admin/database-metrics")
+      .then((body: unknown): void => {
+        if (!cancelled) setMetrics((body as { data?: DatabaseMetrics | null }).data ?? null);
+      })
+      .catch((): void => {
+        // Admin-only page; a failed metrics fetch leaves the card empty.
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, []);
+  const totalBytes = metrics === null ? null : (metrics.sizeBytes ?? 0) + (metrics.walSizeBytes ?? 0);
+  const renderRow = (label: string, value: string): React.JSX.Element => (
+    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+      <span>{label}</span>
+      <span className="font-mono text-xs text-gray-700">{value}</span>
+    </div>
+  );
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Database storage</CardTitle>
+        <CardDescription>On-disk footprint of the SQLite store.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {metrics === null ? (
+          renderRow("Total on disk", "—")
+        ) : (
+          <>
+            {renderRow("Total on disk", formatBytes(totalBytes))}
+            {renderRow("Database file", formatBytes(metrics.sizeBytes))}
+            {renderRow("WAL sidecar", formatBytes(metrics.walSizeBytes))}
+            {renderRow("Journal mode", metrics.journalMode)}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SecurityOverview(props: Readonly<{
   navigate: (path: string) => void;
   samlEnabled: boolean;
@@ -154,6 +215,8 @@ function SecurityOverview(props: Readonly<{
                     </Button>
                   </CardContent>
                 </Card>
+
+                <DatabaseStorageCard />
 
                 <Card>
                   <CardHeader>

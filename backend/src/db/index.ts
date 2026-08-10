@@ -3,7 +3,7 @@ import { drizzle, SQLiteBunTransaction } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'path';
 import * as schema from './schema';
 import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
@@ -19,6 +19,7 @@ mkdirSync(storageDir, { recursive: true });
 // @libsql/client driver leaked native memory per query and churned a fresh native
 // connection for every transaction (the source of terrence's multi-GB RSS growth).
 const dbUrl = process.env.DATABASE_URL ?? `file:${join(storageDir, 'terrence.db')}`;
+const dbPath = dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, '');
 const client = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
 client.run('PRAGMA journal_mode = WAL;');
 client.run('PRAGMA busy_timeout = 5000;');
@@ -92,6 +93,39 @@ export const db = drizzle(client, { schema });
  */
 export function checkpointWal(): void {
   client.run("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
+/**
+ * Live disk-pressure numbers for the admin dashboard: on-disk DB size, WAL
+ * sidecar size, journal mode, and page geometry. Two cheap pragmas plus one
+ * stat() call — safe to invoke per request (kanban 4.18).
+ */
+export function databaseMetrics(): Readonly<{
+  sizeBytes: number;
+  walSizeBytes: number | null;
+  journalMode: string;
+  pageSize: number;
+  pageCount: number;
+  path: string;
+}> {
+  const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
+  const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
+  const journalMode = (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
+  let sizeBytes = 0;
+  let walSizeBytes: number | null = null;
+  if (dbPath !== ":memory:") {
+    try {
+      sizeBytes = statSync(dbPath).size;
+    } catch {
+      sizeBytes = 0;
+    }
+    try {
+      walSizeBytes = statSync(`${dbPath}-wal`).size;
+    } catch {
+      walSizeBytes = 0;
+    }
+  }
+  return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath };
 }
 
 // bun:sqlite's native transaction() rolls back only when its callback throws

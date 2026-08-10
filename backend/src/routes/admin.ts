@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { db } from "../db";
+import { databaseMetrics, db } from "../db";
 import { users, organizations, workspaces, runs, adminTerraformVersions, adminSentinelVersions, adminOpaVersions, registryPartnerships, samlSettings, adminSettings, apiTokens } from "../db/schema";
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
@@ -695,6 +695,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
   .get("/api/v2/admin/provider-surface", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     return { data: providerSurface };
+  })
+  .get("/api/v2/admin/database-metrics", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    return { data: databaseMetrics() };
   })
   .get("/api/v2/admin/runs/:run_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
