@@ -15,7 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -436,11 +436,15 @@ function PhaseMeta({
   status,
   timestamps,
   logUrl,
+  logWrap,
+  onToggleLogWrap,
 }: Readonly<{
   phase: "plan" | "apply";
   status: string;
   timestamps: Readonly<Record<string, string>>;
   logUrl: string | null | undefined;
+  logWrap: boolean;
+  onToggleLogWrap: () => void;
 }>): React.JSX.Element {
   const started = timestamps[phase === "plan" ? "planning-at" : "applying-at"];
   const completed = (phase === "plan"
@@ -461,14 +465,26 @@ function PhaseMeta({
   if (started === undefined && completed === undefined && !hasLogUrl) return <></>;
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-gray-500">
-      {started !== undefined && <span>Started <time dateTime={started}>{formatDate(started)}</time></span>}
+      {started !== undefined && (
+        <span>Started <time dateTime={started} title={formatDateTime(started)}>{formatRelativeTime(started)}</time></span>
+      )}
       {completed !== undefined && (
-        <span>{completedLabel} <time dateTime={completed}>{formatDate(completed)}</time></span>
+        <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time></span>
       )}
       {hasLogUrl && (
-        <a href={logUrl} download className="font-medium text-blue-700 hover:underline">
-          Download raw log
-        </a>
+        <>
+          <button
+            type="button"
+            onClick={onToggleLogWrap}
+            aria-pressed={logWrap}
+            className="font-medium text-blue-700 hover:underline"
+          >
+            Wrap {logWrap ? "on" : "off"}
+          </button>
+          <a href={logUrl} download className="font-medium text-blue-700 hover:underline">
+            Download raw log
+          </a>
+        </>
       )}
     </div>
   );
@@ -510,6 +526,7 @@ export function RunDetail({
   const [pendingAction, setPendingAction] = useState("");
   const [copiedPermalink, setCopiedPermalink] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [logWrap, setLogWrap] = useState<boolean>(true);
   const [planSummary, setPlanSummary] = useState<Readonly<{
     runId: string;
     summary: PlanOutputSummary;
@@ -687,14 +704,21 @@ export function RunDetail({
       const status = await loadRun(controller.signal);
       if (!stopped && !controller.signal.aborted && status !== "not_found"
         && (status === null || !TERMINAL_STATUSES.has(status))) {
+        // Pause polling while the tab is hidden; visibilitychange resumes it.
+        if (document.hidden) return;
         timer = window.setTimeout((): void => { void refresh(); }, 3000);
       }
     };
+    const onVisibilityChange = (): void => {
+      if (!document.hidden && !stopped) { void refresh(); }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     void refresh();
 
     return (): void => {
       stopped = true;
       controller.abort();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [loadRun, refreshVersion]);
@@ -1183,6 +1207,8 @@ export function RunDetail({
                     status={planStatus}
                     timestamps={plan?.attributes["status-timestamps"] ?? timestamps}
                     logUrl={plan?.attributes["log-read-url"]}
+                    logWrap={logWrap}
+                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus === "finished" && (
                     <ResourceCounts
@@ -1220,7 +1246,7 @@ export function RunDetail({
                   <Maximize2 className="size-4" aria-hidden="true" />
                 </Button>
               </summary>
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
+              <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {planLogs !== "" ? planLogs : planRawLogMessage}
               </pre>
             </details>
@@ -1392,6 +1418,8 @@ export function RunDetail({
                     status={applyStatus}
                     timestamps={apply?.attributes["status-timestamps"] ?? timestamps}
                     logUrl={apply?.attributes["log-read-url"]}
+                    logWrap={logWrap}
+                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus !== "finished" && (
                     <ResourceCounts
@@ -1437,7 +1465,7 @@ export function RunDetail({
                   <Maximize2 className="size-4" aria-hidden="true" />
                 </Button>
               </summary>
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
+              <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {applyLogs !== "" ? applyLogs : applyRawLogMessage}
               </pre>
             </details>
@@ -1674,7 +1702,7 @@ export function RunDetail({
               Close
             </Button>
           </div>
-          <pre className="flex-1 overflow-auto whitespace-pre-wrap bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
+          <pre className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
             {fullscreenLog === "plan"
               ? planLogs !== "" ? planLogs : planRawLogMessage
               : applyLogs !== "" ? applyLogs : applyRawLogMessage}

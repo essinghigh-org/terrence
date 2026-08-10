@@ -10,7 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -132,12 +132,6 @@ function parseAddressList(value: string): string[] | null {
     .map((part: string): string => part.trim())
     .filter((part: string): boolean => part !== "");
   return parts.length > 0 ? [...new Set(parts)] : null;
-}
-
-function formatDate(value: string | undefined): string {
-  if (value === undefined || value === "") return "—";
-  const date = new Date(value);
-  return formatDateTime(date);
 }
 
 function StatusIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
@@ -516,7 +510,7 @@ export function RunList({
                       </div>
                     </td>
                     <td className="border-r border-gray-200 px-4 py-3 text-[13px] text-gray-500">
-                      <time dateTime={run.attributes["created-at"]}>{formatDate(run.attributes["created-at"])}</time>
+                      <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>{formatRelativeTime(run.attributes["created-at"])}</time>
                     </td>
                     {canStartRun && (
                       <td className="px-4 py-3 text-right">

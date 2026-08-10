@@ -35,7 +35,7 @@ import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getTablePreferences, setTablePreferences } from "@/lib/table-preferences";
 import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/lib/workspace-shortcuts";
 import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -389,13 +389,6 @@ export function Workspaces(): React.JSX.Element {
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
 
-  const runDate = (run: RunSummary | undefined): string => {
-    const value = run?.attributes["created-at"];
-    if (value === undefined) return "";
-    const date = new Date(value);
-    return formatDateTime(date, "");
-  };
-
   return (
     <div className="flex w-full flex-col gap-6">
       <header className="flex items-center justify-between gap-4">
@@ -692,9 +685,15 @@ export function Workspaces(): React.JSX.Element {
                     ) : (
                       <div className="max-w-64">
                         <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
-                        {runDate(latestRuns.get(workspace.id)) !== "" && (
-                          <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id))}</p>
-                        )}
+                        {(() => {
+                          const created = latestRuns.get(workspace.id)?.attributes["created-at"];
+                          if (created === undefined || created === "") return null;
+                          return (
+                            <p className="text-xs text-muted-foreground" title={formatDateTime(created, "")}>
+                              {formatRelativeTime(created)}
+                            </p>
+                          );
+                        })()}
                       </div>
                     )}
                   </TableCell>

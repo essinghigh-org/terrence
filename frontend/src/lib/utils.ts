@@ -50,6 +50,32 @@ function toDisplayDate(value: Date | string | number | null | undefined, timeZon
  * Format a date for display. Invalid or unparseable input renders as the
  * fallback (default "—") so callers never show "Invalid Date".
  */
+/**
+ * Compact human time for list cells, e.g. "5 minutes ago" or "in 3 hours".
+ * Older than a week falls back to formatDate; pass the exact value to the
+ * element's title attribute for precision (review item 14.23).
+ */
+export function formatRelativeTime(value: Date | string | number | null | undefined, now: Date = new Date()): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const diffMs = date.getTime() - now.getTime();
+  const past = diffMs < 0;
+  const totalSeconds = Math.max(1, Math.round(Math.abs(diffMs) / 1000));
+  if (totalSeconds < 5) return "just now";
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const totalHours = Math.round(totalMinutes / 60);
+  const totalDays = Math.round(totalHours / 24);
+  const phrase = (count: number, unit: string): string => `${count} ${unit}${count === 1 ? "" : "s"}`;
+  let text: string;
+  if (totalMinutes < 1) text = phrase(totalSeconds, "second");
+  else if (totalMinutes < 60) text = phrase(totalMinutes, "minute");
+  else if (totalHours < 24) text = phrase(totalHours, "hour");
+  else if (totalDays < 7) text = phrase(totalDays, "day");
+  else return formatDate(value);
+  return past ? `${text} ago` : `in ${text}`;
+}
+
 export function formatDate(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
   const date = toDisplayDate(value, timeZone);
   return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString(undefined, timeZone !== undefined ? { timeZone } : undefined);
