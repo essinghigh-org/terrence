@@ -316,19 +316,22 @@ export function Layout({
     }
   }, [hasOrg, orgName]);
 
-  // Record workspace visits for the sidebar "Recent" section (kanban 26.11).
-  useEffect((): void => {
-    if (hasWorkspace && orgName !== undefined && orgName !== "" && workspaceName !== undefined && workspaceName !== "") {
-      recordWorkspaceVisit(orgName, workspaceName);
-      setVisitsRevision((value: number): number => value + 1);
-    }
-  }, [hasWorkspace, orgName, workspaceName]);
-
   // Pin toggles happen on the Workspaces page (a different component), so the
-  // sidebar also refreshes when shortcut storage changes anywhere (26.12).
+  // sidebar refreshes when shortcut storage changes anywhere (26.12). This
+  // subscription is registered before the visit effect so mount-time visits
+  // are captured; recordWorkspaceVisit notifies synchronously.
   useEffect((): (() => void) => subscribeWorkspaceShortcuts((): void => {
     setVisitsRevision((value: number): number => value + 1);
   }), []);
+
+  // Record workspace visits for the sidebar "Recent" section (kanban 26.11).
+  // The revision bump comes from the subscription above via the synchronous
+  // shortcut notification, so no direct state set is needed here.
+  useEffect((): void => {
+    if (hasWorkspace && orgName !== undefined && orgName !== "" && workspaceName !== undefined && workspaceName !== "") {
+      recordWorkspaceVisit(orgName, workspaceName);
+    }
+  }, [hasWorkspace, orgName, workspaceName]);
   const workspacePath = hasWorkspace
     ? `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`
     : "";
