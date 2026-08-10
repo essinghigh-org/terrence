@@ -523,6 +523,10 @@ export function RunDetail({
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
+  // Focus management for the fullscreen log dialog (kanban 25.2): remember
+  // whichever control opened it so focus can return there after close.
+  const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
+  const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
@@ -569,11 +573,23 @@ export function RunDetail({
 
   useEffect((): (() => void) => {
     if (fullscreenLog === null) return () => {};
+    // The overlay renders after this effect commits, so the close button ref
+    // is already populated; move focus into the dialog. Remember the trigger
+    // so cleanup can hand focus back when the dialog goes away.
+    fullscreenTriggerRef.current = document.activeElement as HTMLElement | null;
+    fullscreenCloseRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setFullscreenLog(null);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setFullscreenLog(null);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      fullscreenTriggerRef.current?.focus();
+      fullscreenTriggerRef.current = null;
+    };
   }, [fullscreenLog]);
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
@@ -1809,6 +1825,7 @@ export function RunDetail({
               {fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}
             </h2>
             <Button
+              ref={fullscreenCloseRef}
               type="button"
               variant="ghost"
               size="sm"
