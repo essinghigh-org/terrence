@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
+  ArrowUpRight,
   CheckCircle2,
   ChevronRight,
   Circle,
@@ -52,6 +53,7 @@ type RunAttributes = {
   "auto-apply"?: boolean;
   "branch"?: string | null;
   "commit-sha"?: string | null;
+  "commit-url"?: string | null;
   "created-at"?: string;
   "has-changes"?: boolean;
   "is-destroy"?: boolean;
@@ -950,6 +952,7 @@ export function RunDetail({
             >
               {statusLabel(status)}
             </Badge>
+            <span aria-live="polite" className="sr-only">Run status: {statusLabel(status)}</span>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
             {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
             {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-purple-700 border-purple-200 bg-purple-50">Refresh only</Badge>}
@@ -965,7 +968,20 @@ export function RunDetail({
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>{typeof attributes.branch === "string" ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
-                <code title={attributes["commit-sha"]}>{attributes["commit-sha"].slice(0, 12)}</code>
+                typeof attributes["commit-url"] === "string" && attributes["commit-url"] !== "" ? (
+                  <a
+                    href={attributes["commit-url"]}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={attributes["commit-sha"]}
+                    className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-primary underline decoration-primary/40 hover:no-underline"
+                  >
+                    {attributes["commit-sha"].slice(0, 12)}
+                    <ArrowUpRight className="size-3" aria-hidden="true" />
+                  </a>
+                ) : (
+                  <code title={attributes["commit-sha"]}>{attributes["commit-sha"].slice(0, 12)}</code>
+                )
               )}
             </div>
           )}
