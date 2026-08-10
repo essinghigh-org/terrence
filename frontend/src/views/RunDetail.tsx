@@ -9,7 +9,9 @@ import {
   Clock,
   History,
   Link2,
+  Maximize2,
   MessageSquare,
+  X,
   XCircle,
 } from "lucide-react";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
@@ -474,6 +476,7 @@ export function RunDetail({
   const [apply, setApply] = useState<PhaseResource | null>(null);
   const [planLogs, setPlanLogs] = useState("");
   const [applyLogs, setApplyLogs] = useState("");
+  const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
@@ -516,6 +519,15 @@ export function RunDetail({
   useEffect((): void => {
     setRunEvents([]);
   }, [runId]);
+
+  useEffect((): (() => void) => {
+    if (fullscreenLog === null) return () => {};
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setFullscreenLog(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreenLog]);
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
@@ -1168,8 +1180,18 @@ export function RunDetail({
             <details
               className="group border-t border-gray-200"
             >
-              <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
-                Raw plan log
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+                <span>Raw plan log</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={(event: React.MouseEvent<HTMLButtonElement>) => { event.preventDefault(); event.stopPropagation(); setFullscreenLog("plan"); }}
+                  aria-label="Open raw plan log fullscreen"
+                >
+                  <Maximize2 className="size-4" aria-hidden="true" />
+                </Button>
               </summary>
               <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
                 {planLogs !== "" ? planLogs : planRawLogMessage}
@@ -1375,8 +1397,18 @@ export function RunDetail({
               </section>
             )}
             <details className="group">
-              <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
-                Raw apply log
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+                <span>Raw apply log</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={(event: React.MouseEvent<HTMLButtonElement>) => { event.preventDefault(); event.stopPropagation(); setFullscreenLog("apply"); }}
+                  aria-label="Open raw apply log fullscreen"
+                >
+                  <Maximize2 className="size-4" aria-hidden="true" />
+                </Button>
               </summary>
               <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
                 {applyLogs !== "" ? applyLogs : applyRawLogMessage}
@@ -1592,6 +1624,36 @@ export function RunDetail({
             </>
           )}
       </div>
+
+      {fullscreenLog !== null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}
+          className="fixed inset-0 z-50 flex flex-col bg-white"
+        >
+          <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
+            <h2 className="text-sm font-semibold text-gray-950">
+              {fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}
+            </h2>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setFullscreenLog(null)}
+              aria-label="Close fullscreen log"
+            >
+              <X className="size-4" aria-hidden="true" />
+              Close
+            </Button>
+          </div>
+          <pre className="flex-1 overflow-auto whitespace-pre-wrap bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground">
+            {fullscreenLog === "plan"
+              ? planLogs !== "" ? planLogs : planRawLogMessage
+              : applyLogs !== "" ? applyLogs : applyRawLogMessage}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

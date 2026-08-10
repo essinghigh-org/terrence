@@ -218,8 +218,8 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(applySection).not.toBeNull();
   expect((planSection as HTMLDetailsElement).open).toBeTrue();
   expect((applySection as HTMLDetailsElement).open).toBeFalse();
-  const planLog = within(planSection as HTMLElement).getByText("Raw plan log").nextElementSibling;
-  const applyLog = within(applySection as HTMLElement).getByText("Raw apply log").nextElementSibling;
+  const planLog = (planSection as HTMLDetailsElement).querySelector("pre");
+  const applyLog = (applySection as HTMLDetailsElement).querySelector("pre");
   expect(planLog?.textContent).toBe("PLAN_PHASE_ONLY\nPLAN_PHASE_SECOND");
   expect(applyLog?.textContent).toBe("APPLY_PHASE_ONLY\nAPPLY_PHASE_SECOND");
   expect(within(planSection as HTMLElement).queryByText("APPLY_PHASE_ONLY")).toBeNull();
