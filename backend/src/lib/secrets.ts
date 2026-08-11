@@ -9,10 +9,67 @@ import { join, resolve } from "node:path";
 
 const ENCRYPTED_PREFIX = "enc:v1";
 const KEY_FILE_NAME = ".encryption-key";
+const SALT_FILE_NAME = ".encryption-salt";
 const KEY_LENGTH = 32;
+const SALT_LENGTH = 16;
+// Salt used by installations created before per-installation KDF salts
+// existed. Kept only to decrypt secrets written under the old scheme;
+// new encryptions always use the per-installation random salt.
+const LEGACY_KDF_SALT = "terrence:secrets:v1";
 
 let cachedKey: Buffer | undefined;
 let cachedStorageDir: string | undefined;
+let cachedKdfSalt: Buffer | undefined;
+let cachedKdfSaltStorageDir: string | undefined;
+let cachedLegacyKey: Buffer | undefined;
+
+/**
+ * Per-installation random KDF salt for ENCRYPTION_PASSWORD-derived keys.
+ * Stored next to the key file so every installation derives a different
+ * key from the same password (task 4.10); created with O_EXCL so two
+ * concurrent processes race safely.
+ */
+async function loadKdfSalt(): Promise<Buffer> {
+  const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  if (cachedKdfSaltStorageDir !== currentStorageDir) {
+    cachedKdfSalt = undefined;
+    cachedKdfSaltStorageDir = currentStorageDir;
+  }
+  if (cachedKdfSalt !== undefined) return cachedKdfSalt;
+
+  const saltPath = join(currentStorageDir, SALT_FILE_NAME);
+  await mkdir(currentStorageDir, { recursive: true });
+
+  try {
+    cachedKdfSalt = Buffer.from((await readFile(saltPath, "utf8")).trim(), "base64");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+
+    const generated = randomBytes(SALT_LENGTH);
+    try {
+      const saltFile = await open(saltPath, "wx", 0o600);
+      try {
+        await saltFile.writeFile(generated.toString("base64"));
+      } finally {
+        await saltFile.close();
+      }
+      cachedKdfSalt = generated;
+    } catch (createError) {
+      if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
+      cachedKdfSalt = Buffer.from((await readFile(saltPath, "utf8")).trim(), "base64");
+    }
+  }
+
+  if (cachedKdfSalt.length < SALT_LENGTH) {
+    throw new Error(`Invalid KDF salt in ${saltPath}`);
+  }
+  return cachedKdfSalt;
+}
+
+function legacyEncryptionKey(password: string): Buffer {
+  cachedLegacyKey ??= scryptSync(password, LEGACY_KDF_SALT, KEY_LENGTH);
+  return cachedLegacyKey;
+}
 
 async function loadEncryptionKey(): Promise<Buffer> {
   const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
@@ -24,7 +81,7 @@ async function loadEncryptionKey(): Promise<Buffer> {
 
   const password = process.env.ENCRYPTION_PASSWORD;
   if (password !== undefined && password !== "") {
-    cachedKey = scryptSync(password, "terrence:secrets:v1", KEY_LENGTH);
+    cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH);
     return cachedKey;
   }
 
@@ -85,14 +142,33 @@ export async function decryptSecret(value: string): Promise<string> {
     throw new Error("Invalid encrypted secret");
   }
 
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    await loadEncryptionKey(),
-    Buffer.from(ivEncoded, "base64"),
-  );
-  decipher.setAuthTag(Buffer.from(tagEncoded, "base64"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(ciphertextEncoded, "base64")),
-    decipher.final(),
-  ]).toString("utf8");
+  const iv = Buffer.from(ivEncoded, "base64");
+  const tag = Buffer.from(tagEncoded, "base64");
+  const ciphertext = Buffer.from(ciphertextEncoded, "base64");
+
+  const decrypt = (key: Buffer): string => {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]).toString("utf8");
+  };
+
+  try {
+    return decrypt(await loadEncryptionKey());
+  } catch (error) {
+    // Secrets written before per-installation KDF salts derived the key
+    // from a static salt. GCM authentication makes a wrong key fail here,
+    // so retry with the legacy derivation before surfacing the error.
+    const password = process.env.ENCRYPTION_PASSWORD;
+    if (password !== undefined && password !== "") {
+      try {
+        return decrypt(legacyEncryptionKey(password));
+      } catch {
+        // fall through to the primary error
+      }
+    }
+    throw error;
+  }
 }

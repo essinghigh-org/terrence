@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
+  ApiError,
   consumeAuthExpiry,
+  extractFieldErrors,
   fetchAllApiPages,
   fetchApi,
   getAuthToken,
@@ -190,6 +192,55 @@ test("logs out browser sessions server-side without treating API tokens as refre
     await logoutAuthSession();
     expect(calls).toEqual(["/api/v2/users/logout"]);
     expect(getAuthToken()).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)", () => {
+  const rawErrors = [
+    { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
+    { status: "422", title: "Unprocessable Entity", detail: "URL must be valid", source: { pointer: "/data/attributes/url" } },
+    // An entry with a pointer and detail is surfaced regardless of status
+    { status: "404", title: "Not Found", detail: "gone", source: { pointer: "/data/attributes/repo" } },
+    // No pointer - the generic title/detail path carries it, not field errors
+    { status: "422", title: "X", detail: "no-pointer" },
+  ] as Record<string, unknown>[];
+
+  expect(extractFieldErrors(rawErrors)).toEqual({
+    name: "Name is required",
+    url: "URL must be valid",
+    repo: "gone",
+  });
+});
+
+test("extractFieldErrors ignores malformed pointers and empty details", () => {
+  expect(extractFieldErrors([
+    { detail: "d", source: { pointer: "/data/attributes/ok" } },
+    { detail: "", source: { pointer: "/data/attributes/empty" } },
+    { detail: "no pointer" },
+  ] as Record<string, unknown>[])).toEqual({ ok: "d" });
+});
+
+test("fetchApi surfaces field-level 422 details on ApiError", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (): Promise<Response> => new Response(
+    JSON.stringify({
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
+        { status: "422", title: "Unprocessable Entity", detail: "Bad URL", source: { pointer: "/data/attributes/url" } },
+      ],
+    }),
+    { status: 422, headers: { "Content-Type": "application/vnd.api+json" } },
+  )) as typeof fetch;
+
+  try {
+    setAuthToken("tk", Date.now() + 60_000);
+    const caught = (await fetchApi("/notification-configurations").catch((e) => e)) as ApiError;
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught.status).toBe(422);
+    expect(caught.message).toBe("Name is required");
+    expect(caught.fieldErrors).toEqual({ name: "Name is required", url: "Bad URL" });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -11,6 +11,7 @@ import {
 } from "../db/schema";
 import { postNotification, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
+import { isNotificationDestination } from "../lib/constants";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -46,6 +47,21 @@ function isWebhookUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+type FieldError = { status: string; title: string; detail: string; source: { pointer: string } };
+
+/**
+ * Field-level validation detail for notification configuration creation
+ * (26.9). Returns [] when the input is valid. Each error carries a
+ * JSON:API source.pointer so consumers can render per-field feedback.
+ */
+function createValidationErrors(name: string, url: string, destinationType: string): FieldError[] {
+  const errors: FieldError[] = [];
+  if (name === "") errors.push({ status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } });
+  if (!isWebhookUrl(url)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "URL must be a valid http(s) webhook", source: { pointer: "/data/attributes/url" } });
+  if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, or microsoft-teams", source: { pointer: "/data/attributes/destination-type" } });
+  return errors;
 }
 
 function deliveryResource(delivery: Readonly<NotificationDelivery>): Record<string, unknown> {
@@ -155,7 +171,7 @@ function createValues(
   if (
     name === ""
     || !isWebhookUrl(url)
-    || !["generic", "slack", "microsoft-teams"].includes(destinationType)
+    || !isNotificationDestination(destinationType)
   ) return undefined;
 
   return {
@@ -190,8 +206,14 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     if ((await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin")) === undefined) return notFound(set);
     const values = createValues(body, { workspaceId });
     if (values === undefined) {
+      const attributes = attributesFrom(body);
+      const errors = createValidationErrors(
+        typeof attributes.name === "string" ? attributes.name.trim() : "",
+        typeof attributes.url === "string" ? attributes.url : "",
+        typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
+      );
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
     }
     await db.insert(notificationConfigurations).values(values);
     const created = await db.query.notificationConfigurations.findFirst({
@@ -242,7 +264,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
     const url = typeof attributes.url === "string" ? attributes.url : "";
     const destinationType = typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "";
-    if (name === "" || !isWebhookUrl(url) || !["generic", "slack", "microsoft-teams"].includes(destinationType)) {
+    if (name === "" || !isWebhookUrl(url) || !isNotificationDestination(destinationType)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
     }
@@ -280,7 +302,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     if (typeof attributes.name === "string") updates.name = attributes.name;
     if (
       typeof attributes["destination-type"] === "string"
-      && ["generic", "slack", "microsoft-teams"].includes(attributes["destination-type"])
+      && isNotificationDestination(attributes["destination-type"])
     ) updates.destinationType = attributes["destination-type"];
     if (typeof attributes.url === "string" && isWebhookUrl(attributes.url)) updates.url = attributes.url;
     if (Array.isArray(attributes.triggers)) {
@@ -306,10 +328,27 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
   .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
+    // Send a realistic run sample (7.5) mirroring the production payload
+    // shape so a mis-configured adapter surfaces immediately.
+    const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
     const delivery = await postNotification(configuration, {
       payload_version: 1,
       notification_configuration_id: configuration.id,
-      notifications: [{ message: "Verification of notification configuration", trigger: "verification" }],
+      run_url: new URL(`/app/demo/workspaces/demo/runs/test-notification`, baseUrl).toString(),
+      run_id: "test-notification",
+      run_message: "This is a sample notification from Terrence.",
+      run_created_at: new Date().toISOString(),
+      run_created_by: "admin",
+      workspace_id: "demo",
+      workspace_name: "sample-workspace",
+      organization_name: "sample-org",
+      notifications: [{
+        message: "Run Errored",
+        trigger: "run:errored",
+        run_status: "errored",
+        run_updated_at: new Date().toISOString(),
+        run_updated_by: "admin",
+      }],
     });
     if (!delivery.successful) {
       (set as { status: number }).status = 400;
@@ -317,6 +356,8 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     }
     return {
       status: "verification_sent",
-      data: notificationResource(configuration, [delivery]),
+      // Diagnostics (request/response details) surface even on success so
+      // the caller can confirm the destination received the right payload.
+      data: { ...notificationResource(configuration, [delivery]), verification: deliveryResource(delivery) },
     };
   });

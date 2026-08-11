@@ -5,6 +5,7 @@ import { eq, and, inArray, count, countDistinct, asc, isNotNull, sql } from "dri
 import { projectResource, projectTagBindingResource } from "../lib/response";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
+import { isExecutionMode } from "../lib/constants";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -67,12 +68,7 @@ type ExistingProjectSettings = Readonly<{
   settingOverwrites: Readonly<Record<string, boolean>> | null;
 }>;
 
-const executionModes = new Set(["remote", "local", "agent"]);
 const autoDestroyDuration = /^[1-9]\d{0,3}[dh]$/;
-
-export function isExecutionMode(value: unknown): value is string {
-  return typeof value === "string" && executionModes.has(value);
-}
 
 export function isAutoDestroyDuration(value: unknown): value is string {
   return typeof value === "string" && autoDestroyDuration.test(value);

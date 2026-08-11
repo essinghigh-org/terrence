@@ -31,11 +31,39 @@ type ReadonlyRequestInit = Readonly<{
 export class ApiError extends Error {
   public readonly status: number;
 
-  public constructor(status: number, message: string) {
+  /** Field-level 422 details, keyed as `{ "data.attributes.<field>": msg }`. */
+  public readonly fieldErrors: Readonly<Record<string, string>>;
+
+  public constructor(status: number, message: string, fieldErrors: Readonly<Record<string, string>> = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.fieldErrors = fieldErrors;
   }
+}
+
+/**
+ * Extract field-level error details from a JSON:API error document. An
+ * error entry with `source.pointer` (e.g. "/data/attributes/name") is
+ * surfaced so UIs can render per-field feedback instead of a single blob
+ * (26.9). Unparsable pointers are dropped.
+ */
+export function extractFieldErrors(rawErrors: readonly Record<string, unknown>[]): Record<string, string> {
+  const fieldErrors: Record<string, string> = {};
+  for (const entry of rawErrors) {
+    const source = entry["source"];
+    const pointer = source !== null && typeof source === "object"
+      ? (source as Record<string, unknown>)["pointer"]
+      : undefined;
+    if (typeof pointer !== "string" || pointer === "") continue;
+    const detail = typeof entry["detail"] === "string" ? entry["detail"] : "";
+    if (detail === "") continue;
+    const path = pointer
+      .replace(/^\/data\/attributes\//, "")
+      .replace(/^\//, "");
+    if (path !== "") fieldErrors[path] = detail;
+  }
+  return fieldErrors;
 }
 
 
@@ -195,7 +223,11 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     const firstErr = errors[0];
     const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
     const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
-    throw new ApiError(response.status, detail ?? title ?? `API request failed (${response.status})`);
+    throw new ApiError(
+      response.status,
+      detail ?? title ?? `API request failed (${response.status})`,
+      extractFieldErrors(errors),
+    );
   }
 
   return readResponseBody(response);

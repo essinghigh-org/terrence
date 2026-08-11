@@ -15,8 +15,9 @@ import { validateVersion, checkOrgPermission, checkOrganizationPermission, check
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
-import { ensureDefaultProject, isAutoDestroyDuration, isExecutionMode, parseSettingOverwrites } from "./projects";
+import { ensureDefaultProject, isAutoDestroyDuration, parseSettingOverwrites } from "./projects";
 import { cachedOrgByName, cachedOrgById } from "../lib/cached-lookups";
+import { isExecutionMode } from "../lib/constants";
 
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;

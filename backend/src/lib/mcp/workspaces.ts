@@ -15,7 +15,8 @@ import {
   workspaceIdsForPermission,
 } from "../utils";
 import { validateVersion } from "../utils";
-import { ensureDefaultProject, isExecutionMode } from "../../routes/projects";
+import { isExecutionMode } from "../constants";
+import { ensureDefaultProject } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";

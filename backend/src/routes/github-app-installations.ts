@@ -517,4 +517,62 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     const destination = new URL(apiURL(request, `/app/${encodeURIComponent(org.name)}/settings/vcs`));
     destination.searchParams.set("github_app_installation", installation.id);
     return redirect(destination.toString(), 303);
+  })
+  .get("/api/v2/organizations/:org_name/github-app/diagnostics", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    // 8.12 GitHub App permission diagnostics — detects missing required
+    // permissions by exercising the exact API calls Terrence makes with the
+    // installation (commit statuses write path) and reports what to change.
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const installations = await db.query.githubAppInstallations.findMany({ where: eq(githubAppInstallations.orgId, org.id) });
+    if (installations.length === 0) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "No GitHub App installation is registered for this organization. Install the app on the target repository first." }] };
+    }
+    const config = githubAppConfig();
+    const results = await Promise.all(installations.map(async (installation) => {
+      const checks: {
+        id: string; label: string; ok: boolean; status: number | null; detail: string;
+      }[] = [];
+      const token = await getGitHubAppAccessToken(installation.installationId);
+      if (token === null) {
+        checks.push({ id: "app-token", label: "GitHub App token creation", ok: false, status: null, detail: "GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing or invalid — token generation failed." });
+        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      }
+      const repoHeaders = { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" };
+      // Listing repositories is the read path Terrence uses to resolve a
+      // workspace's VCS repo; an install scoped to too few repos breaks it.
+      const statusRes = await fetch(`https://api.github.com/installation/repositories?per_page=1`, {
+        headers: repoHeaders, signal: AbortSignal.timeout(5_000),
+      });
+      if (!statusRes.ok) {
+        checks.push({ id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` });
+        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      }
+      const repoList = await statusRes.json() as { repositories?: { full_name?: unknown }[] };
+      const repo = repoList.repositories?.find((r): r is { full_name: string } => typeof r.full_name === "string");
+      if (repo === undefined) {
+        checks.push({ id: "repo-scope", label: "Repository access scope", ok: false, status: null, detail: "The installation has access to no repositories. Select at least one repository (including the ones this workspace points at)." });
+        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      }
+      const testSha = "a".repeat(40);
+      const writeRes = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
+        method: "POST",
+        headers: repoHeaders,
+        body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (writeRes.ok) {
+        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: "Commit statuses write succeeded on the first accessible repository." });
+      } else if (writeRes.status === 404) {
+        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
+      } else {
+        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` });
+      }
+      return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+    }));
+    return { data: results };
   });

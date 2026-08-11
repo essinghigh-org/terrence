@@ -47,8 +47,12 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
       timestamp: new Date().toISOString(),
       level,
       message,
-      ...(meta !== undefined ? { ...meta } : {}),
     };
+    // Metadata is nested under a reserved `meta` key so caller-supplied
+    // keys can never collide with the structured fields (12.5).
+    if (meta !== undefined && Object.keys(meta).length > 0) {
+      entry.meta = meta;
+    }
     const output = safeJsonStringify(entry);
     if (level === "error") {
       console.error(output);
