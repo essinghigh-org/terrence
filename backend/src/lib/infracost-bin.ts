@@ -1,5 +1,5 @@
 import { join, resolve } from "path";
-import { chmod, exists, mkdir, rm, writeFile } from "fs/promises";
+import { chmod, exists, mkdir, rename, rm, stat, writeFile } from "fs/promises";
 import { log } from "./log";
 
 // ---------------------------------------------------------------------------
@@ -177,6 +177,63 @@ async function extractVerified(targetDir: string): Promise<string> {
   return binaryPath;
 }
 
+/** How long a per-version install lock may be held before it is treated as
+ * stale (owner crashed mid-install) and reclaimed. Generous: a fresh download
+ * is bounded by a 120s fetch timeout plus extraction, far below this. */
+const LOCK_STALE_MS = 10 * 60_000;
+
+/** How long to wait for a concurrent installer to release the version lock
+ * before giving up and reporting the estimate as unavailable. */
+const LOCK_WAIT_MS = 5 * 60_000;
+
+/** Poll interval while waiting on a held version lock. */
+const LOCK_POLL_MS = 200;
+
+function lockDirFor(version: string): string {
+  return join(BINARY_BASE_DIR, "infracost", `.infracost-${version}.lock`);
+}
+
+function stagingDirFor(version: string): string {
+  return join(BINARY_BASE_DIR, "infracost", `.infracost-${version}.staging-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
+}
+
+/** Acquire the per-version install lock (atomic mkdir). Returns true on
+ * success. Reclaims stale locks left by crashed installers. */
+async function acquireVersionLock(lockDir: string): Promise<boolean> {
+  // Ensure the parent tree exists before the non-recursive lock mkdir below:
+  // on a fresh storage layout `binaries/infracost/` may not exist yet, and a
+  // recursive mkdir of the lock itself would defeat its atomicity (no EEXIST).
+  await mkdir(join(BINARY_BASE_DIR, "infracost"), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      await mkdir(lockDir);
+      return true;
+    } catch {
+      // Held by another worker. Reclaim if the owner has been gone too long.
+      try {
+        const info = await stat(lockDir);
+        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+          await rm(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // Lock vanished between the failed mkdir and the stat; retry mkdir.
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        log.warn(`[terrence] Timed out waiting for Infracost install lock ${lockDir}`);
+        return false;
+      }
+      await Bun.sleep(LOCK_POLL_MS);
+    }
+  }
+}
+
+async function releaseVersionLock(lockDir: string): Promise<void> {
+  await rm(lockDir, { recursive: true, force: true });
+}
+
 /** Resolve the Infracost binary for a cost-estimate run.
  *
  * Priority:
@@ -185,6 +242,13 @@ async function extractVerified(targetDir: string): Promise<string> {
  *   2. Managed versioned binary selected by INFRACOST_VERSION, downloaded and
  *      digest-verified into <storage>/binaries/infracost/<version>/ on first use
  *      and cached thereafter.
+ *
+ * Concurrent resolution of the same version is serialized with a per-version
+ * lock: only one worker downloads/extracts; everyone else waits, rechecks the
+ * cache after acquiring the lock, and reuses the published install. Install
+ * work happens in a unique staging directory that is atomically renamed into
+ * place, so a failed attempt can never leave a partially-written install at
+ * the published path and cleanup never touches another worker's install.
  *
  * Returns null when no binary can be resolved/installed so the caller records an
  * errored (but non-fatal to the plan/apply run) cost estimate — matching the
@@ -205,32 +269,64 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
   const targetDir = join(BINARY_BASE_DIR, "infracost", version);
   const binaryPath = join(targetDir, `infracost-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "amd64"}`);
 
+  // Fast path: a valid, fully-published install already exists. Read-only.
+  if (await exists(binaryPath)) {
+    const integrity = await readIntegrity(targetDir);
+    if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) {
+      return { binaryPath, version };
+    }
+    log.warn(`[terrence] Cached Infracost v${version} failed integrity check; reinstalling`);
+  }
+
+  // Slow path: serialize installs per version so concurrent workers never
+  // download into / delete each other's directories.
+  const lockDir = lockDirFor(version);
+  if (!(await acquireVersionLock(lockDir))) {
+    return null;
+  }
+  let stagingDir = "";
   try {
+    // Recheck after acquiring the lock: a worker that finished while we were
+    // waiting has already published a valid install we can reuse.
     if (await exists(binaryPath)) {
       const integrity = await readIntegrity(targetDir);
       if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) {
         return { binaryPath, version };
       }
-      log.warn(`[terrence] Cached Infracost v${version} failed integrity check; re-downloading`);
+      log.warn(`[terrence] Cached Infracost v${version} failed integrity check under lock; reinstalling`);
+      await rm(targetDir, { recursive: true, force: true });
+    } else if (await exists(targetDir)) {
+      // targetDir exists without a binary (legacy/partial state). We hold the
+      // lock, so it cannot be another worker's in-progress install; clear it
+      // so the atomic rename below can publish into a clean path.
       await rm(targetDir, { recursive: true, force: true });
     }
 
-    await downloadAndVerify(version, targetDir);
-    const installedPath = await extractVerified(targetDir);
+    stagingDir = stagingDirFor(version);
+    await downloadAndVerify(version, stagingDir);
+    const installedPath = await extractVerified(stagingDir);
 
     const digest = await calculateSha256(await (await Bun.file(installedPath)).arrayBuffer());
-    await writeIntegrity(targetDir, { tool: "infracost", version, binarySha256: digest });
-    log.info(`[terrence] Installed Infracost v${version} to ${installedPath}`);
-    return { binaryPath: installedPath, version };
+    await writeIntegrity(stagingDir, { tool: "infracost", version, binarySha256: digest });
+    await rename(stagingDir, targetDir);
+    stagingDir = "";
+    log.info(`[terrence] Installed Infracost v${version} to ${targetDir}`);
+    return { binaryPath, version };
   } catch (error: unknown) {
-    // A partial install is never trusted; remove it so the next attempt starts clean.
-    try {
-      await rm(targetDir, { recursive: true, force: true });
-    } catch {
-      // Cleanup failure is secondary.
+    // A partial install is never trusted; remove only this worker's staging
+    // directory. The published targetDir is never touched here — it may be
+    // another worker's valid install.
+    if (stagingDir !== "") {
+      try {
+        await rm(stagingDir, { recursive: true, force: true });
+      } catch {
+        // Cleanup failure is secondary.
+      }
     }
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`[terrence] Could not install Infracost v${version}: ${message}`);
     return null;
+  } finally {
+    await releaseVersionLock(lockDir);
   }
 }

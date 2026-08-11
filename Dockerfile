@@ -48,7 +48,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && /app/backend/bin/landlock-runner --probe
 
 # ---------- Runtime: Chainguard Wolfi (glibc, near-zero CVE) ----------
-FROM cgr.dev/chainguard/wolfi-base:latest
+# Base pinned to an immutable digest (reviewed/immutable supply chain).
+# Tag at pin time: cgr.dev/chainguard/wolfi-base:latest. Bump deliberately
+# after reviewing what changed in the new tag (pin the new digest).
+FROM cgr.dev/chainguard/wolfi-base@sha256:30f03343947c7ae3581fda727a6e2aa7b8ce7009b7bfc2ab8d5c9483ace5812f
 # Pin the full -rN revision so apk exact-matches; bump together with bun bumps.
 ARG BUN_VERSION=1.3.14-r3
 WORKDIR /app
