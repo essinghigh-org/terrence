@@ -350,7 +350,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   ];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-8">
+    <div className="space-y-6">
       <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Link to={`${orgPath}/settings/policy-sets`} className="hover:underline">Policy sets</Link>
         <span aria-hidden="true">/</span>

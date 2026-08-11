@@ -650,7 +650,7 @@ export function VariableSets(): React.JSX.Element {
   };
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
+    <main className="space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Variable sets</h1>

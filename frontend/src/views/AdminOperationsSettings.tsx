@@ -262,7 +262,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
 
   if (loadError !== "") {
     return (
-      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="space-y-6">
         <Card>
           <CardContent className="py-8 text-center text-sm text-destructive">{loadError}</CardContent>
         </Card>
@@ -271,7 +271,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="space-y-6">
       <div className="mb-6 flex items-center gap-3">
         <ShieldAlert className="size-6 text-muted-foreground" aria-hidden="true" />
         <div>

@@ -225,7 +225,7 @@ export function AgentPools(): React.JSX.Element {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-8">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
