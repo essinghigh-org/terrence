@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { PackageOpen, Plus, Trash2 } from "lucide-react";
 
 type RegistryModule = {
@@ -29,12 +30,12 @@ export function RegistryModules(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
   const [modules, setModules] = useState<RegistryModule[]>([]);
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.has("can-manage-providers");
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -47,30 +48,39 @@ export function RegistryModules(): React.JSX.Element {
 
   useEffect((): void => {
     setModules([]);
-    setManageableOrganizationName("");
     setCreateDialogOpen(false);
     setModuleToDelete(null);
+    permissionGateFired.current = false;
     if (orgName !== "") void loadModules();
   }, [orgName]);
+
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-providers")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadModules();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage registry modules for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadModules = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-providers"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-providers"] !== true) {
-        setError("You do not have permission to manage registry modules for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/registry-modules`,
       ) as { data: RegistryModule[] };
