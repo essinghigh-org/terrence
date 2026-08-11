@@ -168,6 +168,62 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     }
   });
 
+  // 7.10: template preview returns the exact webhook body without sending it.
+  it("previews the webhook payload without posting (7.10)", async () => {
+    let hits = 0;
+    const webhook = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        hits += 1;
+        return new Response(null, { status: 204 });
+      },
+    });
+    const createdIds: string[] = [];
+    try {
+      const createRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
+        data: {
+          attributes: {
+            name: `Preview ${suffix}`,
+            "destination-type": "generic",
+            url: webhook.url.toString(),
+            triggers: ["run:errored"],
+            enabled: true,
+          },
+        },
+      });
+      expect(createRes.status).toBe(201);
+      const createBody = await createRes.json();
+      const ncId = createBody.data.id as string;
+      createdIds.push(ncId);
+
+      // Preview the payload: no POST should reach the destination.
+      const previewRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify?preview=true`, "POST");
+      expect(previewRes.status).toBe(200);
+      const previewBody = await previewRes.json();
+      expect(previewBody.status).toBe("preview");
+      const preview = previewBody.data.preview as Record<string, unknown>;
+      expect(preview.payload_version).toBe(1);
+      expect(preview.run_id).toBe("test-notification");
+      expect(preview.workspace_name).toBe("sample-workspace");
+      expect((preview.notifications as Record<string, unknown>[])?.[0]?.trigger).toBe("run:errored");
+      // The destination must NOT have been contacted in preview mode.
+      expect(hits).toBe(0);
+
+      // A real verify still posts and reaches the destination.
+      const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
+      expect(verifyRes.status).toBe(200);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.status).toBe("verification_sent");
+      expect(hits).toBe(1);
+    } finally {
+      await webhook.stop(true);
+      for (const id of createdIds) {
+        await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, id));
+      }
+    }
+  });
+
   it("delivers versioned run notifications for workspace and project configurations", async () => {
     const payloads: Record<string, any>[] = [];
     const webhook = Bun.serve({

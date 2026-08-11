@@ -325,13 +325,14 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx & { query: Record<string, string | undefined> }): Promise<unknown> => {
     const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
     // Send a realistic run sample (7.5) mirroring the production payload
-    // shape so a mis-configured adapter surfaces immediately.
+    // shape so a mis-configured adapter surfaces immediately. The sample body
+    // is shared with the preview path (7.10) so what you see is what is sent.
     const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
-    const delivery = await postNotification(configuration, {
+    const samplePayload: Record<string, unknown> = {
       payload_version: 1,
       notification_configuration_id: configuration.id,
       run_url: new URL(`/app/demo/workspaces/demo/runs/test-notification`, baseUrl).toString(),
@@ -349,7 +350,22 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         run_updated_at: new Date().toISOString(),
         run_updated_by: "admin",
       }],
-    });
+    };
+
+    // Template preview (7.10): when ?preview=true, return the exact body that
+    // would be POSTed without sending it, so the caller can render the webhook
+    // template before enabling the destination.
+    if (query?.preview === "true") {
+      return {
+        status: "preview",
+        data: {
+          ...notificationResource(configuration),
+          preview: JSON.parse(JSON.stringify(samplePayload)),
+        },
+      };
+    }
+
+    const delivery = await postNotification(configuration, samplePayload);
     if (!delivery.successful) {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: `Notification verification returned HTTP ${delivery.code}` }] };
