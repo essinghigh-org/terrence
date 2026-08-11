@@ -10,7 +10,7 @@ import {
   type WorkspaceResourcePermissions,
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData , type DeepReadonly } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData , type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
@@ -1162,6 +1162,16 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       db.select({ total: count() }).from(workspaceVariables).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
+    if (strictAuditEnabled()) {
+      const sensitiveCount = vars.filter((v: { readonly sensitive: boolean | null }): boolean => v.sensitive === true).length;
+      if (sensitiveCount > 0) {
+        await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
+          workspaceId,
+          scope: "list",
+          "sensitive-count": sensitiveCount,
+        });
+      }
+    }
     return { data: vars.map((v: VarItem): Record<string, unknown> => workspaceVariableResource(v)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1192,6 +1202,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const variable = await db.query.workspaceVariables.findFirst({ where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, workspaceId)) });
     if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (strictAuditEnabled() && variable.sensitive === true) {
+      await auditLog("read", "workspace-variable", varId, user?.id ?? null, ws.orgId, {
+        workspaceId,
+        key: variable.key,
+        sensitive: true,
+      });
+    }
     return { data: workspaceVariableResource(variable) };
   })
   .patch("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

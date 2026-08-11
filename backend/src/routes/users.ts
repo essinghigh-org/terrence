@@ -16,7 +16,7 @@ import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzl
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
-import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
 import { authPlugin } from "../auth";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -341,6 +341,12 @@ export const userRoutes = new Elysia({ name: "users" })
       teamId: null,
     };
     await db.insert(apiTokens).values(createdToken);
+    if (strictAuditEnabled()) {
+      await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
+        description,
+        source: "user",
+      });
+    }
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })

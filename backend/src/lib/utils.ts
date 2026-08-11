@@ -88,6 +88,18 @@ export async function auditLog(
   } catch {}
 }
 
+/**
+ * Strict audit mode (kanban 12.16): when AUDIT_STRICT=1, operations that
+ * touch especially sensitive material (token minting, SSH key material,
+ * sensitive variable reads) are recorded in the audit log in addition to
+ * the unconditional entries (e.g. raw state downloads). Defaults off so
+ * self-hosters on constrained storage are not surprised by extra rows.
+ */
+export function strictAuditEnabled(): boolean {
+  const v = process.env.AUDIT_STRICT;
+  return v === "1" || v === "true";
+}
+
 export async function checkOrgPermission(
   userId: string | undefined,
   orgId: string,

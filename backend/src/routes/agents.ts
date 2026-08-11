@@ -14,7 +14,7 @@ import {
   type users,
 } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
-import { checkOrganizationPermission , type DeepReadonly } from "../lib/utils";
+import { checkOrganizationPermission , type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { createHash } from "node:crypto";
 import { authPlugin } from "../auth";
@@ -790,6 +790,12 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const rawToken = `agent-${crypto.randomUUID().replace(/-/g, "")}`;
     const tokenId = `atok-${crypto.randomUUID()}`;
     await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: createHash("sha256").update(rawToken).digest("hex"), description, createdAt: Date.now() });
+    if (strictAuditEnabled()) {
+      await auditLog("create", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, {
+        agentPoolId: poolId,
+        description,
+      });
+    }
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: rawToken, description, "created-at": new Date().toISOString() } } };
   });

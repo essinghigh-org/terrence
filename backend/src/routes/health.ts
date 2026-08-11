@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 // otherwise "dev". Read once at first call and cached; a missing or
 // unparseable package.json must never crash the metadata endpoint.
 let cachedAppVersion: string | undefined;
-function appVersion(): string {
+export function appVersion(): string {
   if (cachedAppVersion !== undefined) return cachedAppVersion;
   const fromEnv = process.env.BUILD_VERSION;
   if (typeof fromEnv === "string" && fromEnv.trim() !== "") {

@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { sshKeys, organizations } from "../db/schema";
 import { eq } from "drizzle-orm";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, auditLog, strictAuditEnabled } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { encryptSecret } from "../lib/secrets";
 
@@ -32,6 +32,9 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const keyList = await db.query.sshKeys.findMany({ where: eq(sshKeys.orgId, org.id) });
+    if (strictAuditEnabled()) {
+      await auditLog("read", "ssh-key", null, user?.id ?? null, org.id, { scope: "organization-list", count: keyList.length });
+    }
     return { data: keyList.map((k: { readonly id: string; readonly name: string }): Record<string, unknown> => ({ id: k.id, type: "ssh-keys", attributes: { name: k.name } })) };
   })
   .post("/api/v2/organizations/:org_name/ssh-keys", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -44,6 +47,9 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     if (name === "" || value === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and value are required" }] }; }
     const id = `ssh-${crypto.randomUUID()}`;
     await db.insert(sshKeys).values({ id, orgId: org.id, name, value: await encryptSecret(value), createdAt: Date.now() });
+    if (strictAuditEnabled()) {
+      await auditLog("create", "ssh-key", id, user?.id ?? null, org.id, { name });
+    }
     (set as { status: number }).status = 201;
     return { data: { id, type: "ssh-keys", attributes: { name } } };
   })
@@ -51,6 +57,9 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     const sshKeyId = params.ssh_key_id ?? "";
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (strictAuditEnabled()) {
+      await auditLog("read", "ssh-key", key.id, user?.id ?? null, key.orgId, { name: key.name });
+    }
     return { data: { id: key.id, type: "ssh-keys", attributes: { name: key.name } } };
   })
   .patch("/api/v2/ssh-keys/:ssh_key_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -62,6 +71,9 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     if (typeof attrs.name === "string") updates.name = attrs.name;
     if (typeof attrs.value === "string") updates.value = await encryptSecret(attrs.value);
     if (Object.keys(updates).length > 0) await db.update(sshKeys).set(updates).where(eq(sshKeys.id, sshKeyId));
+    if (strictAuditEnabled()) {
+      await auditLog("update", "ssh-key", sshKeyId, user?.id ?? null, key.orgId, { name: key.name, "value-replaced": attrs.value !== undefined });
+    }
     const updated = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     return { data: { id: updated?.id ?? "unknown", type: "ssh-keys", attributes: { name: updated?.name ?? "" } } };
   })
@@ -70,6 +82,9 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     const key = await db.query.sshKeys.findFirst({ where: eq(sshKeys.id, sshKeyId) });
     if (key === undefined || !(await checkOrganizationPermission(key.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(sshKeys).where(eq(sshKeys.id, sshKeyId));
+    if (strictAuditEnabled()) {
+      await auditLog("delete", "ssh-key", sshKeyId, user?.id ?? null, key.orgId, { name: key.name });
+    }
     (set as { status: number }).status = 204;
     return {};
   });
