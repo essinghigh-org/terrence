@@ -12,6 +12,7 @@ import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { Select, SelectItem } from "../components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Boxes, Plus, Trash2 } from "lucide-react";
 
 type RegistryProvider = {
@@ -33,12 +34,12 @@ export function RegistryProviders(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
   const [providers, setProviders] = useState<RegistryProvider[]>([]);
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-providers");
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -51,30 +52,38 @@ export function RegistryProviders(): React.JSX.Element {
 
   useEffect((): void => {
     setProviders([]);
-    setManageableOrganizationName("");
     setCreateDialogOpen(false);
     setProviderToDelete(null);
-    if (orgName !== "") void loadProviders();
+    permissionGateFired.current = false;
   }, [orgName]);
+
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-providers")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadProviders();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage registry providers for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadProviders = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-providers"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-providers"] !== true) {
-        setError("You do not have permission to manage registry providers for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/registry-providers`,
       ) as { data: RegistryProvider[] };
