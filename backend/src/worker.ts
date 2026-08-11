@@ -37,6 +37,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
+import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus } from "./lib/run-status";
@@ -393,11 +394,17 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     if (planJson === undefined) throw new Error("Persisted Terraform plan JSON is unavailable.");
     await writeFile(inputPath, JSON.stringify(planJson), { mode: 0o600 });
 
-    const configuredValue = Reflect.get(process.env, "INFRACOST_BINARY") as unknown;
-    const configuredBinary = typeof configuredValue === "string" ? configuredValue.trim() : undefined;
-    const binary = configuredBinary === undefined || configuredBinary === "" ? "infracost" : configuredBinary;
+    // Resolve the Infracost binary: an explicit INFRACOST_BINARY override wins,
+    // otherwise a version-pinned binary managed under <storage>/binaries/
+    // (selected by INFRACOST_VERSION) is installed on demand and digest-verified.
+    // A null here means no binary could be resolved/installed; the estimate is
+    // recorded as errored (non-fatal to the surrounding plan/apply run).
+    const managed = await resolveInfracostBinary();
+    if (managed === null) {
+      throw new Error("Infracost binary is unavailable (no INFRACOST_BINARY override and managed install failed)");
+    }
     const costProcess = spawn(
-      [binary, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
+      [managed.binaryPath, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
       {
         cwd: executionDir,
         env: infracostEnvironment(),

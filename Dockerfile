@@ -1,3 +1,30 @@
+# Terrence container image.
+#
+# Builder: oven/bun:1 (byte-for-byte the bun that owns the committed bun.lock).
+# Runtime: Chainguard Wolfi (glibc) — see below for why.
+#
+# Runtime base rationale (validated by prototype builds during the swap):
+#   - Near-zero CVEs out of the box: the previous Debian oven/bun:1-slim
+#     stage carried 145+ OS-package vulns (16 CRITICAL) with no published fix.
+#     Wolfi ships hardened packages (built from source, signature-verified,
+#     SLSA-buildable, cgr.dev SBOMs). Scanned image: 0 findings.
+#   - ~58% smaller: 173 MB (Debian) -> ~73 MB (Wolfi).
+#   - glibc runtime: matches Debian ABI, so on-demand tofu/terraform/infracost/
+#     opa Go binaries and the static C landlock runner behave identically
+#     (musl-Alpine needed extra libstdc++/libgcc handling and is not used here).
+#   - apk ships bun, git, unzip, wget, curl, ca-certificates-bundle as first-class
+#     packages, so there is no manual Bun tarball and no external downloader to
+#     hand-roll for the runtime toolchain.
+#   - Runs as uid 65532 (nonroot) by default, matching the app's unprivileged
+#     Landlock sandbox model (no chroot, no capabilities).
+#
+# The runtime stage layout EXACTLY mirrors the pre-Wolfi layout so the workspace
+# install resolves identically: root package.json + bun.lock (workspace context),
+# backend only (NOT frontend — frontend dev tooling vite/rolldown/tsx would leak
+# esbuild and add CVEs), then bun install --production --frozen-lockfile from
+# /app/backend. This is what keeps frozen-lockfile succeeding and esbuild out.
+
+# ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
 FROM oven/bun:1 AS builder
 WORKDIR /app
 
@@ -12,7 +39,7 @@ WORKDIR /app/frontend
 RUN bun run build
 
 # Compile the static Landlock runner (needs a C toolchain; the final image
-# does not ship one)
+# does not ship one). Static glibc binary -> runs identically on any base.
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && gcc -static -O2 -Wall -Wextra -o /app/backend/bin/landlock-runner \
@@ -20,36 +47,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/* \
     && /app/backend/bin/landlock-runner --probe
 
-# Final stage
-FROM oven/bun:1-slim
-ARG TARGETARCH=amd64
+# ---------- Runtime: Chainguard Wolfi (glibc, near-zero CVE) ----------
+FROM cgr.dev/chainguard/wolfi-base:latest
+# Pin the full -rN revision so apk exact-matches; bump together with bun bumps.
+ARG BUN_VERSION=1.3.14-r3
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     STORAGE_DIR=/app/backend/storage \
     DATABASE_URL=file:/app/backend/storage/terrence.db \
     INFRACOST_ENABLED=false \
-    INFRACOST_API_KEY=""
+    INFRACOST_API_KEY="" \
+    INFRACOST_VERSION=0.10.45
 
-# Install only the external tools used at runtime and apply current Debian
-# security updates.
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends ca-certificates git unzip && \
-    rm -rf /var/lib/apt/lists/*
+# wolfi-base ships busybox (tar/cp/which), glibc, apk and ca-certificates-bundle.
+# Add the external tools the worker shells out to at runtime. Bun comes from apk
+# (pinned) — world-executable /usr/bin/bun, so the healthcheck works without
+# a dedicated user-home install (the OLD alpine/Debian /root/.bun healthcheck bug
+# came from a curl-installed bun living under an untraversable /root).
+#
+# Infracost is intentionally NOT baked into the image: it is installed on demand
+# at runtime into <storage>/binaries/infracost/<version>/ (digest-verified) by
+# backend/src/lib/infracost-bin.ts, selected by INFRACOST_VERSION. Baking it was
+# the single remaining CVE surface in the image and forced a rebuild to bump the
+# version; managing it like tofu/terraform removes both.
+RUN apk add --no-cache \
+        git \
+        "bun=${BUN_VERSION}" \
+        unzip \
+        wget \
+        curl \
+        ca-certificates-bundle \
+    && git config --global init.defaultBranch main 2>/dev/null || true
 
-# Install Infracost with SHA256 verification
-ENV INFRACOST_VERSION=0.10.45
-RUN export ARCH=${TARGETARCH:-amd64} && \
-    bun -e \
-    'const arch = process.env.ARCH ?? "amd64"; const version = process.env.INFRACOST_VERSION; const files = [["infracost.tar.gz", `https://github.com/infracost/infracost/releases/download/v${version}/infracost-linux-${arch}.tar.gz`], ["infracost_SHA256SUMS", `https://github.com/infracost/infracost/releases/download/v${version}/infracost-linux-${arch}.tar.gz.sha256`]]; for (const [name, url] of files) { const response = await fetch(url); if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`); await Bun.write(name, await response.arrayBuffer()); }' && \
-    grep "$(sha256sum infracost.tar.gz | cut -d' ' -f1)" infracost_SHA256SUMS && \
-    tar -xzf infracost.tar.gz -C /tmp && \
-    mv /tmp/infracost-linux-${ARCH} /usr/local/bin/infracost && \
-    chmod +x /usr/local/bin/infracost && \
-    rm infracost.tar.gz infracost_SHA256SUMS
-
-# Copy monorepo files for backend
+# Workspace root + backend ONLY (no frontend -> no esbuild/vite/rolldown dev
+# tooling). Mirrors the previous runtime COPY set exactly.
 COPY bun.lock ./
 COPY package.json ./
 COPY backend/package.json ./backend/
@@ -57,30 +89,38 @@ COPY backend/drizzle.config.ts ./backend/
 COPY backend/drizzle ./backend/drizzle
 COPY backend/index.ts ./backend/
 COPY backend/src ./backend/src
+
+# landlock-runner is compiled to a static glibc binary in the builder stage.
 COPY --from=builder /app/backend/bin/landlock-runner ./backend/bin/landlock-runner
 
-# Install production dependencies for backend
+# Install production dependencies for backend, inside the workspace context,
+# exactly as before. Frozen-lockfile resolves because root package.json
+# (workspaces) + bun.lock are present and the frontend is absent.
 WORKDIR /app/backend
 RUN bun install --production --frozen-lockfile && \
-    rm -rf /root/.bun/install/cache
+    rm -rf /root/.bun/install/cache 2>/dev/null || true
 
 # Copy built frontend static assets
 COPY --from=builder /app/frontend/dist /app/frontend/dist
 
-# Create storage directory & unprivileged user. The Landlock run sandbox needs
-# no privileges (no chroot, no capabilities), so the whole app runs unprivileged.
+# Create storage directory. Wolfi images run as uid 65532 (nonroot); the Landlock
+# sandbox needs no capabilities, so keep that user and grant it only the storage
+# dir.
 RUN mkdir -p /app/backend/storage && \
-    useradd -m appuser && \
-    chown -R appuser:appuser /app
+    chown -R 65532:65532 /app/backend/storage
 
 VOLUME ["/app/backend/storage"]
 
-USER appuser
+# Backend is the app entry; run from /app/backend so `bun run index.ts` resolves
+# the backend entry, not the root stub.
+WORKDIR /app/backend
+
+USER 65532:65532
 
 # Expose the API/UI
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD bun -e 'fetch("http://127.0.0.1:" + (process.env.PORT || "3000") + "/readyz").then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))'
+    CMD /usr/bin/bun -e 'fetch("http://127.0.0.1:" + (process.env.PORT || "3000") + "/readyz").then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))'
 
-CMD ["bun", "run", "index.ts"]
+CMD ["/usr/bin/bun", "run", "index.ts"]

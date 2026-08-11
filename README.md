@@ -65,6 +65,8 @@ Terrence runs with no environment variables in development. All supported variab
 | `CORS_ORIGIN` | — | CORS origin (defaults to `http://localhost:5173` in non-production) |
 | `SESSION_KEY` | auto-generated | Session encryption key |
 | `INFRACOST_ENABLED` | `false` | Enable Infracost for cost estimation |
+| `INFRACOST_VERSION` | `0.10.45` | Infracost version to use. Managed on demand into `<STORAGE_DIR>/binaries/infracost/<version>/` (digest-verified, like tofu/terraform); bump without a rebuild. |
+| `INFRACOST_BINARY` | — | Optional absolute path override for the Infracost executable; when set, it is used as-is instead of the managed binary in `INFRACOST_VERSION`. |
 | `GITHUB_APP_ID` | — | GitHub App ID for VCS integration |
 | `GITHUB_APP_SLUG` | — | GitHub App slug |
 | `GITHUB_APP_PRIVATE_KEY` | — | GitHub App RSA private key |
