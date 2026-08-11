@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { renderPayloadForDestination } from "../../src/lib/notifications";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { renderPayloadForDestination, verifyDestinationOwnership, _ownershipVerified } from "../../src/lib/notifications";
 
 // Only destinationType and token are consulted by renderPayloadForDestination;
 // the remaining fields are type-fixed placeholders. NotificationConfiguration
@@ -7,13 +7,13 @@ import { renderPayloadForDestination } from "../../src/lib/notifications";
 // parameter slot.
 type Config = Parameters<typeof renderPayloadForDestination>[0];
 
-function config(destinationType: Config["destinationType"]): Config {
+function config(destinationType: Config["destinationType"], url = "https://example.invalid/hook", id = `cfg-${crypto.randomUUID()}`): Config {
   return {
-    id: "cfg",
+    id,
     workspaceId: "ws",
     name: "n",
     destinationType,
-    url: "https://example.invalid/hook",
+    url,
     triggers: [],
     enabled: true,
     token: null,
@@ -106,5 +106,101 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(teams.title).toBe("Drift Detected");
     expect(teams.sections?.[0]?.facts).toContainEqual({ name: "Resources drifted", value: "3" });
     expect(teams.sections?.[0]?.facts).toContainEqual({ name: "Failed checks", value: "1" });
+  });
+});
+
+describe("Notification destination ownership verification (kanban 7.7)", () => {
+  const prevAllow = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+  beforeAll(() => {
+    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+  });
+  afterAll(() => {
+    if (prevAllow === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+    else process.env.TERRENCE_ALLOW_PRIVATE_URLS = prevAllow;
+  });
+
+  it("verifies ownership when the destination echoes the challenge in its response body", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const body = await req.json() as { ownership_challenge?: string };
+        return new Response(JSON.stringify({ echoed: body.ownership_challenge }));
+      },
+    });
+    try {
+      const cfg = config("generic", server.url.toString());
+      const outcome = await verifyDestinationOwnership(cfg);
+      expect(outcome.successful).toBeTrue();
+      expect(outcome.bodyLacksEcho).toBeFalse();
+      expect(_ownershipVerified(cfg.id)).toBeTrue();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  it("verifies ownership via the X-Terrence-Ownership-Challenge response header", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const body = await req.json() as { ownership_challenge?: string };
+        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" } });
+      },
+    });
+    try {
+      const outcome = await verifyDestinationOwnership(config("slack", server.url.toString()));
+      expect(outcome.successful).toBeTrue();
+      expect(outcome.headerLacksEcho).toBeFalse();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  it("marks a destination unverified when it does not echo the challenge", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+    try {
+      const outcome = await verifyDestinationOwnership(config("generic", server.url.toString()));
+      expect(outcome.successful).toBeFalse();
+      expect(outcome.bodyLacksEcho).toBeTrue();
+      expect(outcome.headerLacksEcho).toBeTrue();
+      expect(_ownershipVerified("cfg")).toBeFalse();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  it("a successful verification persists across a later failed echo (in-process TTL, not reset)", async () => {
+    let echo = true;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        if (!echo) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        const body = await req.json() as { ownership_challenge?: string };
+        return new Response(JSON.stringify({ echoed: body.ownership_challenge }));
+      },
+    });
+    try {
+      const cfg = config("generic", server.url.toString());
+      expect(_ownershipVerified(cfg.id)).toBeFalse();
+      await verifyDestinationOwnership(cfg);
+      expect(_ownershipVerified(cfg.id)).toBeTrue();
+
+      // A later failed echo does not wipe the earlier verified record; the
+      // operator is not forced to re-verify on every transient blip.
+      echo = false;
+      const retry = await verifyDestinationOwnership(cfg);
+      expect(retry.successful).toBeFalse();
+      expect(_ownershipVerified(cfg.id)).toBeTrue();
+    } finally {
+      await server.stop(true);
+    }
   });
 });

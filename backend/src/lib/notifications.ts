@@ -344,6 +344,94 @@ export function renderPayloadForDestination(
   return { body: JSON.stringify(payload), contentType: "application/json" };
 }
 
+// ---------------------------------------------------------------------------
+// Destination ownership verification (kanban 7.7).
+//
+// Verifying that a webhook URL actually belongs to the operator prevents both
+// mis-configuration and sending orchestration payloads to a URL the operator
+// does not control. The flow is a one-time challenge/echo handshake:
+//
+//   1. The caller requests verification; we POST a payload containing a fresh
+//      `ownership_challenge` token to the destination.
+//   2. The destination proves ownership by echoing that exact token — either
+//      in its HTTP response body or in the `X-Terrence-Ownership-Challenge`
+//      response header.
+//   3. If the echo matches, the configuration is recorded as ownership-verified
+//      (in-process, with a TTL). Verification is OPTIONAL: enabling notifications
+//      never depends on it, so existing deployments are unaffected.
+//
+// The verification outcome is surfaced via a dedicated endpoint and recorded
+// in-process purely to let operators confirm, before enablement, that the
+// endpoint is genuinely theirs.
+// ---------------------------------------------------------------------------
+const OWNERSHIP_VERIFIED_TTL_MS = 30 * 60 * 1_000; // 30 minutes
+const ownershipVerified = new Map<string, number>();
+
+/** Only exported for tests. */
+export function _ownershipVerified(configurationId: string): boolean {
+  const ts = ownershipVerified.get(configurationId);
+  if (ts === undefined) return false;
+  if (Date.now() - ts < OWNERSHIP_VERIFIED_TTL_MS) return true;
+  ownershipVerified.delete(configurationId);
+  return false;
+}
+
+export function recordOwnershipVerified(configurationId: string): void {
+  ownershipVerified.set(configurationId, Date.now());
+}
+
+export type OwnershipVerification = Readonly<{
+  successful: boolean;
+  echoed: string | null;
+  bodyLacksEcho: boolean;
+  headerLacksEcho: boolean;
+}>;
+
+/**
+ * POST a one-time `ownership_challenge` to the destination and verify the
+ * destination echoes it back (response body or header). Returns a structured
+ * result with the echo outcome so the caller can surface a clear error.
+ */
+export async function verifyDestinationOwnership(
+  configuration: NotificationConfiguration,
+): Promise<OwnershipVerification> {
+  const challenge = crypto.randomUUID();
+  const payload: Record<string, unknown> = {
+    payload_version: 1,
+    notification_configuration_id: configuration.id,
+    ownership_challenge: challenge,
+    ownership_verification: true,
+  };
+
+  const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
+  const urlError = validateExternalUrl(configuration.url, allowPrivate);
+  if (urlError !== null) {
+    return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(configuration.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {
+    return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };
+  }
+
+  const responseBody = await response.text();
+  const headerEcho = response.headers.get("x-terrence-ownership-challenge") ?? "";
+  const bodyLacksEcho = !responseBody.includes(challenge);
+  const headerLacksEcho = headerEcho !== challenge;
+
+  const successful = !bodyLacksEcho || !headerLacksEcho;
+  if (successful) recordOwnershipVerified(configuration.id);
+  return { successful, echoed: responseBody.slice(0, 256), bodyLacksEcho, headerLacksEcho };
+}
+
 export async function deliverRunNotifications(
   runId: string,
   trigger: string,

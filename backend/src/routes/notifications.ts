@@ -9,7 +9,7 @@ import {
   type users,
   workspaces,
 } from "../db/schema";
-import { postNotification, type NotificationDelivery } from "../lib/notifications";
+import { _ownershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 import { isNotificationDestination } from "../lib/constants";
 
@@ -376,4 +376,39 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       // the caller can confirm the destination received the right payload.
       data: { ...notificationResource(configuration, [delivery]), verification: deliveryResource(delivery) },
     };
+  })
+  .post("/api/v2/notification-configurations/:nc_id/actions/verify-ownership", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    if (configuration === undefined) return notFound(set);
+
+    // Ownership verification (7.7): POST a one-time challenge token and require
+    // the destination to echo it back (response body or header) as proof that
+    // the operator controls the endpoint. Optional — it never gates delivery.
+    const outcome = await verifyDestinationOwnership(configuration);
+    if (!outcome.successful) {
+      (set as { status: number }).status = 400;
+      const detail = outcome.echoed === null
+        ? "Destination did not respond to the ownership challenge (unreachable)."
+        : "Destination did not echo the ownership challenge token. Confirm the webhook handler returns the `ownership_challenge` value in its response body or the `X-Terrence-Ownership-Challenge` header.";
+      return {
+        errors: [{
+          status: "400",
+          title: "Ownership Not Verified",
+          detail,
+          ownership_verified: false,
+          response_preview: outcome.echoed,
+        }],
+      };
+    }
+    return {
+      data: {
+        ...notificationResource(configuration),
+        ownership_verified: true,
+      },
+    };
+  })
+  .get("/api/v2/notification-configurations/:nc_id/ownership-verified", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
+    if (configuration === undefined) return notFound(set);
+    return { data: { id: configuration.id, ownership_verified: _ownershipVerified(configuration.id) } };
   });
