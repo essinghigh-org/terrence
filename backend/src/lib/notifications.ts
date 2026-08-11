@@ -36,7 +36,107 @@ function responseHeaders(headers: Readonly<Headers>): Record<string, string[]> {
   return result;
 }
 
-export async function postNotification(
+// ---------------------------------------------------------------------------
+// Per-destination circuit breaker (kanban 7.8).
+//
+// A broken endpoint must not generate endless retry pressure. Each
+// notification configuration tracks recent consecutive failures; after
+// BREAKER_FAILURE_LIMIT trips in a row the breaker "opens" and deliveries are
+// skipped (returning a fast, unsuccessful sentinel) until the cooldown
+// elapses. A single successful delivery resets the failure count.
+// ---------------------------------------------------------------------------
+const BREAKER_FAILURE_LIMIT = 3;
+const BREAKER_OPEN_MS = 60_000;
+
+type BreakerState = Readonly<{ failures: number; openedAfterSample: number | null }>;
+const breakers = new Map<string, BreakerState>();
+
+/** Only exported for tests. */
+export function _breakerState(configurationId: string): Readonly<{ open: boolean; remainingMs: number; failures: number }> {
+  const state = breakers.get(configurationId);
+  if (state === undefined) return { open: false, remainingMs: 0, failures: 0 };
+  const open = state.openedAfterSample !== null && Date.now() < state.openedAfterSample + BREAKER_OPEN_MS;
+  if (open) return { open: true, remainingMs: state.openedAfterSample + BREAKER_OPEN_MS - Date.now(), failures: state.failures };
+  return { open: false, remainingMs: 0, failures: state.failures };
+}
+
+function recordBreakerFailure(configurationId: string): void {
+  const current = breakers.get(configurationId);
+  const failures = (current?.failures ?? 0) + 1;
+  const openedAfterSample = failures >= BREAKER_FAILURE_LIMIT ? Date.now() : current?.openedAfterSample ?? null;
+  breakers.set(configurationId, { failures, openedAfterSample });
+}
+
+function recordBreakerSuccess(configurationId: string): void {
+  breakers.delete(configurationId);
+}
+
+function breakerRefusesDelivery(configurationId: string): boolean {
+  const state = breakers.get(configurationId);
+  if (state === undefined) return false;
+  const open = state.openedAfterSample !== null && Date.now() < state.openedAfterSample + BREAKER_OPEN_MS;
+  // Once the cooldown elapses, reopen the breaker by clearing its state so the
+  // next attempt re-enters the failure counter fresh.
+  if (state.openedAfterSample !== null && !open) {
+    breakers.delete(configurationId);
+    return false;
+  }
+  return open;
+}
+
+// ---------------------------------------------------------------------------
+// Logical-notification dedup (kanban 7.9).
+//
+// A run's status can be written more than once (retries, reconcile loops,
+// webhook replays). These repeatedly call deliverRunNotifications with the
+// same (runId, trigger, status). We keep a short in-process TTL so the SAME
+// logical notification is emitted at most once per DEDUP_WINDOW_MS. A distinct
+// trigger or a status change produces a fresh key and is always delivered.
+// ---------------------------------------------------------------------------
+const DEDUP_WINDOW_MS = 5_000;
+const emittedKeys = new Map<string, number>();
+
+/** Only exported for tests. */
+export function _dedup(reset?: boolean): void {
+  if (reset === true) emittedKeys.clear();
+}
+
+function dedupAlreadyDelivered(scope: "run" | "assessment", key: string): boolean {
+  const now = Date.now();
+  const fullKey = `${scope}:${key}`;
+  const prior = emittedKeys.get(fullKey);
+  if (prior !== undefined && now - prior < DEDUP_WINDOW_MS) {
+    return true;
+  }
+  // Prune stale entries opportunistically so the map does not grow unbounded.
+  if (emittedKeys.size > 1_000) {
+    for (const [mapKey, ts] of emittedKeys) {
+      if (now - ts >= DEDUP_WINDOW_MS) emittedKeys.delete(mapKey);
+    }
+  }
+  emittedKeys.set(fullKey, now);
+  return false;
+}
+
+export function postNotification(
+  configuration: NotificationConfiguration,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<NotificationDelivery> {
+  if (breakerRefusesDelivery(configuration.id)) {
+    return Promise.resolve({
+      body: `Destination temporarily disabled by circuit breaker (${BREAKER_OPEN_MS / 1000}s cooldown).`,
+      code: "0",
+      headers: {},
+      sentAt: new Date().toISOString(),
+      successful: false,
+      url: configuration.url,
+      attempts: 0,
+    });
+  }
+  return doPostNotification(configuration, payload);
+}
+
+async function doPostNotification(
   configuration: NotificationConfiguration,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
@@ -68,6 +168,9 @@ export async function postNotification(
       });
       const responseBody = await lastResponse.text();
       if (lastResponse.ok || (lastResponse.status < 500 && lastResponse.status !== 429)) {
+        // Reachable endpoint: the breaker resets regardless of HTTP status
+        // (a 4xx means the destination is up and responding).
+        recordBreakerSuccess(configuration.id);
         return {
           body: responseBody.slice(0, 16_384),
           code: String(lastResponse.status),
@@ -84,6 +187,9 @@ export async function postNotification(
     }
   }
 
+  // Exhausted retries while the endpoint was unreachable, timing out, or
+  // consistently 5xx/429 — count this toward opening the circuit breaker.
+  recordBreakerFailure(configuration.id);
   return {
     body: lastError.slice(0, 16_384),
     code: lastResponse === undefined ? "0" : String(lastResponse.status),
@@ -141,6 +247,10 @@ export async function deliverRunNotifications(
   ).toString();
   const updatedAt = new Date().toISOString();
   const runStatus = statusOverride ?? run.status;
+
+  if (dedupAlreadyDelivered("run", `${run.id}:${trigger}:${runStatus}`)) {
+    return [];
+  }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
     postNotification(configuration, {
@@ -200,6 +310,10 @@ export async function deliverAssessmentNotifications(
   if (result === undefined) return [];
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, result.workspaceId) });
   if (workspace === undefined) return [];
+
+  if (dedupAlreadyDelivered("assessment", `${assessmentResultId}:${trigger}`)) {
+    return [];
+  }
 
   const [organization, prior, configurations] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),

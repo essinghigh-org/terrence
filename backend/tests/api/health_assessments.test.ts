@@ -64,7 +64,7 @@ test("schedules eligible assessments separately from runs and records drift, che
       runs,
       workspaces,
     } = await import("./src/db/schema.ts");
-    const { deliverAssessmentNotifications } = await import("./src/lib/notifications.ts");
+    const { _dedup, deliverAssessmentNotifications } = await import("./src/lib/notifications.ts");
     const { enqueueDueAssessments, pollAssessmentQueue } = await import("./src/worker.ts");
 
     const now = 2_000_000_000_000;
@@ -118,6 +118,12 @@ test("schedules eligible assessments separately from runs and records drift, che
       triggers: ["assessment:drifted", "assessment:check_failure"],
       enabled: true,
     });
+    // The worker already emitted these logical notifications during queue
+    // polling above (worker.ts queueAssessmentNotification), so clear the
+    // 7.9 dedup state here: this test's explicit calls validate the payload
+    // shape, not duplicate suppression (which notifications_breaker_dedup
+    // covers directly).
+    _dedup(true);
     await deliverAssessmentNotifications(completed[0].id, "assessment:drifted");
     await deliverAssessmentNotifications(completed[0].id, "assessment:check_failure");
 
