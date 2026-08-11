@@ -2201,7 +2201,25 @@ async function executeAssessment(assessmentResultId: string): Promise<void> {
   }
 }
 
+/**
+ * Queue-poll gate: serializes poll passes so concurrent callers (tests, a
+ * second worker instance in the same process) cannot nest SQLite
+ * transactions. The agent-claim path runs db.transaction() with an awaiting
+ * callback; two overlapping pollers would otherwise hit "cannot start a
+ * transaction within a transaction" and silently drop claims (22.11).
+ */
+let pollQueueGate: Promise<void> = Promise.resolve();
+function withQueueGate<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pollQueueGate.then(fn);
+  pollQueueGate = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 export async function pollAssessmentQueue(): Promise<string[]> {
+  return withQueueGate(async (): Promise<string[]> => {
   const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
@@ -2231,11 +2249,13 @@ export async function pollAssessmentQueue(): Promise<string[]> {
     });
   }
   return claimed;
+  });
 }
 
 let isWorkerLoopRunning = false;
 
 export async function pollWorkerQueue(): Promise<string[]> {
+  return withQueueGate(async (): Promise<string[]> => {
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
   const pendingRuns = await db.query.runs.findMany({
@@ -2365,6 +2385,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
   }
 
   return claimedRunIds;
+  });
 }
 
 /**
