@@ -94,9 +94,13 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
     // One query for every config's key versions instead of one per row.
-    const keyVersions = await db.query.hyokCustomerKeyVersions.findMany({
-      where: rows.length > 0 ? inArray(hyokCustomerKeyVersions.hyokConfigId, rows.map((row) => row.id)) : undefined,
-    });
+    // An empty rows list must not run an unfiltered findMany (that would
+    // return every key version in the database).
+    const keyVersions = rows.length === 0
+      ? []
+      : await db.query.hyokCustomerKeyVersions.findMany({
+          where: inArray(hyokCustomerKeyVersions.hyokConfigId, rows.map((row) => row.id)),
+        });
     const keyVersionsByConfig = new Map<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>();
     for (const kv of keyVersions) {
       const bucket = keyVersionsByConfig.get(kv.hyokConfigId);

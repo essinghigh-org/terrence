@@ -16,7 +16,13 @@ import type { Page } from "@playwright/test";
  * Run from the frontend directory:
  *   npx playwright test tests/e2e/accessibility.test.ts
  */
-const ADMIN_TOKEN = "terrence-test-pVhq8jdDKeWxwGCotTEMRNdnwsjpg9RU";
+/**
+ * Test-box admin token. Prefer TERRENCE_E2E_ADMIN_TOKEN from the
+ * environment; the fallback mirrors the value already committed in
+ * run-detail.test.ts — a local sandbox-only credential for the test
+ * instance on 127.0.0.1:3001, never a production secret.
+ */
+const ADMIN_TOKEN = process.env.TERRENCE_E2E_ADMIN_TOKEN ?? "terrence-test-pVhq8jdDKeWxwGCotTEMRNdnwsjpg9RU";
 const RUN_ID = "423b4c6e-3b0b-4707-94c6-678d80c43f09";
 
 /** Collect structural a11y violations from the rendered DOM. */
@@ -28,12 +34,20 @@ async function collectViolations(page: Page): Promise<string[]> {
       issues.push(`expected exactly one <main> landmark, found ${main.length}`);
     }
 
-    const accessibleName = (el: Element): string =>
-      el.getAttribute("aria-label")?.trim()
-      ?? (el.getAttribute("aria-labelledby")
-        ? [...document.querySelectorAll(`[id="${el.getAttribute("aria-labelledby")}"]`)].map((n) => n.textContent?.trim() ?? "").join(" ").trim()
-        : "")
-      ?? "";
+    const accessibleName = (el: Element): string => {
+      // aria-labelledby wins over aria-label per the accname algorithm;
+      // resolve each referenced id in order, joining trimmed text.
+      const labelledBy = el.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const resolved = labelledBy.split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+          .filter((text) => text !== "")
+          .join(" ")
+          .trim();
+        if (resolved !== "") return resolved;
+      }
+      return el.getAttribute("aria-label")?.trim() ?? "";
+    };
 
     for (const btn of document.querySelectorAll("button")) {
       if (btn.getAttribute("aria-hidden") !== null) continue;
