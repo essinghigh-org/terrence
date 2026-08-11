@@ -6,6 +6,7 @@ import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { FileClock, KeyRound, RefreshCw, ShieldX } from "lucide-react";
 
 type AuditTrailToken = {
@@ -25,12 +26,12 @@ export function AuditTrailTokens(): React.JSX.Element {
   const orgName = rawOrgName ?? "";
   const [token, setToken] = useState<AuditTrailToken | null>(null);
   const [generatedToken, setGeneratedToken] = useState("");
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-auditing");
 
   const [expiresIn, setExpiresIn] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -41,29 +42,38 @@ export function AuditTrailTokens(): React.JSX.Element {
   useEffect((): void => {
     setToken(null);
     setGeneratedToken("");
-    setManageableOrganizationName("");
     setActionError("");
+    permissionGateFired.current = false;
     if (orgName !== "") void loadAuditTrailToken();
   }, [orgName]);
+
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-auditing")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadAuditTrailToken();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage the audit trail token for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadAuditTrailToken = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-auditing"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-auditing"] !== true) {
-        setError("You do not have permission to manage the audit trail token for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/authentication-token?token=audit-trails`,
       ) as { data: AuditTrailToken };
