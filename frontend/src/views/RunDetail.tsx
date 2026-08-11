@@ -531,6 +531,9 @@ export function RunDetail({
   const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
   const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement | null>(null);
+  const explainerTriggerRef = useRef<HTMLElement | null>(null);
+  const explainerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const explainerContainerRef = useRef<HTMLDivElement | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
@@ -628,6 +631,52 @@ export function RunDetail({
       fullscreenTriggerRef.current = null;
     };
   }, [fullscreenLog]);
+
+  // Same focus contract for the plan-explainer dialog: focus the close
+  // button on open, trap Tab, close on Escape, restore focus on close.
+  useEffect((): (() => void) => {
+    if (!explainerOpen) return () => {};
+    explainerTriggerRef.current = document.activeElement as HTMLElement | null;
+    explainerCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setExplainerOpen(false);
+        return;
+      }
+      if (event.key === "Tab") {
+        const container = explainerContainerRef.current;
+        if (container === null) return;
+        const focusable = Array.from(
+          container.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+          ),
+        );
+        if (focusable.length === 0) {
+          event.preventDefault();
+          return;
+        }
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
+        const active = document.activeElement;
+        if (event.shiftKey) {
+          if (active === null || active === first || !container.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === null || active === last || !container.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      explainerTriggerRef.current?.focus();
+      explainerTriggerRef.current = null;
+    };
+  }, [explainerOpen]);
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
@@ -1403,7 +1452,12 @@ export function RunDetail({
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={(): void => { void handleExplainPlan(); }}
+                      onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
+                        // Inside the plan <summary>: opening the dialog must
+                        // not toggle the details section open/closed.
+                        event.stopPropagation();
+                        void handleExplainPlan();
+                      }}
                       aria-haspopup="dialog"
                     >
                       <Sparkles className="mr-2 size-4" aria-hidden="true" />
@@ -1901,6 +1955,7 @@ export function RunDetail({
 
       {explainerOpen && (
         <div
+          ref={explainerContainerRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="plan-explainer-heading"
@@ -1913,6 +1968,7 @@ export function RunDetail({
                 Plan explanation
               </h2>
               <Button
+                ref={explainerCloseRef}
                 type="button"
                 variant="ghost"
                 size="sm"

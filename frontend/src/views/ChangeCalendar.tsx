@@ -85,8 +85,11 @@ export function ChangeCalendar(): React.JSX.Element {
     return (): void => { cancelled = true; };
   }, [orgName]);
 
-  const workspaceUrl = (workspaceId: string): string =>
-    `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceId)}`;
+  // Workspace routes are name-based (matching TFE): links resolve through
+  // attributes.workspaceName, never the internal id. The run link is only
+  // rendered when the workspace name is available so it can never dangle.
+  const workspaceUrl = (workspaceName: string): string =>
+    `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -140,7 +143,7 @@ export function ChangeCalendar(): React.JSX.Element {
                         <div className="mt-1 text-sm text-muted-foreground">
                           {entry.attributes.workspaceName !== null ? (
                             <Link
-                              to={workspaceUrl(entry.attributes.workspaceId)}
+                              to={workspaceUrl(entry.attributes.workspaceName)}
                               className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                             >
                               {entry.attributes.workspaceName}
@@ -148,11 +151,11 @@ export function ChangeCalendar(): React.JSX.Element {
                           ) : (
                             "Workspace"
                           )}
-                          {entry.attributes.runId !== undefined && (
+                          {entry.attributes.runId !== undefined && entry.attributes.workspaceName !== null && (
                             <span>
                               {" · "}
                               <Link
-                                to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(entry.attributes.workspaceId)}/runs/${encodeURIComponent(entry.attributes.runId)}`}
+                                to={`${workspaceUrl(entry.attributes.workspaceName)}/runs/${encodeURIComponent(entry.attributes.runId)}`}
                                 className="rounded-sm font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                               >
                                 {entry.attributes.runId.slice(0, 8)}

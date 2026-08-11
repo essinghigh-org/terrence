@@ -9,7 +9,8 @@ import { Check, Plus, ShieldAlert, Trash2, X } from "lucide-react";
 
 type ApprovalWebhookSettings = {
   enabled?: boolean;
-  secret?: string;
+  secret?: string | null;
+  "secret-set"?: boolean;
   url?: string | null;
 };
 
@@ -29,6 +30,7 @@ type PlanExplainerSettings = {
   enabled?: boolean;
   "endpoint-url"?: string | null;
   "api-key"?: string | null;
+  "api-key-set"?: boolean;
   model?: string | null;
 };
 
@@ -80,6 +82,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [approvalEnabled, setApprovalEnabled] = useState(false);
   const [approvalUrl, setApprovalUrl] = useState("");
   const [approvalSecret, setApprovalSecret] = useState("");
+  const [approvalSecretSet, setApprovalSecretSet] = useState(false);
+  const [approvalClearSecret, setApprovalClearSecret] = useState(false);
 
   const [windowsEnabled, setWindowsEnabled] = useState(false);
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
@@ -87,6 +91,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [explainerEnabled, setExplainerEnabled] = useState(false);
   const [explainerUrl, setExplainerUrl] = useState("");
   const [explainerApiKey, setExplainerApiKey] = useState("");
+  const [explainerApiKeySet, setExplainerApiKeySet] = useState(false);
+  const [explainerClearApiKey, setExplainerClearApiKey] = useState(false);
   const [explainerModel, setExplainerModel] = useState("");
 
   useEffect((): void => {
@@ -101,14 +107,18 @@ export function AdminOperationsSettings(): React.JSX.Element {
         const approval = attributes["approval-webhook"] ?? {};
         setApprovalEnabled(approval.enabled === true);
         setApprovalUrl(approval.url ?? "");
-        setApprovalSecret(approval.secret ?? "");
+        setApprovalSecret("");
+        setApprovalSecretSet(approval["secret-set"] === true);
+        setApprovalClearSecret(false);
         const windowsGroup = attributes["maintenance-windows"] ?? {};
         setWindowsEnabled(windowsGroup.enabled === true);
         setWindows(windowsGroup.windows ?? []);
         const explainer = attributes["plan-explainer"] ?? {};
         setExplainerEnabled(explainer.enabled === true);
         setExplainerUrl(explainer["endpoint-url"] ?? "");
-        setExplainerApiKey(explainer["api-key"] ?? "");
+        setExplainerApiKey("");
+        setExplainerApiKeySet(explainer["api-key-set"] === true);
+        setExplainerClearApiKey(false);
         setExplainerModel(explainer.model ?? "");
       } catch (caught: unknown) {
         setLoadError(caught instanceof Error ? caught.message : String(caught));
@@ -131,7 +141,9 @@ export function AdminOperationsSettings(): React.JSX.Element {
     attributes["approval-webhook"] = {
       enabled: approvalEnabled,
       ...(approvalUrl !== "" ? { url: approvalUrl } : { url: null }),
-      ...(approvalSecret !== "" ? { secret: approvalSecret } : {}),
+      // secret omitted -> preserve the stored value; null -> clear it;
+      // non-empty -> replace it. The read surface only reports *-set.
+      ...(approvalClearSecret ? { secret: null } : approvalSecret !== "" ? { secret: approvalSecret } : {}),
     };
     attributes["maintenance-windows"] = {
       enabled: windowsEnabled,
@@ -145,7 +157,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
     attributes["plan-explainer"] = {
       enabled: explainerEnabled,
       ...(explainerUrl !== "" ? { "endpoint-url": explainerUrl } : { "endpoint-url": null }),
-      ...(explainerApiKey !== "" ? { "api-key": explainerApiKey } : { "api-key": null }),
+      ...(explainerClearApiKey ? { "api-key": null } : explainerApiKey !== "" ? { "api-key": explainerApiKey } : {}),
       ...(explainerModel !== "" ? { model: explainerModel } : { model: null }),
     };
     try {
@@ -232,15 +244,34 @@ export function AdminOperationsSettings(): React.JSX.Element {
               <label htmlFor="approval-secret" className="mb-1.5 block text-sm font-medium text-foreground">
                 Shared secret
               </label>
-              <Input
-                id="approval-secret"
-                value={approvalSecret}
-                onInput={(event): void => { setApprovalSecret(event.currentTarget.value); }}
-                placeholder="HMAC-SHA256 secret for request signatures"
-                className="max-w-xl"
-              />
+              <div className="flex max-w-xl items-center gap-2">
+                <Input
+                  id="approval-secret"
+                  type="password"
+                  value={approvalSecret}
+                  onInput={(event): void => {
+                    setApprovalSecret(event.currentTarget.value);
+                    setApprovalClearSecret(false);
+                  }}
+                  placeholder={approvalSecretSet ? "•••••••• (a secret is stored)" : "HMAC-SHA256 secret for request signatures"}
+                  className="flex-1"
+                />
+                {approvalSecretSet && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={(): void => {
+                      setApprovalSecret("");
+                      setApprovalClearSecret(true);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Required to verify incoming approval requests. Leave blank to disable verification.
+                Required to verify incoming approval requests. Leave blank to keep the stored secret.
               </p>
             </div>
           </CardContent>
@@ -364,7 +395,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       Schedule: {humanizeDays(window.days)} · {window["start-time"]}–{window["end-time"]}
-                      {window.timezone !== "" ? ` ${window.timezone}` : ""}
+                      {window.timezone !== undefined && window.timezone !== "" ? ` ${window.timezone}` : ""}
                     </div>
                   </div>
                 ))}
@@ -424,14 +455,32 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 <label htmlFor="explainer-api-key" className="mb-1.5 block text-sm font-medium text-foreground">
                   API key
                 </label>
-                <Input
-                  id="explainer-api-key"
-                  type="password"
-                  value={explainerApiKey}
-                  onInput={(event): void => { setExplainerApiKey(event.currentTarget.value); }}
-                  placeholder="Optional bearer token"
-                  className="font-mono"
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="explainer-api-key"
+                    type="password"
+                    value={explainerApiKey}
+                    onInput={(event): void => {
+                      setExplainerApiKey(event.currentTarget.value);
+                      setExplainerClearApiKey(false);
+                    }}
+                    placeholder={explainerApiKeySet ? "•••••••• (a key is stored)" : "Optional bearer token"}
+                    className="flex-1 font-mono"
+                  />
+                  {explainerApiKeySet && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={(): void => {
+                        setExplainerApiKey("");
+                        setExplainerClearApiKey(true);
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
               </div>
               <div>
                 <label htmlFor="explainer-model" className="mb-1.5 block text-sm font-medium text-foreground">

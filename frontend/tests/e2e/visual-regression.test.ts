@@ -9,7 +9,7 @@ import type { Page } from "@playwright/test";
 // Dynamic regions (relative timestamps, run statuses) are masked so the
 // baselines stay stable across runs.
 
-const ADMIN_TOKEN = "terrence-test-pVhq8jdDKeWxwGCotTEMRNdnwsjpg9RU";
+const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "terrence-test-pVhq8jdDKeWxwGCotTEMRNdnwsjpg9RU";
 
 const PAGES: ReadonlyArray<{ name: string; path: string }> = [
   { name: "admin-security", path: "/app/admin" },

@@ -19,16 +19,16 @@ describe("display time format preference", () => {
   it("defaults to the 24-hour cycle", () => {
     expect(getDisplayTimeFormat()).toBe("24");
     expect(resolveDisplayTimeFormat()).toBe("24");
-    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString(undefined, { hour12: false }));
+    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString("en-US", { hour12: false }));
   });
 
   it("uses the 12-hour cycle with an AM/PM suffix when selected", () => {
     setDisplayTimeFormat("12");
     expect(resolveDisplayTimeFormat()).toBe("12");
-    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString(undefined, { hour12: true }));
-    // Regression: the locale's default 12-hour cycle can render without an
-    // AM/PM suffix; an explicit 12-hour choice must always carry one.
-    expect(formatDateTime(timestamp)).toMatch(/AM|PM|am|pm/);
+    // formatDateTime renders with a fixed en-US locale, so the reference
+    // must be locale-independent too when asserting the AM/PM suffix.
+    expect(formatDateTime(timestamp)).toBe(new Date(timestamp).toLocaleString("en-US", { hour12: true }));
+    expect(formatDateTime(timestamp)).toMatch(/AM|PM/);
   });
 
   it("persists the selected format for the next session", () => {

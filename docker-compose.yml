@@ -18,8 +18,9 @@ services:
     # Sane resource limits for a self-hosted instance. Terraform plans and
     # applies can be memory-hungry, so size mem_limit for your largest
     # expected configuration and leave headroom for the worker. cpus is a
-    # relative share of the host's cores (Compose v2; omit or raise both for
-    # large configurations).
+    # hard cap on the number of host CPUs available to the container
+    # (Compose v2 cpu_limit semantics; not a relative share — use cpu_shares
+    # for relative weighting). Omit or raise both for large configurations.
     mem_limit: 4g
     cpus: "2.0"
     # No healthcheck override: the image's own Bun-based HEALTHCHECK (Dockerfile)

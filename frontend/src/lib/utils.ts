@@ -102,7 +102,10 @@ export function formatDateTime(
   if (Number.isNaN(date.valueOf())) return fallback;
   const options: Intl.DateTimeFormatOptions = { hour12: timeFormat === "12" };
   if (timeZone !== undefined) options.timeZone = timeZone;
-  return date.toLocaleString(undefined, options);
+  // Fixed locale: the product UI is English and the AM/PM suffix for the
+  // 12-hour cycle must render identically on every host (a locale like
+  // de-DE or ja-JP omits the day period even with hour12: true).
+  return date.toLocaleString("en-US", options);
 }
 
 /**
