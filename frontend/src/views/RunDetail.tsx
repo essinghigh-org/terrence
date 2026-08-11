@@ -1240,9 +1240,9 @@ export function RunDetail({
             {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-purple-700 border-purple-200 bg-purple-50">Refresh only</Badge>}
             {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-blue-700 border-blue-200 bg-blue-50">Allow empty apply</Badge>}
           </div>
-          <h1 className="break-words text-3xl font-bold tracking-tight text-gray-950">
+          <h2 className="break-words text-3xl font-bold tracking-tight text-gray-950">
             {attributes.message ?? "Manual run"}
-          </h1>
+          </h2>
           <p className="mt-2 text-[13px] text-gray-600">
             {statusLabel(attributes["trigger-reason"] ?? "manual")} · {attributes["trigger-reason"] === "manual" ? "UI" : sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
@@ -1418,7 +1418,7 @@ export function RunDetail({
         </dl>
         {timestampEntries.length > 0 && (
           <div className="border-t border-gray-200 px-5 py-4">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Run timeline</h2>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Run timeline</h3>
             <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
               {timestampEntries.map(([key, value]): React.JSX.Element => (
                 <div key={key}>
@@ -1442,9 +1442,9 @@ export function RunDetail({
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
-                  <h2 id="plan-heading" className="font-semibold capitalize text-gray-950">
+                  <h3 id="plan-heading" className="font-semibold capitalize text-gray-950">
                     Plan {planStatus.replace(/_/g, " ")}
-                  </h2>
+                  </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
                   {["finished", "planned_and_saved"].includes(planStatus) && (
@@ -1525,7 +1525,7 @@ export function RunDetail({
                 ) : (
                   <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
                 )}
-                <h2 id="cost-heading" className="font-semibold text-gray-950">Cost estimation</h2>
+                <h3 id="cost-heading" className="font-semibold text-gray-950">Cost estimation</h3>
               </div>
               <Badge variant={costFailed ? "destructive" : "secondary"} className="rounded capitalize">{costStatus}</Badge>
             </div>
@@ -1568,7 +1568,7 @@ export function RunDetail({
                 ) : (
                   <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
                 )}
-                <h2 id="policy-heading" className="font-semibold text-gray-950">Policy check</h2>
+                <h3 id="policy-heading" className="font-semibold text-gray-950">Policy check</h3>
               </div>
               <Badge variant={hasFailedPolicy ? "destructive" : "secondary"} className="rounded capitalize">
                 {policySummary}
@@ -1628,7 +1628,7 @@ export function RunDetail({
                   <div className="flex items-center gap-3">
                     <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
                     <div>
-                      <h2 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h2>
+                      <h3 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h3>
                       <p className="mt-1 text-xs text-muted-foreground">Terraform checks and drift validation reported for this run.</p>
                     </div>
                   </div>
@@ -1670,9 +1670,9 @@ export function RunDetail({
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
-                  <h2 id="apply-heading" className="font-semibold capitalize text-gray-950">
+                  <h3 id="apply-heading" className="font-semibold capitalize text-gray-950">
                     Apply {canApply ? "needs confirmation" : applyStatus.replace(/_/g, " ")}
-                  </h2>
+                  </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
                   <PhaseMeta
@@ -1718,7 +1718,7 @@ export function RunDetail({
 
             {["errored", "unreachable"].includes(applyStatus) && (
               <section aria-labelledby="apply-diagnostics-heading" className="border-t border-red-200 bg-red-50/70 px-5 py-4">
-                <h3 id="apply-diagnostics-heading" className="text-sm font-semibold text-red-900">Diagnostics</h3>
+                <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-red-900">Diagnostics</h4>
                 <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white p-4 font-mono text-xs leading-5 text-red-900">
                   {applyLogs !== "" ? applyLogs : "The apply failed before diagnostic output became available."}
                 </pre>
@@ -1752,9 +1752,9 @@ export function RunDetail({
             >
               {confirmationAction === null ? (
                 <>
-                  <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                  <h3 id="run-confirmation-heading" className="font-semibold text-amber-950">
                     Please review the planned changes before continuing
-                  </h2>
+                  </h3>
                   <div className="mt-3">
                     <ResourceCounts
                       additions={planCounts["resource-additions"]}
@@ -1799,9 +1799,9 @@ export function RunDetail({
                 </>
               ) : (
                 <>
-                  <h2 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                  <h3 id="run-confirmation-heading" className="font-semibold text-amber-950">
                     {confirmationAction === "apply" ? "Confirm apply" : "Confirm discard"}
-                  </h2>
+                  </h3>
                   <p className="mt-2 text-sm text-amber-900">
                     {confirmationAction === "apply"
                       ? "This will execute the planned changes against this workspace."
@@ -1851,7 +1851,7 @@ export function RunDetail({
               <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
                 <History className="size-5 text-gray-400" aria-hidden="true" />
                 <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
-                <h2 id="activity-heading" className="font-semibold text-gray-950">Activity &amp; comments</h2>
+                <h3 id="activity-heading" className="font-semibold text-gray-950">Activity &amp; comments</h3>
                 <span className="text-xs text-gray-500">0</span>
               </div>
               <p className="px-5 py-4 text-sm text-gray-500">No run activity or comments yet.</p>
@@ -1862,7 +1862,7 @@ export function RunDetail({
           <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
             <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
               <History className="size-5 text-gray-400" aria-hidden="true" />
-              <h2 id="activity-heading" className="font-semibold text-gray-950">Activity</h2>
+              <h3 id="activity-heading" className="font-semibold text-gray-950">Activity</h3>
               <span className="text-xs text-gray-500">{runEvents.length}</span>
             </div>
             {runEvents.length === 0 ? (
@@ -1920,7 +1920,7 @@ export function RunDetail({
           <section aria-labelledby="comments-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
             <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
               <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
-              <h2 id="comments-heading" className="font-semibold text-gray-950">Comments</h2>
+              <h3 id="comments-heading" className="font-semibold text-gray-950">Comments</h3>
               <span className="text-xs text-gray-500">{comments.length}</span>
             </div>
             <div className="divide-y divide-gray-100">

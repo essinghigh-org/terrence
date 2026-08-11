@@ -608,7 +608,7 @@ export function WorkspaceDetail({
                     {latestRunSucceeded
                       ? <CheckCircle2 className="size-5 text-emerald-600" aria-hidden="true" />
                       : <Info className="size-5 text-blue-600" aria-hidden="true" />}
-                    <h3 id="latest-run-heading" className="text-sm font-semibold text-gray-950">Latest run</h3>
+                    <h2 id="latest-run-heading" className="text-sm font-semibold text-gray-950">Latest run</h2>
                   </div>
                   <Link to={`${workspacePath}/runs`} className="text-xs font-medium text-blue-700 hover:underline">
                     View all runs
@@ -629,6 +629,7 @@ export function WorkspaceDetail({
                       ) : (
                         <EmptyState
                           compact
+                          headingLevel="h3"
                           title="No runs yet"
                           description="Start a run to plan your infrastructure changes."
                           docsHref="https://developer.hashicorp.com/terraform/cloud-docs/run"
@@ -684,7 +685,7 @@ export function WorkspaceDetail({
               {/* Details Card */}
               <div className="bg-white border border-gray-200 rounded-md shadow-sm">
                 <div className="px-4 py-3 border-b border-gray-200">
-                  <h3 className="text-sm font-semibold text-gray-900">Workspace details</h3>
+                  <h2 className="text-sm font-semibold text-gray-900">Workspace details</h2>
                 </div>
                 <div className="p-4 space-y-4">
                   <div>

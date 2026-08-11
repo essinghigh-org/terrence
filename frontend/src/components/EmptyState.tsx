@@ -14,13 +14,15 @@ export function EmptyState(props: Readonly<{
   onAction?: () => void;
   docsHref?: string;
   compact?: boolean;
+  headingLevel?: "h2" | "h3" | "h4";
 }>): React.JSX.Element {
-  const { title, description, actionLabel, onAction, docsHref, compact } = props;
+  const { title, description, actionLabel, onAction, docsHref, compact, headingLevel = "h2" } = props;
   const hasAction = actionLabel !== undefined && onAction !== undefined;
   const footerVisible = hasAction || docsHref !== undefined;
+  const Heading = headingLevel;
   return (
     <div className={`text-center text-gray-500 ${compact ? "p-6" : "p-12"}`}>
-      <h2 className="font-medium text-gray-950">{title}</h2>
+      <Heading className="font-medium text-gray-950">{title}</Heading>
       {description !== undefined && (
         <p className={`mx-auto mt-1 max-w-md text-sm ${footerVisible ? "mb-4" : ""}`}>{description}</p>
       )}
