@@ -105,6 +105,22 @@ export function probeLandlockAbi(): number {
   return cachedAbi;
 }
 
+/** Test hook: drop the cached ABI so a swapped TERRENCE_LANDLOCK_RUNNER takes effect. */
+export function resetLandlockAbiCache(): void {
+  cachedAbi = null;
+}
+
+/**
+ * Mirror of landlock-runner.c's `abi_mask`: which filesystem access bits the
+ * kernel accepts at a given Landlock ABI. REFER (rename/link between
+ * hierarchies) requires ABI >= 2; TRUNCATE requires ABI >= 3. The C source
+ * masks both the ruleset attr and every rule by probed ABI; this pure
+ * function pins that truth table in unit tests without a kernel farm.
+ */
+export function landlockAccessFlagsForAbi(abi: number): { refer: boolean; truncate: boolean } {
+  return { refer: abi >= 2, truncate: abi >= 3 };
+}
+
 /** Directories that must be traversable/readable for any dynamically linked
  *  binary or provisioner shell. */
 function systemRuleArgs(): string[] {

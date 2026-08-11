@@ -50,6 +50,9 @@
 #define __NR_landlock_restrict_self 446
 #endif
 
+/* Version reported by --version. Bump on user-visible runner changes. */
+#define LANDLOCK_RUNNER_VERSION "1.1.0"
+
 #ifndef LANDLOCK_CREATE_RULESET_VERSION
 #define LANDLOCK_CREATE_RULESET_VERSION (1U << 0)
 #endif
@@ -150,6 +153,11 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "--probe") == 0) {
         return probe();
+    }
+
+    if (strcmp(argv[1], "--version") == 0) {
+        printf("landlock-runner %s (Landlock ABI %ld)\n", LANDLOCK_RUNNER_VERSION, landlock_abi());
+        return 0;
     }
 
     const char *cwd = NULL;
