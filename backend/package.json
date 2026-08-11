@@ -7,7 +7,8 @@
     "start": "bun run index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "coverage": "bun run scripts/coverage-report.ts"
+    "coverage": "bun run scripts/coverage-report.ts",
+    "db:generate": "drizzle-kit generate"
   },
   "devDependencies": {
     "@types/bun": "latest",

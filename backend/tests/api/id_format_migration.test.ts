@@ -57,7 +57,7 @@ test("id-format migration renames run sidecar artifacts alongside re-keyed rows"
   // 14-hex suffix (old webhook template), each with a log row and sidecars.
   const sql = new Database(dbPath);
   sql.run("INSERT INTO organizations (id, name) VALUES ('org-1234567890abcdef', 'idfmt-org')");
-  sql.run("INSERT INTO workspaces (id, name, org_id) VALUES ('ws-1234567890abcdef', 'idfmt-ws', 'org-1234567890abcdef')");
+  sql.run("INSERT INTO workspaces (id, name, org_id, created_at) VALUES ('ws-1234567890abcdef', 'idfmt-ws', 'org-1234567890abcdef', 1)");
   sql.run("INSERT INTO runs (id, workspace_id, status, created_at) VALUES ('9e94c6d8-8c60-44a6-93e6-d9952866a20c', 'ws-1234567890abcdef', 'planned_and_finished', 1)");
   sql.run("INSERT INTO runs (id, workspace_id, status, created_at) VALUES ('run-abcdef01234567', 'ws-1234567890abcdef', 'planned_and_finished', 1)");
   sql.run("INSERT INTO logs (id, run_id, phase, output_text, created_at) VALUES ('log-uuid-1', '9e94c6d8-8c60-44a6-93e6-d9952866a20c', 'plan', 'boot 1', 1)");

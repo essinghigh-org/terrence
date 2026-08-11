@@ -2,35 +2,62 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { cp, mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { cp, mkdtemp, rm } from "fs/promises";
 import { readdirSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 /**
- * DB migration fixtures from historical releases (review item 22.10).
+ * DB migration fixtures (review item 22.10), post-squash.
  *
- * The drizzle journal (drizzle/meta/_journal.json) records 60 migrations.
- * Each prefix 0..N is a "release fixture": the schema a fresh install had at
- * that point in history. Properties asserted:
- *   - every release prefix applies cleanly to a fresh DB,
- *   - continuing a release-prefix DB to head yields EXACTLY the same table
- *     set as a fresh head apply (the upgrade-path invariant; the strongest
- *     guarantee a migration set can make),
+ * The migration history was squashed to a single baseline
+ * (drizzle/meta/_journal.json has one entry, 0000_squashed_initial) because
+ * the pre-public server is the only consumer and the 60 historical steps had
+ * no upgrade value. Properties still pinned here:
+ *   - the single baseline applies cleanly to a fresh DB and records exactly
+ *     one applied migration,
+ *   - the baseline is the COMPLETE schema (not a subset): the tables that
+ *     later migrations + the runtime convergence path added are all present,
  *   - re-running the migrator on an already-migrated DB is a no-op,
- *   - milestone tables exist at the release point that introduced them,
- *   - any DROP TABLE in a migration targets a table created by an earlier
- *     migration (nothing drops tables it did not make).
+ *   - any DROP TABLE in the baseline targets a table created within it
+ *     (nothing drops tables it did not make),
+ *   - journal `when` timestamps stay strictly ascending so a future
+ *     multi-entry history cannot regress into upgrade-skip islands.
  */
-
 const DRIZZLE_DIR = join(import.meta.dir, "../../drizzle");
 
-interface MigratedDb {
-  tables: string[];
-  journalCount: number;
-  /** Column names per table, for milestone checks. */
-  columns: Map<string, string[]>;
-}
+/** Tables created by the runtime convergence path in src/db/index.ts (not by the baseline). */
+const RUNTIME_TABLES = [
+  "test_variables",
+  "stacks",
+  "hyok_customer_key_versions",
+  "policy_set_tag_selectors",
+  "admin_terraform_versions",
+  "admin_sentinel_versions",
+  "admin_opa_versions",
+  "provider_sets",
+  "agents",
+  "github_app_installations",
+  "org_token_ttl_policies",
+  "oidc_configs",
+  "hyok_configurations",
+  "github_webhook_deliveries",
+  "admin_settings",
+  "workspace_transfers",
+  "plan_exports",
+  "cidr_range_lists",
+  "cidr_ranges",
+  "query_runs",
+  "team_projects",
+  "admin_general_settings",
+  "site_data_retention_policies",
+  "support_bundle_requests",
+  "oauth_device_codes",
+  "user_2fa",
+  "task_stages",
+  "policy_evaluations",
+  "policy_set_outcomes",
+];
 
 function pragmaTables(db: Database): string[] {
   return (db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[])
@@ -42,14 +69,8 @@ function pragmaColumns(db: Database, table: string): string[] {
   return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name);
 }
 
-/** Apply journal entries [0..prefix] (or all when prefix is null) to a fresh in-memory DB. Restores the journal afterwards. */
-async function applyPrefix(folder: string, prefix: number | null): Promise<MigratedDb> {
-  const journalPath = join(folder, "meta/_journal.json");
-  const journal = JSON.parse(await readFile(journalPath, "utf8")) as { entries: Array<Record<string, unknown>> };
-  const original = await readFile(journalPath, "utf8");
-  const entries = prefix === null ? journal.entries : journal.entries.slice(0, prefix + 1);
-  await writeFile(journalPath, JSON.stringify({ ...journal, entries }));
-
+/** Apply the whole (single-entry) baseline to a fresh in-memory DB. */
+async function applyBaseline(folder: string): Promise<{ tables: string[]; columns: Map<string, string[]>; journalCount: number }> {
   const raw = new Database(":memory:");
   try {
     const db = drizzle(raw);
@@ -58,48 +79,9 @@ async function applyPrefix(folder: string, prefix: number | null): Promise<Migra
     const columns = new Map<string, string[]>();
     for (const table of tables) columns.set(table, pragmaColumns(raw, table));
     const journalCount = (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c;
-    return { tables, journalCount, columns };
+    return { tables, columns, journalCount };
   } finally {
     raw.close();
-    await writeFile(journalPath, original);
-  }
-}
-
-/** Apply [0..prefix], then continue the SAME database to head with the full journal. */
-async function applyPrefixThenHead(folder: string, prefix: number, fullJournal: { entries: Array<Record<string, unknown>> }): Promise<{
-  stage: MigratedDb;
-  continued: MigratedDb;
-}> {
-  const journalPath = join(folder, "meta/_journal.json");
-  const journal = JSON.parse(await readFile(journalPath, "utf8")) as { entries: Array<Record<string, unknown>> };
-  const entries = journal.entries.slice(0, prefix + 1);
-  await writeFile(journalPath, JSON.stringify({ ...journal, entries }));
-
-  const raw = new Database(":memory:");
-  try {
-    const db = drizzle(raw);
-    migrate(db, { migrationsFolder: folder });
-    const stage = {
-      tables: pragmaTables(raw),
-      journalCount: (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c,
-      columns: new Map<string, string[]>(),
-    };
-    // Continue on the SAME connection: the migrator only runs entries after
-    // the last applied one, so this exercises the historical-release upgrade
-    // path (fixture at prefix N → head), not a second fresh install.
-    await writeFile(journalPath, JSON.stringify(fullJournal));
-    migrate(db, { migrationsFolder: folder });
-    const continued = {
-      tables: pragmaTables(raw),
-      journalCount: (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c,
-      columns: new Map<string, string[]>(),
-    };
-    return { stage, continued };
-  } finally {
-    raw.close();
-    // Restore the full journal even when a migrate call throws, so the temp
-    // fixture folder is never left in a truncated state.
-    await writeFile(journalPath, JSON.stringify(fullJournal));
   }
 }
 
@@ -127,9 +109,6 @@ function validateDropTargets(): string[] {
         existing.add(rename[2] as string);
         continue;
       }
-      // The IF EXISTS guard comes from the DROP statement itself, never from
-      // other clauses in the same statement (e.g. a CREATE TABLE IF NOT
-      // EXISTS in a multi-statement chunk).
       const drop = stmt.match(/DROP TABLE (IF EXISTS )?`?([\w-]+)`?/);
       if (drop !== null) {
         const guarded = drop[1] !== undefined;
@@ -160,29 +139,34 @@ function journalOrderViolations(): string[] {
   return violations;
 }
 
-test("every release prefix applies cleanly and continues to an identical head schema", async () => {
-  const folder = await mkdtemp(join(tmpdir(), "terrence-mig-fixtures-"));
+test("squashed baseline applies cleanly to a fresh DB as exactly one migration", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "terrence-mig-baseline-"));
   try {
     await cp(DRIZZLE_DIR, folder, { recursive: true });
-    const fullJournal = JSON.parse(await readFile(join(folder, "meta/_journal.json"), "utf8")) as {
-      entries: Array<Record<string, unknown>>;
-    };
-    const total = fullJournal.entries.length;
-    expect(total).toBeGreaterThanOrEqual(59);
-
-    const head = await applyPrefix(folder, null);
-    expect(head.journalCount).toBe(total);
-
-    for (let prefix = 0; prefix < total; prefix += 1) {
-      const { stage, continued } = await applyPrefixThenHead(folder, prefix, fullJournal);
-      expect(stage.journalCount, `prefix ${prefix} journal count`).toBe(prefix + 1);
-      expect(continued.journalCount, `prefix ${prefix} continued journal count`).toBe(total);
-      expect(continued.tables, `prefix ${prefix} continued table set`).toEqual(head.tables);
-    }
+    const { journalCount, tables } = await applyBaseline(folder);
+    expect(journalCount).toBe(1);
+    // The baseline must be substantial (it replaces 60 migrations), not a stub.
+    expect(tables.length).toBeGreaterThan(90);
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
-}, 120_000);
+}, 60_000);
+
+test("baseline table set supersedes the runtime convergence tables (complete schema)", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "terrence-mig-complete-"));
+  try {
+    await cp(DRIZZLE_DIR, folder, { recursive: true });
+    const { tables } = await applyBaseline(folder);
+    // Every table the runtime convergence path in db/index.ts would create
+    // (guarded CREATE TABLE IF NOT EXISTS) must already be present from the
+    // baseline, proving the baseline is the complete schema — not a subset
+    // that the app quietly patches up at boot.
+    const missing = RUNTIME_TABLES.filter((t) => !tables.includes(t));
+    expect(missing).toEqual([]);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}, 60_000);
 
 test("re-running the migrator on an already-migrated DB is a no-op", async () => {
   const folder = await mkdtemp(join(tmpdir(), "terrence-mig-idempotent-"));
@@ -197,33 +181,10 @@ test("re-running the migrator on an already-migrated DB is a no-op", async () =>
       const second = pragmaTables(raw);
       const count = (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c;
       expect(second).toEqual(first);
-      expect(count).toBeGreaterThanOrEqual(59);
+      expect(count).toBe(1);
     } finally {
       raw.close();
     }
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
-});
-
-test("milestone tables exist at the release point that introduced them", async () => {
-  const folder = await mkdtemp(join(tmpdir(), "terrence-mig-milestones-"));
-  try {
-    await cp(DRIZZLE_DIR, folder, { recursive: true });
-    const milestones: Array<[number, string, string[]]> = [
-      [25, "assessment_results", ["check_results"]], // health assessments
-      [35, "registry_gpg_keys", []],
-      [37, "agent_jobs", []],
-      [39, "saml_settings", []],
-    ];
-    for (const [prefix, table, siblings] of milestones) {
-      const stage = await applyPrefix(folder, prefix);
-      expect(stage.tables, `prefix ${prefix}`).toContain(table);
-      for (const s of siblings) expect(stage.tables, `prefix ${prefix}`).toContain(s);
-    }
-    // 0050_fine_grained_token_scopes: ALTER-only — scopes column lands on api_tokens.
-    const scoped = await applyPrefix(folder, 50);
-    expect(scoped.columns.get("api_tokens")).toContain("scopes");
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
@@ -237,6 +198,6 @@ test("journal when timestamps are strictly ascending (no upgrade-skip islands)",
   // drizzle's migrator skips any journal entry whose `when` is not newer than
   // the last-applied row's created_at; an out-of-order island silently skips
   // those migrations on upgrade and later migrations then fail. This pins the
-  // ordering so the landmine cannot regress.
+  // ordering so the landmine cannot regress when the history grows again.
   expect(journalOrderViolations()).toEqual([]);
 });
