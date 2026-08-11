@@ -12,6 +12,7 @@ import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
+import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -348,9 +349,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const username = typeof payload.username === "string" ? payload.username.trim() : "";
     const email = typeof payload.email === "string" ? payload.email.trim() : "";
     const password = typeof payload.password === "string" ? payload.password : "";
-    if (username === "" || email === "" || password.length < 10) {
+    if (username === "" || email === "" || password === "") {
       (set as { status: number }).status = 422;
-      return { status: "error", error: "Username, email, and a password of at least 10 characters are required" };
+      return { status: "error", error: "Username, email, and password are required" };
+    }
+    const setupPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+    if (!setupPolicy.ok) {
+      (set as { status: number }).status = 422;
+      return { status: "error", error: setupPolicy.errors.join(" ") };
     }
 
     const userId = `user-${crypto.randomUUID()}`;
@@ -664,9 +670,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing username or password" }] };
     }
 
-    if (password.length < 10) {
+    const policyCheck = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+    if (!policyCheck.ok) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Password must be at least 10 characters" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyCheck.errors.join(" ") }] };
     }
     const RFC_5322_EMAIL_REGEX = /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$/i;
 
@@ -848,9 +855,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const currentPassword = typeof attrs.current_password === "string" ? attrs.current_password : (typeof attrs["current-password"] === "string" ? attrs["current-password"] : "");
     const password = typeof attrs.password === "string" ? attrs.password : "";
     const confirmation = typeof attrs.password_confirmation === "string" ? attrs.password_confirmation : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
-    if (currentPassword === "" || password === "" || password !== confirmation || password.length < 10) {
+    if (currentPassword === "" || password === "" || password !== confirmation) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
+    }
+    const changePolicy = checkPasswordPolicy(loadPasswordPolicy(), password, user.username);
+    if (!changePolicy.ok) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: changePolicy.errors.join(" ") }] };
     }
     // passwordMatches swallows malformed/unusable hashes (SSO-provisioned
     // accounts), so a bad hash cannot surface as a 500; it is just a failed

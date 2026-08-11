@@ -2,6 +2,7 @@ import { count, eq } from "drizzle-orm";
 import { db } from "../db";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
 import { auditLog } from "./utils";
+import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 
 export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | "skipped"> {
   const password = process.env.ADMIN_PASSWORD;
@@ -10,11 +11,19 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
 
   const userCount = (await db.select({ value: count() }).from(users))[0]?.value ?? 0;
   if (userCount > 0) return "skipped";
-  if (password.length < 10) {
-    throw new Error("ADMIN_PASSWORD must be at least 10 characters");
+  const bootstrapUsername = (process.env.ADMIN_USERNAME ?? "admin").trim();
+  const policy = checkPasswordPolicy(loadPasswordPolicy(), password, bootstrapUsername);
+  if (!policy.ok) {
+    // Preserve the long-standing exact message for the common minimum-length
+    // case so existing deployments/tests keyed on it keep working; include the
+    // full breakdown for any stricter or combined failures.
+    const isOnlyLength = policy.errors.length === 1 && policy.errors[0]?.startsWith("Password must be at least ");
+    const message = isOnlyLength
+      ? `ADMIN_PASSWORD ${policy.errors[0]?.replace(/^Password /, "").toLowerCase()}` : `ADMIN_PASSWORD is invalid: ${policy.errors.join(" ")}`;
+    throw new Error(message);
   }
 
-  const username = (process.env.ADMIN_USERNAME ?? "admin").trim();
+  const username = bootstrapUsername;
   if (username === "") throw new Error("ADMIN_USERNAME cannot be empty");
   const configuredEmail = process.env.ADMIN_EMAIL?.trim();
   const email = configuredEmail === undefined || configuredEmail === "" ? null : configuredEmail;

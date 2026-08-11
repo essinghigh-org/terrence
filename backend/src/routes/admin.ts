@@ -10,6 +10,7 @@ import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
+import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
 import { authPlugin } from "../auth";
 import { createHash } from "node:crypto";
 import { invalidatePingSsoCache, appVersion } from "./health";
@@ -475,9 +476,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username is required" }] };
     }
-    if (password.length < 10) {
+    const adminPolicy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+    if (!adminPolicy.ok) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Password must be at least 10 characters" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: adminPolicy.errors.join(" ") }] };
     }
 
     const existing = await db.query.users.findFirst({ where: eq(users.username, username) });
