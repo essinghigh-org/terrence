@@ -1,11 +1,12 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, projects, projectTags, organizations, workspaces, teamWorkspaces, type users } from "../db/schema";
+import { agentPools, projects, projectTags, workspaces, teamWorkspaces, type users } from "../db/schema";
 import { eq, and, inArray, count, countDistinct, asc, isNotNull, sql } from "drizzle-orm";
 import { projectResource, projectTagBindingResource } from "../lib/response";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -229,7 +230,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/projects", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await ensureDefaultProject(org.id);
     const { number, size } = pageRequest(request);
@@ -251,7 +252,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
   })
   .post("/api/v2/organizations/:org_name/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;

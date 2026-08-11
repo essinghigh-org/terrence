@@ -8,7 +8,6 @@ import {
   agents,
   agentPoolTokens,
   configurationVersions,
-  organizations,
   projects,
   workspaces,
   type users,
@@ -29,6 +28,7 @@ import {
 } from "../lib/agent-jobs";
 import { refetchConfigurationVersion } from "../lib/webhooks";
 import type { PlanJson } from "../lib/plan-json";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -411,7 +411,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/agent-pools", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
     const poolData = await Promise.all(pools.map((p): Promise<Record<string, unknown>> => agentPoolResource(p, org.name)));
@@ -419,7 +419,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
   })
   .post("/api/v2/organizations/:org_name/agent-pools", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
     const name = typeof attrs.name === "string" ? attrs.name : "";

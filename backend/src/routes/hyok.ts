@@ -4,6 +4,7 @@ import { hyokConfigurations, hyokCustomerKeyVersions, organizations, type users 
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -85,14 +86,14 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
     return { data: await Promise.all(rows.map((row) => hyokResource(row, org.name))) };
   })
   .post("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const { attributes, relationships } = bodyData(body);
     const name = typeof attributes?.name === "string" ? attributes.name : "";

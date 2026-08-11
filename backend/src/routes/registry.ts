@@ -49,6 +49,7 @@ import {
 import { ensureDefaultProject } from "./projects";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "cv");
 
@@ -918,7 +919,7 @@ async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<
   const moduleName = params.module_name ?? "";
   const provider = params.provider ?? "";
   if (orgName === "" || moduleName === "" || provider === "") return undefined;
-  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  const org = await cachedOrgByName(orgName);
   if (org === undefined) return undefined;
   return db.query.registryModules.findFirst({
     where: and(
@@ -1261,14 +1262,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
   // --- Module Management API (TFE v2) ---
   .get("/api/v2/organizations/:org_name/registry-modules", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const modList = await db.query.registryModules.findMany({ where: eq(registryModules.orgId, org.id) });
     return { data: modList.map((m: ModItem): Record<string, unknown> => ({ id: m.id, type: "registry-modules", attributes: { name: m.name, provider: m.provider, namespace: m.namespace, "created-at": new Date(m.createdAt).toISOString() } })) };
   })
   .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
@@ -1287,7 +1288,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = params.namespace ?? "";
     const moduleName = params.module_name ?? "";
     const provider = params.provider ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
       where: and(
@@ -1316,7 +1317,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const moduleName = params.module_name ?? "";
     const provider = params.provider ?? "";
     const version = new URL(request.url).searchParams.get("module_version") ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null)) || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
       where: and(eq(registryModules.orgId, org.id), eq(registryModules.namespace, namespace), eq(registryModules.name, moduleName), eq(registryModules.provider, provider)),
@@ -1339,7 +1340,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const namespace = params.namespace ?? "";
     const moduleName = params.module_name ?? "";
     const provider = params.provider ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
       where: and(
@@ -1357,7 +1358,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   // --- No-Code Module Allowlist ---
   .post("/api/v2/organizations/:org_name/no-code-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
     if (
       org === undefined
@@ -1419,7 +1420,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .get("/api/v2/organizations/:org_name/no-code-modules", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (
       org === undefined
       || !(
@@ -2079,7 +2080,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   // --- Provider Management API (TFE v2) ---
   .get("/api/v2/organizations/:org_name/registry-providers", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
         return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)) };
@@ -2097,7 +2098,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
         const orgName = params.org_name ?? "";
         const namespace = params.namespace ?? "";
         const name = params.name ?? "";
-        const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+        const org = await cachedOrgByName(orgName);
         if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
         const p = await db.query.registryProviders.findFirst({
           where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
@@ -2107,7 +2108,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       })
       .post("/api/v2/organizations/:org_name/registry-providers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
         const orgName = params.org_name ?? "";
-        const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+        const org = await cachedOrgByName(orgName);
         if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
         const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
         const data = payload.data as Record<string, unknown> | undefined;
@@ -2133,7 +2134,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const orgName = params.org_name ?? "";
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({
       where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),

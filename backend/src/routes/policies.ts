@@ -7,6 +7,7 @@ import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 const POLICY_ARCHIVE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
 
@@ -334,7 +335,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
   .get("/api/v2/organizations/:org_name/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const polList = (await db.query.policies.findMany({
       where: eq(policies.orgId, org.id),
@@ -344,7 +345,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
   })
   .post("/api/v2/organizations/:org_name/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
@@ -499,7 +500,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
   })
   .get("/api/v2/organizations/:org_name/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
     if (psList.length === 0) return { data: [] };
@@ -552,7 +553,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
   })
   .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;

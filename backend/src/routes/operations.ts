@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { eq, and, gte, inArray } from "drizzle-orm";
 import { db } from "../db";
-import { organizations, runs, workspaces, changeRequests } from "../db/schema";
+import { runs, workspaces, changeRequests } from "../db/schema";
 import {
   checkOrgPermission,
   findAuthorizedRun,
@@ -11,6 +11,7 @@ import { getSettings } from "../lib/settings";
 import { readPlanJsonArtifact } from "../lib/plan-json";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -38,7 +39,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/change-calendar", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
       return notFound(set);
     }

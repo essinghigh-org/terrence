@@ -1,9 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, teams, workspaces, organizations } from "../db/schema";
+import { users, teams, workspaces } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { checkWorkspacePermission, checkOrgPermission, type WorkspacePermission } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -37,7 +38,7 @@ export const permissionSimulatorRoutes = new Elysia()
     set,
   }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };

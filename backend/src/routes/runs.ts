@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, organizations, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, notInArray, isNull } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
@@ -14,6 +14,7 @@ import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 import { AvatarService } from "../lib/avatars";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -456,7 +457,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
       authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
@@ -478,7 +479,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
       authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null),
@@ -505,7 +506,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
     const active = orgWorkspaces.length === 0 ? [] : await db.query.runs.findMany({

@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, stackVariableSets, stacks, workspaces, projects, organizations, type users } from "../db/schema";
+import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, stackVariableSets, stacks, workspaces, projects, type users } from "../db/schema";
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { variableSetResource, variableSetVariableResource, variableSetVariableUpdate } from "../lib/response";
 import { validVariableSetAttributes, validVariableSetVariableAttributes, isUniqueConstraintError } from "../lib/validation";
@@ -8,6 +8,7 @@ import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pa
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -34,7 +35,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "read-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -109,7 +110,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   })
   .post("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }

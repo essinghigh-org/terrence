@@ -1,9 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, organizations, workspaces, workspaceTags, policySetWorkspaces } from "../db/schema";
+import { users, workspaces, workspaceTags, policySetWorkspaces } from "../db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -40,7 +41,7 @@ export const workspaceScorecardRoutes = new Elysia()
     set,
   }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId ?? null, null, "read-workspaces"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };

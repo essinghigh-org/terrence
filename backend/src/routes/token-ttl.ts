@@ -1,9 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, orgTokenTTLPolicies, type users } from "../db/schema";
+import { orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -33,14 +34,14 @@ export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
     const rows = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
     return { data: rows.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
   })
   .patch("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
     const root = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const data = root.data !== null && typeof root.data === "object" ? root.data as Record<string, unknown> : {};

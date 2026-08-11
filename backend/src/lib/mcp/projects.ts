@@ -1,8 +1,9 @@
 import { asc, eq, sql, and } from "drizzle-orm";
 import { db } from "../../db";
-import { organizations, projects, teamProjects, workspaces } from "../../db/schema";
+import { projects, teamProjects, workspaces } from "../../db/schema";
 import { checkOrgPermission, checkOrganizationPermission } from "../utils";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { cachedOrgByName } from "../cached-lookups";
 
 /**
  * Project tools. All are org-scoped and require the relevant project grant,
@@ -25,7 +26,7 @@ export const projectTools: readonly McpTool[] = [
     requires: ["projects:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const orgName = typeof args.org === "string" ? args.org : "";
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+      const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
         return toolError("Not authorized to access this organization");
@@ -93,7 +94,7 @@ export const projectTools: readonly McpTool[] = [
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const orgName = String(args.org);
       const name = (typeof args.name === "string" ? args.name : "").trim();
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+      const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-projects"))) {
         return toolError("Not authorized to manage projects in this organization");

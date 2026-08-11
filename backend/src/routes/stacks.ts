@@ -4,6 +4,7 @@ import { authPlugin } from "../auth";
 import { db } from "../db";
 import { organizations, projects, stacks, agentPools } from "../db/schema";
 import { checkOrganizationPermission , type DeepReadonly } from "../lib/utils";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -132,7 +133,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
   })
   .get("/api/v2/organizations/:org_name/stacks", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }

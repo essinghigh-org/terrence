@@ -4,6 +4,7 @@ import { organizations, providerSets, type users } from "../db/schema";
 import { and, eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -49,7 +50,7 @@ function attrsFrom(body: unknown): Record<string, unknown> {
 }
 
 async function findOrg(orgName: string): Promise<{ id: string; name: string } | undefined> {
-  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  const org = await cachedOrgByName(orgName);
   return org === undefined ? undefined : { id: org.id, name: org.name };
 }
 

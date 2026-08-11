@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
-import { runTriggers, auditLogs, githubWebhookDeliveries, organizations, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
+import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
@@ -20,6 +20,7 @@ import {
 } from "../lib/cost-estimate";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -366,7 +367,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
 
     if (orgName !== null && workspaceName !== null) {
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+      const org = await cachedOrgByName(orgName);
       const workspace = org === undefined
         ? undefined
         : await db.query.workspaces.findFirst({
@@ -489,7 +490,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
     return { data: await auditTrailResources(logsList) };
@@ -498,7 +499,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     // go-tfe OrganizationAuditConfigurations.Read. HCP-only fields are null for
     // a TFE-style deployment; audit trails are always enabled here.
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return {
       data: {

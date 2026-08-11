@@ -48,6 +48,20 @@ export function setRequestTokenScopes(scopes: TokenScopes | null): void {
 }
 
 /**
+ * Run `fn` inside a brand-new request scope (fresh memoization store, no
+ * token scopes). Useful for code paths outside the auth plugin — worker
+ * jobs, CLI scripts, tests — that call permission helpers or cached
+ * lookups and want request-scoped semantics. Each invocation gets an
+ * isolated store; nothing leaks between invocations.
+ */
+export async function withRequestScope<T>(fn: () => Promise<T>): Promise<T> {
+  return requestCacheStorage.run(new Map(), async (): Promise<T> => {
+    tokenScopesStorage.enterWith(null);
+    return fn();
+  });
+}
+
+/**
  * Publish the authenticated user's isSiteAdmin flag into the request cache.
  * The auth plugin already loads the full user row (via the joined token
  * lookup), so permission helpers can skip re-reading users.is_site_admin.

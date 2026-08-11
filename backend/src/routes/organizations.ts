@@ -8,6 +8,7 @@ import { currentTokenScopes } from "../lib/request-scope";
 import { isUniqueConstraintError } from "../lib/validation";
 import { invalidateOrganizationName } from "../lib/metadata-cache";
 import { authPlugin } from "../auth";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -239,7 +240,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -261,7 +262,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .post("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -333,7 +334,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null, teamId ?? null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -342,7 +343,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -362,7 +363,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -385,7 +386,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .post("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -448,7 +449,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .delete("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -458,7 +459,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .patch("/api/v2/organizations/:org_name", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -573,7 +574,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .delete("/api/v2/organizations/:org_name", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -611,7 +612,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name/tags", async ({ params, user, request, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -650,7 +651,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .delete("/api/v2/organizations/:org_name/tags", async ({ params, user, body, orgId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -672,7 +673,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   })
   .get("/api/v2/organizations/:org_name/vcs-events", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }

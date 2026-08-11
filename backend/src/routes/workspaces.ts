@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, organizations, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
+import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, like, notInArray, sql } from "drizzle-orm";
 import {
   workspaceResource,
@@ -16,6 +16,7 @@ import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, isExecutionMode, parseSettingOverwrites } from "./projects";
+import { cachedOrgByName, cachedOrgById } from "../lib/cached-lookups";
 
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -410,7 +411,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   // --- Organization Workspaces ---
   .get("/api/v2/organizations/:org_name/workspaces", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, org.id, "member", principalOrgId ?? null, teamId ?? null))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const { number, size } = pageRequest(request);
@@ -573,7 +574,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   })
   .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrganizationPermission(org.id, user?.id, principalOrgId ?? null, teamId ?? null, "manage-workspaces"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -781,7 +782,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -796,7 +797,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -813,7 +814,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -826,7 +827,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .post("/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -840,7 +841,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
+    const org = await cachedOrgById(ws.orgId);
     const data = await workspaceResource(
       ws,
       org?.defaultIacBinary,
@@ -996,7 +997,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
+    const org = await cachedOrgById(ws.orgId);
     return updateWorkspaceResponse(
       ws,
       org?.defaultIacBinary,
@@ -1270,7 +1271,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
     await db.update(workspaces).set({ locked: true, lockedReason: lockReason.reason }).where(eq(workspaces.id, workspaceId));
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
+    const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
         { ...ws, locked: true, lockedReason: lockReason.reason },
@@ -1289,7 +1290,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
     await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
+    const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
         { ...ws, locked: false, lockedReason: null },
@@ -1305,7 +1306,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
     await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, ws.orgId) });
+    const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
         { ...ws, locked: false, lockedReason: null },

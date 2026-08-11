@@ -8,6 +8,7 @@ import { organizationName } from "../lib/response";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -504,14 +505,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
     return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request, org.name))) };
   })
   .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;

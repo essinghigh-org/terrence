@@ -1,11 +1,12 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, organizations, notificationConfigurations, scimGroups, scimSettings, teamScimGroupMappings } from "../db/schema";
+import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, notificationConfigurations, scimGroups, scimSettings, teamScimGroupMappings } from "../db/schema";
 import { eq, and, count, inArray, asc, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -163,7 +164,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/teams", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Roster (member identifiers) is membership data: only include it when the
     // token also grants members:read.
@@ -204,7 +205,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
   })
   .post("/api/v2/organizations/:org_name/teams", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;

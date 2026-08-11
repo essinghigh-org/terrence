@@ -1,7 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
-  organizations,
   projects,
   workspaceTags,
   workspaceVariables,
@@ -19,6 +18,7 @@ import { validateVersion } from "../utils";
 import { ensureDefaultProject, isExecutionMode } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import { cachedOrgByName } from "../cached-lookups";
 
 /**
  * Workspace tools. Read/list operations require `workspaces:read`, mutations
@@ -57,7 +57,7 @@ export const workspaceTools: readonly McpTool[] = [
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const orgName = typeof args.org === "string" ? args.org : "";
       const name = (typeof args.name === "string" ? args.name : "").trim();
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+      const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-workspaces"))) {
         return toolError("Not authorized to manage workspaces in this organization");
@@ -117,7 +117,7 @@ export const workspaceTools: readonly McpTool[] = [
     requires: ["workspaces:read"],
       handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
         const orgName = String(args.org);
-        const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+        const org = await cachedOrgByName(orgName);
         if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
         if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
         return toolError("Not authorized to access this organization");

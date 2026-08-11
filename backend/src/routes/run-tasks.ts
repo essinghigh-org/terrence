@@ -5,7 +5,6 @@ import {
   workspaceRunTasks,
   runTaskResults,
   taskStages,
-  organizations,
   type users,
   type workspaces,
 } from "../db/schema";
@@ -13,6 +12,7 @@ import { eq, and, inArray, or } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -138,7 +138,7 @@ const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): 
 // /workspaces/:ws/tasks.
 const listOrgRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const orgName = params.org_name ?? "";
-  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
   return { data: await Promise.all(tasksList.map((t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))) };
@@ -146,7 +146,7 @@ const listOrgRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenT
 
 const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const orgName = params.org_name ?? "";
-  const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+  const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload.data as Record<string, unknown> | undefined;

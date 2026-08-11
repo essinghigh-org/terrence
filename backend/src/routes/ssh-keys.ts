@@ -1,10 +1,11 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { sshKeys, organizations } from "../db/schema";
+import { sshKeys } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, auditLog, strictAuditEnabled } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { encryptSecret } from "../lib/secrets";
+import { cachedOrgByName } from "../lib/cached-lookups";
 
 function getAttrs(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null) return {};
@@ -29,7 +30,7 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/ssh-keys", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const keyList = await db.query.sshKeys.findMany({ where: eq(sshKeys.orgId, org.id) });
     if (strictAuditEnabled()) {
@@ -39,7 +40,7 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
   })
   .post("/api/v2/organizations/:org_name/ssh-keys", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
     const name = typeof attrs.name === "string" ? attrs.name : "";
