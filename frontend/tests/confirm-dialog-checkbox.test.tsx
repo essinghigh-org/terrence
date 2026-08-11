@@ -69,3 +69,36 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
   expect(freshCheckbox.checked).toBeFalse();
   expect(freshConfirmButton.disabled).toBeTrue();
 });
+
+test("destructive confirm stays disabled until the exact object name is typed (kanban 25.5)", () => {
+  let confirmed = false;
+  const view = render(
+    <ConfirmDialog
+      open={true}
+      onOpenChange={(): void => {}}
+      title="Delete Agent Pool"
+      description="Workspaces using this pool will fail to run until reassigned. This cannot be undone."
+      confirmText="Delete Pool"
+      requireText="production-pool"
+      onConfirm={(): void => {
+        confirmed = true;
+      }}
+    />,
+  );
+
+  const confirmButton = view.getByRole("button", { name: "Delete Pool" }) as HTMLButtonElement;
+
+  // Wrong text: stays disabled.
+  const input = view.getByRole("textbox") as HTMLInputElement;
+  fireEvent.input(input, { target: { value: "staging-pool" } });
+  expect(confirmButton.disabled).toBeTrue();
+
+  // Exact name: becomes enabled.
+  fireEvent.input(input, { target: { value: "production-pool" } });
+
+  const enabledButton = view.getByRole("button", { name: "Delete Pool" }) as HTMLButtonElement;
+  expect(enabledButton.disabled).toBeFalse();
+
+  fireEvent.click(enabledButton);
+  expect(confirmed).toBeTrue();
+});

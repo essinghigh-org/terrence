@@ -465,7 +465,7 @@ export function AgentPools(): React.JSX.Element {
         title="Delete Agent Pool"
         description={
           <>
-            Are you sure you want to delete agent pool <strong className="text-foreground">{poolToDelete?.attributes.name}</strong>? Workspaces using this pool will fail to run until reassigned.
+            Are you sure you want to delete agent pool <strong className="text-foreground">{poolToDelete?.attributes.name}</strong>? Workspaces using this pool will fail to run until reassigned. This cannot be undone.
           </>
         }
         confirmText="Delete Agent Pool"

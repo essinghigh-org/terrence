@@ -247,9 +247,10 @@ export function RegistryModules(): React.JSX.Element {
         open={moduleToDelete !== null}
         onOpenChange={(open): void => { if (!open) setModuleToDelete(null); }}
         title="Delete registry module"
-        description={`Are you sure you want to delete "${moduleToDelete === null ? "" : moduleToDelete.attributes.name}"? This cannot be undone.`}
+        description={`Are you sure you want to delete module "${moduleToDelete === null ? "" : moduleToDelete.attributes.name}"? This cannot be undone.`}
         confirmText="Delete"
         confirmVariant="destructive"
+        requireText={moduleToDelete === null ? undefined : moduleToDelete.attributes.name}
         loading={deleting}
         onConfirm={confirmDelete}
       />

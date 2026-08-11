@@ -242,9 +242,10 @@ export function ProviderSets(): React.JSX.Element {
         open={setToDelete !== null}
         onOpenChange={(open): void => { if (!open) setSetToDelete(null); }}
         title="Delete provider set"
-        description={`Are you sure you want to delete "${setToDelete === null ? "" : setToDelete.attributes.name}"? This cannot be undone.`}
+        description={`Are you sure you want to delete provider set "${setToDelete === null ? "" : setToDelete.attributes.name}"? Workspaces referencing it will no longer resolve its providers. This cannot be undone.`}
         confirmText="Delete"
         confirmVariant="destructive"
+        requireText={setToDelete === null ? undefined : setToDelete.attributes.name}
         loading={deleting}
         onConfirm={confirmDelete}
       />

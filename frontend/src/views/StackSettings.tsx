@@ -385,9 +385,10 @@ export function StackSettings(): React.JSX.Element {
         open={stackToDelete !== null}
         onOpenChange={(open): void => { if (!open) setStackToDelete(null); }}
         title="Delete stack"
-        description="Deleting a stack removes it and its deployments."
+        description="Deleting a stack removes it and its deployments. This cannot be undone."
         confirmText="Delete"
         confirmVariant="destructive"
+        requireText={stackToDelete?.attributes.name}
         loading={deleting}
         onConfirm={confirmDelete}
       />

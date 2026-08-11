@@ -2251,6 +2251,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         description={`Permanently delete version "${versionToDelete?.label ?? ""}" from the registered binaries? This cannot be undone; runs pinned to it will fail until a replacement version is registered.`}
         confirmText="Delete Version"
         confirmVariant="destructive"
+        requireText={versionToDelete?.label}
         onConfirm={async (): Promise<void> => {
           if (versionToDelete !== null) {
             await handleDeleteVersion(versionToDelete.id);
@@ -2326,6 +2327,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         description={`Permanently delete user "${deleteUserId?.label ?? ""}"? This action cannot be undone. All associated data will be removed.`}
         confirmText="Delete User"
         confirmVariant="destructive"
+        requireText={deleteUserId?.label}
         onConfirm={async (): Promise<void> => {
           if (deleteUserId !== null) {
             await handleDeleteUser(deleteUserId.id);

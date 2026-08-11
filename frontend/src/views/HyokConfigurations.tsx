@@ -351,9 +351,10 @@ export function HyokConfigurations(): React.JSX.Element {
         open={configurationToDelete !== null}
         onOpenChange={(open): void => { if (!open) setConfigurationToDelete(null); }}
         title="Delete HYOK configuration"
-        description={`Are you sure you want to delete "${configurationToDelete === null ? "" : configurationToDelete.attributes.name}"? Workspaces encrypted with this key will not be able to decrypt their state.`}
+        description={`Are you sure you want to delete HYOK configuration "${configurationToDelete === null ? "" : configurationToDelete.attributes.name}"? Workspaces encrypted with this key will not be able to decrypt their state. This cannot be undone.`}
         confirmText="Delete"
         confirmVariant="destructive"
+        requireText={configurationToDelete === null ? undefined : configurationToDelete.attributes.name}
         loading={deleting}
         onConfirm={confirmDelete}
       />

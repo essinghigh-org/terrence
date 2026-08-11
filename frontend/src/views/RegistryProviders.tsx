@@ -248,9 +248,10 @@ export function RegistryProviders(): React.JSX.Element {
         open={providerToDelete !== null}
         onOpenChange={(open): void => { if (!open) setProviderToDelete(null); }}
         title="Delete registry provider"
-        description={`Are you sure you want to delete "${providerToDelete === null ? "" : providerToDelete.attributes.name}"? This cannot be undone.`}
+        description={`Are you sure you want to delete provider "${providerToDelete === null ? "" : providerToDelete.attributes.name}"? Any published providers from this registry will be removed. This cannot be undone.`}
         confirmText="Delete"
         confirmVariant="destructive"
+        requireText={providerToDelete === null ? undefined : providerToDelete.attributes.name}
         loading={deleting}
         onConfirm={confirmDelete}
       />
