@@ -33,6 +33,59 @@ type ParamCtx = Readonly<{
   readonly set: SetObj;
 }>;
 
+// --- Operations settings helpers (kanban 21.2 / 21.6 / 21.8) ---------
+
+function usableHttpUrl(value: unknown): boolean {
+  if (typeof value !== "string" || value === "") return false;
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+// Clock "HH:MM" with a real hour 0-23 and minute 0-59 (rejects 25:00 etc).
+function validClockTime(value: unknown): boolean {
+  if (typeof value !== "string" || !/^\d{1,2}:\d{2}$/.test(value)) return false;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (match === null) return false;
+  const hours = Number.parseInt(match[1] ?? "0", 10);
+  const minutes = Number.parseInt(match[2] ?? "0", 10);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
+// Redact secrets for the admin read surface: the stored secret / API key
+// are never returned once set. `*-set` booleans tell the UI a value is
+// stored so it can render a masked placeholder; PATCH preserves the stored
+// value when the key is omitted and clears it when explicitly null.
+async function operationsSettingsResource(): Promise<Record<string, unknown>> {
+  const [approval, windows, explainer] = await Promise.all([
+    getSettings("approval-webhook"),
+    getSettings("maintenance-windows"),
+    getSettings("plan-explainer"),
+  ]);
+  const approvalSafe: Record<string, unknown> = {
+    ...approval,
+    "secret-set": typeof approval.secret === "string" && approval.secret !== "",
+  };
+  delete approvalSafe.secret;
+  const explainerSafe: Record<string, unknown> = {
+    ...explainer,
+    "api-key-set": typeof explainer["api-key"] === "string" && explainer["api-key"] !== "",
+  };
+  delete explainerSafe["api-key"];
+  return {
+    id: "operations-settings",
+    type: "operations-settings",
+    attributes: {
+      "approval-webhook": approvalSafe,
+      "maintenance-windows": windows,
+      "plan-explainer": explainerSafe,
+    },
+  };
+}
+
 
 type UserItem = DeepReadonly<typeof users.$inferSelect>;
 type OrgItem = DeepReadonly<typeof organizations.$inferSelect>;
@@ -1082,12 +1135,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
   // --- Operations Settings (kanban 21.2 / 21.6 / 21.8) ---
   .get("/api/v2/admin/operations-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const [approval, windows, explainer] = await Promise.all([
-      getSettings("approval-webhook"),
-      getSettings("maintenance-windows"),
-      getSettings("plan-explainer"),
-    ]);
-    return { data: { id: "operations-settings", type: "operations-settings", attributes: { "approval-webhook": approval, "maintenance-windows": windows, "plan-explainer": explainer } } };
+    return { data: await operationsSettingsResource() };
   })
   .patch("/api/v2/admin/operations-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1104,7 +1152,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
       const group = value as Record<string, unknown>;
       if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("approval-webhook.enabled must be a boolean");
       if (group.secret !== undefined && group.secret !== null && typeof group.secret !== "string") return reject("approval-webhook.secret must be a string");
-      if (group.url !== undefined && group.url !== null && typeof group.url !== "string") return reject("approval-webhook.url must be a string or null");
+      if (group.url !== undefined && group.url !== null) {
+        if (typeof group.url !== "string" || !usableHttpUrl(group.url)) return reject("approval-webhook.url must be an http(s) URL or null");
+      }
       await updateSettings("approval-webhook", group);
     }
     if (attrs["maintenance-windows"] !== undefined) {
@@ -1121,9 +1171,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
           if (!Array.isArray(days) || !days.every((day: unknown): boolean => typeof day === "number" && Number.isInteger(day) && day >= 0 && day <= 6)) {
             return reject("maintenance window days must be an array of integers 0-6");
           }
-          if (typeof window["start-time"] !== "string" || !/^\d{1,2}:\d{2}$/.test(window["start-time"])
-            || typeof window["end-time"] !== "string" || !/^\d{1,2}:\d{2}$/.test(window["end-time"])) {
-            return reject("maintenance window start-time and end-time must be HH:MM");
+          if (typeof window["start-time"] !== "string" || !validClockTime(window["start-time"])
+            || typeof window["end-time"] !== "string" || !validClockTime(window["end-time"])) {
+            return reject("maintenance window start-time and end-time must be HH:MM with a valid clock time (00-23 hours, 00-59 minutes)");
           }
           if (window.timezone !== undefined && typeof window.timezone !== "string") return reject("maintenance window timezone must be a string");
         }
@@ -1135,17 +1185,16 @@ export const adminRoutes = new Elysia({ name: "admin" })
       if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("plan-explainer must be an object");
       const group = value as Record<string, unknown>;
       if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("plan-explainer.enabled must be a boolean");
-      if (group["endpoint-url"] !== undefined && group["endpoint-url"] !== null && typeof group["endpoint-url"] !== "string") return reject("plan-explainer endpoint-url must be a string or null");
+      if (group["endpoint-url"] !== undefined && group["endpoint-url"] !== null) {
+        if (typeof group["endpoint-url"] !== "string" || !usableHttpUrl(group["endpoint-url"])) {
+          return reject("plan-explainer endpoint-url must be an http(s) URL or null");
+        }
+      }
       if (group["api-key"] !== undefined && group["api-key"] !== null && typeof group["api-key"] !== "string") return reject("plan-explainer api-key must be a string or null");
       if (group.model !== undefined && group.model !== null && typeof group.model !== "string") return reject("plan-explainer model must be a string or null");
       await updateSettings("plan-explainer", group);
     }
-    const [approval, windows, explainer] = await Promise.all([
-      getSettings("approval-webhook"),
-      getSettings("maintenance-windows"),
-      getSettings("plan-explainer"),
-    ]);
-    return { data: { id: "operations-settings", type: "operations-settings", attributes: { "approval-webhook": approval, "maintenance-windows": windows, "plan-explainer": explainer } } };
+    return { data: await operationsSettingsResource() };
   })
   // --- B.3 Cost Estimation Settings ---
   .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {

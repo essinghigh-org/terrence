@@ -105,14 +105,19 @@ function checkDatabase(): void {
 }
 
 async function checkDns(host: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         const result = await Promise.race([
             dns.resolve4(host),
-            new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error("timeout")), 5000);
+            }),
         ]);
         record(`dns:${host}`, "ok", `resolves to ${(result as string[]).join(", ")}`);
     } catch {
         record(`dns:${host}`, "fail", "could not resolve (network or DNS failure)");
+    } finally {
+        if (timer !== undefined) clearTimeout(timer);
     }
 }
 
@@ -195,7 +200,7 @@ function checkConfig(): void {
     for (const [name, kind] of known) {
         const present = set(name);
         if (kind === "required" && !present) {
-            record(`config:${name}`, "warn", "not set — admin bootstrap will not work");
+            record(`config:${name}`, "fail", "not set — admin bootstrap will not work");
         } else {
             record(`config:${name}`, present ? "ok" : "warn", present ? "set" : "unset (defaults apply)");
         }
@@ -221,10 +226,9 @@ function printHuman(): void {
     console.log(`storage dir: ${storageDir}`);
     console.log(`database:    ${dbPath}`);
     console.log("");
-    const widths = new Map<string, number>();
-    for (const c of checks) widths.set(c.name, Math.max(widths.get(c.name) ?? 0, c.name.length));
+    const maxNameWidth = checks.reduce((acc, c) => Math.max(acc, c.name.length), 0);
     for (const c of checks) {
-        const label = c.name.padEnd(widths.get(c.name) ?? 0);
+        const label = c.name.padEnd(maxNameWidth);
         console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${c.detail}`);
     }
     const fails = checks.filter((c) => c.status === "fail").length;
@@ -253,7 +257,8 @@ async function main(): Promise<void> {
     } else {
         printHuman();
     }
-    if (checks.some((c) => c.status === "fail")) process.exit(1);
+    // --fail is opt-in: without it, doctor only reports and always exits 0.
+    if (failOnFinding && checks.some((c) => c.status === "fail")) process.exit(1);
     process.exit(0);
 }
 

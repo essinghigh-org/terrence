@@ -471,6 +471,14 @@ export const userRoutes = new Elysia({ name: "users" })
     } else {
       await db.insert(apiTokens).values(createdToken);
     }
+    if (strictAuditEnabled()) {
+      await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
+        description,
+        scopes: createdToken.scopes,
+        ...(orgId !== undefined ? { orgId } : {}),
+        source: "user",
+      });
+    }
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -528,6 +536,13 @@ export const userRoutes = new Elysia({ name: "users" })
       await t.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)));
       await t.insert(apiTokens).values(createdToken);
     });
+    if (strictAuditEnabled()) {
+      await auditLog("create", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
+        orgId: org.id,
+        tokenType: tokenType === "" ? null : tokenType,
+        source: "user",
+      });
+    }
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })

@@ -1232,15 +1232,28 @@ export async function executeRun(runId: string): Promise<void> {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
       } else if (run.autoApply === true) {
-        await writeLog(
-          runId,
-          "plan",
-          hasNoResourceChanges && !hasDrift
-            ? `[terrence] Plan has no resource changes and no drift. Automatically applying to update workspace state.`
-            : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
+        // Auto-apply must not bypass the site-wide apply gates: when an
+        // approval workflow or a maintenance window blocks applies, fall
+        // back to the needs-attention state instead of applying.
+        const autoApplyBlockReason = await import("./lib/operations").then((mod): Promise<string | null> =>
+          mod.applyGateBlockReason(new Date()),
         );
-        keepPlan = true;
-        await executeApply(runId);
+        if (autoApplyBlockReason !== null) {
+          await writeLog(runId, "plan", `[terrence] Auto-apply blocked: ${autoApplyBlockReason}`);
+          await updateRunStatus(runId, "planned");
+          queueRunNotification(runId, "run:needs_attention", "planned");
+          keepPlan = true;
+        } else {
+          await writeLog(
+            runId,
+            "plan",
+            hasNoResourceChanges && !hasDrift
+              ? `[terrence] Plan has no resource changes and no drift. Automatically applying to update workspace state.`
+              : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
+          );
+          keepPlan = true;
+          await executeApply(runId);
+        }
       } else if (hasNoResourceChanges && !hasDrift && !run.allowEmptyApply) {
         await writeLog(runId, "plan", `[terrence] Plan has no resource changes or drift. Run finished.`);
         await updateRunStatus(runId, "planned_and_finished");

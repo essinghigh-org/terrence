@@ -6,6 +6,9 @@ const planJsonDirectory = resolve(
   "plan-json",
 );
 
+/** Canonical directory holding per-run plan JSON artifacts (id.json). */
+export { planJsonDirectory };
+
 export type PlanJson = Readonly<Record<string, unknown>>;
 export type PlanResourceCounts = Readonly<{
   additions: number;

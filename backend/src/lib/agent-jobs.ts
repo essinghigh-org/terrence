@@ -52,6 +52,28 @@ const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
 // sweep cutoff (AGENT_HEARTBEAT_TIMEOUT_MS) must stay comfortably above
 // this interval so a throttled agent is never swept as unavailable.
 const AGENT_PING_WRITE_INTERVAL_MS = 15_000;
+// Lower bound so an operator-shrunk timeout cannot drive the write
+// interval to something pathological (sub-second DB writes).
+const MIN_PING_WRITE_INTERVAL_MS = 3_000;
+
+function configuredHeartbeatTimeoutMs(): number {
+  const configured = Number(
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
+  );
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+}
+
+/** Persist-at-most interval derived from the sweep timeout: always stays
+ * below the timeout so a heartbeating agent can never be swept as stale. */
+function effectivePingWriteIntervalMs(): number {
+  const timeout = configuredHeartbeatTimeoutMs();
+  return Math.min(
+    AGENT_PING_WRITE_INTERVAL_MS,
+    Math.max(MIN_PING_WRITE_INTERVAL_MS, Math.floor(timeout / 4)),
+  );
+}
 // Agent-pool tokens mirror the user-token lastUsedAt throttle (auth.ts).
 const AGENT_TOKEN_LAST_USED_INTERVAL_MS = 60_000;
 
@@ -291,12 +313,7 @@ async function recordAgentPolicyChecks(
 }
 
 export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]> {
-  const configuredTimeout = Number(
-    process.env.AGENT_HEARTBEAT_TIMEOUT_MS ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
-  );
-  const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
-    ? configuredTimeout
-    : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+  const timeout = configuredHeartbeatTimeoutMs();
   const cutoff = now - timeout;
   // ponytail: run the sweep on the shared connection WITHOUT a write transaction.
   // The process shares a single stable bun:sqlite connection, so a write
@@ -423,7 +440,7 @@ export async function authenticateAgent(
   // of "unknown" always persist so a recovered agent is visible promptly.
   if (
     agent.lastPingAt === null
-    || now - agent.lastPingAt >= AGENT_PING_WRITE_INTERVAL_MS
+    || now - agent.lastPingAt >= effectivePingWriteIntervalMs()
     || agent.status === "unknown"
   ) {
     const rows = await db.update(agents).set({

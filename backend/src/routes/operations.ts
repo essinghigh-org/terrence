@@ -92,30 +92,39 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       }
     }
     const nowIso = new Date().toISOString();
-    const autoDestroys = await db.query.workspaces.findMany({
-      columns: { id: true, name: true, autoDestroyAt: true },
-      where: and(
-        eq(workspaces.orgId, organization.id),
-        gte(workspaces.autoDestroyAt, nowIso),
-      ),
-      limit: 100,
-    });
-    for (const workspace of autoDestroys) {
-      entries.push({
-        kind: "auto-destroy",
-        at: workspace.autoDestroyAt,
-        workspaceId: workspace.id,
-        workspaceName: workspace.name,
+    if (allowedWorkspaceIds.length > 0) {
+      // Same run-read permission filter as confirmed runs / change requests:
+      // auto-destroy schedules are only visible for workspaces the user can
+      // read, so a scoped user cannot enumerate other workspaces' schedules.
+      const autoDestroys = await db.query.workspaces.findMany({
+        columns: { id: true, name: true, autoDestroyAt: true },
+        where: and(
+          eq(workspaces.orgId, organization.id),
+          inArray(workspaces.id, allowedWorkspaceIds),
+          gte(workspaces.autoDestroyAt, nowIso),
+        ),
+        limit: 100,
       });
+      for (const workspace of autoDestroys) {
+        entries.push({
+          kind: "auto-destroy",
+          at: workspace.autoDestroyAt,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
+        });
+      }
     }
     entries.sort((a: Readonly<Record<string, unknown>>, b: Readonly<Record<string, unknown>>): number =>
       String(a.at).localeCompare(String(b.at)));
     const data = entries.slice(0, 50).map((attributes: Record<string, unknown>): Record<string, unknown> => ({
-      id: String(attributes.workspaceId ?? attributes.runId ?? attributes.changeRequestId ?? "entry"),
+      // Entry-specific id first so every item has a unique type+id pair:
+      // a workspace can appear once per confirmed run / change request, so
+      // workspaceId alone would collide for repeated entries.
+      id: String(attributes.changeRequestId ?? attributes.runId ?? attributes.workspaceId ?? "entry"),
       type: "change-calendar-entry",
       attributes,
     }));
-    return { data, meta: { "total-count": entries.length } };
+    return { data, meta: { "total-count": data.length } };
   })
   // --- AI plan explainer (kanban 21.2) ----------------------------------
   // Read-only convenience: feeds the sanitized stored plan JSON to a
@@ -129,7 +138,21 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     if (settings.enabled !== true) return notFound(set);
     const endpointUrl = settings["endpoint-url"];
     const model = settings.model;
-    if (typeof endpointUrl !== "string" || endpointUrl === "" || typeof model !== "string" || model === "") {
+    const endpointIsUsable = typeof endpointUrl === "string"
+      && endpointUrl !== ""
+      && typeof model === "string" && model !== "";
+    let parsedEndpoint: URL | null = null;
+    if (endpointIsUsable) {
+      try {
+        parsedEndpoint = new URL(endpointUrl);
+      } catch {
+        parsedEndpoint = null;
+      }
+    }
+    const endpointAllowed = parsedEndpoint !== null
+      && (parsedEndpoint.protocol === "http:" || parsedEndpoint.protocol === "https:")
+      && parsedEndpoint.hostname !== "";
+    if (!endpointIsUsable || !endpointAllowed) {
       (set as { status: number }).status = 503;
       return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
     }

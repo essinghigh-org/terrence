@@ -318,7 +318,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     const runId = typeof parsed.run === "string" ? parsed.run : typeof parsed.run_id === "string" ? parsed.run_id : "";
     if (runId === "") return webhookUnprocessable(set, "Missing run id");
-    const outcome = await confirmRunForApply(runId);
+    const action = typeof parsed.action === "string" ? parsed.action : "";
+    if (action !== "confirm") {
+      return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
+    }
+    const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
     if (!outcome.ok) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };

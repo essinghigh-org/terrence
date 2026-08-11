@@ -8,8 +8,7 @@ import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuth
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact } from "../lib/plan-json";
-import { getSettings } from "../lib/settings";
-import { maintenanceWindowsBlockApply, approvalWebhookBlocksApply } from "../lib/operations";
+import { applyGateBlockReason } from "../lib/operations";
 import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
@@ -685,20 +684,13 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
     }
-    const [approvalSettings, maintenanceSettings] = await Promise.all([
-      getSettings("approval-webhook"),
-      getSettings("maintenance-windows"),
-    ]);
-    if (approvalWebhookBlocksApply(approvalSettings)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Apply blocked: this instance requires approval through an external workflow (see admin approval-webhook settings)" }] };
-    }
-    if (maintenanceWindowsBlockApply(maintenanceSettings, new Date())) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Applies are only allowed during maintenance windows (see admin maintenance-windows settings)" }] };
-    }
     const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
+    const gateBlockReason = await applyGateBlockReason(new Date());
+    if (gateBlockReason !== null) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: gateBlockReason }] };
+    }
     let agentPoolId: string | null = null;
     if (authorized.workspace.executionMode === "agent") {
       const pool = authorized.workspace.agentPoolId === null

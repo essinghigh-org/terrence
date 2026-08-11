@@ -31,13 +31,23 @@ test("id-format migration renames run sidecar artifacts alongside re-keyed rows"
       stdout: "pipe",
       stderr: "ignore",
     });
-    const timedOut = await Promise.race([
-      child.exited.then(() => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 30_000)),
-    ]);
-    expect(timedOut).toBe(false);
-    const output = await new Response(child.stdout).text();
-    expect(output).toContain("READY");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timedOut = await Promise.race([
+        child.exited.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), 30_000);
+        }),
+      ]);
+      expect(timedOut).toBe(false);
+      const output = await new Response(child.stdout).text();
+      expect(output).toContain("READY");
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      // Never leak a hung boot child: after the race resolves (or on
+      // assertion failure) any still-running process is terminated.
+      if (child.exitCode === null) child.kill();
+    }
   };
 
   // Boot 1: migrations + compat block, no legacy rows yet -> no-op.

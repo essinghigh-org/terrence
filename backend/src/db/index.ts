@@ -7,6 +7,8 @@ import { mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve } from 'path';
 import * as schema from './schema';
 import { encryptSecret, isEncryptedSecret } from '../lib/secrets';
+import { planJsonDirectory } from '../lib/plan-json';
+import { runLogsDirectory } from '../lib/run-logs';
 
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
 // Deliberately synchronous: a top-level await here made this module a TLA
@@ -1013,12 +1015,12 @@ runSql('PRAGMA foreign_keys = ON');
 // ---------------------------------------------------------------------------
 {
   // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-  const STORAGE_DIR: string = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
   const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
-    { dir: join(STORAGE_DIR, "plan-json"), suffix: ".json" },
-    { dir: join(STORAGE_DIR, "run-logs"), suffix: ".json.gz" },
+    { dir: planJsonDirectory, suffix: ".json" },
+    { dir: runLogsDirectory, suffix: ".json.gz" },
   ];
   let sidecarsRenamed = 0;
+  let sidecarRenameFailures = 0;
   const renameRunSidecars = (map: Map<string, string>): void => {
     for (const [oldId, newId] of map) {
       for (const { dir, suffix } of RUN_SIDECAR_DIRS) {
@@ -1027,6 +1029,7 @@ runSql('PRAGMA foreign_keys = ON');
           sidecarsRenamed += 1;
         } catch (error: unknown) {
           if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+          sidecarRenameFailures += 1;
           console.warn(`[terrence] Failed to rename run sidecar ${oldId}${suffix}: ${String(error)}`);
         }
       }
@@ -1095,6 +1098,9 @@ runSql('PRAGMA foreign_keys = ON');
     }
     const entityNames = [...rekeyMaps.keys()].join(", ");
     const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
-    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarsRenamed > 0 ? `; renamed ${sidecarsRenamed} run sidecar files` : ""}.`);
+    const sidecarSummary = sidecarsRenamed > 0 || sidecarRenameFailures > 0
+      ? `; renamed ${sidecarsRenamed} run sidecar files${sidecarRenameFailures > 0 ? `, ${sidecarRenameFailures} failed` : ""}`
+      : "";
+    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarSummary}.`);
   }
 }

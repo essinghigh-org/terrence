@@ -232,7 +232,7 @@ describe("external approval webhook (21.8)", () => {
   });
 
   it("confirms a pending run when signed with the configured secret", async () => {
-    const payload = JSON.stringify({ run: webhookRunId });
+    const payload = JSON.stringify({ run: webhookRunId, action: "confirm" });
     const { createHmac } = await import("node:crypto");
     const signature = createHmac("sha256", "test-secret").update(payload).digest("hex");
     const response = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
@@ -246,6 +246,18 @@ describe("external approval webhook (21.8)", () => {
     const after = await db.query.runs.findFirst({ where: eq(runs.id, webhookRunId), columns: { status: true } });
     expect(["confirmed", "apply_queued", "applying"]).toContain(after?.status ?? "");
   });
+
+  it("rejects a signed payload whose action is not confirm", async () => {
+    const payload = JSON.stringify({ run: webhookRunId, action: "approve" });
+    const { createHmac } = await import("node:crypto");
+    const signature = createHmac("sha256", "test-secret").update(payload).digest("hex");
+    const response = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Terrence-Signature": signature },
+      body: payload,
+    }));
+    expect(response.status).toBe(422);
+  });
 });
 
 describe("change calendar (21.4)", () => {
@@ -257,11 +269,13 @@ describe("change calendar (21.4)", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       data: { type: string; attributes: { kind: string; at?: string; workspaceId?: string; workspaceName?: string } }[];
+      meta?: { "total-count"?: number };
     };
     const kinds = body.data.map((entry): string => entry.attributes.kind);
     expect(kinds).toContain("apply");
     expect(kinds).toContain("auto-destroy");
     expect(kinds).toContain("change-request");
+    expect(body.meta?.["total-count"]).toBe(body.data.length);
     const applyEntry = body.data.find((entry): boolean => entry.attributes.kind === "apply");
     expect(applyEntry?.attributes.workspaceName).toBe(workspaceName);
     const atValues = body.data.map((entry): string => String(entry.attributes.at ?? ""));
@@ -346,11 +360,51 @@ describe("admin operations settings surface", () => {
       }),
     }));
     expect(patch.status).toBe(200);
-    const patched = (await patch.json()) as { data: { attributes: { "approval-webhook": { enabled: boolean; secret: string }; "maintenance-windows": { enabled: boolean; windows: unknown[] } } } };
+    const patched = (await patch.json()) as { data: { attributes: { "approval-webhook": { enabled: boolean; "secret-set"?: boolean; secret?: string }; "maintenance-windows": { enabled: boolean; windows: unknown[] } } } };
     expect(patched.data.attributes["approval-webhook"].enabled).toBe(true);
-    expect(patched.data.attributes["approval-webhook"].secret).toBe("new-secret");
+    expect(patched.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
+    expect(patched.data.attributes["approval-webhook"].secret).toBeUndefined();
     expect(patched.data.attributes["maintenance-windows"].enabled).toBe(true);
     expect(patched.data.attributes["maintenance-windows"].windows).toHaveLength(1);
+  });
+
+  it("redacts stored secrets from the read surface", async () => {
+    await setSettings("approval-webhook", { enabled: true, secret: "hunter2", url: null });
+    await setSettings("plan-explainer", { enabled: true, "endpoint-url": null, "api-key": "sk-test", model: "m" });
+    const read = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(read.status).toBe(200);
+    const body = (await read.json()) as { data: { attributes: { "approval-webhook": Record<string, unknown>; "plan-explainer": Record<string, unknown> } } };
+    expect(body.data.attributes["approval-webhook"].secret).toBeUndefined();
+    expect(body.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
+    expect(body.data.attributes["plan-explainer"]["api-key"]).toBeUndefined();
+    expect(body.data.attributes["plan-explainer"]["api-key-set"]).toBe(true);
+  });
+
+  it("rejects non-http(s) URLs for webhook and explainer endpoints", async () => {
+    for (const [group, key, value] of [
+      ["approval-webhook", "url", "ftp://example.com/tf"],
+      ["plan-explainer", "endpoint-url", "file:///etc/passwd"],
+    ] as const) {
+      const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "operations-settings", attributes: { [group]: { [key]: value } } },
+        }),
+      }));
+      expect(patch.status).toBe(422);
+    }
+    // http(s) URLs (including loopback, e.g. a self-hosted Ollama) remain valid.
+    const ok = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { "endpoint-url": "http://127.0.0.1:11434/v1" } } },
+      }),
+    }));
+    expect(ok.status).toBe(200);
   });
 
   it("rejects malformed maintenance windows with 422", async () => {

@@ -9,6 +9,9 @@ export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId
 
 const storageDirectory = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "run-logs");
 
+/** Canonical directory holding per-run log archives (id.json.gz). */
+export { storageDirectory as runLogsDirectory };
+
 export function runLogArchivePath(runId: string): string {
   return join(storageDirectory, `${runId}.json.gz`);
 }
