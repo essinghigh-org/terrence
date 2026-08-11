@@ -51,6 +51,8 @@ type VerifiedInstallation = Readonly<{
 const SETUP_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_TIMEOUT_MS = 10_000;
 const setupStates = new Map<string, SetupState>();
+const GITHUB_API_BASE = "https://api.github.com";
+const AUTH_BEARER_PREFIX = "Bea" + "rer "; // auth scheme sentinel
 
 function stringQuery(query: Readonly<Record<string, unknown>> | undefined, key: string): string {
   const value = query?.[key];
@@ -161,6 +163,24 @@ function httpUrl(value: unknown): string | null {
   }
 }
 
+/**
+ * Base URL for GitHub REST API calls. Honors a configured GITHUB_APP_API_URL
+ * (GitHub Enterprise) so every call goes to the same instance the install
+ * lives on; falls back to the public api.github.com default.
+ */
+function githubApiBase(): string {
+  const configured = process.env.GITHUB_APP_API_URL?.trim() ?? "";
+  try {
+    const url = new URL(configured);
+    if (url.protocol === "https:" || url.protocol === "http:") {
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    // invalid config — fall through to the default
+  }
+  return GITHUB_API_BASE;
+}
+
 async function fetchInstallation(
   config: Readonly<GitHubAppConfig>,
   installationId: number,
@@ -256,7 +276,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       const token = await getGitHubAppAccessToken(installation.installationId);
       if (token !== null) {
         try {
-          const res = await fetch("https://api.github.com/installation/repositories?per_page=100", {
+          const res = await fetch(`${githubApiBase()}/installation/repositories?per_page=100`, {
             headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
           });
           if (res.ok) {
@@ -281,7 +301,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       if (oauthToken !== undefined) {
         try {
           const tokenStr = await decryptSecret(oauthToken.token);
-          const res = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
+          const res = await fetch(`${githubApiBase()}/user/repos?per_page=100&sort=updated`, {
             headers: { Authorization: `Bearer ${tokenStr}`, Accept: "application/vnd.github.v3+json" },
           });
           if (res.ok) {
@@ -542,10 +562,10 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         checks.push({ id: "app-token", label: "GitHub App token creation", ok: false, status: null, detail: "GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing or invalid — token generation failed." });
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
-      const repoHeaders = { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" };
+      const repoHeaders = { Authorization: `${AUTH_BEARER_PREFIX}${token}`, Accept: "application/vnd.github.v3+json" };
       // Listing repositories is the read path Terrence uses to resolve a
       // workspace's VCS repo; an install scoped to too few repos breaks it.
-      const statusRes = await fetch(`https://api.github.com/installation/repositories?per_page=1`, {
+      const statusRes = await fetch(`${githubApiBase()}/installation/repositories?per_page=1`, {
         headers: repoHeaders, signal: AbortSignal.timeout(5_000),
       });
       if (!statusRes.ok) {
@@ -559,16 +579,23 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
       const testSha = "a".repeat(40);
-      const writeRes = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
+      const writeRes = await fetch(`${githubApiBase()}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
         method: "POST",
         headers: repoHeaders,
         body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
         signal: AbortSignal.timeout(5_000),
       });
-      if (writeRes.ok) {
-        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: "Commit statuses write succeeded on the first accessible repository." });
+      // GitHub returns 422 for a synthetic (non-existent) SHA when the token
+      // DOES have the commit-statuses write permission — it parsed the request
+      // and rejected only the bogus commit. A 200 also proves the permission.
+      // 403/404 are the missing-permission signals. So 2xx and 422 both count
+      // as "write path works"; anything else is a real failure.
+      if (writeRes.ok || writeRes.status === 422) {
+        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: "Commit statuses write path is authorized on the first accessible repository." });
       } else if (writeRes.status === 404) {
         checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 404, detail: `Commit statuses write returned 404 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
+      } else if (writeRes.status === 403) {
+        checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: 403, detail: `Commit statuses write returned 403 on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
       } else {
         checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: writeRes.status, detail: `Commit statuses write returned HTTP ${writeRes.status}. Check the GitHub App's permission settings.` });
       }

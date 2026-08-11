@@ -29,13 +29,13 @@ export function useSyncedSearchParam(
   paramNameRef.current = paramName;
 
   // Reconcile when the location changes (e.g. browser back/forward) so the
-  // in-component state follows the URL if the param changed underneath us.
+  // in-component state follows the URL. If the param disappeared (e.g. the
+  // filter was cleared and the URL param removed), reset to the initial value
+  // rather than leaving a stale in-component filter.
   useEffect((): void => {
     if (paramName === undefined) return;
     const fromUrl = searchParams.get(paramName);
-    if (fromUrl !== null) {
-      setValue(fromUrl);
-    }
+    setValue(fromUrl ?? initialValue);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, paramName]);
 

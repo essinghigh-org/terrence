@@ -101,21 +101,25 @@ export function _dedup(reset?: boolean): void {
   if (reset === true) emittedKeys.clear();
 }
 
-function dedupAlreadyDelivered(scope: "run" | "assessment", key: string): boolean {
+function dedupSuppressed(scope: "run" | "assessment", key: string): boolean {
   const now = Date.now();
   const fullKey = `${scope}:${key}`;
   const prior = emittedKeys.get(fullKey);
   if (prior !== undefined && now - prior < DEDUP_WINDOW_MS) {
     return true;
   }
-  // Prune stale entries opportunistically so the map does not grow unbounded.
+  // Opportunistically prune stale entries so the map never grows unbounded.
   if (emittedKeys.size > 1_000) {
     for (const [mapKey, ts] of emittedKeys) {
       if (now - ts >= DEDUP_WINDOW_MS) emittedKeys.delete(mapKey);
     }
   }
-  emittedKeys.set(fullKey, now);
   return false;
+}
+
+/** Record that a logical notification was emitted for a (scope, key). */
+function dedupRecord(scope: "run" | "assessment", key: string): void {
+  emittedKeys.set(`${scope}:${key}`, Date.now());
 }
 
 export function postNotification(
@@ -292,7 +296,17 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
 
   const linkUrl = firstUrl(payload);
   const linkLabel = typeof payload.run_id === "string" ? "Open run" : "Open workspace";
-  return { title: message, subtext: stringify(payload.run_message ?? payload.change_request_message), fields, linkLabel, linkUrl };
+  const status = typeof payload.run_status === "string"
+    ? payload.run_status
+    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+  return {
+    title: message,
+    subtext: stringify(payload.run_message ?? payload.change_request_message),
+    fields,
+    linkLabel,
+    linkUrl,
+    ...(typeof status === "string" ? { status } : {}),
+  };
 }
 
 function renderSlack(payload: Readonly<Record<string, unknown>>): string {
@@ -316,10 +330,18 @@ function renderSlack(payload: Readonly<Record<string, unknown>>): string {
 function renderTeams(payload: Readonly<Record<string, unknown>>): string {
   const summary = summarizePayload(payload);
   const facts = summary.fields.slice(0, 10).map((field) => ({ name: field.label, value: field.value }));
+  const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set([
+    "canceled",
+    "errored",
+    "force_canceled",
+    "discarded",
+  ]);
   const card: Record<string, unknown> = {
     "@type": "MessageCard",
     "@context": "http://schema.org/extensions",
-    themeColor: summary.status !== undefined ? "c0392b" : "2b579a",
+    // Failure states get the alert accent; everything else (including a run
+    // with no status yet) keeps the default blue.
+    themeColor: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? "c0392b" : "2b579a",
     summary: summary.title,
     title: summary.title,
   };
@@ -422,14 +444,21 @@ export async function verifyDestinationOwnership(
     return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };
   }
 
-  const responseBody = await response.text();
+  // Reading the response body is bounded so a malicious/hostile endpoint cannot
+  // force us to buffer an unbounded payload. An explicit `X-Terrence-Ownership-Challenge`
+  // response header is the verification condition; body reflection alone is a
+  // weaker proof (a generic echo server echoes anything, including our token)
+  // and is not sufficient on its own.
+  const boundedBody = await response.arrayBuffer().then(
+    (buffer: ArrayBuffer): string => new TextDecoder().decode(buffer).slice(0, 4096),
+  ).catch(() => "");
   const headerEcho = response.headers.get("x-terrence-ownership-challenge") ?? "";
-  const bodyLacksEcho = !responseBody.includes(challenge);
+  const bodyLacksEcho = !boundedBody.includes(challenge);
   const headerLacksEcho = headerEcho !== challenge;
 
-  const successful = !bodyLacksEcho || !headerLacksEcho;
+  const successful = !headerLacksEcho;
   if (successful) recordOwnershipVerified(configuration.id);
-  return { successful, echoed: responseBody.slice(0, 256), bodyLacksEcho, headerLacksEcho };
+  return { successful, echoed: boundedBody.slice(0, 256), bodyLacksEcho, headerLacksEcho };
 }
 
 export async function deliverRunNotifications(
@@ -467,8 +496,15 @@ export async function deliverRunNotifications(
   const updatedAt = new Date().toISOString();
   const runStatus = statusOverride ?? run.status;
 
-  if (dedupAlreadyDelivered("run", `${run.id}:${trigger}:${runStatus}`)) {
+  const dedupKey = `${run.id}:${trigger}:${runStatus}`;
+  if (dedupSuppressed("run", dedupKey)) {
     return [];
+  }
+  // Only record the logical emission when there is at least one matching
+  // destination and a delivery will actually be attempted, so a config-less
+  // or breaker-closed run does not consume the dedup window.
+  if (matching.length > 0) {
+    dedupRecord("run", dedupKey);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
@@ -530,7 +566,7 @@ export async function deliverAssessmentNotifications(
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, result.workspaceId) });
   if (workspace === undefined) return [];
 
-  if (dedupAlreadyDelivered("assessment", `${assessmentResultId}:${trigger}`)) {
+  if (dedupSuppressed("assessment", `${assessmentResultId}:${trigger}`)) {
     return [];
   }
 
@@ -561,6 +597,10 @@ export async function deliverAssessmentNotifications(
     "assessment:check_failure": "Continuous Validation Check Failed",
     "assessment:failed": "Health Assessment Errored",
   } as const;
+
+  if (matching.length > 0) {
+    dedupRecord("assessment", `${assessmentResultId}:${trigger}`);
+  }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
     postNotification(configuration, {

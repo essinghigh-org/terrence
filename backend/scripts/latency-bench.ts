@@ -54,13 +54,19 @@ function percentiles(values: readonly number[]): { p50: number; p95: number; max
   return { p50: pick(50), p95: pick(95), max: sorted[sorted.length - 1] ?? 0 };
 }
 
-async function timeOnce(url: string): Promise<number> {
+async function timeOnce(url: string, headers: Record<string, string>): Promise<number> {
   const start = performance.now();
   const res = await fetch(url, {
-    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.api+json" },
+    headers,
     signal: AbortSignal.timeout(15_000),
   });
   await res.body?.cancel().catch(() => undefined);
+  if (!res.ok) {
+    // A non-2xx response means the endpoint did not serve a successful read,
+    // so it must not count as a valid latency sample. Throwing routes it into
+    // the caller's failure accounting instead of skewing the p95 upward/down.
+    throw new Error(`HTTP ${res.status} for ${url}`);
+  }
   return performance.now() - start;
 }
 
@@ -73,14 +79,22 @@ interface Result {
 }
 
 async function main(): Promise<void> {
+  const headers: Record<string, string> = { Authorization: "Bearer " + token, Accept: "application/vnd.api+json" };
   const results: Result[] = [];
   let failures = 0;
   for (const endpoint of endpoints) {
-    for (let i = 0; i < warmup; i += 1) await timeOnce(`${baseUrl}${endpoint.path}`);
+    // Warmup is best-effort: a warmup failure must not abort the whole run.
+    for (let i = 0; i < warmup; i += 1) {
+      try {
+        await timeOnce(`${baseUrl}${endpoint.path}`, headers);
+      } catch {
+        // ignore warmup failures
+      }
+    }
     const times: number[] = [];
     for (let i = 0; i < samples; i += 1) {
       try {
-        times.push(await timeOnce(`${baseUrl}${endpoint.path}`));
+        times.push(await timeOnce(`${baseUrl}${endpoint.path}`, headers));
       } catch {
         times.push(Number.POSITIVE_INFINITY);
       }

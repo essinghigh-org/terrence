@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { log } from "./log";
 
 const ENCRYPTED_PREFIX = "enc:v1";
 const KEY_FILE_NAME = ".encryption-key";
@@ -22,6 +23,25 @@ let cachedStorageDir: string | undefined;
 let cachedKdfSalt: Buffer | undefined;
 let cachedKdfSaltStorageDir: string | undefined;
 let cachedLegacyKey: Buffer | undefined;
+let cachedLegacyPassword: string | undefined;
+
+/** Equal to true after loadKdfSalt() had to create a new salt (no prior salt on disk). */
+let saltWasRecreatedOnLoad = false;
+
+/**
+ * True when the current process created the KDF salt because none existed. A
+ * fresh salt silently changes the derived key for every ENCRYPTION_PASSWORD,
+ * which would make previously-encrypted secrets undecryptable — so callers
+ * (startup/bootstrapping) can detect a lost or non-persistent STORAGE_DIR and
+ * warn or abort. Only exported for startup diagnostics.
+ */
+export function didRecreateKdfSalt(): boolean {
+  return saltWasRecreatedOnLoad;
+}
+
+/** Warning the operator sees if a KDF salt was freshly created this boot. */
+export const KDF_SALT_RECREATED_WARNING =
+  "[terrence] Created a new KDF salt in STORAGE_DIR. If this is not a fresh installation, STORAGE_DIR is not persistent and previously-encrypted secrets cannot be decrypted. Persist STORAGE_DIR (bind-mount/volume) whenever ENCRYPTION_PASSWORD is configured.";
 
 /**
  * Per-installation random KDF salt for ENCRYPTION_PASSWORD-derived keys.
@@ -54,9 +74,16 @@ async function loadKdfSalt(): Promise<Buffer> {
         await saltFile.close();
       }
       cachedKdfSalt = generated;
+      // We just minted a salt where none existed. If encrypted secrets already
+      // exist this is a lost/non-persistent STORAGE_DIR and must be surfaced.
+      saltWasRecreatedOnLoad = true;
     } catch (createError) {
       if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
-      cachedKdfSalt = Buffer.from((await readFile(saltPath, "utf8")).trim(), "base64");
+      // A concurrent process created the file. The concurrent writer may not
+      // have finished writing yet (open(path, "wx") → write is not atomic with
+      // creation), so retry a bounded number of times rather than treating a
+      // transient partial/empty file as the final salt.
+      cachedKdfSalt = await readExistingSaltWithRetry(saltPath);
     }
   }
 
@@ -66,8 +93,32 @@ async function loadKdfSalt(): Promise<Buffer> {
   return cachedKdfSalt;
 }
 
+const SALT_READ_RETRIES = 20;
+const SALT_READ_RETRY_DELAY_MS = 25;
+
+async function readExistingSaltWithRetry(saltPath: string): Promise<Buffer> {
+  for (let attempt = 0; attempt < SALT_READ_RETRIES; attempt += 1) {
+    if (attempt > 0) await new Promise<void>((resolveDelay): void => { setTimeout(resolveDelay, SALT_READ_RETRY_DELAY_MS); });
+    try {
+      const salt = Buffer.from((await readFile(saltPath, "utf8")).trim(), "base64");
+      if (salt.length >= SALT_LENGTH) return salt;
+    } catch (readError) {
+      if ((readError as NodeJS.ErrnoException).code !== "ENOENT") throw readError;
+    }
+  }
+  // Give up: the file is persistently absent or below the valid length. Callers
+  // surface the "Invalid KDF salt" error; failing closed is correct here.
+  throw new Error(`Invalid KDF salt in ${saltPath} (concurrent write never completed)`);
+}
+
 function legacyEncryptionKey(password: string): Buffer {
-  cachedLegacyKey ??= scryptSync(password, LEGACY_KDF_SALT, KEY_LENGTH);
+  // Key is cached per password so a process that re-reads ENCRYPTION_PASSWORD
+  // after a config change derives a fresh key instead of returning the stale
+  // cached one (the decrypt fallback calls this with the current password).
+  if (cachedLegacyPassword !== password || cachedLegacyKey === undefined) {
+    cachedLegacyKey = scryptSync(password, LEGACY_KDF_SALT, KEY_LENGTH);
+    cachedLegacyPassword = password;
+  }
   return cachedLegacyKey;
 }
 
@@ -82,6 +133,10 @@ async function loadEncryptionKey(): Promise<Buffer> {
   const password = process.env.ENCRYPTION_PASSWORD;
   if (password !== undefined && password !== "") {
     cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH);
+    if (saltWasRecreatedOnLoad) {
+      log.warn(KDF_SALT_RECREATED_WARNING);
+      saltWasRecreatedOnLoad = false; // warn once per boot
+    }
     return cachedKey;
   }
 

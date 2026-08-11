@@ -237,8 +237,14 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) return notFound(set);
     const values = createValues(body, { projectId });
     if (values === undefined) {
+      const attributes = attributesFrom(body);
+      const errors = createValidationErrors(
+        typeof attributes.name === "string" ? attributes.name.trim() : "",
+        typeof attributes.url === "string" ? attributes.url : "",
+        typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
+      );
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
     }
     await db.insert(notificationConfigurations).values(values);
     const created = await db.query.notificationConfigurations.findFirst({
@@ -265,8 +271,9 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     const url = typeof attributes.url === "string" ? attributes.url : "";
     const destinationType = typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "";
     if (name === "" || !isWebhookUrl(url) || !isNotificationDestination(destinationType)) {
+      const errors = createValidationErrors(name, url, destinationType);
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
     }
     const values = {
       id: `nc-${crypto.randomUUID()}`,
@@ -331,11 +338,12 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     // Send a realistic run sample (7.5) mirroring the production payload
     // shape so a mis-configured adapter surfaces immediately. The sample body
     // is shared with the preview path (7.10) so what you see is what is sent.
-    const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+    const configuredUrl = process.env.PUBLIC_URL ?? "";
+    const baseUrl = URL.canParse(configuredUrl) ? configuredUrl : "http://localhost";
     const samplePayload: Record<string, unknown> = {
       payload_version: 1,
       notification_configuration_id: configuration.id,
-      run_url: new URL(`/app/demo/workspaces/demo/runs/test-notification`, baseUrl).toString(),
+      run_url: new URL("/app/demo/workspaces/demo/runs/test-notification", baseUrl).toString(),
       run_id: "test-notification",
       run_message: "This is a sample notification from Terrence.",
       run_created_at: new Date().toISOString(),
@@ -360,7 +368,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         status: "preview",
         data: {
           ...notificationResource(configuration),
-          preview: JSON.parse(JSON.stringify(samplePayload)),
+          preview: samplePayload,
         },
       };
     }

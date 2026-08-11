@@ -74,7 +74,6 @@ export function StackSettings(): React.JSX.Element {
     setProjects([]);
     setStackToDelete(null);
     permissionGateFired.current = false;
-    if (orgName !== "") void loadStacks();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

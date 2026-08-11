@@ -48,6 +48,27 @@ describe("Configurable password policy (kanban 5.5)", () => {
     });
   });
 
+  describe("bcrypt 72-byte input limit", () => {
+    it("rejects passwords exceeding 72 UTF-8 bytes", () => {
+      const longAscii = "a".repeat(73);
+      expect(checkPasswordPolicy(defaultPasswordPolicy, longAscii).ok).toBeFalse();
+      expect(checkPasswordPolicy(defaultPasswordPolicy, longAscii).errors).toContain("Password must be at most 72 bytes when encoded as UTF-8");
+    });
+
+    it("accepts a password of exactly 72 bytes", () => {
+      expect(checkPasswordPolicy(defaultPasswordPolicy, "a".repeat(72)).ok).toBeTrue();
+    });
+
+    it("counts multibyte characters by encoded byte length, not string length", () => {
+      // 24 emoji (empty "😀" is 4 bytes) => 96 UTF-8 bytes, well over 72, but
+      // only 24 JS code units.
+      const multibyte = "😀".repeat(24);
+      expect(multibyte.length).toBeLessThan(72);
+      expect(Buffer.byteLength(multibyte, "utf8")).toBeGreaterThan(72);
+      expect(checkPasswordPolicy(defaultPasswordPolicy, multibyte).ok).toBeFalse();
+    });
+  });
+
   describe("configurable minimum length", () => {
     it("uses the configured minimum length", () => {
       const tight: PasswordPolicyRules = { ...defaultPasswordPolicy, minLength: 16 };

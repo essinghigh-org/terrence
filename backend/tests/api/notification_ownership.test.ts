@@ -38,7 +38,7 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
       port: 0,
       async fetch(req) {
         const parsed = await req.json() as { ownership_challenge?: string };
-        return new Response(JSON.stringify({ echoed: parsed.ownership_challenge }));
+        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": parsed.ownership_challenge ?? "" } });
       },
     });
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);

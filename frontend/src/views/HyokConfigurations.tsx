@@ -91,7 +91,6 @@ export function HyokConfigurations(): React.JSX.Element {
     setDialogOpen(false);
     setOidcConfigs([]);
     setAgentPools([]);
-    if (orgName !== "") void loadConfigurations();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

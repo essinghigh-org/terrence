@@ -260,10 +260,19 @@ export function CommandPalette({
                   perform: () => {
                     void (async (): Promise<void> => {
                       try {
-                        const response = await fetchApi(
-                          `/workspaces/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/runs?page[size]=1&sort=-created-at`,
+                        // Runs are API-keyed by workspace ID (GET
+                        // /api/v2/workspaces/:workspace_id/runs), so resolve the
+                        // workspace ID from its org/name path first, then fetch
+                        // the newest run (sort=-created-at, page[size]=1).
+                        const wsResponse = await fetchApi(
+                          `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
+                        ) as { data?: { id?: string } };
+                        const wsId = wsResponse.data?.id;
+                        if (wsId === undefined) return;
+                        const runsResponse = await fetchApi(
+                          `/workspaces/${encodeURIComponent(wsId)}/runs?page[size]=1&sort=-created-at`,
                         ) as { data?: { id?: string }[] };
-                        const runId = response.data?.[0]?.id;
+                        const runId = runsResponse.data?.[0]?.id;
                         if (runId !== undefined) {
                           navigate(
                             `/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/runs/${encodeURIComponent(runId)}`,

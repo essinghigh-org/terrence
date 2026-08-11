@@ -67,7 +67,6 @@ export function AgentPoolScoping(): React.JSX.Element {
     setError("");
     permissionGateFired.current = false;
     setCreateDialogOpen(false);
-    if (orgName !== "") void loadPools();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

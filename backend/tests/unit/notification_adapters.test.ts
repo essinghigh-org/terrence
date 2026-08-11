@@ -119,7 +119,11 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
     else process.env.TERRENCE_ALLOW_PRIVATE_URLS = prevAllow;
   });
 
-  it("verifies ownership when the destination echoes the challenge in its response body", async () => {
+  it("does NOT verify when the challenge is echoed only in the response body (header is the proof)", async () => {
+    // A generic echo server reflects ANY body it receives, so a body echo is a
+    // weak proof — an attacker-controlled endpoint would echo our token too.
+    // Ownership is established by the explicit X-Terrence-Ownership-Challenge
+    // response header, so this must fail verification.
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -131,9 +135,10 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
     try {
       const cfg = config("generic", server.url.toString());
       const outcome = await verifyDestinationOwnership(cfg);
-      expect(outcome.successful).toBeTrue();
+      expect(outcome.successful).toBeFalse();
       expect(outcome.bodyLacksEcho).toBeFalse();
-      expect(_ownershipVerified(cfg.id)).toBeTrue();
+      expect(outcome.headerLacksEcho).toBeTrue();
+      expect(_ownershipVerified(cfg.id)).toBeFalse();
     } finally {
       await server.stop(true);
     }
@@ -166,11 +171,12 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       },
     });
     try {
-      const outcome = await verifyDestinationOwnership(config("generic", server.url.toString()));
+      const cfg = config("generic", server.url.toString());
+      const outcome = await verifyDestinationOwnership(cfg);
       expect(outcome.successful).toBeFalse();
       expect(outcome.bodyLacksEcho).toBeTrue();
       expect(outcome.headerLacksEcho).toBeTrue();
-      expect(_ownershipVerified("cfg")).toBeFalse();
+      expect(_ownershipVerified(cfg.id)).toBeFalse();
     } finally {
       await server.stop(true);
     }
@@ -184,7 +190,7 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       async fetch(req) {
         if (!echo) return new Response(JSON.stringify({ ok: true }), { status: 200 });
         const body = await req.json() as { ownership_challenge?: string };
-        return new Response(JSON.stringify({ echoed: body.ownership_challenge }));
+        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" } });
       },
     });
     try {

@@ -49,7 +49,6 @@ export function ProviderSets(): React.JSX.Element {
     setSets([]);
     setCreateDialogOpen(false);
     permissionGateFired.current = false;
-    if (orgName !== "") void loadProviderSets();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

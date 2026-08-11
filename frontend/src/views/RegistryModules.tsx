@@ -51,7 +51,6 @@ export function RegistryModules(): React.JSX.Element {
     setCreateDialogOpen(false);
     setModuleToDelete(null);
     permissionGateFired.current = false;
-    if (orgName !== "") void loadModules();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

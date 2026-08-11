@@ -2,9 +2,12 @@
 //
 // The default policy keeps the long-standing minimum of 10 characters, so
 // behavior is unchanged unless an operator opts into stricter rules via env
-// vars. Rules are additive and per-instance:
+// vars. Rules are additive and per-instance (loadPasswordPolicy reads
+// process.env on every call, so live changes take effect on next check):
 //
-//   TERRENCE_PASSWORD_MIN_LENGTH        minimum rune length (default 10)
+//   TERRENCE_PASSWORD_MIN_LENGTH        minimum character length using UTF-16
+//                                       code units (see loadPasswordPolicy;
+//                                       default 10)
 //   TERRENCE_PASSWORD_REQUIRE_UPPER     require >= 1 uppercase [A-Z]      (default false)
 //   TERRENCE_PASSWORD_REQUIRE_LOWER     require >= 1 lowercase [a-z]      (default false)
 //   TERRENCE_PASSWORD_REQUIRE_DIGIT     require >= 1 digit [0-9]          (default false)
@@ -12,8 +15,9 @@
 //   TERRENCE_PASSWORD_DISALLOW_USERNAME reject passwords containing the    (default false)
 //                                        username (case-insensitive) when set
 //
-// All configuration is read once at module load. This module is pure and
-// framework-free so it can be unit-tested without a server.
+// A password is additionally capped at 72 UTF-8 bytes to match bcrypt's input
+// limit (Bun.password.hash), independent of the configured rules. This module
+// is pure and framework-free so it can be unit-tested without a server.
 
 export interface PasswordPolicyRules {
   minLength: number;
@@ -84,6 +88,13 @@ export function checkPasswordPolicy(
     if (password.toLowerCase().includes(lower)) {
       errors.push("Password must not contain the username");
     }
+  }
+  // bcrypt (Bun.password.hash default) truncates input at 72 bytes; a longer
+  // password would silently hash only its prefix, making distinct long
+  // passwords collide. Measure the UTF-8 byte length so multibyte characters
+  // are counted correctly, not by JS string length.
+  if (Buffer.byteLength(password, "utf8") > 72) {
+    errors.push("Password must be at most 72 bytes when encoded as UTF-8");
   }
   return { ok: errors.length === 0, errors };
 }

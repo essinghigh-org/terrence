@@ -61,7 +61,6 @@ export function OidcConfigurations(): React.JSX.Element {
     setConfigs([]);
     setCreateDialogOpen(false);
     permissionGateFired.current = false;
-    if (orgName !== "") void loadConfigs();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear

@@ -44,7 +44,6 @@ export function AuditTrailTokens(): React.JSX.Element {
     setGeneratedToken("");
     setActionError("");
     permissionGateFired.current = false;
-    if (orgName !== "") void loadAuditTrailToken();
   }, [orgName]);
 
   // Central permission gate (14.6): once org permissions load, surface a clear
