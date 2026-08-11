@@ -16,6 +16,7 @@ const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX
 
 // Import route plugins
 import { healthRoutes } from "./routes/health";
+import { operationsRoutes } from "./routes/operations";
 import { accountRoutes } from "./routes/accounts";
 import { userRoutes } from "./routes/users";
 import { organizationRoutes } from "./routes/organizations";
@@ -453,7 +454,7 @@ export const app = new Elysia()
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
-    if (new URL(request.url).pathname === "/api/webhooks/github") {
+    if (new URL(request.url).pathname === "/api/webhooks/github" || new URL(request.url).pathname === "/api/v2/webhooks/run-approval") {
       return request.text();
     }
     if (contentType === "application/vnd.api+json") {
@@ -532,6 +533,7 @@ export const app = new Elysia()
   })
   // Route modules
   .use(healthRoutes)
+  .use(operationsRoutes)
   .use(accountRoutes)
   .use(userRoutes)
   .use(organizationRoutes)

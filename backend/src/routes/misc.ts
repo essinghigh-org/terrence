@@ -9,6 +9,8 @@ import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "../lib/webhooks";
+import { getSettings } from "../lib/settings";
+import { confirmRunForApply } from "../lib/operations";
 import {
   emptyCostEstimate,
   readCostEstimateArtifact,
@@ -282,6 +284,47 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (eventName === null || eventName === "") return webhookUnprocessable(set, "Missing Bitbucket event header");
     void processProviderDelivery(handleBitbucketWebhook, eventName, parsed.payload);
     return webhookAcknowledged;
+  })
+  // --- External Apply Approval Webhook (kanban 21.8) ---
+  // Lets a ServiceNow/Jira/other workflow unblock an apply that the site
+  // has gated behind external approval (admin `approval-webhook` settings).
+  // Signature: `X-Terrence-Signature: <sha256 hex HMAC of the raw body>`.
+  .post("/api/v2/webhooks/run-approval", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
+    const settings = await getSettings("approval-webhook");
+    if (settings.enabled !== true) {
+      return webhookUnprocessable(set, "External apply approval is not enabled");
+    }
+    const secret = settings.secret;
+    if (typeof secret !== "string" || secret === "") {
+      return webhookUnauthorized(set, "Approval webhook secret is not configured");
+    }
+    const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
+    const signature = request.headers.get("x-terrence-signature");
+    if (signature === null) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Missing signature" }] };
+    }
+    const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"));
+    const provided = Buffer.from(signature);
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      return webhookUnauthorized(set, "Invalid approval webhook signature");
+    }
+    let parsed: Readonly<Record<string, unknown>> = {};
+    try {
+      const value: unknown = JSON.parse(rawBody);
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value as Readonly<Record<string, unknown>>;
+    } catch {
+      return webhookUnprocessable(set, "Invalid JSON payload");
+    }
+    const runId = typeof parsed.run === "string" ? parsed.run : typeof parsed.run_id === "string" ? parsed.run_id : "";
+    if (runId === "") return webhookUnprocessable(set, "Missing run id");
+    const outcome = await confirmRunForApply(runId);
+    if (!outcome.ok) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
+    }
+    log.info(`Approval webhook confirmed apply for run ${runId}`);
+    return { data: { id: runId, type: "runs", attributes: { status: outcome.status } } };
   })
   // --- Entitlements ---
   .get("/api/v2/entitlements", (): unknown => ({

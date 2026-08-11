@@ -1079,6 +1079,74 @@ export const adminRoutes = new Elysia({ name: "admin" })
     (set as { status: number }).status = 204;
     return {};
   })
+  // --- Operations Settings (kanban 21.2 / 21.6 / 21.8) ---
+  .get("/api/v2/admin/operations-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const [approval, windows, explainer] = await Promise.all([
+      getSettings("approval-webhook"),
+      getSettings("maintenance-windows"),
+      getSettings("plan-explainer"),
+    ]);
+    return { data: { id: "operations-settings", type: "operations-settings", attributes: { "approval-webhook": approval, "maintenance-windows": windows, "plan-explainer": explainer } } };
+  })
+  .patch("/api/v2/admin/operations-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const reject = (detail: string): { errors: { status: string; title: string; detail: string }[] } => {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
+    };
+    if (attrs["approval-webhook"] !== undefined) {
+      const value = attrs["approval-webhook"];
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("approval-webhook must be an object");
+      const group = value as Record<string, unknown>;
+      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("approval-webhook.enabled must be a boolean");
+      if (group.secret !== undefined && group.secret !== null && typeof group.secret !== "string") return reject("approval-webhook.secret must be a string");
+      if (group.url !== undefined && group.url !== null && typeof group.url !== "string") return reject("approval-webhook.url must be a string or null");
+      await updateSettings("approval-webhook", group);
+    }
+    if (attrs["maintenance-windows"] !== undefined) {
+      const value = attrs["maintenance-windows"];
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("maintenance-windows must be an object");
+      const group = value as Record<string, unknown>;
+      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("maintenance-windows.enabled must be a boolean");
+      if (group.windows !== undefined) {
+        if (!Array.isArray(group.windows)) return reject("maintenance-windows.windows must be an array");
+        for (const rawWindow of group.windows) {
+          if (rawWindow === null || typeof rawWindow !== "object" || Array.isArray(rawWindow)) return reject("each maintenance window must be an object");
+          const window = rawWindow as Record<string, unknown>;
+          const days = window.days;
+          if (!Array.isArray(days) || !days.every((day: unknown): boolean => typeof day === "number" && Number.isInteger(day) && day >= 0 && day <= 6)) {
+            return reject("maintenance window days must be an array of integers 0-6");
+          }
+          if (typeof window["start-time"] !== "string" || !/^\d{1,2}:\d{2}$/.test(window["start-time"])
+            || typeof window["end-time"] !== "string" || !/^\d{1,2}:\d{2}$/.test(window["end-time"])) {
+            return reject("maintenance window start-time and end-time must be HH:MM");
+          }
+          if (window.timezone !== undefined && typeof window.timezone !== "string") return reject("maintenance window timezone must be a string");
+        }
+      }
+      await updateSettings("maintenance-windows", group);
+    }
+    if (attrs["plan-explainer"] !== undefined) {
+      const value = attrs["plan-explainer"];
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("plan-explainer must be an object");
+      const group = value as Record<string, unknown>;
+      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("plan-explainer.enabled must be a boolean");
+      if (group["endpoint-url"] !== undefined && group["endpoint-url"] !== null && typeof group["endpoint-url"] !== "string") return reject("plan-explainer endpoint-url must be a string or null");
+      if (group["api-key"] !== undefined && group["api-key"] !== null && typeof group["api-key"] !== "string") return reject("plan-explainer api-key must be a string or null");
+      if (group.model !== undefined && group.model !== null && typeof group.model !== "string") return reject("plan-explainer model must be a string or null");
+      await updateSettings("plan-explainer", group);
+    }
+    const [approval, windows, explainer] = await Promise.all([
+      getSettings("approval-webhook"),
+      getSettings("maintenance-windows"),
+      getSettings("plan-explainer"),
+    ]);
+    return { data: { id: "operations-settings", type: "operations-settings", attributes: { "approval-webhook": approval, "maintenance-windows": windows, "plan-explainer": explainer } } };
+  })
   // --- B.3 Cost Estimation Settings ---
   .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }

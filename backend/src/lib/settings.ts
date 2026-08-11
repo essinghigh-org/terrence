@@ -15,6 +15,9 @@ const settingDefaults: Record<string, Settings> = {
   oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null, "signing-alg": null, "link-by-email": false },
   ldap: { enabled: false, host: null, port: 636, encryption: "ldaps", "bind-dn": null, "bind-password": null, "base-dn": null, "user-filter": "(uid={{username}})", "attr-username": "uid", "attr-email": "mail", "attr-display-name": "cn", "link-by-email": false },
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
+  "approval-webhook": { enabled: false, url: null, secret: null },
+  "maintenance-windows": { enabled: false, windows: [] },
+  "plan-explainer": { enabled: false, "endpoint-url": null, "api-key": null, model: null },
 };
 
 const SETTINGS_CACHE_TTL_MS = 1_000;
