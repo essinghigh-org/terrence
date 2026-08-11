@@ -140,8 +140,9 @@ async function doPostNotification(
   configuration: NotificationConfiguration,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
-  const body = JSON.stringify(payload);
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const render = renderPayloadForDestination(configuration, payload);
+  const body = render.body;
+  const headers: Record<string, string> = { "Content-Type": render.contentType };
   if (configuration.destinationType === "generic" && configuration.token !== null) {
     headers["X-TFE-Notification-Signature"] = createHmac("sha512", configuration.token)
       .update(body)
@@ -211,6 +212,136 @@ function runNotificationMessage(trigger: string, status: string): string {
     case "run:errored": return `Run ${status === "canceled" ? "Canceled" : "Errored"}`;
     default: return trigger;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rich destination adapters (kanban 7.11).
+//
+// Generic webhook destinations receive the raw structured JSON payload. When a
+// notification is configured for Slack or Microsoft Teams we instead render a
+// destination-native structured payload (Slack blocks / Teams MessageCard) that
+// surfaces the same high-signal fields — what happened, which run/workspace,
+// who triggered it, and where to look — without the caller needing to choose a
+// format. The generic wire contract is untouched (fully additive).
+// ---------------------------------------------------------------------------
+type DestinationRender = Readonly<{ body: string; contentType: string }>;
+
+interface NotificationSummary {
+  title: string;
+  subtext: string;
+  fields: ReadonlyArray<Readonly<{ label: string; value: string }>>;
+  linkLabel: string;
+  linkUrl: string;
+  status?: string;
+}
+
+function stringify(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "object" && Array.isArray(value)) return value.length === 0 ? "" : String(value.length);
+  return String(value);
+}
+
+function firstUrl(payload: Readonly<Record<string, unknown>>): string {
+  const candidates = [
+    payload.run_url,
+    payload.change_request_url,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  }
+  // Assessment notifications carry the result under `details`.
+  const details = payload.details as Readonly<Record<string, unknown>> | undefined;
+  const newResult = details?.new_assessment_result as Readonly<Record<string, unknown>> | undefined;
+  if (typeof newResult?.url === "string" && newResult.url.length > 0) return newResult.url;
+  return "";
+}
+
+function summarizePayload(payload: Readonly<Record<string, unknown>>): NotificationSummary {
+  const notifications = payload.notifications;
+  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as
+    | Readonly<Record<string, unknown>>
+    | undefined;
+  const message =
+    typeof notification?.message === "string" && notification.message.length > 0
+      ? notification.message
+      : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+
+  const fields: Array<{ label: string; value: string }> = [];
+
+  const addField = (label: string, value: unknown): void => {
+    const text = stringify(value);
+    if (text.length > 0) fields.push({ label, value: text });
+  };
+
+  addField("Organization", payload.organization_name);
+  addField("Workspace", payload.workspace_name);
+  addField("Run", payload.run_id);
+  addField("Change request", payload.change_request_subject);
+  addField("Triggered by", payload.run_created_by ?? payload.run_updated_by);
+  addField("Status", payload.run_status ?? payload.change_request_status ?? notification?.run_status);
+
+  const details = payload.details as Readonly<Record<string, unknown>> | undefined;
+  if (details !== undefined) {
+    const result = details.new_assessment_result as Readonly<Record<string, unknown>> | undefined;
+    const drifted = result?.resources_drifted;
+    if (typeof drifted === "number") addField("Resources drifted", drifted);
+    const checksFailed = result?.checks_failed as number | undefined;
+    if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
+  }
+
+  const linkUrl = firstUrl(payload);
+  const linkLabel = typeof payload.run_id === "string" ? "Open run" : "Open workspace";
+  return { title: message, subtext: stringify(payload.run_message ?? payload.change_request_message), fields, linkLabel, linkUrl };
+}
+
+function renderSlack(payload: Readonly<Record<string, unknown>>): string {
+  const summary = summarizePayload(payload);
+  const blocks: Array<Record<string, unknown>> = [{ type: "header", text: { type: "plain_text", text: summary.title.slice(0, 150) } }];
+  if (summary.subtext.length > 0) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: summary.subtext.slice(0, 2_900) } });
+  }
+  if (summary.fields.length > 0) {
+    const pairs: Record<string, unknown>[] = [];
+    for (const field of summary.fields) {
+      pairs.push({ type: "mrkdwn", text: `*${field.label}:* ${field.value.slice(0, 1_900)}` });
+    }
+    blocks.push({ type: "section", fields: pairs.slice(0, 10) });
+  }
+  const href = summary.linkUrl.length > 0 ? summary.linkUrl : "https://terrence.local";
+  blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: summary.linkLabel }, url: href }] });
+  return JSON.stringify({ text: summary.title, blocks });
+}
+
+function renderTeams(payload: Readonly<Record<string, unknown>>): string {
+  const summary = summarizePayload(payload);
+  const facts = summary.fields.slice(0, 10).map((field) => ({ name: field.label, value: field.value }));
+  const card: Record<string, unknown> = {
+    "@type": "MessageCard",
+    "@context": "http://schema.org/extensions",
+    themeColor: summary.status !== undefined ? "c0392b" : "2b579a",
+    summary: summary.title,
+    title: summary.title,
+  };
+  if (summary.subtext.length > 0) card.text = summary.subtext;
+  if (facts.length > 0) card.sections = [{ facts }];
+  if (summary.linkUrl.length > 0) {
+    card.potentialAction = [{ "@type": "OpenUri", name: summary.linkLabel, targets: [{ os: "default", uri: summary.linkUrl }] }];
+  }
+  return JSON.stringify(card);
+}
+
+export function renderPayloadForDestination(
+  configuration: NotificationConfiguration,
+  payload: Readonly<Record<string, unknown>>,
+): DestinationRender {
+  if (configuration.destinationType === "slack") {
+    return { body: renderSlack(payload), contentType: "application/json" };
+  }
+  if (configuration.destinationType === "microsoft-teams") {
+    return { body: renderTeams(payload), contentType: "application/json" };
+  }
+  return { body: JSON.stringify(payload), contentType: "application/json" };
 }
 
 export async function deliverRunNotifications(
