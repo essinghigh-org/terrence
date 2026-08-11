@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Spinner } from "../components/ui/spinner";
@@ -50,10 +51,10 @@ export function AgentPoolScoping(): React.JSX.Element {
   const [pools, setPools] = useState<AgentPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-agent-pools");
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -64,29 +65,38 @@ export function AgentPoolScoping(): React.JSX.Element {
   useEffect((): void => {
     setPools([]);
     setError("");
-    setManageableOrganizationName("");
+    permissionGateFired.current = false;
     setCreateDialogOpen(false);
     if (orgName !== "") void loadPools();
   }, [orgName]);
+
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-agent-pools")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadPools();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage agent pools for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadPools = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-agent-pools"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-agent-pools"] !== true) {
-        setError("You do not have permission to manage agent pools for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
       ) as { data?: AgentPool[] };
