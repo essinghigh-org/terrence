@@ -1416,6 +1416,8 @@ export function Layout({
         open={commandPaletteOpen}
         onOpenChange={setCommandPaletteOpen}
         currentOrgName={orgName}
+        currentWorkspaceName={workspaceName}
+        canManageWorkspaces={canManageWorkspaces}
       />
 
       <ShortcutsHelpModal

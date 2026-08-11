@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
+import { useSyncedSearchParam } from "@/hooks/useSyncedSearchParam";
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
@@ -121,7 +122,7 @@ export function Workspaces(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useSyncedSearchParam("status", "");
   const [projectFilter, setProjectFilter] = useState("");
   const [density, setDensity] = useState<TableDensity>(() => {
     const prefs = getTablePreferences("workspaces");
@@ -580,7 +581,7 @@ export function Workspaces(): React.JSX.Element {
         <Table className="min-w-[64rem]" density={density}>
           <TableHeader>
             <TableRow>
-              <TableHead>Workspace</TableHead>
+              <TableHead className="sticky left-0 z-10 bg-card">Workspace</TableHead>
               {visibleColumns.includes("repository") && <TableHead>Repository</TableHead>}
               {visibleColumns.includes("tags") && <TableHead>Tags</TableHead>}
               {visibleColumns.includes("project") && <TableHead>Project</TableHead>}
@@ -615,7 +616,7 @@ export function Workspaces(): React.JSX.Element {
               </TableRow>
             ) : visibleWorkspaces.map((workspace): React.JSX.Element => (
               <TableRow key={workspace.id}>
-                <TableCell>
+                <TableCell className="sticky left-0 z-10 bg-card">
                   <div className="flex items-center gap-2">
                     <Link
                       to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspace.attributes.name)}`}

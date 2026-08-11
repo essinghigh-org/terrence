@@ -4,6 +4,7 @@ import { formatDateTime } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { toast } from "../components/ui/toast";
+import { ErrorPanel } from "./ui/error-panel";
 
 type ConfigurationVersion = { id: string; attributes: { status?: string; source?: string; speculative?: boolean; "created-at"?: string; [key: string]: unknown } };
 
@@ -17,6 +18,7 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
     setVersions(Array.isArray(response.data) ? response.data : []);
   };
   useEffect(() => { void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
+  const retryLoad = (): void => { setError(""); setLoading(true); void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); };
   const createVersion = async (): Promise<void> => {
     setCreating(true); setError("");
     try {
@@ -26,6 +28,6 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
   };
   return <Card className="max-w-4xl">
     <CardHeader className="flex-row items-start justify-between gap-4"><div><CardTitle>Configuration versions</CardTitle><CardDescription>Prepare and track configuration archives for this workspace.</CardDescription></div><Button type="button" onClick={() => void createVersion()} disabled={creating}>{creating ? "Creating…" : "New version"}</Button></CardHeader>
-    <CardContent>{error !== "" && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}{loading ? <p className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{typeof version.attributes["created-at"] === "string" && version.attributes["created-at"] !== "" ? ` · ${formatDateTime(version.attributes["created-at"])}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
+    <CardContent>{error !== "" && <ErrorPanel message={error} onRetry={retryLoad} className="mb-3" />}{loading ? <p className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{typeof version.attributes["created-at"] === "string" && version.attributes["created-at"] !== "" ? ` · ${formatDateTime(version.attributes["created-at"])}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
   </Card>;
 }

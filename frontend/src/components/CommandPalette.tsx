@@ -3,9 +3,14 @@ import { useNavigate } from "react-router-dom";
 import {
   Box,
   Building2,
+  Clipboard,
   FolderGit2,
+  History,
   LayoutDashboard,
+  Lock,
   Package,
+  PlayCircle,
+  Plus,
   Search,
   Settings,
   UserRound,
@@ -19,11 +24,12 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { fetchAllApiPages } from "../lib/api";
+import { fetchAllApiPages, fetchApi } from "../lib/api";
+import { getRecentWorkspaces, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 
 type CommandItemType = {
   id: string;
-  category: "Navigation" | "Organizations" | "Workspaces" | "Actions";
+  category: "Navigation" | "Organizations" | "Workspaces" | "Actions" | "Recent";
   icon: typeof Box;
   title: string;
   subtitle?: string | undefined;
@@ -34,15 +40,28 @@ export function CommandPalette({
   open,
   onOpenChange,
   currentOrgName,
+  currentWorkspaceName,
+  canManageWorkspaces,
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentOrgName?: string | undefined;
+  currentWorkspaceName?: string | undefined;
+  canManageWorkspaces: boolean;
 }>): JSX.Element {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [orgs, setOrgs] = useState<{ name: string }[]>([]);
   const [workspaces, setWorkspaces] = useState<{ name: string }[]>([]);
+  const [, setRecentRevision] = useState(0);
+  // 14.18: keep the Recent list live while the palette is open (a visit made
+  // elsewhere in the sidebar bumps the revision through the shortcut bus).
+  useEffect((): (() => void) | undefined => {
+    if (!open) return undefined;
+    return subscribeWorkspaceShortcuts((): void => {
+      setRecentRevision((r) => r + 1);
+    });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -176,11 +195,126 @@ export function CommandPalette({
           },
         }))
       : []),
+    // 14.17: permission-aware actions. Workspace-scoped actions are only shown
+    // when a workspace is on screen; the "New workspace" action is gated on the
+    // can-manage-workspaces permission.
+    ...(currentOrgName !== undefined && currentOrgName !== ""
+      ? [
+          ...(canManageWorkspaces
+            ? [{
+                id: "act-new-workspace",
+                category: "Actions" as const,
+                icon: Plus,
+                title: "New workspace",
+                subtitle: `Create a workspace in ${currentOrgName}`,
+                perform: () => {
+                  navigate(`/app/${encodeURIComponent(currentOrgName)}/workspaces/new`);
+                  onOpenChange(false);
+                },
+              }]
+            : []),
+          ...(currentWorkspaceName !== undefined && currentWorkspaceName !== ""
+            ? [
+                {
+                  id: "act-queue-plan",
+                  category: "Actions" as const,
+                  icon: PlayCircle,
+                  title: "Queue plan",
+                  subtitle: `Run a plan on ${currentWorkspaceName}`,
+                  perform: () => {
+                    navigate(
+                      `/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/runs/new`,
+                    );
+                    onOpenChange(false);
+                  },
+                },
+                {
+                  id: "act-copy-workspace-id",
+                  category: "Actions" as const,
+                  icon: Clipboard,
+                  title: "Copy workspace ID",
+                  subtitle: currentWorkspaceName,
+                  perform: () => {
+                    void (async (): Promise<void> => {
+                      try {
+                        const response = await fetchApi(
+                          `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
+                        ) as { data?: { id?: string } };
+                        const wsId = response.data?.id;
+                        if (wsId !== undefined) {
+                          await navigator.clipboard.writeText(wsId);
+                        }
+                      } catch {
+                        // clipboard copy is best-effort; ignore non-fatal failures
+                      }
+                      onOpenChange(false);
+                    })();
+                  },
+                },
+                {
+                  id: "act-open-latest-run",
+                  category: "Actions" as const,
+                  icon: History,
+                  title: "Open latest run",
+                  subtitle: currentWorkspaceName,
+                  perform: () => {
+                    void (async (): Promise<void> => {
+                      try {
+                        const response = await fetchApi(
+                          `/workspaces/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/runs?page[size]=1&sort=-created-at`,
+                        ) as { data?: { id?: string }[] };
+                        const runId = response.data?.[0]?.id;
+                        if (runId !== undefined) {
+                          navigate(
+                            `/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/runs/${encodeURIComponent(runId)}`,
+                          );
+                        }
+                      } catch {
+                        // no-op: if we cannot resolve the latest run, stay put
+                      }
+                      onOpenChange(false);
+                    })();
+                  },
+                },
+                {
+                  // Lock/unlock the current workspace (drive-by toggle).
+                  id: "act-toggle-lock",
+                  category: "Actions" as const,
+                  icon: Lock,
+                  title: "Toggle workspace lock",
+                  subtitle: currentWorkspaceName,
+                  perform: () => {
+                    navigate(
+                      `/app/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}/settings#lock`,
+                    );
+                    onOpenChange(false);
+                  },
+                },
+              ]
+            : []),
+        ]
+      : []),
   ];
 
   const query = search.trim().toLowerCase();
+  const recentItems: CommandItemType[] = getRecentWorkspaces().map((visit): CommandItemType => ({
+    id: `recent-${visit.orgName}-${visit.workspaceName}`,
+    category: "Recent",
+    icon: History,
+    title: visit.workspaceName,
+    subtitle: `Workspace in ${visit.orgName}`,
+    perform: () => {
+      navigate(
+        `/app/${encodeURIComponent(visit.orgName)}/workspaces/${encodeURIComponent(visit.workspaceName)}`,
+      );
+      onOpenChange(false);
+    },
+  }));
+  // 14.18: when the query is empty, surface recently-visited workspaces (most
+  // recent first) ahead of the generic navigation items. When the user types,
+  // search runs over the full item list as usual.
   const filtered = query === ""
-    ? items.slice(0, 10)
+    ? [...recentItems, ...items].slice(0, 14)
     : items.filter((item) =>
         item.title.toLowerCase().includes(query) ||
         (item.subtitle?.toLowerCase().includes(query) ?? false) ||
@@ -214,30 +348,59 @@ export function CommandPalette({
             </div>
           ) : (
             <div className="space-y-1">
-              {filtered.map((item) => {
-                const IconComponent = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
-                    onClick={item.perform}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <IconComponent className="size-4 shrink-0 text-muted-foreground" />
-                      <div className="truncate">
-                        <p className="font-medium truncate">{item.title}</p>
-                        {item.subtitle !== undefined && item.subtitle !== "" && (
-                          <p className="text-xs text-muted-foreground truncate">{item.subtitle}</p>
-                        )}
-                      </div>
-                    </div>
-                    <span className="text-[10px] uppercase font-semibold text-muted-foreground/70 shrink-0">
-                      {item.category}
-                    </span>
-                  </button>
-                );
-              })}
+              {(() => {
+                const grouped = new Map<string, CommandItemType[]>();
+                for (const item of filtered) {
+                  const list = grouped.get(item.category) ?? [];
+                  list.push(item);
+                  grouped.set(item.category, list);
+                }
+                const categoryOrder = ["Recent", "Actions", "Navigation", "Workspaces", "Organizations"];
+                const rows: React.JSX.Element[] = [];
+                for (const category of categoryOrder) {
+                  const list = grouped.get(category);
+                  if (list === undefined) continue;
+                  rows.push(
+                    <div key={category} className="pt-1 first:pt-0">
+                      {query === "" && (
+                        <p className="px-3 py-1 text-[10px] uppercase font-semibold tracking-wide text-muted-foreground/60">
+                          {category}
+                        </p>
+                      )}
+                      {list.map((item) => {
+                        const IconComponent = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
+                            onClick={item.perform}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <IconComponent className="size-4 shrink-0 text-muted-foreground" />
+                              <div className="truncate">
+                                <p className="font-medium truncate">{item.title}</p>
+                                {item.subtitle !== undefined && item.subtitle !== "" && (
+                                  <p className="text-xs text-muted-foreground truncate">{item.subtitle}</p>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] uppercase font-semibold text-muted-foreground/70 shrink-0">
+                              {item.category}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>,
+                  );
+                }
+                // Any category not in the fixed order (e.g. a future one).
+                for (const [category, list] of grouped) {
+                  if (categoryOrder.includes(category)) continue;
+                  rows.push(<div key={category}>{list.map((item) => <button key={item.id} type="button" className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none" onClick={item.perform}><span>{item.title}</span><span className="text-[10px] uppercase font-semibold text-muted-foreground/70">{item.category}</span></button>)}</div>);
+                }
+                return rows;
+              })()}
             </div>
           )}
         </div>
