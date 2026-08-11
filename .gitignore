@@ -43,5 +43,8 @@ backend/storage/
 .vscode
 .DS_Store
 
+# code-index MCP server local index
+.codegraph/
+
 # compiled helper binary (build with backend/bin/build-landlock-runner.sh)
 backend/bin/landlock-runner
