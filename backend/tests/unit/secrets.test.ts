@@ -125,3 +125,40 @@ describe("per-installation KDF salt (4.10)", () => {
     }
   });
 });
+
+describe("concurrent cold-start key creation (policy_vcs_sync regression)", () => {
+  it("serializes concurrent encryptSecret calls on a fresh storage dir so none reads a half-written key", async () => {
+    const previousDir = process.env.STORAGE_DIR;
+    const previousPass = process.env.ENCRYPTION_PASSWORD;
+    // A unique fresh dir ensures a true cold start (no pre-existing key).
+    const coldDir = join(tmpdir(), "terrence-concurrent-cold-" + Date.now() + "-" + crypto.randomUUID());
+    process.env.STORAGE_DIR = coldDir;
+    delete process.env.ENCRYPTION_PASSWORD;
+
+    try {
+      const mod = await import("../../src/lib/secrets");
+
+      // Fire many callers at once on a missing key file, mirroring the
+      // Promise.all(providers.map(... encryptSecret ...)) in policy_vcs_sync.
+      const values = Array.from({ length: 16 }, (_, i) => `payload-${i}`);
+      const results = await Promise.all(values.map((v) => mod.encryptSecret(v)));
+
+      // Every call must round-trip under the same key.
+      const decrypts = await Promise.all(results.map((c) => mod.decryptSecret(c).then((d) => d)));
+      expect(decrypts).toEqual(values);
+
+      // The key file is present, exactly one, and has the correct length.
+      const keyPath = join(coldDir, ".encryption-key");
+      expect(existsSync(keyPath)).toBe(true);
+      const key = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
+      expect(key.length).toBe(32); // KEY_LENGTH
+
+      expect(results.length).toBe(16);
+    } finally {
+      if (previousDir === undefined) delete process.env.STORAGE_DIR;
+      else process.env.STORAGE_DIR = previousDir;
+      if (previousPass !== undefined) process.env.ENCRYPTION_PASSWORD = previousPass;
+      rmSync(coldDir, { recursive: true, force: true });
+    }
+  });
+});

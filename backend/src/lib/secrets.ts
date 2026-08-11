@@ -20,6 +20,14 @@ const LEGACY_KDF_SALT = "terrence:secrets:v1";
 
 let cachedKey: Buffer | undefined;
 let cachedStorageDir: string | undefined;
+// In-flight guard for the cold file-key load. Under test setups (and any burst
+// of first-time encryptSecret calls) several callers can hit a missing key file
+// concurrently; without a shared promise each one races the filesystem and the
+// EEXIST fallback can read a half-written key (-> "Invalid encryption key").
+// Serialize the create/read so only the first caller touches the file and every
+// concurrent caller awaits the same result.
+let cachedKeyInFlight: Promise<Buffer> | undefined;
+let cachedKeyInFlightDir: string | undefined;
 let cachedKdfSalt: Buffer | undefined;
 let cachedKdfSaltStorageDir: string | undefined;
 let cachedLegacyKey: Buffer | undefined;
@@ -126,6 +134,8 @@ async function loadEncryptionKey(): Promise<Buffer> {
   const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
   if (cachedStorageDir !== currentStorageDir) {
     cachedKey = undefined;
+    cachedKeyInFlight = undefined;
+    cachedKeyInFlightDir = undefined;
     cachedStorageDir = currentStorageDir;
   }
   if (cachedKey !== undefined) return cachedKey;
@@ -140,33 +150,52 @@ async function loadEncryptionKey(): Promise<Buffer> {
     return cachedKey;
   }
 
-  const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
-  const keyPath = join(storageDir, KEY_FILE_NAME);
-  await mkdir(storageDir, { recursive: true });
+  // Join an in-flight cold load for the same directory instead of racing the
+  // filesystem (a second reader could observe a half-written key file).
+  if (cachedKeyInFlight !== undefined && cachedKeyInFlightDir === currentStorageDir) {
+    return cachedKeyInFlight;
+  }
 
-  try {
-    cachedKey = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  cachedKeyInFlightDir = currentStorageDir;
+  cachedKeyInFlight = (async (): Promise<Buffer> => {
+    const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+    const keyPath = join(storageDir, KEY_FILE_NAME);
+    await mkdir(storageDir, { recursive: true });
 
-    const generated = randomBytes(KEY_LENGTH);
+    let key: Buffer;
     try {
-      const keyFile = await open(keyPath, "wx", 0o600);
-      try {
-        await keyFile.writeFile(generated.toString("base64"));
-      } finally {
-        await keyFile.close();
-      }
-      cachedKey = generated;
-    } catch (createError) {
-      if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
-      cachedKey = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
-    }
-  }
+      key = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 
-  if (cachedKey.length !== KEY_LENGTH) {
-    throw new Error(`Invalid encryption key in ${keyPath}`);
-  }
+      const generated = randomBytes(KEY_LENGTH);
+      try {
+        const keyFile = await open(keyPath, "wx", 0o600);
+        try {
+          await keyFile.writeFile(generated.toString("base64"));
+        } finally {
+          await keyFile.close();
+        }
+        key = generated;
+      } catch (createError) {
+        if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
+        // Another caller created the file concurrently; read the now-complete key.
+        key = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
+      }
+    }
+
+    if (key.length !== KEY_LENGTH) {
+      throw new Error(`Invalid encryption key in ${keyPath}`);
+    }
+    return key;
+  })().finally(() => {
+    if (cachedKeyInFlightDir === currentStorageDir) {
+      cachedKeyInFlight = undefined;
+      cachedKeyInFlightDir = undefined;
+    }
+  });
+
+  cachedKey = await cachedKeyInFlight;
   return cachedKey;
 }
 
