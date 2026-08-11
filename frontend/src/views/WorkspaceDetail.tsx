@@ -315,7 +315,7 @@ export function WorkspaceDetail({
   );
   if (workspace == null) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-destructive">
         <p className="font-medium">Could not load workspace</p>
         <p className="mt-1">{loadError !== "" ? loadError : "Workspace not found"}</p>
         <Button className="mt-3" variant="outline" onClick={(): void => { void loadWorkspace(); }}>
@@ -602,27 +602,27 @@ export function WorkspaceDetail({
         {activeSection === "overview" && (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="flex flex-col gap-6 xl:col-span-2">
-              <section aria-labelledby="latest-run-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-3">
+              <section aria-labelledby="latest-run-heading" className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
                   <div className="flex items-center gap-2">
                     {latestRunSucceeded
-                      ? <CheckCircle2 className="size-5 text-emerald-600" aria-hidden="true" />
-                      : <Info className="size-5 text-blue-600" aria-hidden="true" />}
-                    <h2 id="latest-run-heading" className="text-sm font-semibold text-gray-950">Latest run</h2>
+                      ? <CheckCircle2 className="size-5 text-success" aria-hidden="true" />
+                      : <Info className="size-5 text-primary" aria-hidden="true" />}
+                    <h2 id="latest-run-heading" className="text-sm font-semibold text-foreground">Latest run</h2>
                   </div>
-                  <Link to={`${workspacePath}/runs`} className="text-xs font-medium text-blue-700 hover:underline">
+                  <Link to={`${workspacePath}/runs`} className="text-xs font-medium text-primary hover:underline">
                     View all runs
                   </Link>
                 </div>
                 <div className="px-5 py-4">
                   {latestRunLoading ? (
-                    <p className="text-sm text-gray-500">Loading run history…</p>
+                    <p className="text-sm text-muted-foreground">Loading run history…</p>
                   ) : latestRun === null ? (
                     <div className="py-4">
                       {latestRunError ? (
                         <>
-                          <p className="font-medium text-gray-950">Run history unavailable</p>
-                          <p className="mt-1 text-sm text-gray-500">
+                          <p className="font-medium text-foreground">Run history unavailable</p>
+                          <p className="mt-1 text-sm text-muted-foreground">
                             Could not refresh this workspace’s run history. It will retry automatically.
                           </p>
                         </>
@@ -639,18 +639,18 @@ export function WorkspaceDetail({
                   ) : (
                     <>
                       {latestRunPath === null ? (
-                        <p className="font-semibold text-gray-950">
+                        <p className="font-semibold text-foreground">
                           Latest run: {latestRunStatus ?? "unknown"}
                         </p>
                       ) : (
-                        <Link to={latestRunPath} className="font-semibold text-blue-700 hover:underline">
+                        <Link to={latestRunPath} className="font-semibold text-primary hover:underline">
                           Latest run: {latestRunStatus ?? "unknown"}
                         </Link>
                       )}
-                      <p className="mt-1 text-sm text-gray-700">
+                      <p className="mt-1 text-sm text-foreground">
                         {latestRun.attributes.message ?? "Manual run"}
                       </p>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
+                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
                         {typeof latestRunCreatedAt === "string" && latestRunCreatedAt !== "" && (
                           <time dateTime={latestRunCreatedAt}>
                             {formatDateTime(latestRunCreatedAt)}
@@ -664,8 +664,8 @@ export function WorkspaceDetail({
                           && typeof latestRunCounts["resource-destructions"] === "number" && (
                           <span className="flex items-center gap-3 font-medium">
                             <span className="text-emerald-700">+{latestRunCounts["resource-additions"]}</span>
-                            <span className="text-blue-700">~{latestRunCounts["resource-changes"]}</span>
-                            <span className="text-red-700">−{latestRunCounts["resource-destructions"]}</span>
+                            <span className="text-primary">~{latestRunCounts["resource-changes"]}</span>
+                            <span className="text-destructive">−{latestRunCounts["resource-destructions"]}</span>
                           </span>
                         )}
                         <code className="font-mono">{latestRun.id}</code>
@@ -683,14 +683,14 @@ export function WorkspaceDetail({
 
             <div className="flex flex-col gap-6 xl:col-span-1">
               {/* Details Card */}
-              <div className="bg-white border border-gray-200 rounded-md shadow-sm">
-                <div className="px-4 py-3 border-b border-gray-200">
-                  <h2 className="text-sm font-semibold text-gray-900">Workspace details</h2>
+              <div className="bg-card border border-border rounded-md shadow-sm">
+                <div className="px-4 py-3 border-b border-border">
+                  <h2 className="text-sm font-semibold text-foreground">Workspace details</h2>
                 </div>
                 <div className="p-4 space-y-4">
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Project</div>
-                    <div className="text-[13px] text-gray-900 font-medium">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Project</div>
+                    <div className="text-[13px] text-foreground font-medium">
                       {projectId === undefined
                         ? "No project"
                         : projectName === null
@@ -705,35 +705,35 @@ export function WorkspaceDetail({
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
                       Execution mode
                       <HelpTooltip icon="info" content="Execution mode determines whether Terraform or OpenTofu runs execute remotely in Terrence agent pools or locally on your CLI." />
                     </div>
-                    <div className="text-[13px] text-gray-900 flex items-center gap-1.5">
+                    <div className="text-[13px] text-foreground flex items-center gap-1.5">
                        <span className="capitalize">{executionMode}</span>
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
                       Execution engine
                       <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
                     </div>
-                    <div className="text-[13px] text-gray-900 flex items-center gap-1.5">
+                    <div className="text-[13px] text-foreground flex items-center gap-1.5">
                        <span className="capitalize">{iacBinary}</span> {engineVersion}
                        {engineVersion === "latest" && (
-                         <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">Latest</span>
+                         <span className="text-xs bg-muted text-foreground px-1.5 py-0.5 rounded border border-border">Latest</span>
                        )}
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Auto-apply</div>
-                    <div className="text-[13px] text-gray-900">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Auto-apply</div>
+                    <div className="text-[13px] text-foreground">
                        {workspace.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Created</div>
-                    <div className="text-[13px] text-gray-900">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Created</div>
+                    <div className="text-[13px] text-foreground">
                        {formatDate(createdAt)}
                     </div>
                   </div>

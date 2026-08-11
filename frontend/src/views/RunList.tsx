@@ -139,13 +139,13 @@ function parseAddressList(value: string): string[] | null {
 }
 
 function StatusIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
-  if (FINISHED_STATUSES.has(status)) return <CheckCircle2 className="size-4 text-emerald-600" aria-hidden="true" />;
-  if (FAILED_STATUSES.has(status)) return <XCircle className="size-4 text-red-600" aria-hidden="true" />;
+  if (FINISHED_STATUSES.has(status)) return <CheckCircle2 className="size-4 text-success" aria-hidden="true" />;
+  if (FAILED_STATUSES.has(status)) return <XCircle className="size-4 text-destructive" aria-hidden="true" />;
   if (ATTENTION_STATUSES.has(status)) return <AlertCircle className="size-4 text-amber-600" aria-hidden="true" />;
   if (["canceled", "discarded", "force_canceled"].includes(status)) {
-    return <XCircle className="size-4 text-gray-500" aria-hidden="true" />;
+    return <XCircle className="size-4 text-muted-foreground" aria-hidden="true" />;
   }
-  return <Clock className="size-4 text-blue-600" aria-hidden="true" />;
+  return <Clock className="size-4 text-primary" aria-hidden="true" />;
 }
 
 export function RunList({
@@ -388,10 +388,10 @@ export function RunList({
     }
   };
 
-  if (loading) return <div role="status" className="py-8 text-center text-gray-500">Loading runs...</div>;
+  if (loading) return <div role="status" className="py-8 text-center text-muted-foreground">Loading runs...</div>;
   if (error !== "" && runs.length === 0) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-destructive">
         <p className="font-medium">Could not load runs</p>
         <p className="mt-1">{error}</p>
         <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
@@ -406,7 +406,7 @@ export function RunList({
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-xs">
           <label htmlFor="run-filter" className="sr-only">Filter runs</label>
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             id="run-filter"
             type="search"
@@ -434,7 +434,7 @@ export function RunList({
         />
       )}
 
-      <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
+      <div className="overflow-hidden rounded-md border border-border bg-card">
         {runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
@@ -454,24 +454,24 @@ export function RunList({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[920px] border-collapse text-left text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-background text-xs font-semibold tracking-wide text-gray-800">
-                  <th className="border-r border-gray-200 px-4 py-3">Run</th>
-                  <th className="border-r border-gray-200 px-4 py-3">
+                <tr className="border-b border-border bg-background text-xs font-semibold tracking-wide text-foreground">
+                  <th className="border-r border-border px-4 py-3">Run</th>
+                  <th className="border-r border-border px-4 py-3">
                     <button
                       type="button"
                       onClick={(): void => { toggleSort("status"); }}
-                      className="inline-flex items-center gap-1 rounded hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="inline-flex items-center gap-1 rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
                     >
                       Status
                       {sortArrows("status")}
                     </button>
                   </th>
-                  <th className="border-r border-gray-200 px-4 py-3">
+                  <th className="border-r border-border px-4 py-3">
                     <button
                       type="button"
                       onClick={(): void => { toggleSort("created-at"); }}
-                      className="inline-flex items-center gap-1 rounded hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="inline-flex items-center gap-1 rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
                     >
                       Created
@@ -483,20 +483,20 @@ export function RunList({
               </thead>
               <tbody>
                 {filteredRuns.map((run: RunItem): React.JSX.Element => (
-                  <tr key={run.id} className="border-b border-gray-200 transition-colors last:border-b-0 hover:bg-gray-50">
-                    <td className="border-r border-gray-200 px-4 py-3">
+                  <tr key={run.id} className="border-b border-border transition-colors last:border-b-0 hover:bg-background">
+                    <td className="border-r border-border px-4 py-3">
                       <Link
                         to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
-                        className="mb-0.5 block text-[13px] font-medium text-blue-700 hover:underline"
+                        className="mb-0.5 block text-[13px] font-medium text-primary hover:underline"
                       >
                         {run.attributes.message ?? "Triggered via UI"}
                       </Link>
-                      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 font-mono text-[11px] text-gray-500">
+                      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
                         <span>{run.id}</span>
                         <span aria-hidden="true">|</span>
                         {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
                           <>
-                            <span className="text-gray-600">{run.attributes.operation.replace(/_/g, " ")}</span>
+                            <span className="text-foreground">{run.attributes.operation.replace(/_/g, " ")}</span>
                             <span aria-hidden="true">|</span>
                           </>
                         )}
@@ -545,13 +545,13 @@ export function RunList({
                         })()}
                       </div>
                     </td>
-                    <td className="border-r border-gray-200 px-4 py-3">
-                      <div className="flex items-center gap-2 text-[13px] font-medium text-gray-900">
+                    <td className="border-r border-border px-4 py-3">
+                      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
                         <StatusIcon status={run.attributes.status} />
                         {statusLabel(run.attributes.status)}
                       </div>
                     </td>
-                    <td className="border-r border-gray-200 px-4 py-3 text-[13px] text-gray-500">
+                    <td className="border-r border-border px-4 py-3 text-[13px] text-muted-foreground">
                       <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>{formatRelativeTime(run.attributes["created-at"])}</time>
                     </td>
                     {canStartRun && (
@@ -560,7 +560,7 @@ export function RunList({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 gap-1 px-2 text-xs text-gray-500 hover:text-gray-900"
+                          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
                           onClick={(): void => { cloneRunSettings(run); }}
                           title="Start a new run with this run's settings (type, destroy, targets, replace addresses)"
                         >
@@ -608,8 +608,8 @@ export function RunList({
                     key={type}
                     className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
                       runType === type
-                        ? "border-blue-600 bg-blue-50"
-                        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                        ? "border-primary bg-blue-50"
+                        : "border-border hover:border-input hover:bg-background"
                     }`}
                   >
                     <input
@@ -622,13 +622,13 @@ export function RunList({
                       className="mt-0.5 size-4 accent-blue-600"
                     />
                     <span>
-                      <span className="block text-sm font-medium text-gray-950">{RUN_TYPE_LABELS[type]}</span>
-                      <span className="mt-0.5 block text-xs text-gray-500">{RUN_TYPE_DESCRIPTIONS[type]}</span>
+                      <span className="block text-sm font-medium text-foreground">{RUN_TYPE_LABELS[type]}</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">{RUN_TYPE_DESCRIPTIONS[type]}</span>
                     </span>
                   </label>
                 ))}
               </fieldset>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 p-3 transition-colors hover:border-gray-300 hover:bg-gray-50">
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 transition-colors hover:border-input hover:bg-background">
                 <input
                   type="checkbox"
                   checked={runDestroy}
@@ -638,8 +638,8 @@ export function RunList({
                   className="mt-0.5 size-4 accent-blue-600"
                 />
                 <span>
-                  <span className="block text-sm font-medium text-gray-950">Destroy infrastructure</span>
-                  <span className="mt-0.5 block text-xs text-gray-500">
+                  <span className="block text-sm font-medium text-foreground">Destroy infrastructure</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
                     Plan a destroy of all managed resources and apply it. Target and replace addresses still apply.
                     {runDestroy && runType === "plan" && (
                       <span className="mt-0.5 block text-amber-700">A speculative plan-only destroy will not apply changes.</span>
@@ -655,7 +655,7 @@ export function RunList({
                   value={runTargets}
                   onChange={(event): void => { setRunTargets(event.target.value); }}
                 />
-                <p className="text-xs text-gray-500">Comma-separated resource addresses to limit this run to.</p>
+                <p className="text-xs text-muted-foreground">Comma-separated resource addresses to limit this run to.</p>
               </div>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="run-replace" className="text-sm font-medium">Replace addresses</label>
@@ -665,7 +665,7 @@ export function RunList({
                   value={runReplace}
                   onChange={(event): void => { setRunReplace(event.target.value); }}
                 />
-                <p className="text-xs text-gray-500">Comma-separated resource addresses to force replacement of.</p>
+                <p className="text-xs text-muted-foreground">Comma-separated resource addresses to force replacement of.</p>
               </div>
             </div>
             <DialogFooter>
