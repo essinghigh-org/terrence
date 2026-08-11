@@ -13,6 +13,7 @@ import { timingSafeEqual, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
+import { privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
@@ -1151,16 +1152,17 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-// Private / loopback / link-local / CGNAT / cloud-metadata ranges (incl.
-// RFC 1918, 169.254.x for cloud metadata, 100.64.0.0/10 CGNAT). IPv6 loopback
-// (::1) and link-local/ULA are checked separately in the async resolver.
-const PRIVATE_IP_PATTERN = /^(127\.|0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d)\.|localhost$)/i;
+// Private/loopback/link-local/CGNAT/cloud-metadata range checks live in
+// lib/url-safety.ts (privateHostReason); validateExternalUrl delegates there.
 
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
-    if (!allowPrivate && PRIVATE_IP_PATTERN.test(parsed.hostname)) return "URL points to a private or loopback address";
+    if (!allowPrivate) {
+      const reason = privateHostReason(parsed.hostname);
+      if (reason !== null) return reason;
+    }
     return null; // valid
   } catch {
     return "Invalid URL";
