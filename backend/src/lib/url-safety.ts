@@ -48,42 +48,54 @@ function isPrivateV4(n: number): boolean {
 
 function isPrivateV6(host: string): boolean {
   const lower = host.toLowerCase();
-  // Split on "::" (at most one compression marker).
-  const parts = lower.split("::", 2);
-  const head = parts[0] ?? "";
-  const tailPart = parts[1];
-  const before = head === "" ? [] : head.split(":");
-  const after = tailPart === undefined || tailPart === "" ? [] : tailPart.split(":");
+  // Normalize into the full 8-hextet sequence so embedded-IPv4 detection
+  // inspects the final two hextets regardless of "::" compression. Raw DNS
+  // AAAA answers arrive uncompressed ("0:0:0:0:0:ffff:127.0.0.1"), so the
+  // compressed-only tail inspection would otherwise fail open.
+  const parts = lower.split("::");
+  let hextets: string[];
+  if (parts.length === 2) {
+    const headPart = parts[0] ?? "";
+    const tailPart = parts[1] ?? "";
+    const head = headPart === "" ? [] : headPart.split(":");
+    const tail = tailPart === "" ? [] : tailPart.split(":");
+    const missing = 8 - head.length - tail.length;
+    if (missing < 1) return true; // too many hextets → malformed → fail closed
+    hextets = [...head, ...Array<string>(missing).fill("0"), ...tail];
+  } else {
+    const body = parts[0] ?? "";
+    hextets = body === "" ? [] : body.split(":");
+    if (hextets.length !== 8) return true; // no compression and wrong width → fail closed
+  }
 
-  // "::" alone = unspecified.
-  if (before.length === 0 && after.length === 0) return true;
-  // "::1" = loopback.
-  if (before.length === 0 && after.length === 1 && (after[0] ?? "") === "1") return true;
+  // An embedded dotted quad occupies the last hextet; validate the rest as
+  // hextets and classify the quad itself. Any malformed piece → fail closed.
+  const tail = hextets.slice(-2);
+  const last = tail[1] ?? "";
+  if (last.includes(".")) {
+    if (!hextets.slice(0, -1).every((h): boolean => V6_HEXTET.test(h))) return true;
+    const n = v4ToNumber(last.split("."));
+    if (n === null) return true;
+    return isPrivateV4(n);
+  }
+  if (!hextets.every((h): boolean => V6_HEXTET.test(h))) return true;
 
-  const first = before.length > 0 ? (before[0] ?? "") : "0";
-  if (!V6_HEXTET.test(first)) return true; // malformed → treat as private (fail closed)
-  const firstHextet = Number.parseInt(first, 16);
+  // "::" (unspecified) and "::1" (loopback).
+  if (hextets.every((h): boolean => h === "0")) return true;
+  if (hextets.slice(0, 7).every((h): boolean => h === "0") && (hextets[7] ?? "") === "1") return true;
+
+  const firstHextet = Number.parseInt(hextets[0] ?? "0", 16);
   if ((firstHextet & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
   if ((firstHextet & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
   if ((firstHextet & 0xff00) === 0xff00) return true; // ff00::/8 multicast
 
   // Embedded IPv4 (IPv4-mapped ::ffff:a.b.c.d / ::ffff:xxxx, and the
-  // deprecated IPv4-compatible ::a.b.c.d). The URL parser normalizes dotted
-  // tails to hex, but stay defensive for both shapes.
-  if (after.length >= 2) {
-    const tail = after.slice(-2);
-    const last = tail[tail.length - 1] ?? "";
-    if (last.includes(".")) {
-      const n = v4ToNumber(last.split("."));
-      if (n !== null && isPrivateV4(n)) return true;
-    } else if (tail.every((part): boolean => V6_HEXTET.test(part))) {
-      const hi = Number.parseInt(tail[0] ?? "0", 16);
-      const lo = Number.parseInt(tail[1] ?? "0", 16);
-      const n = ((hi << 16) | lo) >>> 0;
-      if (isPrivateV4(n)) return true;
-    }
-  }
-  return false;
+  // deprecated IPv4-compatible ::a.b.c.d): the final two hextets hold the
+  // address, already validated as hex above.
+  const hi = Number.parseInt(tail[0] ?? "0", 16);
+  const lo = Number.parseInt(tail[1] ?? "0", 16);
+  const n = ((hi << 16) | lo) >>> 0;
+  return isPrivateV4(n);
 }
 
 /**
@@ -110,15 +122,19 @@ export function privateHostReason(hostname: string): string | null {
     if (n !== null && isPrivateV4(n)) return PRIVATE_MSG;
   }
   // WHATWG normalizes odd IPv4 forms to quads, but a bare numeric host
-  // (non-special parsing edge) is checked defensively.
-  if (quad.length === 1 && V4_OCTET.test(host)) {
+  // (non-special parsing edge) is checked defensively across the full
+  // unsigned 32-bit range: 2130706433 is 127.0.0.1, not a hostname.
+  if (quad.length === 1 && /^\d+$/.test(host)) {
     const n = Number(host);
-    if (n <= 0xffffffff && isPrivateV4(n)) return PRIVATE_MSG;
+    if (Number.isSafeInteger(n) && n > 0 && n <= 0xffffffff && isPrivateV4(n >>> 0)) return PRIVATE_MSG;
   }
   return null;
 }
 
 export type HostResolver = (hostname: string) => Promise<readonly string[]>;
+
+/** Bound on a single external resolution so a stuck resolver cannot hang a request. */
+const RESOLVE_TIMEOUT_MS = 5000;
 
 /**
  * Async URL validation with an injectable resolver: rejects private/loopback
@@ -126,6 +142,10 @@ export type HostResolver = (hostname: string) => Promise<readonly string[]>;
  * rejects hostnames whose resolved addresses are private. The resolver is
  * supplied by the caller (real DNS lookup, mock, or rebinding simulation).
  * This is the test harness surface for DNS-rebinding class hosts.
+ *
+ * Fail-closed contract: if resolution rejects or times out, the URL is
+ * rejected (a distinct reason string) rather than treated as an empty
+ * address list. Unresolvable is not provably safe.
  */
 export async function validateExternalUrlResolved(
   url: string,
@@ -142,7 +162,17 @@ export async function validateExternalUrlResolved(
   const literalReason = privateHostReason(parsed.hostname);
   if (!allowPrivate && literalReason !== null) return literalReason;
   if (!allowPrivate) {
-    const ips = await resolve(parsed.hostname).catch((): readonly string[] => []);
+    let ips: readonly string[];
+    try {
+      ips = await Promise.race([
+        resolve(parsed.hostname),
+        new Promise<readonly string[]>((_, reject): void => {
+          setTimeout(() => reject(new Error("DNS resolution timed out")), RESOLVE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      return "URL could not be resolved safely";
+    }
     for (const ip of ips) {
       const ipv6 = ip.includes(":");
       const reason = ipv6

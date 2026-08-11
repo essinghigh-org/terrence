@@ -97,6 +97,9 @@ async function applyPrefixThenHead(folder: string, prefix: number, fullJournal: 
     return { stage, continued };
   } finally {
     raw.close();
+    // Restore the full journal even when a migrate call throws, so the temp
+    // fixture folder is never left in a truncated state.
+    await writeFile(journalPath, JSON.stringify(fullJournal));
   }
 }
 
@@ -113,21 +116,25 @@ function validateDropTargets(): string[] {
   for (const file of files) {
     const sql = readFileSync(join(DRIZZLE_DIR, file), "utf8");
     for (const stmt of sql.split("--> statement-breakpoint")) {
-      const create = stmt.match(/CREATE TABLE (?:IF NOT EXISTS )?`?(\w+)`?/);
+      const create = stmt.match(/CREATE TABLE (?:IF NOT EXISTS )?`?([\w-]+)`?/);
       if (create !== null) {
         existing.add(create[1] as string);
         continue;
       }
-      const rename = stmt.match(/ALTER TABLE `?(\w+)`? RENAME TO `?(\w+)`?/);
+      const rename = stmt.match(/ALTER TABLE `?([\w-]+)`? RENAME TO `?([\w-]+)`?/);
       if (rename !== null) {
         existing.delete(rename[1] as string);
         existing.add(rename[2] as string);
         continue;
       }
-      const drop = stmt.match(/DROP TABLE (?:IF EXISTS )?`?(\w+)`?/);
+      // The IF EXISTS guard comes from the DROP statement itself, never from
+      // other clauses in the same statement (e.g. a CREATE TABLE IF NOT
+      // EXISTS in a multi-statement chunk).
+      const drop = stmt.match(/DROP TABLE (IF EXISTS )?`?([\w-]+)`?/);
       if (drop !== null) {
-        const target = drop[1] as string;
-        if (!stmt.includes("IF EXISTS") && !existing.has(target)) {
+        const guarded = drop[1] !== undefined;
+        const target = drop[2] as string;
+        if (!guarded && !existing.has(target)) {
           violations.push(`${file} drops ${target} which no earlier statement created`);
         }
         existing.delete(target);

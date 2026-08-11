@@ -54,8 +54,8 @@ const PRIVATE_V6 = [
   "[::ffff:a00:1]", "[::7f00:1]",
 ];
 const PUBLIC_V6 = [
-  "[2001:4860:4860::8888]", "[2606:4700::1111]", "[2001:db8::1]", "[::1:2]",
-  "[2600::1]",
+  "[2001:4860:4860::8888]", "[2606:4700::1111]", "[2607:f8b0:4005:808::200e]",
+  "[2a00:1450:4001:82f::200e]", "[2600::1]",
 ];
 const LOCALHOST = ["localhost", "localhost.", "LOCALHOST", "%6c%6f%63%61%6c%68%6f%73%74"];
 // DNS-rebinding wrappers: resolve to loopback/private IPs but are not IP
@@ -196,11 +196,15 @@ describe("fuzz: outbound URL validator", () => {
 
     // ...but the resolved harness re-checks per resolution, so a
     // public-then-private answer sequence (the rebinding pattern) is caught
-    // on the second resolution instead of being cached as safe.
-    let queries = 0;
+    // on the second resolution instead of being cached as safe. Answers come
+    // from an explicit ordered sequence, not call parity.
+    const sequence: readonly string[][] = [["93.184.216.34"], ["127.0.0.1"]];
+    let call = 0;
     const rebindingResolver: HostResolver = async (hostname: string): Promise<string[]> => {
-      queries += 1;
-      return hostname.includes("nip.io") ? (queries % 2 === 1 ? ["93.184.216.34"] : ["127.0.0.1"]) : [];
+      if (!hostname.includes("nip.io")) return [];
+      const answer = sequence[Math.min(call, sequence.length - 1)] ?? [];
+      call += 1;
+      return answer;
     };
     expect(await validateExternalUrlResolved("http://127.0.0.1.nip.io/", false, rebindingResolver)).toBeNull();
     expect(await validateExternalUrlResolved("http://127.0.0.1.nip.io/", false, rebindingResolver)).toContain("private");
@@ -213,5 +217,20 @@ describe("fuzz: outbound URL validator", () => {
     expect(await validateExternalUrlResolved("http://127.0.0.1.nip.io/", false, publicResolver)).toBeNull();
     // allowPrivate=true skips the resolved check too.
     expect(await validateExternalUrlResolved("http://127.0.0.1.nip.io/", true, privateResolver)).toBeNull();
+
+    // Raw AAAA answers arrive UNCOMPRESSED; embedded private v4 must still be
+    // caught after normalization (0:0:0:0:0:ffff:7f00:1 is 127.0.0.1).
+    const uncompressedResolver: HostResolver = async (): Promise<string[]> => [
+      "0:0:0:0:0:ffff:127.0.0.1",
+      "0:0:0:0:0:ffff:7f00:1",
+      "0:0:0:0:0:ffff:8.8.8.8",
+    ];
+    expect(await validateExternalUrlResolved("http://127.0.0.1.nip.io/", false, uncompressedResolver)).toContain("private");
+
+    // Resolver rejection fails closed instead of being treated as safe.
+    const failingResolver: HostResolver = async (): Promise<string[]> => {
+      throw new Error("resolver down");
+    };
+    expect(await validateExternalUrlResolved("http://example.com/", false, failingResolver)).toContain("resolve");
   });
 });

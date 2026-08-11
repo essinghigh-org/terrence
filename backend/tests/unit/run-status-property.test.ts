@@ -32,7 +32,7 @@ const OBSERVED_IN_SOURCE = [
   "policy_checking", "policy_override", "policy_soft_failed", "policy_checked",
   "post_plan_running", "post_plan_completed", "planned_and_saved", "planned_and_finished",
   "confirmed", "apply_queued", "applying", "applied", "errored", "canceled", "discarded",
-  "force_canceled",
+  "force_canceled", "unreachable",
 ];
 
 /** mulberry32 seeded PRNG (deterministic across runs and hosts). */
@@ -58,12 +58,31 @@ describe("run status state machine", () => {
     }
   });
 
-  it("completeness: every status written by the source is in the table", (): void => {
+  it("completeness: table and observed source statuses are exactly the same set", (): void => {
     const table = new Set<string>(RUN_STATUSES);
+    const observed = new Set<string>(OBSERVED_IN_SOURCE);
     for (const s of OBSERVED_IN_SOURCE) {
       expect(table.has(s), `missing status ${s}`).toBe(true);
     }
+    // Bidirectional: every table entry must also be observed in the source,
+    // so an added table status cannot silently diverge from reality.
+    for (const s of RUN_STATUSES) {
+      expect(observed.has(s), `table-only status ${s}`).toBe(true);
+    }
     expect(RUN_STATUSES.length as number).toBe(OBSERVED_IN_SOURCE.length);
+  });
+
+  it("incoming edges: every status except pending is a legal target of some transition", (): void => {
+    const targets = new Set<string>();
+    for (const s of RUN_STATUSES) {
+      for (const next of nextRunStatuses(s)) {
+        targets.add(next);
+      }
+    }
+    for (const s of RUN_STATUSES) {
+      if (s === "pending") continue;
+      expect(targets.has(s), `${s} has no incoming edge`).toBe(true);
+    }
   });
 
   it("reachability: every non-terminal status is reachable from pending", (): void => {

@@ -92,6 +92,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Agent jobs reference runs and pools; delete them first so no FK violation
+  // or orphaned queued job leaks into later suites.
+  await db.delete(agentJobs).where(inArray(agentJobs.runId, [
+    RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN,
+  ]));
   await db.delete(runs).where(inArray(runs.id, [
     RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F, CONFIRM_RUN,
   ]));
@@ -114,13 +119,17 @@ describe("concurrency: queue claim races", () => {
   it("exactly one run per workspace is claimed across 24 concurrent pollers (CAS exclusivity)", async () => {
     const pollers = Array.from({ length: 24 }, async (): Promise<string[]> => pollWorkerQueue());
     const results = await Promise.all(pollers);
-    const claims = results.flat();
+    const allClaims = results.flat();
+    // The test DB is shared across suites; scope to this suite's runs before
+    // asserting exact counts so stray pending rows elsewhere cannot skew it.
+    const own = new Set([RUN_A1, RUN_A2, RUN_A3, RUN_B, RUN_C, RUN_D, RUN_E, RUN_F]);
+    const claims = allClaims.filter((id) => own.has(id));
 
     // No double-claim: the union has the same size as the flattened list.
     expect(new Set(claims).size).toBe(claims.length);
     // One run per workspace, across 6 workspaces.
     expect(new Set(claims).size).toBe(6);
-    for (const runId of [RUN_B, RUN_C, RUN_D, RUN_E]) {
+    for (const runId of [RUN_B, RUN_C, RUN_D, RUN_E, RUN_F]) {
       expect(claims).toContain(runId);
     }
     // Workspace A's three runs: exactly one claimed.
@@ -128,7 +137,7 @@ describe("concurrency: queue claim races", () => {
     expect(aClaims.length).toBe(1);
     // Claimed runs moved to plan_queued; unclaimed siblings stayed pending.
     const claimedSet = new Set(claims);
-    for (const runId of [RUN_B, RUN_C, RUN_D, RUN_E]) {
+    for (const runId of [RUN_B, RUN_C, RUN_D, RUN_E, RUN_F]) {
       expect(await runStatus(runId)).toBe("plan_queued");
     }
     for (const runId of [RUN_A1, RUN_A2, RUN_A3]) {

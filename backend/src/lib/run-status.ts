@@ -47,16 +47,19 @@ export const RUN_STATUSES = [
   "canceled",
   "discarded",
   "force_canceled",
+  "unreachable",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /**
  * Statuses with no legal outgoing edges: a run that reaches one stays there.
- * Note `canceled` is deliberately NOT here: the operator force-execute action
- * reopens canceled runs into `pending` (the only exit from an otherwise
- * resting state). `FINAL_RUN_STATUSES` in lib/utils.ts remains the worker's
- * "has this run stopped" check and is separate from this model.
+ * `unreachable` (worker writes it when an agent cannot be reached for a
+ * claim) and `force_canceled` are both end-of-life. Note `canceled` is
+ * deliberately NOT here: the operator force-execute action reopens canceled
+ * runs into `pending` (the only exit from an otherwise resting state).
+ * `FINAL_RUN_STATUSES` in lib/utils.ts remains the worker's "has this run
+ * stopped" check and is separate from this model.
  */
 export const RUN_TERMINAL_STATUSES: readonly RunStatus[] = [
   "applied",
@@ -64,6 +67,7 @@ export const RUN_TERMINAL_STATUSES: readonly RunStatus[] = [
   "discarded",
   "force_canceled",
   "planned_and_finished",
+  "unreachable",
 ];
 
 const TERMINAL_SET: ReadonlySet<string> = new Set(RUN_TERMINAL_STATUSES);
@@ -73,14 +77,14 @@ export function isTerminalRunStatus(status: string): boolean {
 }
 
 const EDGES: Readonly<Record<string, readonly string[]>> = {
-  pending: ["fetching", "errored", "canceled", "discarded"],
-  fetching: ["fetching_completed", "errored", "canceled", "discarded"],
-  fetching_completed: ["pre_plan_running", "errored", "canceled", "discarded"],
-  pre_plan_running: ["pre_plan_completed", "errored", "canceled", "discarded"],
-  pre_plan_completed: ["queuing", "errored", "canceled", "discarded"],
-  queuing: ["plan_queued", "errored", "canceled", "discarded"],
-  plan_queued: ["planning", "pending", "errored", "canceled", "discarded"],
-  planning: ["planned", "errored", "canceled", "discarded"],
+  pending: ["fetching", "errored", "canceled", "discarded", "force_canceled", "unreachable"],
+  fetching: ["fetching_completed", "errored", "canceled", "discarded", "force_canceled"],
+  fetching_completed: ["pre_plan_running", "errored", "canceled", "discarded", "force_canceled"],
+  pre_plan_running: ["pre_plan_completed", "errored", "canceled", "discarded", "force_canceled"],
+  pre_plan_completed: ["queuing", "errored", "canceled", "discarded", "force_canceled"],
+  queuing: ["plan_queued", "errored", "canceled", "discarded", "force_canceled"],
+  plan_queued: ["planning", "pending", "errored", "canceled", "discarded", "force_canceled"],
+  planning: ["planned", "errored", "canceled", "discarded", "force_canceled"],
   planned: [
     "cost_estimating",
     "confirmed", // user confirm action
@@ -88,9 +92,10 @@ const EDGES: Readonly<Record<string, readonly string[]>> = {
     "errored",
     "canceled",
     "discarded",
+    "force_canceled",
   ],
-  cost_estimating: ["cost_estimated", "errored", "canceled", "discarded"],
-  cost_estimated: ["policy_checking", "errored", "canceled", "discarded"],
+  cost_estimating: ["cost_estimated", "errored", "canceled", "discarded", "force_canceled"],
+  cost_estimated: ["policy_checking", "errored", "canceled", "discarded", "force_canceled"],
   policy_checking: [
     "policy_checked",
     "policy_override", // transient marker before soft-fail resting state
@@ -98,11 +103,12 @@ const EDGES: Readonly<Record<string, readonly string[]>> = {
     "errored",
     "canceled",
     "discarded",
+    "force_canceled",
   ],
-  policy_override: ["policy_soft_failed", "errored", "canceled", "discarded"],
-  policy_soft_failed: ["planned", "errored", "canceled", "discarded"], // override-policy action
-  policy_checked: ["post_plan_running", "errored", "canceled", "discarded"],
-  post_plan_running: ["post_plan_completed", "errored", "canceled", "discarded"],
+  policy_override: ["policy_soft_failed", "errored", "canceled", "discarded", "force_canceled"],
+  policy_soft_failed: ["planned", "errored", "canceled", "discarded", "force_canceled"], // override-policy action
+  policy_checked: ["post_plan_running", "errored", "canceled", "discarded", "force_canceled"],
+  post_plan_running: ["post_plan_completed", "errored", "canceled", "discarded", "force_canceled"],
   post_plan_completed: [
     "planned_and_saved",
     "planned_and_finished",
@@ -110,17 +116,19 @@ const EDGES: Readonly<Record<string, readonly string[]>> = {
     "errored",
     "canceled",
     "discarded",
+    "force_canceled",
   ],
-  planned_and_saved: ["confirmed", "apply_queued", "errored", "canceled", "discarded"],
+  planned_and_saved: ["confirmed", "apply_queued", "errored", "canceled", "discarded", "force_canceled"],
   planned_and_finished: [],
-  confirmed: ["apply_queued", "errored", "canceled", "discarded"],
-  apply_queued: ["applying", "pending", "errored", "canceled", "discarded"], // re-queue action
-  applying: ["applied", "errored", "canceled", "discarded"],
+  confirmed: ["apply_queued", "errored", "canceled", "discarded", "force_canceled"],
+  apply_queued: ["applying", "pending", "errored", "canceled", "discarded", "force_canceled"], // re-queue action
+  applying: ["applied", "errored", "canceled", "discarded", "force_canceled"],
   applied: [],
   errored: [],
   canceled: ["pending"], // force-execute action
   discarded: [],
   force_canceled: [],
+  unreachable: [],
 };
 
 const TRANSITION_SET: ReadonlyMap<string, ReadonlySet<string>> = new Map(

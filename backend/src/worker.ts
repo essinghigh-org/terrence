@@ -2202,24 +2202,35 @@ async function executeAssessment(assessmentResultId: string): Promise<void> {
 }
 
 /**
- * Queue-poll gate: serializes poll passes so concurrent callers (tests, a
- * second worker instance in the same process) cannot nest SQLite
- * transactions. The agent-claim path runs db.transaction() with an awaiting
- * callback; two overlapping pollers would otherwise hit "cannot start a
- * transaction within a transaction" and silently drop claims (22.11).
+ * Queue-poll gates: serialize each queue's passes independently so concurrent
+ * callers (tests, a second worker instance in the same process) cannot nest
+ * SQLite transactions. The agent-claim path runs db.transaction() with an
+ * awaiting callback; two overlapping pollers of the same queue would
+ * otherwise hit "cannot start a transaction within a transaction" and
+ * silently drop claims (22.11). The assessment and run queues get separate
+ * gates so one queue never blocks the other.
+ *
+ * Cross-process concurrency (two worker instances) is not supported for the
+ * in-process SQLite worker; deployments split the worker with
+ * TERRENCE_DISABLE_WORKER instead. The CAS claim conditions remain the
+ * correctness backstop should a future deployment run overlapping pollers.
  */
-let pollQueueGate: Promise<void> = Promise.resolve();
-function withQueueGate<T>(fn: () => Promise<T>): Promise<T> {
-  const run = pollQueueGate.then(fn);
-  pollQueueGate = run.then(
+let assessmentPollGate: Promise<void> = Promise.resolve();
+let workerPollGate: Promise<void> = Promise.resolve();
+function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise<T>): Promise<T> {
+  const prior = gate === "assessment" ? assessmentPollGate : workerPollGate;
+  const run = prior.then(fn);
+  const next = run.then(
     () => undefined,
     () => undefined,
   );
+  if (gate === "assessment") assessmentPollGate = next;
+  else workerPollGate = next;
   return run;
 }
 
 export async function pollAssessmentQueue(): Promise<string[]> {
-  return withQueueGate(async (): Promise<string[]> => {
+  return withQueueGate("assessment", async (): Promise<string[]> => {
   const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
@@ -2255,7 +2266,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
 let isWorkerLoopRunning = false;
 
 export async function pollWorkerQueue(): Promise<string[]> {
-  return withQueueGate(async (): Promise<string[]> => {
+  return withQueueGate("worker", async (): Promise<string[]> => {
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
   const pendingRuns = await db.query.runs.findMany({

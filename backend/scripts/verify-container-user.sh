@@ -3,7 +3,9 @@
 # `appuser` (non-root), owns its tree, and can write to storage.
 #
 # Usage: verify-container-user.sh <container-name>
-# Exit 0 = all checks pass. Exit 1 = any check failed (details on stderr).
+# Exit 0 = all checks pass.
+# Exit 1 = any check failed (details on stderr).
+# Exit 2 = usage error (no container name given).
 set -u
 
 CONTAINER="${1:-}"
@@ -25,22 +27,29 @@ check() {
   fi
 }
 
-# 1. Image declares the unprivileged user.
+# 1. Image declares the unprivileged user (name or numeric form).
 user_decl=$(docker inspect "${CONTAINER}" --format '{{.Config.User}}' 2>/dev/null)
-if [[ "${user_decl}" == "appuser" ]]; then
-  check "image USER directive" "ok"
-else
-  check "image USER directive" "Config.User='${user_decl}' (expected 'appuser')"
-fi
+case "${user_decl}" in
+  appuser|appuser:appuser|1001|1001:1001)
+    check "image USER directive" "ok" ;;
+  *)
+    check "image USER directive" "Config.User='${user_decl}' (expected 'appuser' or uid 1001)" ;;
+esac
 
-# 2. The live process is non-root.
+# 2. The live process is non-root. Capture docker exec's own exit status so a
+# failed exec is reported as an execution failure, not as a root process.
 uid_line=$(docker exec "${CONTAINER}" sh -c 'id -u; id -g' 2>/dev/null)
-uid=$(printf '%s\n' "${uid_line}" | head -1)
-gid=$(printf '%s\n' "${uid_line}" | tail -1)
-if [[ -n "${uid}" ]] && [[ "${uid}" != "0" ]] && [[ -n "${gid}" ]] && [[ "${gid}" != "0" ]]; then
-  check "process runs non-root" "ok (uid=${uid} gid=${gid})"
+exec_status=$?
+if [[ "${exec_status}" -ne 0 ]]; then
+  check "process runs non-root" "docker exec failed (status ${exec_status})"
 else
-  check "process runs non-root" "uid=${uid} gid=${gid} (both must be non-zero)"
+  uid=$(printf '%s\n' "${uid_line}" | head -1)
+  gid=$(printf '%s\n' "${uid_line}" | tail -1)
+  if [[ -n "${uid}" ]] && [[ "${uid}" != "0" ]] && [[ -n "${gid}" ]] && [[ "${gid}" != "0" ]]; then
+    check "process runs non-root" "ok (uid=${uid} gid=${gid})"
+  else
+    check "process runs non-root" "uid=${uid} gid=${gid} (both must be non-zero)"
+  fi
 fi
 
 # 3. /app tree and storage are owned by the app user, not root.

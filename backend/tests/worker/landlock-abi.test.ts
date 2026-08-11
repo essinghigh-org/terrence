@@ -1,5 +1,5 @@
 import { describe, expect, it, afterAll } from "bun:test";
-import { writeFile, mkdir, rm } from "fs/promises";
+import { writeFile, mkdir, mkdtemp, rm } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -29,8 +29,17 @@ const defaultRunner = join(import.meta.dir, "../../bin/landlock-runner");
 const runnerPath = process.env.TERRENCE_LANDLOCK_RUNNER ?? defaultRunner;
 const hasRunner = RunSandbox.hasRunner();
 
+// Preserve an externally supplied runner override across the suite; cleanup
+// restores it instead of deleting it unconditionally.
+const originalRunnerEnv = process.env.TERRENCE_LANDLOCK_RUNNER;
+
+function restoreRunnerEnv(): void {
+  if (originalRunnerEnv === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
+  else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunnerEnv;
+}
+
 afterAll(() => {
-  delete process.env.TERRENCE_LANDLOCK_RUNNER;
+  restoreRunnerEnv();
   resetLandlockAbiCache();
 });
 
@@ -76,7 +85,8 @@ describe("landlock runner probe contract", () => {
     expect(proc.exitCode).toBe(0);
     const parsed = Number.parseInt(proc.stdout.toString().trim(), 10);
     expect(Number.isSafeInteger(parsed)).toBe(true);
-    expect(parsed).toBeGreaterThanOrEqual(1);
+    // ABI 0 is valid: the helper exists but the host kernel lacks Landlock.
+    expect(parsed).toBeGreaterThanOrEqual(0);
     // The app-side cache must agree with the real runner's report.
     resetLandlockAbiCache();
     expect(probeLandlockAbi()).toBe(parsed);
@@ -93,9 +103,9 @@ describe("landlock runner probe contract", () => {
 describe("landlock fail-closed on ABI-0 hosts", () => {
   it("fails closed when the runner reports Landlock unsupported", async (): Promise<void> => {
     // Fake runner: probes as ABI 0, refuses real spawns exactly like the C
-    // helper on a kernel without Landlock (exit 2, stderr message).
-    const fakeDir = join(tmpdir(), "terrence", "ll-fake-runner");
-    await mkdir(fakeDir, { recursive: true });
+    // helper on a kernel without Landlock (exit 2, stderr message). A fresh
+    // mkdtemp directory keeps parallel runs and repeated invocations isolated.
+    const fakeDir = await mkdtemp(join(tmpdir(), "terrence-ll-fake-"));
     const fakeRunner = join(fakeDir, "landlock-runner");
     await writeFile(
       fakeRunner,
@@ -128,7 +138,7 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
       expect(stderr).toContain("not supported");
     } finally {
       await rm(fakeDir, { recursive: true, force: true });
-      delete process.env.TERRENCE_LANDLOCK_RUNNER;
+      restoreRunnerEnv();
       resetLandlockAbiCache();
     }
   });
