@@ -39,6 +39,11 @@ export function requestCacheSet(key: string, value: unknown): void {
   requestCacheStorage.getStore()?.set(key, value);
 }
 
+/** Remove a single entry from the current request's memoization store. */
+export function requestCacheDelete(key: string): void {
+  requestCacheStorage.getStore()?.delete(key);
+}
+
 /** Set the scopes for the current request. Called by the auth plugin. */
 export function setRequestTokenScopes(scopes: TokenScopes | null): void {
   tokenScopesStorage.enterWith(scopes);
@@ -55,10 +60,9 @@ export function setRequestTokenScopes(scopes: TokenScopes | null): void {
  * isolated store; nothing leaks between invocations.
  */
 export async function withRequestScope<T>(fn: () => Promise<T>): Promise<T> {
-  return requestCacheStorage.run(new Map(), async (): Promise<T> => {
-    tokenScopesStorage.enterWith(null);
-    return fn();
-  });
+  return requestCacheStorage.run(new Map(), () =>
+    tokenScopesStorage.run(null, () => fn()),
+  );
 }
 
 /**

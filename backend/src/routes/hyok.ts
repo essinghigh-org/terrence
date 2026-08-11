@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { hyokConfigurations, hyokCustomerKeyVersions, organizations, type users } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -20,8 +20,12 @@ type HyokRow = typeof hyokConfigurations.$inferSelect;
 // go-tfe HYOKConfiguration's model reads Organization.Name, AgentPool.ID and the
 // polymorphic oidc-configuration relationship (type-tagged). Key versions are
 // loaded per config (create auto-generates one, like TFE's KMS key pair).
-async function hyokResource(row: HyokRow, orgName: string): Promise<Record<string, unknown>> {
-  const keyVersions = await db.query.hyokCustomerKeyVersions.findMany({
+async function hyokResource(
+  row: HyokRow,
+  orgName: string,
+  keyVersionsByConfig?: ReadonlyMap<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>,
+): Promise<Record<string, unknown>> {
+  const keyVersions = keyVersionsByConfig?.get(row.id) ?? await db.query.hyokCustomerKeyVersions.findMany({
     where: eq(hyokCustomerKeyVersions.hyokConfigId, row.id),
   });
   return {
@@ -89,7 +93,17 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
-    return { data: await Promise.all(rows.map((row) => hyokResource(row, org.name))) };
+    // One query for every config's key versions instead of one per row.
+    const keyVersions = await db.query.hyokCustomerKeyVersions.findMany({
+      where: rows.length > 0 ? inArray(hyokCustomerKeyVersions.hyokConfigId, rows.map((row) => row.id)) : undefined,
+    });
+    const keyVersionsByConfig = new Map<string, readonly (typeof hyokCustomerKeyVersions.$inferSelect)[]>();
+    for (const kv of keyVersions) {
+      const bucket = keyVersionsByConfig.get(kv.hyokConfigId);
+      if (bucket === undefined) keyVersionsByConfig.set(kv.hyokConfigId, [kv]);
+      else (bucket as (typeof hyokCustomerKeyVersions.$inferSelect)[]).push(kv);
+    }
+    return { data: await Promise.all(rows.map((row) => hyokResource(row, org.name, keyVersionsByConfig))) };
   })
   .post("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";

@@ -21,7 +21,7 @@ import { join } from "node:path";
 // E2E suite and kept current with `hashicorp/tfe`; the dashboard surfaces it
 // as an admin read-only endpoint instead of shipping it in the bundle.
 import providerSurface from "../data/provider_surface.json";
-import { cachedOrgByName } from "../lib/cached-lookups";
+import { cachedOrgByName, invalidateOrgLookup } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -677,6 +677,9 @@ export const adminRoutes = new Elysia({ name: "admin" })
     if (Object.keys(updates).length > 0) await db.update(organizations).set(updates).where(eq(organizations.id, org.id));
     if (updates.globalModuleSharing === true) await clearSpecificRegistrySharing(org.id, "modules");
     if (updates.globalProviderSharing === true) await clearSpecificRegistrySharing(org.id, "providers");
+    // The org may have been renamed; drop both cache keys so any later
+    // lookup in this request re-reads the database.
+    invalidateOrgLookup(orgName, org.id);
     const updated = await db.query.organizations.findFirst({ where: eq(organizations.id, org.id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: adminOrganizationResource(updated) };
@@ -687,6 +690,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(organizations).where(eq(organizations.id, org.id));
+    invalidateOrgLookup(orgName, org.id);
     (set as { status: number }).status = 204;
     return {};
   })

@@ -105,7 +105,10 @@ describe("zipEntryEscapes (binaryManager)", () => {
     const rand = mulberry32(0xb2c5);
     for (let i = 0; i < 10_000; i++) {
       const entry = randomPath(rand);
-      const flipped = entry.replaceAll("/", "\\").replaceAll("\\", "/");
+      // genuine backslash variant: every forward slash becomes a backslash.
+      // The guard normalizes backslashes to slashes before classifying, so
+      // both forms must agree.
+      const flipped = entry.replaceAll("/", "\\");
       expect(zipEntryEscapes(entry)).toBe(zipEntryEscapes(flipped));
     }
   });
