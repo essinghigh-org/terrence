@@ -24,14 +24,13 @@
  *   --include=<dir>      only report files under this src subdirectory
  *                        (repeatable; default: whole backend/src)
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const BACKEND_DIR = import.meta.dir.includes("/backend/")
-  ? import.meta.dir.slice(0, import.meta.dir.indexOf("/backend/") + "/backend".length)
-  : import.meta.dir;
+// import.meta.dir points at backend/scripts; the backend root is its parent.
+const BACKEND_DIR = dirname(import.meta.dir);
 const SRC_DIR = join(BACKEND_DIR, "src");
 
 const jsonOutput = process.argv.includes("--json");
@@ -51,6 +50,12 @@ if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
   process.exit(2);
 }
 
+/** Normalize an lcov SF path to a repository-relative, forward-slash form. */
+function toBackendRelative(path: string): string {
+  const absolute = isAbsolute(path) ? path : join(BACKEND_DIR, path);
+  return relative(BACKEND_DIR, absolute).replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
 // ---------------------------------------------------------------------------
 // 1. Run the suite under coverage into a throwaway directory.
 // ---------------------------------------------------------------------------
@@ -63,7 +68,12 @@ const run = spawnSync(
 );
 
 if (run.status !== 0) {
-  console.error(`Coverage run failed (exit ${run.status}):\n${run.stderr ?? run.stdout}`);
+  const detail = run.error !== undefined
+    ? `${run.error.message}`
+    : run.signal !== null
+      ? `terminated by signal ${run.signal}`
+      : `exit ${run.status}`;
+  console.error(`Coverage run failed (${detail}):\n${run.stderr ?? run.stdout}`);
   rmSync(coverageDir, { recursive: true, force: true });
   process.exit(1);
 }
@@ -77,12 +87,16 @@ interface LcovRecord {
   lh: number;
 }
 
+interface CoverageRecord extends LcovRecord {
+  pct: number;
+}
+
 function parseLcov(text: string): LcovRecord[] {
   const records: LcovRecord[] = [];
   let current: LcovRecord | null = null;
   for (const line of text.split("\n")) {
     if (line.startsWith("SF:")) {
-      current = { file: line.slice(3), lf: 0, lh: 0 };
+      current = { file: toBackendRelative(line.slice(3)), lf: 0, lh: 0 };
       records.push(current);
     } else if (line.startsWith("LF:") && current !== null) {
       current.lf = Number(line.slice(3));
@@ -93,20 +107,26 @@ function parseLcov(text: string): LcovRecord[] {
   return records;
 }
 
-const lcovPath = join(coverageDir, "lcov.info");
-const records = parseLcov(readFileSync(lcovPath, "utf8"))
-  .filter((record) => record.file.startsWith("src/"))
-  .map((record) => ({
-    ...record,
-    pct: record.lf === 0 ? 100 : (record.lh / record.lf) * 100,
-  }))
-  .sort((a, b) => a.pct - b.pct || a.file.localeCompare(b.file));
+let records: CoverageRecord[] = [];
+try {
+  const lcovPath = join(coverageDir, "lcov.info");
+  const raw = parseLcov(readFileSync(lcovPath, "utf8")).filter((record) => record.file.startsWith("src/"));
+  records = raw
+    .map((record): CoverageRecord => ({
+      ...record,
+      pct: record.lf === 0 ? 100 : (record.lh / record.lf) * 100,
+    }))
+    .sort((a, b) => a.pct - b.pct || a.file.localeCompare(b.file));
+} finally {
+  // The temp coverage dir is removed on every exit path, including a
+  // missing lcov.info or a malformed run.
+  rmSync(coverageDir, { recursive: true, force: true });
+}
 
 // ---------------------------------------------------------------------------
 // 3. Enumerate the tracked source tree to find never-imported modules.
 // ---------------------------------------------------------------------------
 function walkSrc(dir: string): string[] {
-  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
@@ -139,8 +159,6 @@ for (const record of records) {
   entry.lh += record.lh;
   rollups.set(group, entry);
 }
-
-rmSync(coverageDir, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
 // 4. Report.
@@ -189,7 +207,7 @@ if (jsonOutput) {
   console.log(JSON.stringify(report, null, 2));
 } else {
   console.log(`Line coverage: ${report.lineCoveragePct.toFixed(1)}% (${report.coveredLines}/${report.totalLines}) across ${report.totalFiles} imported files`);
-  console.log(`Threshold: ${threshold}% — ${report.belowThreshold.length} file(s) below, ${report.uncovered.length} file(s) never imported by any test\n`);
+  console.log(`Threshold: ${threshold}% — ${report.belowThreshold.length} file(s) below, ${uncoveredTracked.length} tracked file(s) never imported by any test\n`);
   console.log("Per-directory rollups (worst first):");
   for (const rollup of report.rollups) {
     console.log(`  ${rollup.dir.padEnd(14)} ${rollup.pct.toFixed(1).padStart(6)}%  (${rollup.lh}/${rollup.lf})`);
