@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 22.12 — verify a running Terrence container executes as the shipped
-# `appuser` (non-root), owns its tree, and can write to storage.
+# `nonroot` (uid 65532, Wolfi), owns its tree, and can write to storage.
 #
 # Usage: verify-container-user.sh <container-name>
 # Exit 0 = all checks pass.
@@ -30,10 +30,10 @@ check() {
 # 1. Image declares the unprivileged user (name or numeric form).
 user_decl=$(docker inspect "${CONTAINER}" --format '{{.Config.User}}' 2>/dev/null)
 case "${user_decl}" in
-  appuser|appuser:appuser|1001|1001:1001)
+  nonroot|nonroot:nonroot|65532|65532:65532)
     check "image USER directive" "ok" ;;
   *)
-    check "image USER directive" "Config.User='${user_decl}' (expected 'appuser' or uid 1001)" ;;
+    check "image USER directive" "Config.User='${user_decl}' (expected 'nonroot' or uid 65532)" ;;
 esac
 
 # 2. The live process is non-root. Capture docker exec's own exit status so a
@@ -52,12 +52,14 @@ else
   fi
 fi
 
-# 3. /app tree and storage are owned by the app user, not root.
-tree_owner=$(docker exec "${CONTAINER}" sh -c 'stat -c "%U:%G" /app /app/backend/storage 2>/dev/null | sort -u' 2>/dev/null)
-if [[ "${tree_owner}" == "appuser:appuser" ]]; then
-  check "tree + storage ownership" "ok (appuser:appuser)"
+# 3. Storage is owned by the app user (data dir must be writable). The code
+# tree /app is intentionally root-owned and read-only (secure default: the app
+# can execute it but not modify it) — only storage ownership is checked.
+storage_owner=$(docker exec "${CONTAINER}" sh -c 'stat -c "%U:%G" /app/backend/storage 2>/dev/null' 2>/dev/null)
+if [[ "${storage_owner}" == "nonroot:nonroot" ]]; then
+  check "storage ownership" "ok (nonroot:nonroot)"
 else
-  check "tree + storage ownership" "owners='${tree_owner}' (expected only 'appuser:appuser')"
+  check "storage ownership" "owner='${storage_owner}' (expected 'nonroot:nonroot')"
 fi
 
 # 4. Storage is writable by the app user at runtime.

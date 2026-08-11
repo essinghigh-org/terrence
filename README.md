@@ -97,12 +97,12 @@ docker build -t terrence .
 docker run -p 3000:3000 -v ./storage:/app/backend/storage terrence
 ```
 
-The image runs as the unprivileged `appuser` (uid 1001). When bind-mounting
-`./storage`, the host directory must be owned by uid 1001 (or world-writable),
-otherwise the app cannot write its database. Named volumes (see
-`docker-compose.yml`) inherit the correct ownership automatically.
+The image runs as the unprivileged `nonroot` user (uid 65532, Wolfi). When
+bind-mounting `./storage`, the host directory must be owned by uid 65532 (or
+world-writable), otherwise the app cannot write its database. Named volumes
+(see `docker-compose.yml`) inherit the correct ownership automatically.
 
-Verify a running container executes as `appuser`:
+Verify a running container executes as `nonroot`:
 
 ```bash
 backend/scripts/verify-container-user.sh <container-name>
