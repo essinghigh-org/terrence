@@ -48,6 +48,7 @@ import {
   Boxes,
   Hourglass,
   Layers,
+  Calendar,
   Tags,
   FileClock,
   Mail,
@@ -547,6 +548,12 @@ export function Layout({
           label: "SCIM settings",
           to: "/app/admin/scim",
         },
+        {
+          active: isActivePath(location.pathname, "/app/admin/operations"),
+          icon: SlidersHorizontal,
+          label: "Operations",
+          to: "/app/admin/operations",
+        },
       ] as const;
 
       return (
@@ -1045,6 +1052,7 @@ export function Layout({
         { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
         { label: "Registry", to: `${orgPath}/registry`, icon: Package },
         { label: "No-code modules", to: `${orgPath}/no-code`, icon: PackageOpen },
+        { label: "Change calendar", to: `${orgPath}/calendar`, icon: Calendar },
         { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
       ] as const).filter((link): boolean =>
         (link.label !== "Projects" || canReadProjects)

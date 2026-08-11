@@ -12,9 +12,11 @@ import {
   Maximize2,
   RotateCcw,
   MessageSquare,
+  Sparkles,
   X,
   XCircle,
 } from "lucide-react";
+import { Spinner } from "../components/ui/spinner";
 import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { DegradedBanner } from "../components/DegradedBanner";
@@ -537,6 +539,11 @@ export function RunDetail({
   const [commentBody, setCommentBody] = useState("");
   const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
   const [actionComment, setActionComment] = useState("");
+  const [explainerOpen, setExplainerOpen] = useState(false);
+  const [explaining, setExplaining] = useState(false);
+  const [explanation, setExplanation] = useState("");
+  const [explainerModel, setExplainerModel] = useState("");
+  const [explainError, setExplainError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
@@ -854,6 +861,31 @@ export function RunDetail({
     if (succeeded) {
       setConfirmationAction(null);
       setActionComment("");
+    }
+  }
+
+  // kanban 21.2: plain-language explanation of the stored plan JSON via the
+  // configured OpenAI-compatible endpoint. Read-only; never mutates the run.
+  async function handleExplainPlan(): Promise<void> {
+    setExplainerOpen(true);
+    setExplaining(true);
+    setExplanation("");
+    setExplainerModel("");
+    setExplainError("");
+    try {
+      const response = await fetchApi(`/api/v2/runs/${runId}/explain`, {
+        method: "POST",
+        body: JSON.stringify({ data: { type: "plan-explanations" } }),
+      }) as { data?: { attributes?: { explanation?: string; model?: string } } };
+      setExplanation(response.data?.attributes?.explanation ?? "");
+      setExplainerModel(response.data?.attributes?.model ?? "");
+      if (response.data?.attributes?.explanation === undefined) {
+        setExplainError("The plan explainer returned an empty response.");
+      }
+    } catch (caught: unknown) {
+      setExplainError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -1366,6 +1398,18 @@ export function RunDetail({
                   </h2>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
+                  {["finished", "planned_and_saved"].includes(planStatus) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={(): void => { void handleExplainPlan(); }}
+                      aria-haspopup="dialog"
+                    >
+                      <Sparkles className="mr-2 size-4" aria-hidden="true" />
+                      Explain plan
+                    </Button>
+                  )}
                   <PhaseMeta
                     phase="plan"
                     status={planStatus}
@@ -1854,6 +1898,57 @@ export function RunDetail({
             </>
           )}
       </div>
+
+      {explainerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="plan-explainer-heading"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        >
+          <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
+              <h2 id="plan-explainer-heading" className="flex items-center gap-2 text-sm font-semibold text-gray-950">
+                <Sparkles className="size-4 text-gray-500" aria-hidden="true" />
+                Plan explanation
+              </h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={(): void => { setExplainerOpen(false); }}
+                aria-label="Close plan explanation"
+              >
+                <X className="size-4" aria-hidden="true" />
+                Close
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto px-5 py-4">
+              {explaining ? (
+                <div className="flex items-center gap-3 py-8 text-sm text-gray-500">
+                  <Spinner className="size-4" />
+                  Generating explanation…
+                </div>
+              ) : explainError !== "" ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  <div>
+                    <p className="font-medium">Could not generate an explanation</p>
+                    <p className="mt-1">{explainError}</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{explanation}</p>
+                  {explainerModel !== "" && (
+                    <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-400">Generated by {explainerModel}</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {fullscreenLog !== null && (
         <div

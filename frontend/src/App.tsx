@@ -31,6 +31,8 @@ import { AdminSmtpSettings } from "./views/AdminSmtpSettings";
 import { AdminScimSettings } from "./views/AdminScimSettings";
 import { ModuleSharing } from "./views/ModuleSharing";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
+import { ChangeCalendar } from "./views/ChangeCalendar";
+import { AdminOperationsSettings } from "./views/AdminOperationsSettings";
 import {
   AUTH_CHANGED_EVENT,
   AUTH_EXPIRED_EVENT,
@@ -130,11 +132,13 @@ function App(): JSX.Element {
             <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
             <Route path="admin/smtp" element={<AdminSmtpSettings />} />
             <Route path="admin/scim" element={<AdminScimSettings />} />
+            <Route path="admin/operations" element={<AdminOperationsSettings />} />
             <Route path="account" element={<AccountSettings />} />
             <Route path=":orgName" element={<Workspaces />} />
             <Route path=":orgName/workspaces" element={<Workspaces />} />
             <Route path=":orgName/registry" element={<Registry />} />
             <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
+            <Route path=":orgName/calendar" element={<ChangeCalendar />} />
             <Route path=":orgName/projects" element={<Projects />} />
             <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
             <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
