@@ -39,6 +39,7 @@ import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/prom
 import { ensureBinary } from "./binaryManager";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
+import { canTransitionRunStatus } from "./lib/run-status";
 import { FINAL_RUN_STATUSES, signedApiURL, validateExternalUrl } from "./lib/utils";
 import {
   emptyCostEstimate,
@@ -166,11 +167,18 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
   try {
     const existing = await db.query.runs.findFirst({
       where: eq(runs.id, runId),
-      columns: { statusTimestamps: true },
+      columns: { statusTimestamps: true, status: true },
     });
     const existingTimestamps = typeof existing?.statusTimestamps === "object" && existing.statusTimestamps !== null
       ? existing.statusTimestamps
       : {};
+    // State machine guard: warn loudly (never throw) when a transition is
+    // not in the canonical table (lib/run-status.ts). Surfaces violations in
+    // test runs and logs instead of silently corrupting run state.
+    const currentStatus = existing?.status;
+    if (currentStatus !== undefined && currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
+      log.error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status} (see lib/run-status.ts)`);
+    }
     const timestamps = { ...existingTimestamps, [statusKey]: now };
     await db.update(runs).set({ status, statusTimestamps: timestamps, ...(extra ?? {}) }).where(eq(runs.id, runId));
   } catch (err: unknown) {
