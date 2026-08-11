@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { buttonVariants, Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -652,7 +653,7 @@ export function VariableSets(): React.JSX.Element {
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-3xl font-bold">{orgName} / Variable sets</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Variable sets</h1>
           <p className="text-sm text-muted-foreground">
             Reuse configuration across workspaces in this organization.
           </p>
@@ -671,7 +672,8 @@ export function VariableSets(): React.JSX.Element {
         </p>
       )}
 
-      <div className="rounded-md border bg-card">
+      <Card>
+        <CardContent className="p-0">
         <Table>
           <TableHeader>
             <TableRow>
@@ -760,7 +762,8 @@ export function VariableSets(): React.JSX.Element {
             )}
           </TableBody>
         </Table>
-      </div>
+        </CardContent>
+      </Card>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent>

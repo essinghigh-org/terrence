@@ -100,30 +100,37 @@ export function PolicySetsTags(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : sets.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <Tags className="h-8 w-8" />
-              <p className="text-sm">No tag-based policy sets found.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Kind</TableHead>
-                  <TableHead>Tag selectors</TableHead>
-                  <TableHead>Description</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sets.map((policySet): React.JSX.Element => (
+        <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead>Tag selectors</TableHead>
+                      <TableHead>Description</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loading ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-32 text-center">
+                          <Spinner />
+                        </TableCell>
+                      </TableRow>
+                    ) : error !== "" ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                      </TableRow>
+                    ) : sets.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                          <div className="flex flex-col items-center justify-center gap-2">
+                            <Tags className="h-8 w-8 text-muted-foreground/60" />
+                            <p className="text-sm">No tag-based policy sets found.</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : sets.map((policySet): React.JSX.Element => (
                   <TableRow
                     key={policySet.id}
                     className="cursor-pointer"
@@ -155,7 +162,6 @@ export function PolicySetsTags(): React.JSX.Element {
                 ))}
               </TableBody>
             </Table>
-          )}
         </CardContent>
       </Card>
     </div>

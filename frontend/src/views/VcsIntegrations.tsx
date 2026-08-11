@@ -384,7 +384,7 @@ export function VcsIntegrations({
     <div className="mx-auto max-w-6xl space-y-6 p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">{orgName} / VCS Integrations</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{orgName} / VCS Integrations</h1>
           <p className="text-sm text-muted-foreground">Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs.</p>
         </div>
       </div>

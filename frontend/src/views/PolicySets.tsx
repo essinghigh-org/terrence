@@ -155,7 +155,7 @@ export function PolicySets(): React.JSX.Element {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold tracking-tight">{orgName} / Policy sets</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Policy sets</h1>
             <HelpTooltip content="Policy sets group Sentinel policies that are run against workspace plans and applies." />
           </div>
           <p className="text-sm text-muted-foreground">Manage Sentinel policy sets for this organization, attach them to projects and workspaces, and configure enforcement.</p>

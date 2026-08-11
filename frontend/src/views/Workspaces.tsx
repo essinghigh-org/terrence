@@ -434,9 +434,9 @@ export function Workspaces(): React.JSX.Element {
         </p>
       )}
 
-      <section aria-label="Workspace filters" className="grid gap-3 md:grid-cols-[minmax(15rem,1fr)_12rem_14rem_auto_auto]">
+      <section aria-label="Workspace filters" className="flex flex-wrap items-center gap-3">
         {savedViews.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 md:col-span-5">
+          <div className="flex w-full flex-wrap items-center gap-2">
             <span className="text-sm font-medium">Saved views:</span>
             {savedViews.map((view): React.JSX.Element => (
               <span key={view.name} className="inline-flex items-center gap-1">
@@ -465,99 +465,110 @@ export function Workspaces(): React.JSX.Element {
         <Input
           aria-label="Search workspaces"
           placeholder="Search by workspace name or tag"
+          className="min-w-[9rem] max-w-md flex-1"
           value={search}
           onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
             setSearch(event.currentTarget.value);
             setActiveViewName("");
           }}
         />
-        <Select aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
-          setStatusFilter(value);
-          setActiveViewName("");
-        }}>
-          <option value="">All statuses</option>
-          <option value="attention">Needs attention</option>
-          <option value="errored">Errored</option>
-          <option value="running">Running</option>
-          <option value="on-hold">On hold</option>
-          <option value="completed">Completed</option>
-        </Select>
-        <Select aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
-          setProjectFilter(value);
-          setActiveViewName("");
-        }}>
-          <option value="">All projects</option>
-          {projects.map((project): React.JSX.Element => (
-            <option key={project.id} value={project.id}>{project.attributes.name}</option>
-          ))}
-        </Select>
-        <Button
-          variant="ghost"
-          disabled={!hasFilters}
-          onClick={(): void => {
-            setSearch("");
-            setStatusFilter("");
-            setProjectFilter("");
+        <div className="w-36 shrink-0">
+          <Select aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
+            setStatusFilter(value);
             setActiveViewName("");
-          }}
-        >
-          <X data-icon="inline-start" />
-          Clear
-        </Button>
-        <Button
-          variant="outline"
-          aria-label="Save current filters as a view"
-          title="Save current filters as a named view"
-          onClick={(): void => { setViewDialogOpen(true); }}
-        >
-          <Bookmark data-icon="inline-start" />
-          Save view
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={(
-              <Button
-                variant="outline"
-                aria-label="Choose visible columns"
-                title="Choose which columns are visible"
-              >
-                <Columns3 data-icon="inline-start" />
-                Columns
-              </Button>
-            )}
-          />
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {WORKSPACE_TABLE_COLUMNS.map((column): React.JSX.Element => (
-                <DropdownMenuCheckboxItem
-                  key={column.id}
-                  checked={visibleColumns.includes(column.id)}
-                  onCheckedChange={(checked: boolean): void => {
-                    setVisibleColumns((current): string[] =>
-                      checked
-                        ? [...current, column.id]
-                        : current.filter((id: string): boolean => id !== column.id));
-                  }}
+          }}>
+            <option value="">All statuses</option>
+            <option value="attention">Needs attention</option>
+            <option value="errored">Errored</option>
+            <option value="running">Running</option>
+            <option value="on-hold">On hold</option>
+            <option value="completed">Completed</option>
+          </Select>
+        </div>
+        <div className="w-36 shrink-0">
+          <Select aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
+            setProjectFilter(value);
+            setActiveViewName("");
+          }}>
+            <option value="">All projects</option>
+            {projects.map((project): React.JSX.Element => (
+              <option key={project.id} value={project.id}>{project.attributes.name}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!hasFilters}
+            onClick={(): void => {
+              setSearch("");
+              setStatusFilter("");
+              setProjectFilter("");
+              setActiveViewName("");
+            }}
+          >
+            <X data-icon="inline-start" />
+            Clear
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Save current filters as a view"
+            title="Save current filters as a named view"
+            onClick={(): void => { setViewDialogOpen(true); }}
+          >
+            <Bookmark data-icon="inline-start" />
+            Save view
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={(
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label="Choose visible columns"
+                  title="Choose which columns are visible"
                 >
-                  {column.label}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          variant="outline"
-          aria-label={density === "dense" ? "Switch to comfortable table density" : "Switch to dense table density"}
-          title={density === "dense" ? "Dense rows (click for comfortable)" : "Comfortable rows (click for dense)"}
-          onClick={(): void => {
-            setDensity((current): TableDensity => current === "dense" ? "comfortable" : "dense");
-          }}
-        >
-          <Rows3 data-icon="inline-start" />
-          {density === "dense" ? "Dense" : "Comfortable"}
-        </Button>
+                  <Columns3 data-icon="inline-start" />
+                  Columns
+                </Button>
+              )}
+            />
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {WORKSPACE_TABLE_COLUMNS.map((column): React.JSX.Element => (
+                  <DropdownMenuCheckboxItem
+                    key={column.id}
+                    checked={visibleColumns.includes(column.id)}
+                    onCheckedChange={(checked: boolean): void => {
+                      setVisibleColumns((current): string[] =>
+                        checked
+                          ? [...current, column.id]
+                          : current.filter((id: string): boolean => id !== column.id));
+                    }}
+                  >
+                    {column.label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={density === "dense" ? "Switch to comfortable table density" : "Switch to dense table density"}
+            title={density === "dense" ? "Dense rows (click for comfortable)" : "Comfortable rows (click for dense)"}
+            onClick={(): void => {
+              setDensity((current): TableDensity => current === "dense" ? "comfortable" : "dense");
+            }}
+          >
+            <Rows3 data-icon="inline-start" />
+            {density === "dense" ? "Dense" : "Comfortable"}
+          </Button>
+        </div>
       </section>
 
       {runStatusError && (

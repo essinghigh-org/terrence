@@ -925,7 +925,10 @@ export function Layout({
           to: `${organizationSettingsPath}/agents`,
         },
         {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets`),
+          // Active on the list and detail pages, but NOT on the tag-selector
+          // sibling (`.../policy-sets/tags`), which has its own nav item.
+          active: isActivePath(location.pathname, `${organizationSettingsPath}/policy-sets`)
+            && !location.pathname.startsWith(`${organizationSettingsPath}/policy-sets/tags`),
           icon: ShieldCheck,
           label: "Policy sets",
           to: `${organizationSettingsPath}/policy-sets`,

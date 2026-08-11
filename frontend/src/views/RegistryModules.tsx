@@ -164,59 +164,67 @@ export function RegistryModules(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <TableSkeleton rows={4} cols={4} />
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : modules.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <PackageOpen className="h-8 w-8" />
-              <p className="text-sm">No registry modules.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Module</TableHead>
+                <TableHead>Provider</TableHead>
+                <TableHead>Namespace</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Created at</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Module</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Namespace</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created at</TableHead>
-                  <TableHead className="w-16" />
+                  <TableCell colSpan={6} className="h-32 text-center">
+                    <TableSkeleton rows={4} cols={4} />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {modules.map((m): React.JSX.Element => (
-                  <TableRow key={m.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <PackageOpen className="h-4 w-4 text-muted-foreground" />
-                        {m.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{m.attributes.provider}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{m.attributes.namespace}</TableCell>
-                    <TableCell>
-                      <Badge variant={m.attributes.status === "available" ? "default" : "secondary"}>
-                        {m.attributes.status ?? "available"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDate(m.attributes["created-at"], "")}
-                    </TableCell>
-                    <TableCell>
-                      {canManage && (
-                        <Button variant="ghost" size="icon" onClick={(): void => { setModuleToDelete(m); }} aria-label={`Delete ${m.attributes.name}`}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : modules.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <PackageOpen className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No registry modules.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : modules.map((m): React.JSX.Element => (
+                <TableRow key={m.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <PackageOpen className="h-4 w-4 text-muted-foreground" />
+                      {m.attributes.name}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{m.attributes.provider}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{m.attributes.namespace}</TableCell>
+                  <TableCell>
+                    <Badge variant={m.attributes.status === "available" ? "default" : "secondary"}>
+                      {m.attributes.status ?? "available"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatDate(m.attributes["created-at"], "")}
+                  </TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <Button variant="ghost" size="icon" onClick={(): void => { setModuleToDelete(m); }} aria-label={`Delete ${m.attributes.name}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

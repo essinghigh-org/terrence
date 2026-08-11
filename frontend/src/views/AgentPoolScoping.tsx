@@ -159,51 +159,59 @@ export function AgentPoolScoping(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : pools.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <Boxes className="h-8 w-8" />
-              <p className="text-sm">No agent pools.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Allowed workspaces</TableHead>
+                <TableHead>Allowed projects</TableHead>
+                <TableHead>Excluded workspaces</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Allowed workspaces</TableHead>
-                  <TableHead>Allowed projects</TableHead>
-                  <TableHead>Excluded workspaces</TableHead>
+                  <TableCell colSpan={4} className="h-32 text-center">
+                    <div className="flex justify-center py-12">
+                      <Spinner />
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pools.map((pool): React.JSX.Element => (
-                  <TableRow key={pool.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Boxes className="h-4 w-4 text-muted-foreground" />
-                        {pool.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <ScopeCell ids={relationshipIds(pool.relationships?.["allowed-workspaces"])} />
-                    </TableCell>
-                    <TableCell>
-                      <ScopeCell ids={relationshipIds(pool.relationships?.["allowed-projects"])} />
-                    </TableCell>
-                    <TableCell>
-                      <ScopeCell ids={relationshipIds(pool.relationships?.["excluded-workspaces"])} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : pools.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Boxes className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No agent pools.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : pools.map((pool): React.JSX.Element => (
+                <TableRow key={pool.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <Boxes className="h-4 w-4 text-muted-foreground" />
+                      {pool.attributes.name}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <ScopeCell ids={relationshipIds(pool.relationships?.["allowed-workspaces"])} />
+                  </TableCell>
+                  <TableCell>
+                    <ScopeCell ids={relationshipIds(pool.relationships?.["allowed-projects"])} />
+                  </TableCell>
+                  <TableCell>
+                    <ScopeCell ids={relationshipIds(pool.relationships?.["excluded-workspaces"])} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

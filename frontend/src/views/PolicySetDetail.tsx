@@ -12,7 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
 import { toast } from "../components/ui/toast";
-import { FileText, GitBranch, Plus, Trash2 } from "lucide-react";
+import { FileText, GitBranch, Plus, Tags, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ENFORCEMENTS = [
@@ -28,6 +28,12 @@ type PolicySetRelationships = {
   "workspace-exclusions"?: { data?: { id: string; type: string }[] };
 };
 
+type TagSelector = {
+  "tag-key": string;
+  "tag-value": string | null;
+  "is-exclude": boolean;
+};
+
 type PolicySet = {
   id: string;
   attributes: {
@@ -39,6 +45,7 @@ type PolicySet = {
     "policy-update-patterns"?: string[];
     "policies-path"?: string | null;
     "vcs-repo"?: { identifier?: string; branch?: string | null } | null;
+    "tag-selectors"?: TagSelector[];
   };
   relationships?: PolicySetRelationships;
 };
@@ -71,7 +78,7 @@ type Workspace = {
 
 type Project = { id: string; attributes: { name: string } };
 
-type Tab = "overview" | "policies" | "attachments" | "parameters" | "vcs";
+type Tab = "overview" | "tags" | "policies" | "attachments" | "parameters" | "vcs";
 
 export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: Tab }>): React.JSX.Element {
   const { orgName: rawOrgName, policySetId } = useParams<{ orgName: string; policySetId: string }>();
@@ -117,6 +124,12 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [savingAttach, setSavingAttach] = useState(false);
   const [attachKind, setAttachKind] = useState<"workspaces" | "projects">("workspaces");
+
+  const [selectorKey, setSelectorKey] = useState("");
+  const [selectorValue, setSelectorValue] = useState("");
+  const [selectorExclude, setSelectorExclude] = useState(false);
+  const [selectorError, setSelectorError] = useState("");
+  const [savingSelector, setSavingSelector] = useState(false);
 
   const [paramDialogOpen, setParamDialogOpen] = useState(false);
   const [editingParam, setEditingParam] = useState<Param | null>(null);
@@ -262,8 +275,74 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     }
   }
 
+  const tagSelectors = policySet?.attributes["tag-selectors"] ?? [];
+
+  const addTagSelector = async (e: React.SyntheticEvent): Promise<void> => {
+    e.preventDefault();
+    if (!canManage) return;
+    const key = selectorKey.trim().toLowerCase();
+    if (key === "") {
+      setSelectorError("Tag key is required.");
+      return;
+    }
+    const duplicate = tagSelectors.some((selector): boolean =>
+      selector["tag-key"].toLowerCase() === key
+      && (selector["tag-value"] ?? "") === (selectorValue.trim() === "" ? null : selectorValue.trim())
+      && selector["is-exclude"] === selectorExclude);
+    if (duplicate) {
+      setSelectorError("That tag selector already exists.");
+      return;
+    }
+    setSavingSelector(true);
+    setSelectorError("");
+    try {
+      await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(setId)}/tag-selectors`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: [{
+            "tag-key": key,
+            "tag-value": selectorValue.trim() === "" ? null : selectorValue.trim(),
+            "is-exclude": selectorExclude,
+          }],
+        }),
+      });
+      setSelectorKey("");
+      setSelectorValue("");
+      setSelectorExclude(false);
+      reload();
+    } catch (err: unknown) {
+      setSelectorError(err instanceof Error ? err.message : "Failed to add tag selector.");
+    } finally {
+      setSavingSelector(false);
+    }
+  };
+
+  const removeTagSelector = async (selector: TagSelector): Promise<void> => {
+    if (!canManage) return;
+    setSavingSelector(true);
+    setSelectorError("");
+    try {
+      await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(setId)}/tag-selectors`, {
+        method: "DELETE",
+        body: JSON.stringify({
+          data: [{
+            "tag-key": selector["tag-key"],
+            "tag-value": selector["tag-value"],
+            "is-exclude": selector["is-exclude"],
+          }],
+        }),
+      });
+      reload();
+    } catch (err: unknown) {
+      setSelectorError(err instanceof Error ? err.message : "Failed to remove tag selector.");
+    } finally {
+      setSavingSelector(false);
+    }
+  };
+
   const tabs: readonly { id: Tab; label: string }[] = [
     { id: "overview", label: "Overview" },
+    { id: "tags", label: "Tag selectors" },
     { id: "policies", label: "Policies" },
     { id: "attachments", label: "Attachments" },
     { id: "parameters", label: "Parameters" },
@@ -344,6 +423,127 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             )}
           </CardContent>
         </Card>
+      )}
+
+      {activeTab === "tags" && (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Tag selectors</CardTitle>
+              <CardDescription>
+                Apply this policy set to workspaces and projects that match these tags. Include rules match all
+                specified tags; exclude rules remove matching resources regardless of include rules.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Tag key</TableHead>
+                    <TableHead>Tag value</TableHead>
+                    <TableHead>Behavior</TableHead>
+                    {canManage && <TableHead className="w-16 text-right">Actions</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tagSelectors.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={canManage ? 4 : 3} className="h-24 text-center text-muted-foreground">
+                        <div className="flex flex-col items-center gap-2">
+                          <Tags className="size-8 text-muted-foreground/60" />
+                          {isVcsBacked
+                            ? "Tag selectors are managed from the connected version control repository."
+                            : "No tag selectors yet. Add one to target specific workspaces."}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : tagSelectors.map((selector, index): React.JSX.Element => (
+                    <TableRow key={`${selector["tag-key"]}-${selector["tag-value"] ?? "*"}-${selector["is-exclude"]}-${index}`}>
+                      <TableCell className="font-medium">{selector["tag-key"]}</TableCell>
+                      <TableCell className="text-muted-foreground">{selector["tag-value"] ?? <em>any</em>}</TableCell>
+                      <TableCell>
+                        <Badge variant={selector["is-exclude"] ? "destructive" : "secondary"}>
+                          {selector["is-exclude"] ? "Exclude" : "Include"}
+                        </Badge>
+                      </TableCell>
+                      {canManage && (
+                        <TableCell className="text-right">
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-destructive hover:text-destructive"
+                              disabled={savingSelector}
+                              onClick={(): void => { void removeTagSelector(selector); }}
+                            >
+                              <Trash2 className="size-3.5 mr-1" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {canManage && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Add tag selector</CardTitle>
+                <CardDescription>Target resources by their workspace or project tags.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={(e): void => { void addTagSelector(e); }} className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="space-y-2">
+                      <label htmlFor="selector-key" className="text-sm font-medium">
+                        Tag key <span className="text-destructive">*</span>
+                      </label>
+                      <Input
+                        id="selector-key"
+                        required
+                        value={selectorKey}
+                        onInput={(e): void => { setSelectorKey(e.currentTarget.value); }}
+                        placeholder="environment"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="selector-value" className="text-sm font-medium">
+                        Tag value
+                      </label>
+                      <Input
+                        id="selector-value"
+                        value={selectorValue}
+                        onInput={(e): void => { setSelectorValue(e.currentTarget.value); }}
+                        placeholder="production"
+                      />
+                      <p className="text-xs text-muted-foreground">Leave empty to match any value for the key.</p>
+                    </div>
+                    <div className="space-y-2">
+                      <span className="text-sm font-medium">Behavior</span>
+                      <label className="flex h-9 items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={selectorExclude}
+                          onCheckedChange={(c: boolean | "indeterminate"): void => { setSelectorExclude(c === true); }}
+                        />
+                        Exclude matching resources
+                      </label>
+                    </div>
+                  </div>
+                  {selectorError !== "" && <div className="text-sm text-red-500">{selectorError}</div>}
+                  <div className="flex justify-end">
+                    <Button type="submit" disabled={savingSelector || selectorKey.trim() === ""}>
+                      {savingSelector ? <Spinner className="size-4" /> : <Plus className="size-4 mr-1.5" />}
+                      Add selector
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {activeTab === "policies" && (

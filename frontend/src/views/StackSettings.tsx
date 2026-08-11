@@ -253,74 +253,80 @@ export function StackSettings(): React.JSX.Element {
       )}
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : stacks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <Layers className="h-8 w-8" />
-              <p className="text-sm">{canManage ? "No stacks yet. Create one to get started." : "No stacks."}</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>VCS repo</TableHead>
+                <TableHead>Branch</TableHead>
+                <TableHead>Working directory</TableHead>
+                <TableHead>Speculative</TableHead>
+                <TableHead className="w-24" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>VCS repo</TableHead>
-                  <TableHead>Branch</TableHead>
-                  <TableHead>Working directory</TableHead>
-                  <TableHead>Speculative</TableHead>
-                  <TableHead className="w-24" />
+                  <TableCell colSpan={6} className="h-32 text-center">
+                    <div className="flex justify-center py-12">
+                      <Spinner />
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {stacks.map((stack): React.JSX.Element => (
-                  <TableRow key={stack.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Layers className="h-4 w-4 text-muted-foreground" />
-                        {stack.attributes.name}
+              ) : stacks.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Layers className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">{canManage ? "No stacks yet. Create one to get started." : "No stacks."}</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : stacks.map((stack): React.JSX.Element => (
+                <TableRow key={stack.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-muted-foreground" />
+                      {stack.attributes.name}
+                    </div>
+                    {typeof stack.attributes.description === "string" && stack.attributes.description !== "" && (
+                      <div className="text-xs text-muted-foreground">{stack.attributes.description}</div>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {vcsRepo(stack)?.identifier ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {vcsRepo(stack)?.branch ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {stack.attributes["working-directory"] ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {stack.attributes["speculative-enabled"] === true ? "Enabled" : "Disabled"}
+                  </TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <div className="flex items-center justify-end gap-1">
+                        {((vcsRepo(stack)?.identifier ?? "").trim()) !== "" && (
+                          <Button variant="ghost" size="icon" onClick={(): void => { void fetchLatest(stack); }} aria-label={`Fetch latest for ${stack.attributes.name}`} disabled={fetchingStackId === stack.id}>
+                            <RefreshCw className={`h-4 w-4 ${fetchingStackId === stack.id ? "animate-spin" : ""}`} />
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="icon" onClick={(): void => { openEdit(stack); }} aria-label={`Edit ${stack.attributes.name}`}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={(): void => { setStackToDelete(stack); }} aria-label={`Delete ${stack.attributes.name}`}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                      {typeof stack.attributes.description === "string" && stack.attributes.description !== "" && (
-                        <div className="text-xs text-muted-foreground">{stack.attributes.description}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {vcsRepo(stack)?.identifier ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {vcsRepo(stack)?.branch ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {stack.attributes["working-directory"] ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {stack.attributes["speculative-enabled"] === true ? "Enabled" : "Disabled"}
-                    </TableCell>
-                    <TableCell>
-                      {canManage && (
-                        <div className="flex items-center justify-end gap-1">
-                          {((vcsRepo(stack)?.identifier ?? "").trim()) !== "" && (
-                            <Button variant="ghost" size="icon" onClick={(): void => { void fetchLatest(stack); }} aria-label={`Fetch latest for ${stack.attributes.name}`} disabled={fetchingStackId === stack.id}>
-                              <RefreshCw className={`h-4 w-4 ${fetchingStackId === stack.id ? "animate-spin" : ""}`} />
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="icon" onClick={(): void => { openEdit(stack); }} aria-label={`Edit ${stack.attributes.name}`}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={(): void => { setStackToDelete(stack); }} aria-label={`Delete ${stack.attributes.name}`}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

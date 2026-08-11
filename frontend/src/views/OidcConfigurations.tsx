@@ -177,49 +177,57 @@ export function OidcConfigurations(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : configs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <Fingerprint className="h-8 w-8" />
-              <p className="text-sm">No OIDC configurations.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider</TableHead>
+                <TableHead>Configuration</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Configuration</TableHead>
-                  <TableHead className="w-16" />
+                  <TableCell colSpan={3} className="h-32 text-center">
+                    <div className="flex justify-center py-12">
+                      <Spinner />
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {configs.map((config): React.JSX.Element => (
-                  <TableRow key={config.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Fingerprint className="h-4 w-4 text-muted-foreground" />
-                        {TYPE_LABELS[config.type] ?? config.type}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
-                    <TableCell>
-                      {canManage && (
-                        <Button variant="ghost" size="icon" onClick={(): void => { setConfigToDelete(config); }} aria-label="Delete configuration">
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : configs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Fingerprint className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No OIDC configurations.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : configs.map((config): React.JSX.Element => (
+                <TableRow key={config.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <Fingerprint className="h-4 w-4 text-muted-foreground" />
+                      {TYPE_LABELS[config.type] ?? config.type}
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <Button variant="ghost" size="icon" onClick={(): void => { setConfigToDelete(config); }} aria-label="Delete configuration">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

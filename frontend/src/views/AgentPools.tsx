@@ -229,7 +229,7 @@ export function AgentPools(): React.JSX.Element {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold tracking-tight">{orgName} / Agent Pools</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Agent Pools</h1>
             <HelpTooltip content="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure." />
           </div>
           <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>

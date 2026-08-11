@@ -236,63 +236,71 @@ export function HyokConfigurations(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : configurations.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <KeyRound className="h-8 w-8" />
-              <p className="text-sm">{canManage ? "No HYOK configurations yet. Create one to get started." : "No HYOK configurations."}</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Key</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Primary</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Primary</TableHead>
-                  <TableHead className="w-16" />
+                  <TableCell colSpan={5} className="h-32 text-center">
+                    <div className="flex justify-center py-12">
+                      <Spinner />
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {configurations.map((configuration): React.JSX.Element => (
-                  <TableRow key={configuration.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <KeyRound className="h-4 w-4 text-muted-foreground" />
-                        {configuration.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {configuration.attributes["kek-id"]}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={configuration.attributes.status === "ok" ? "default" : "secondary"}>
-                        {configuration.attributes.status ?? "unknown"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {configuration.attributes.primary === true
-                        ? <Badge variant="default">Primary</Badge>
-                        : <span className="text-muted-foreground">&mdash;</span>}
-                    </TableCell>
-                    <TableCell>
-                      {canManage && (
-                        <Button variant="ghost" size="icon" onClick={(): void => { setConfigurationToDelete(configuration); }} aria-label={`Delete ${configuration.attributes.name}`}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : configurations.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <KeyRound className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">{canManage ? "No HYOK configurations yet. Create one to get started." : "No HYOK configurations."}</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : configurations.map((configuration): React.JSX.Element => (
+                <TableRow key={configuration.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="h-4 w-4 text-muted-foreground" />
+                      {configuration.attributes.name}
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {configuration.attributes["kek-id"]}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={configuration.attributes.status === "ok" ? "default" : "secondary"}>
+                      {configuration.attributes.status ?? "unknown"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {configuration.attributes.primary === true
+                      ? <Badge variant="default">Primary</Badge>
+                      : <span className="text-muted-foreground">&mdash;</span>}
+                  </TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <Button variant="ghost" size="icon" onClick={(): void => { setConfigurationToDelete(configuration); }} aria-label={`Delete ${configuration.attributes.name}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

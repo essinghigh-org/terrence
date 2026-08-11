@@ -158,53 +158,61 @@ export function ProviderSets(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <TableSkeleton rows={4} cols={4} />
-          ) : error !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : sets.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-              <Boxes className="h-8 w-8" />
-              <p className="text-sm">No provider sets configured.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Provider source</TableHead>
+                <TableHead>Scope</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Provider source</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead className="w-16" />
+                  <TableCell colSpan={4} className="h-32 text-center">
+                    <TableSkeleton rows={4} cols={4} />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sets.map((set): React.JSX.Element => (
-                  <TableRow key={set.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Boxes className="h-4 w-4 text-muted-foreground" />
-                        {set.attributes.name}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{set.attributes["provider-source"]}</TableCell>
-                    <TableCell>
-                      <Badge variant={set.attributes.global === true ? "default" : "secondary"}>
-                        {set.attributes.global === true ? "Global" : "Selective"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {canManage && (
-                        <Button variant="ghost" size="icon" onClick={(): void => { setSetToDelete(set); }} aria-label={`Delete ${set.attributes.name}`}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ) : error !== "" ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : sets.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Boxes className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No provider sets configured.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : sets.map((set): React.JSX.Element => (
+                <TableRow key={set.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <Boxes className="h-4 w-4 text-muted-foreground" />
+                      {set.attributes.name}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{set.attributes["provider-source"]}</TableCell>
+                  <TableCell>
+                    <Badge variant={set.attributes.global === true ? "default" : "secondary"}>
+                      {set.attributes.global === true ? "Global" : "Selective"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <Button variant="ghost" size="icon" onClick={(): void => { setSetToDelete(set); }} aria-label={`Delete ${set.attributes.name}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

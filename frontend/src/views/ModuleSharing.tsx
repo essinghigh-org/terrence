@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Spinner } from "../components/ui/spinner";
@@ -12,11 +12,17 @@ type ConsumerResource = {
   id: string;
 };
 
+type OrgResource = {
+  id: string;
+  attributes?: { name?: string };
+};
+
 export function ModuleSharing(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
 
   const [consumers, setConsumers] = useState<string[]>([]);
+  const [availableOrgs, setAvailableOrgs] = useState<string[]>([]);
   const [newConsumer, setNewConsumer] = useState("");
   const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -29,6 +35,7 @@ export function ModuleSharing(): React.JSX.Element {
 
   useEffect((): void => {
     setConsumers([]);
+    setAvailableOrgs([]);
     setManageableOrganizationName("");
     setError("");
     setSaved(false);
@@ -53,11 +60,25 @@ export function ModuleSharing(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
-      const response = await fetchApi(
-        `/admin/organizations/${encodeURIComponent(requestedOrganizationName)}/relationships/module-consumers`,
-      ) as { data: ConsumerResource[] };
+      const [consumersResponse, orgsResponse] = await Promise.all([
+        fetchApi(
+          `/admin/organizations/${encodeURIComponent(requestedOrganizationName)}/relationships/module-consumers`,
+        ) as Promise<{ data: ConsumerResource[] }>,
+        fetchApi("/admin/organizations") as Promise<{ data: OrgResource[] }>,
+      ]);
       if (activeOrganizationName.current !== requestedOrganizationName) return;
-      setConsumers(response.data.map((consumer): string => consumer.id));
+      const consumerNames = consumersResponse.data.map((consumer): string => consumer.id);
+      setConsumers(consumerNames);
+      // Offer every organization that is not already a consumer as a pickable
+      // option — the user picks from the list instead of typing a name.
+      const consumerSet = new Set(consumerNames);
+      const orgNames = Array.isArray(orgsResponse.data)
+        ? orgsResponse.data
+          .map((org): string => org.id)
+          .filter((name): boolean => name !== "" && name !== requestedOrganizationName && !consumerSet.has(name))
+          .sort()
+        : [];
+      setAvailableOrgs(orgNames);
     } catch (reason) {
       if (activeOrganizationName.current === requestedOrganizationName) {
         setError(reason instanceof Error ? reason.message : "Failed to load module consumers.");
@@ -102,6 +123,7 @@ export function ModuleSharing(): React.JSX.Element {
       // Drop a stale response if the user navigated to another org mid-request.
       if (activeOrganizationName.current !== orgName) return;
       setConsumers(next);
+      setAvailableOrgs((current): string[] => current.filter((candidate): boolean => candidate !== name));
       setNewConsumer("");
       setSaved(true);
     } catch (reason) {
@@ -119,6 +141,7 @@ export function ModuleSharing(): React.JSX.Element {
       const next = await patchConsumers((current): string[] => current.filter((consumer): boolean => consumer !== id));
       if (activeOrganizationName.current !== orgName) return;
       setConsumers(next);
+      setAvailableOrgs((current): string[] => [...current, id].sort());
       setSaved(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to remove module consumer.");
@@ -140,87 +163,100 @@ export function ModuleSharing(): React.JSX.Element {
       </div>
 
       <Card>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Spinner />
-            </div>
-          ) : error !== "" && consumers.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{error}</div>
-          ) : (
-            <div className="space-y-4">
-              {consumers.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-                  <Share2 className="h-8 w-8" />
-                  <p className="text-sm">No module consumers.</p>
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>
-                        <span className="flex items-center gap-2">
-                          <Share2 className="h-4 w-4" />
-                          Consumer organization
-                        </span>
-                      </TableHead>
-                      <TableHead className="w-16" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {consumers.map((consumer): React.JSX.Element => (
-                      <TableRow key={consumer}>
-                        <TableCell className="font-medium">{consumer}</TableCell>
-                        <TableCell>
-                          {canManage && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={(): void => { void removeConsumer(consumer); }}
-                              disabled={saving}
-                              aria-label={`Remove ${consumer}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-
-              {canManage && (
-                <div className="flex items-end gap-2">
-                  <div className="flex-1 space-y-2">
-                    <label className="text-sm font-medium" htmlFor="module-consumer-name">
-                      Organization name
-                    </label>
-                    <Input
-                      id="module-consumer-name"
-                      value={newConsumer}
-                      onChange={(e): void => { setNewConsumer(e.target.value); }}
-                      onKeyDown={(e): void => {
-                        if (e.key === "Enter") void addConsumer();
-                      }}
-                      placeholder="acme-corp"
-                    />
-                  </div>
-                  <Button
-                    onClick={(): void => { void addConsumer(); }}
-                    disabled={saving || newConsumer.trim() === ""}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add
-                  </Button>
-                </div>
-              )}
-
-              {error !== "" && <div className="text-sm text-red-500">{error}</div>}
-              {saved && <div className="text-sm text-green-600">Saved</div>}
-            </div>
-          )}
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>
+                  <span className="flex items-center gap-2">
+                    <Share2 className="h-4 w-4" />
+                    Consumer organization
+                  </span>
+                </TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="h-32 text-center">
+                    <div className="flex justify-center py-12">
+                      <Spinner />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : error !== "" && consumers.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="h-32 text-center text-sm text-muted-foreground">{error}</TableCell>
+                </TableRow>
+              ) : consumers.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="h-32 text-center text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Share2 className="h-8 w-8 text-muted-foreground/60" />
+                      <p className="text-sm">No module consumers.</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : consumers.map((consumer): React.JSX.Element => (
+                <TableRow key={consumer}>
+                  <TableCell className="font-medium">{consumer}</TableCell>
+                  <TableCell>
+                    {canManage && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(): void => { void removeConsumer(consumer); }}
+                        disabled={saving}
+                        aria-label={`Remove ${consumer}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
+        {canManage && (
+          <div className="flex items-end gap-2 px-4">
+            <div className="flex-1 space-y-2">
+              <label className="text-sm font-medium" htmlFor="module-consumer-name">
+                Organization
+              </label>
+              <Select
+                id="module-consumer-name"
+                value={newConsumer}
+                onValueChange={(value: string): void => { setNewConsumer(value); }}
+                aria-label="Organization to share modules with"
+              >
+                <option value="">Select an organization…</option>
+                {availableOrgs.map((name): React.JSX.Element => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </Select>
+              {availableOrgs.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Every other organization is already a module consumer.
+                </p>
+              )}
+            </div>
+            <Button
+              onClick={(): void => { void addConsumer(); }}
+              disabled={saving || newConsumer.trim() === ""}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add
+            </Button>
+          </div>
+        )}
+        {(error !== "" || saved) && (
+          <div className="px-4">
+            {error !== "" && <div className="text-sm text-red-500">{error}</div>}
+            {saved && <div className="text-sm text-green-600">Saved</div>}
+          </div>
+        )}
       </Card>
     </div>
   );
