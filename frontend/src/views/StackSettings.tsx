@@ -9,6 +9,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Layers, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 type VcsRepo = { identifier?: string; branch?: string | null } | null;
@@ -52,12 +53,12 @@ export function StackSettings(): React.JSX.Element {
   const orgName = rawOrgName ?? "";
   const [stacks, setStacks] = useState<Stack[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-projects");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingStack, setEditingStack] = useState<Stack | null>(null);
@@ -71,29 +72,38 @@ export function StackSettings(): React.JSX.Element {
   useEffect((): void => {
     setStacks([]);
     setProjects([]);
-    setManageableOrganizationName("");
     setStackToDelete(null);
+    permissionGateFired.current = false;
     if (orgName !== "") void loadStacks();
   }, [orgName]);
+
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-projects")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadStacks();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage stacks for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadStacks = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-projects"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-projects"] !== true) {
-        setError("You do not have permission to manage stacks for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const [stacksResponse, projectsResponse] = await Promise.all([
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/stacks`) as Promise<{ data: Stack[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data: Project[] }>,
