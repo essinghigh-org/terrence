@@ -10,6 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { KeyRound, Trash2 } from "lucide-react";
 
 type Hyok = {
@@ -68,12 +69,12 @@ export function HyokConfigurations(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
   const [configurations, setConfigurations] = useState<Hyok[]>([]);
-  const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
-  const canManage = orgName !== "" && manageableOrganizationName === orgName;
+  const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-providers");
 
   const [configurationToDelete, setConfigurationToDelete] = useState<Hyok | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -86,31 +87,40 @@ export function HyokConfigurations(): React.JSX.Element {
 
   useEffect((): void => {
     setConfigurations([]);
-    setManageableOrganizationName("");
+    permissionGateFired.current = false;
     setDialogOpen(false);
     setOidcConfigs([]);
     setAgentPools([]);
     if (orgName !== "") void loadConfigurations();
   }, [orgName]);
 
+  // Central permission gate (14.6): once org permissions load, surface a clear
+  // error when the operator lacks access. When access is granted, load the data
+  // exactly once (the initial call early-returns while permissions are loading).
+  const permissionGateFired = useRef(false);
+  useEffect((): void => {
+    if (!orgPermissions.loaded) return;
+    if (orgPermissions.has("can-manage-providers")) {
+      setError("");
+      if (!permissionGateFired.current) {
+        permissionGateFired.current = true;
+        void loadConfigurations();
+      }
+    } else {
+      setError(orgPermissions.error ?? "You do not have permission to manage HYOK configurations for this organization.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgPermissions.loaded, orgPermissions.has]);
+
   const loadConfigurations = async (): Promise<void> => {
     const requestedOrganizationName = orgName;
     setLoading(true);
     setError("");
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
     try {
-      const organizationResponse = await fetchApi(
-        `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
-        data?: { attributes?: { permissions?: { "can-manage-providers"?: boolean } } };
-      };
-      if (activeOrganizationName.current !== requestedOrganizationName) return;
-      const permissions = organizationResponse.data?.attributes?.permissions;
-      if (permissions?.["can-manage-providers"] !== true) {
-        setError("You do not have permission to manage HYOK configurations for this organization.");
-        setLoading(false);
-        return;
-      }
-      setManageableOrganizationName(requestedOrganizationName);
       const [configsResponse, oidcResponse] = await Promise.all([
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/hyok-configurations`) as Promise<{ data: Hyok[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/oidc-configurations`) as Promise<{ data: OidcConfig[] }>,
