@@ -5,6 +5,7 @@ import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
+import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
 import { Check, Plus, ShieldAlert, Trash2, X } from "lucide-react";
 
 type ApprovalWebhookSettings = {
@@ -32,6 +33,21 @@ type PlanExplainerSettings = {
   "api-key"?: string | null;
   "api-key-set"?: boolean;
   model?: string | null;
+  provider?: string | null;
+};
+
+type ExplainerProvider = {
+  id: string;
+  name: string;
+  "base-url": string | null;
+  "model-count": number;
+};
+
+type ExplainerModel = {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  context: number | null;
 };
 
 type OperationsSettings = {
@@ -94,6 +110,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [explainerApiKeySet, setExplainerApiKeySet] = useState(false);
   const [explainerClearApiKey, setExplainerClearApiKey] = useState(false);
   const [explainerModel, setExplainerModel] = useState("");
+  const [explainerProvider, setExplainerProvider] = useState("");
+
+  // Provider/model catalog for the explainer pickers (models.dev via admin API).
+  const [providers, setProviders] = useState<ExplainerProvider[]>([]);
+  const [providerModels, setProviderModels] = useState<ExplainerModel[]>([]);
+  const [providerCatalogError, setProviderCatalogError] = useState("");
 
   useEffect((): void => {
     const loadSettings = async (): Promise<void> => {
@@ -120,6 +142,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
         setExplainerApiKeySet(explainer["api-key-set"] === true);
         setExplainerClearApiKey(false);
         setExplainerModel(explainer.model ?? "");
+        setExplainerProvider(explainer.provider ?? "");
       } catch (caught: unknown) {
         setLoadError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -128,6 +151,59 @@ export function AdminOperationsSettings(): React.JSX.Element {
     };
     void loadSettings();
   }, []);
+
+  // Provider catalog for the explainer pickers, fetched in the background.
+  // The backend refreshes from models.dev with a 6h TTL; the picker is a
+  // convenience and never blocks saving. Failures degrade to free-text entry.
+  useEffect((): void => {
+    const loadCatalog = async (): Promise<void> => {
+      try {
+        const response = await fetchApi("/admin/operations-settings/explainer/providers") as {
+          data?: Array<{ id: string; attributes?: { name?: string; "base-url"?: string | null; "model-count"?: number } }>;
+        };
+        const rows = response.data ?? [];
+        setProviders(rows.map((row): ExplainerProvider => ({
+          id: row.id,
+          name: row.attributes?.name ?? row.id,
+          "base-url": row.attributes?.["base-url"] ?? null,
+          "model-count": row.attributes?.["model-count"] ?? 0,
+        })));
+      } catch (caught: unknown) {
+        setProviderCatalogError(caught instanceof Error ? caught.message : String(caught));
+      }
+    };
+    void loadCatalog();
+  }, []);
+
+  // When the stored provider resolves to a catalog entry, load its models so
+  // the picker shows suggestions (the raw value stays editable either way).
+  useEffect((): (() => void) => {
+    if (explainerProvider === "") {
+      setProviderModels([]);
+      return () => undefined;
+    }
+    let cancelled = false;
+    const loadModels = async (): Promise<void> => {
+      try {
+        const response = await fetchApi(`/admin/operations-settings/explainer/models?provider=${encodeURIComponent(explainerProvider)}`) as {
+          data?: Array<{ id: string; attributes?: { name?: string; reasoning?: boolean; context?: number | null } }>;
+        };
+        if (cancelled) return;
+        setProviderModels((response.data ?? []).map((row): ExplainerModel => ({
+          id: row.id,
+          name: row.attributes?.name ?? row.id,
+          reasoning: row.attributes?.reasoning === true,
+          context: row.attributes?.context ?? null,
+        })));
+      } catch {
+        if (!cancelled) setProviderModels([]);
+      }
+    };
+    void loadModels();
+    return (): void => {
+      cancelled = true;
+    };
+  }, [explainerProvider]);
 
   const updateWindow = (index: number, patch: Partial<MaintenanceWindow>): void => {
     setWindows((existing): MaintenanceWindow[] => existing.map((window, i): MaintenanceWindow => (i === index ? { ...window, ...patch } : window)));
@@ -159,6 +235,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
       ...(explainerUrl !== "" ? { "endpoint-url": explainerUrl } : { "endpoint-url": null }),
       ...(explainerClearApiKey ? { "api-key": null } : explainerApiKey !== "" ? { "api-key": explainerApiKey } : {}),
       ...(explainerModel !== "" ? { model: explainerModel } : { model: null }),
+      ...(explainerProvider !== "" ? { provider: explainerProvider } : { provider: null }),
     };
     try {
       const response = await fetchApi("/admin/operations-settings", {
@@ -450,51 +527,91 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 className="max-w-xl font-mono"
               />
             </div>
+            <div>
+              <label htmlFor="explainer-api-key" className="mb-1.5 block text-sm font-medium text-foreground">
+                API key
+              </label>
+              <div className="flex max-w-xl items-center gap-2">
+                <Input
+                  id="explainer-api-key"
+                  type="password"
+                  value={explainerApiKey}
+                  onInput={(event): void => {
+                    setExplainerApiKey(event.currentTarget.value);
+                    setExplainerClearApiKey(false);
+                  }}
+                  placeholder={explainerApiKeySet ? "•••••••• (a key is stored)" : "Optional bearer token"}
+                  className="flex-1 font-mono"
+                />
+                {explainerApiKeySet && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={(): void => {
+                      setExplainerApiKey("");
+                      setExplainerClearApiKey(true);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label htmlFor="explainer-api-key" className="mb-1.5 block text-sm font-medium text-foreground">
-                  API key
+                <label htmlFor="explainer-provider" className="mb-1.5 block text-sm font-medium text-foreground">
+                  Provider (optional)
                 </label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="explainer-api-key"
-                    type="password"
-                    value={explainerApiKey}
-                    onInput={(event): void => {
-                      setExplainerApiKey(event.currentTarget.value);
-                      setExplainerClearApiKey(false);
-                    }}
-                    placeholder={explainerApiKeySet ? "•••••••• (a key is stored)" : "Optional bearer token"}
-                    className="flex-1 font-mono"
-                  />
-                  {explainerApiKeySet && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={(): void => {
-                        setExplainerApiKey("");
-                        setExplainerClearApiKey(true);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  )}
-                </div>
+                <FuzzyCombobox
+                  value={explainerProvider}
+                  options={providers.map((provider): { id: string; label: string; hint: string } => ({
+                    id: provider.id,
+                    label: provider.name,
+                    hint: `${provider["model-count"]} models`,
+                  }))}
+                  onSelect={(providerId: string): void => {
+                    setExplainerProvider(providerId);
+                    const provider = providers.find((entry): boolean => entry.id === providerId);
+                    const baseUrl = provider?.["base-url"];
+                    // Auto-fill the endpoint from the catalog base URL only
+                    // when the field is empty (never clobber a manual URL).
+                    if (baseUrl !== null && baseUrl !== undefined && explainerUrl === "") {
+                      setExplainerUrl(`${baseUrl}/chat/completions`);
+                    }
+                  }}
+                  placeholder="e.g. openrouter"
+                  emptyText="No providers (catalog unavailable)"
+                  className="max-w-xl"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  From the models.dev catalog (refreshed every 6h). Picking one fills the endpoint URL and
+                  suggests models below. You can still type any provider or endpoint manually.
+                </p>
               </div>
               <div>
                 <label htmlFor="explainer-model" className="mb-1.5 block text-sm font-medium text-foreground">
                   Model
                 </label>
-                <Input
-                  id="explainer-model"
+                <FuzzyCombobox
                   value={explainerModel}
-                  onInput={(event): void => { setExplainerModel(event.currentTarget.value); }}
+                  options={providerModels.map((model): { id: string; label: string; hint: string } => ({
+                    id: model.id,
+                    label: model.name,
+                    hint: `${model.reasoning ? "reasoning · " : ""}${model.context !== null ? `${Math.round(model.context / 1000)}k ctx` : ""}`.replace(/^ · | $/g, ""),
+                  }))}
+                  onSelect={setExplainerModel}
                   placeholder="gpt-4o-mini"
+                  emptyText="No models for this provider"
                   className="font-mono"
                 />
               </div>
             </div>
+            {providerCatalogError !== "" && (
+              <p className="text-xs text-destructive">
+                Provider catalog unavailable ({providerCatalogError}). Enter the endpoint and model manually.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

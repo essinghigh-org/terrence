@@ -6,6 +6,7 @@ import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { AvatarService } from "../lib/avatars";
 import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
+import { listCatalogProviders, getCatalogProviderModels } from "../lib/model-catalog";
 import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
 import { apiURL, FINAL_RUN_STATUSES, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
@@ -1192,6 +1193,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
       if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("plan-explainer must be an object");
       const group = value as Record<string, unknown>;
       if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("plan-explainer.enabled must be a boolean");
+      if (group.provider !== undefined && group.provider !== null && typeof group.provider !== "string") return reject("plan-explainer.provider must be a string or null");
       if (group["endpoint-url"] !== undefined && group["endpoint-url"] !== null) {
         if (typeof group["endpoint-url"] !== "string" || !usableHttpUrl(group["endpoint-url"])) {
           return reject("plan-explainer endpoint-url must be an http(s) URL or null");
@@ -1202,6 +1204,45 @@ export const adminRoutes = new Elysia({ name: "admin" })
       await updateSettings("plan-explainer", group);
     }
     return { data: await operationsSettingsResource() };
+  })
+  // --- Plan explainer provider/model catalog (kanban 21.2 UI) ----------
+  // Additive admin convenience: powers the provider dropdown + model picker.
+  // Sourced from the models.dev catalog (6h TTL background refresh); never
+  // part of the explain request itself (endpoint-url remains authoritative).
+  .get("/api/v2/admin/operations-settings/explainer/providers", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const providers = await listCatalogProviders();
+    return {
+      data: providers.map((provider) => ({
+        id: provider.id,
+        type: "explainer-providers",
+        attributes: {
+          name: provider.name,
+          "base-url": provider.baseUrl,
+          "model-count": provider.modelCount,
+        },
+      })),
+      meta: { "catalog-ttl-ms": 6 * 60 * 60 * 1000 },
+    };
+  })
+  .get("/api/v2/admin/operations-settings/explainer/models", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const providerId = new URL(request.url).searchParams.get("provider") ?? "";
+    if (providerId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "provider query parameter is required" }] }; }
+    const provider = await getCatalogProviderModels(providerId);
+    if (provider === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found", detail: `Unknown provider: ${providerId}` }] }; }
+    return {
+      data: provider.models.map((model) => ({
+        id: model.id,
+        type: "explainer-models",
+        attributes: {
+          name: model.name,
+          reasoning: model.reasoning,
+          context: model.context,
+        },
+      })),
+      meta: { provider: providerId, "model-count": provider.models.length },
+    };
   })
   // --- B.3 Cost Estimation Settings ---
   .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {

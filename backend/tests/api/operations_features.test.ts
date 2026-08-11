@@ -18,6 +18,49 @@ import {
   type MaintenanceWindow,
 } from "../../src/lib/operations";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
+import { _resetModelCatalogCache, parseModelCatalog } from "../../src/lib/model-catalog";
+
+// Seed for the explainer provider/model catalog endpoints (keeps the API
+// tests hermetic: no live models.dev fetch, deterministic openrouter entry).
+const CATALOG_SEED = JSON.stringify({
+  openrouter: {
+    id: "openrouter",
+    name: "OpenRouter",
+    api: "https://openrouter.ai/api/v1",
+    models: {
+      "anthropic/claude-sonnet-4.5": {
+        id: "anthropic/claude-sonnet-4.5",
+        name: "Claude Sonnet 4.5",
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        limit: { context: 200000, output: 64000 },
+      },
+      "openai/gpt-5": {
+        id: "openai/gpt-5",
+        name: "GPT-5",
+        modalities: { input: ["text"], output: ["text"] },
+        limit: { context: 400000 },
+      },
+      "some/image-only": {
+        id: "some/image-only",
+        name: "Image Only",
+        modalities: { input: ["text"], output: ["image"] },
+      },
+    },
+  },
+  groq: {
+    id: "groq",
+    name: "Groq",
+    models: {
+      "llama-3.3-70b-versatile": {
+        id: "llama-3.3-70b-versatile",
+        name: "Llama 3.3 70B Versatile",
+        modalities: { input: ["text"], output: ["text"] },
+        limit: { context: 131072 },
+      },
+    },
+  },
+});
 
 const suffix = crypto.randomUUID();
 const userId = `ops-user-${suffix}`;
@@ -53,6 +96,9 @@ async function setSettings(group: string, values: Record<string, unknown>): Prom
 }
 
 beforeAll(async () => {
+  // Seed the explainer provider catalog so endpoint tests never touch the network.
+  _resetModelCatalogCache({ fetchedAt: Date.now(), providers: parseModelCatalog(CATALOG_SEED) });
+
   await db.insert(users).values([
     {
       id: userId,
@@ -416,5 +462,74 @@ describe("admin operations settings surface", () => {
       }),
     }));
     expect(patch.status).toBe(422);
+  });
+
+  it("accepts a plan-explainer provider field (additive)", async () => {
+    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: "openrouter", enabled: true } } },
+      }),
+    }));
+    expect(patch.status).toBe(200);
+    const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
+    expect(body.data.attributes["plan-explainer"].provider).toBe("openrouter");
+
+    // Clearing it back to null also validates.
+    const clear = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: null, enabled: false } } },
+      }),
+    }));
+    expect(clear.status).toBe(200);
+  });
+
+  it("rejects a non-string plan-explainer provider with 422", async () => {
+    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: 42 } } },
+      }),
+    }));
+    expect(patch.status).toBe(422);
+  });
+
+  it("serves the provider catalog and per-provider models to admins only", async () => {
+    // Non-admin is forbidden from both endpoints.
+    const forbidden = await request("/api/v2/admin/operations-settings/explainer/providers");
+    expect(forbidden.status).toBe(403);
+    const forbiddenModels = await request("/api/v2/admin/operations-settings/explainer/models?provider=openrouter");
+    expect(forbiddenModels.status).toBe(403);
+
+    const providers = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/providers", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(providers.status).toBe(200);
+    const providersBody = (await providers.json()) as { data: Array<{ id: string; attributes: { name: string; "model-count": number } }> };
+    expect(providersBody.data.length).toBeGreaterThan(0);
+    const ids = providersBody.data.map((p) => p.id);
+    expect(ids).toContain("openrouter");
+
+    const models = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=openrouter", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(models.status).toBe(200);
+    const modelsBody = (await models.json()) as { data: Array<{ id: string; attributes: { name: string } }>; meta: { "model-count": number } };
+    expect(modelsBody.meta["model-count"]).toBeGreaterThan(0);
+    expect(modelsBody.data.every((m) => typeof m.id === "string" && m.id !== "")).toBe(true);
+
+    // Unknown provider -> 404; missing param -> 422.
+    const unknown = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=does-not-exist", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(unknown.status).toBe(404);
+    const missing = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(missing.status).toBe(422);
   });
 });
