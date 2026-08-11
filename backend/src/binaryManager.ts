@@ -16,7 +16,7 @@ const BINARY_BASE_DIR = resolve(
 
 /** Reject a single archive entry whose normalized path escapes the extraction
  * root via an absolute path, a drive letter, or a `..` traversal segment. */
-function zipEntryEscapes(entry: string): boolean {
+export function zipEntryEscapes(entry: string): boolean {
   const normalized = entry.replaceAll("\\", "/");
   return normalized.startsWith("/")
     || /^[A-Za-z]:/.test(normalized)

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "bun run index.ts",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "coverage": "bun run scripts/coverage-report.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

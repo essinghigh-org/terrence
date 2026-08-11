@@ -599,6 +599,26 @@ async function executionVariables(
   return [...effective.values()];
 }
 
+/** True when a tar member name is dangerous to extract: absolute path or any
+ * `..` substring (conservative — also rejects `a..b`-style names). Extracted
+ * so the archive guard can be fuzz-tested directly (kanban 22.6). */
+export function tarMemberPathUnsafe(member: string): boolean {
+  return member.startsWith("/") || member.includes("..");
+}
+
+/** True when a tar verbose-listing type char denotes a link or special file
+ * (l=link, h=hard link, c=char device, b=block device, p=fifo, s=sparse/
+ * socket). Regular files (f/-/0) and directories (d) are allowed. Extracted
+ * so the archive guard can be fuzz-tested directly (kanban 22.6). */
+export function tarMemberIsForbiddenSpecial(firstChar: string): boolean {
+  return firstChar === "l"
+    || firstChar === "h"
+    || firstChar === "c"
+    || firstChar === "b"
+    || firstChar === "p"
+    || firstChar === "s";
+}
+
 async function extractTarArchive(
   archivePath: string,
   destDir: string,
@@ -612,8 +632,7 @@ async function extractTarArchive(
 
     const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     for (const line of verboseLines) {
-      const firstChar = line.charAt(0);
-      if (firstChar === "l" || firstChar === "h" || firstChar === "c" || firstChar === "b" || firstChar === "p" || firstChar === "s") {
+      if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
         log.error("Security error: archive contains forbidden link/special member", { member: line });
         return false;
       }
@@ -630,7 +649,7 @@ async function extractTarArchive(
 
     const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     for (const m of members) {
-      if (m.startsWith("/") || m.includes("..")) {
+      if (tarMemberPathUnsafe(m)) {
         log.error("Security error: archive contains dangerous path", { path: m });
         return false;
       }
