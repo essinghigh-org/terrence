@@ -164,7 +164,8 @@ export function splitInlineThinking(raw: string): CompletionParts {
  * handled by the caller via content-type sniffing.
  */
 export function upstreamRequest(settings: Readonly<Record<string, unknown>>, prompt: string, stream: boolean): Request {
-  const endpointUrl = settings["endpoint-url"] as string;
+  const baseUrl = settings["base-url"] as string;
+  const endpointUrl = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const model = settings.model as string;
   const apiKey = typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
   const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);

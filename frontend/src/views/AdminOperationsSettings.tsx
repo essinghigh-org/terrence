@@ -7,7 +7,6 @@ import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
 import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
-import { Select, SelectItem } from "../components/ui/select";
 import { Check, LockKeyhole, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 
@@ -32,7 +31,7 @@ type MaintenanceWindowsSettings = {
 
 type PlanExplainerSettings = {
   enabled?: boolean;
-  "endpoint-url"?: string | null;
+  "base-url"?: string | null;
   "api-key"?: string | null;
   "api-key-set"?: boolean;
   model?: string | null;
@@ -43,7 +42,6 @@ type PlanExplainerSettings = {
 type ExplainerProvider = {
   id: string;
   name: string;
-  "base-url": string | null;
   "model-count": number;
 };
 
@@ -143,7 +141,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
 
   const [explainerEnabled, setExplainerEnabled] = useState(false);
-  const [explainerUrl, setExplainerUrl] = useState("");
+  const [explainerBaseUrl, setExplainerBaseUrl] = useState("");
   const [explainerApiKey, setExplainerApiKey] = useState("");
   const [explainerApiKeySet, setExplainerApiKeySet] = useState(false);
   const [explainerClearApiKey, setExplainerClearApiKey] = useState(false);
@@ -177,7 +175,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
         setWindows(windowsGroup.windows ?? []);
         const explainer = attributes["plan-explainer"] ?? {};
         setExplainerEnabled(explainer.enabled === true);
-        setExplainerUrl(explainer["endpoint-url"] ?? "");
+        setExplainerBaseUrl(explainer["base-url"] ?? "");
         setExplainerApiKey("");
         setExplainerApiKeySet(explainer["api-key-set"] === true);
         setExplainerClearApiKey(false);
@@ -200,13 +198,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
     const loadCatalog = async (): Promise<void> => {
       try {
         const response = await fetchApi("/admin/operations-settings/explainer/providers") as {
-          data?: { id: string; attributes?: { name?: string; "base-url"?: string | null; "model-count"?: number } }[];
+          data?: { id: string; attributes?: { name?: string; "model-count"?: number } }[];
         };
         const rows = response.data ?? [];
         setProviders(rows.map((row): ExplainerProvider => ({
           id: row.id,
           name: row.attributes?.name ?? row.id,
-          "base-url": row.attributes?.["base-url"] ?? null,
           "model-count": row.attributes?.["model-count"] ?? 0,
         })));
       } catch (caught: unknown) {
@@ -273,7 +270,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
     };
     attributes["plan-explainer"] = {
       enabled: explainerEnabled,
-      ...(explainerUrl !== "" ? { "endpoint-url": explainerUrl } : { "endpoint-url": null }),
+      ...(explainerBaseUrl !== "" ? { "base-url": explainerBaseUrl } : { "base-url": null }),
       ...(explainerClearApiKey ? { "api-key": null } : explainerApiKey !== "" ? { "api-key": explainerApiKey } : {}),
       ...(explainerModel !== "" ? { model: explainerModel } : { model: null }),
       ...(explainerProvider !== "" ? { provider: explainerProvider } : { provider: null }),
@@ -549,65 +546,18 @@ export function AdminOperationsSettings(): React.JSX.Element {
           <CardHeader variant="section">
             <CardTitle>AI plan explainer</CardTitle>
             <CardDescription>
-              Sends a sanitized plan summary to an OpenAI-compatible endpoint to produce a plain-language explanation.
+              Sends a sanitized plan summary to the selected provider for a plain-language explanation.
               Never affects run status.
             </CardDescription>
             <CardAction>
               <SettingToggle id="explainer-enabled" label="AI plan explainer" checked={explainerEnabled} onCheckedChange={setExplainerEnabled} />
             </CardAction>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label htmlFor="explainer-url" className="mb-1.5 block text-sm font-medium text-foreground">
-                Endpoint URL
-              </label>
-              <Input
-                id="explainer-url"
-                name="explainer-endpoint-url"
-                autoComplete="url"
-                value={explainerUrl}
-                onInput={(event): void => { setExplainerUrl(event.currentTarget.value); }}
-                placeholder="https://api.openai.com/v1/chat/completions"
-                className="max-w-xl font-mono"
-              />
-            </div>
-            <div>
-              <label htmlFor="explainer-api-key" className="mb-1.5 block text-sm font-medium text-foreground">
-                API key
-              </label>
-              <div className="flex max-w-xl items-center gap-2">
-                <Input
-                  id="explainer-api-key"
-                  name="explainer-api-key"
-                  autoComplete="new-password"
-                  type="password"
-                  value={explainerApiKey}
-                  onInput={(event): void => {
-                    setExplainerApiKey(event.currentTarget.value);
-                    setExplainerClearApiKey(false);
-                  }}
-                  placeholder={explainerApiKeySet ? "•••••••• (a key is stored)" : "Optional bearer token"}
-                  className="flex-1 font-mono"
-                />
-                {explainerApiKeySet && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={(): void => {
-                      setExplainerApiKey("");
-                      setExplainerClearApiKey(true);
-                    }}
-                  >
-                    Clear
-                  </Button>
-                )}
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
+          <CardContent className="space-y-5">
+            <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
               <div>
                 <label htmlFor="explainer-provider" className="mb-1.5 block text-sm font-medium text-foreground">
-                  Provider (optional)
+                  Provider
                 </label>
                 <FuzzyCombobox
                   id="explainer-provider"
@@ -622,22 +572,14 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   }))}
                   onSelect={(providerId: string): void => {
                     setExplainerProvider(providerId);
-                    const provider = providers.find((entry): boolean => entry.id === providerId);
-                    const baseUrl = provider?.["base-url"];
-                    // Auto-fill the endpoint from the catalog base URL only
-                    // when the field is empty (never clobber a manual URL).
-                    if (baseUrl !== null && baseUrl !== undefined && explainerUrl === "") {
-                      setExplainerUrl(`${baseUrl}/chat/completions`);
-                    }
                   }}
-                  placeholder="e.g. openrouter"
+                  placeholder="e.g. openrouter…"
                   emptyText="No providers (catalog unavailable)"
                   aria-describedby="explainer-provider-help"
-                  className="max-w-xl"
+                  inputClassName="h-9 bg-background"
                 />
                 <p id="explainer-provider-help" className="mt-1 text-xs text-muted-foreground">
-                  From the models.dev catalog (refreshed every 6h). Picking one fills the endpoint URL and
-                  suggests models below. You can still type any provider or endpoint manually.
+                  From the models.dev catalog (refreshed every 6h). Selecting a provider loads its model suggestions.
                 </p>
               </div>
               <div>
@@ -654,40 +596,99 @@ export function AdminOperationsSettings(): React.JSX.Element {
                     hint: `${model.reasoning ? "reasoning · " : ""}${model.context !== null ? `${Math.round(model.context / 1000)}k ctx` : ""}`.replace(/^ · | $/g, ""),
                   }))}
                   onSelect={setExplainerModel}
-                  placeholder="gpt-4o-mini"
+                  placeholder="e.g. gpt-4o-mini…"
                   emptyText={explainerProvider === CUSTOM_PROVIDER_ID
                     ? "Type a model id (no catalog for custom providers)"
                     : "No models for this provider"}
-                  className="font-mono"
+                  inputClassName="h-9 bg-background font-mono"
                 />
               </div>
+              <div>
+                <label htmlFor="explainer-reasoning-effort" className="mb-1.5 block text-sm font-medium text-foreground">
+                  Reasoning effort
+                </label>
+                <FuzzyCombobox
+                  id="explainer-reasoning-effort"
+                  name="reasoning-effort"
+                  value={explainerReasoningEffort}
+                  options={[
+                    { id: "", label: "Automatic (model default)" },
+                    { id: "none", label: "None" },
+                    { id: "minimal", label: "Minimal" },
+                    { id: "low", label: "Low" },
+                    { id: "medium", label: "Medium" },
+                    { id: "high", label: "High" },
+                    { id: "xhigh", label: "XHigh" },
+                    { id: "max", label: "Max" },
+                  ]}
+                  onSelect={(value: string): void => { setExplainerReasoningEffort(value as ReasoningEffort | ""); }}
+                  allowCustom={false}
+                  inputClassName="h-9 bg-background"
+                  aria-describedby="explainer-reasoning-effort-help"
+                />
+                <p id="explainer-reasoning-effort-help" className="mt-1 text-xs text-muted-foreground">
+                  Optional. Automatic leaves the provider’s model default unchanged.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="explainer-base-url" className="mb-1.5 block text-sm font-medium text-foreground">
+                  Base URL (optional)
+                </label>
+                <Input
+                  id="explainer-base-url"
+                  name="explainer-base-url"
+                  type="url"
+                  autoComplete="url"
+                  spellCheck={false}
+                  value={explainerBaseUrl}
+                  onInput={(event): void => { setExplainerBaseUrl(event.currentTarget.value); }}
+                  placeholder="e.g. https://api.example.com/v1…"
+                  className="rounded-lg bg-background font-mono"
+                  aria-describedby="explainer-base-url-help"
+                />
+                <p id="explainer-base-url-help" className="mt-1 text-xs text-muted-foreground">
+                  {explainerProvider === CUSTOM_PROVIDER_ID
+                    ? "Required for the custom provider. The chat completions path is added automatically."
+                    : "Leave blank to use the selected provider’s models.dev URL. The chat completions path is added automatically."}
+                </p>
+              </div>
             </div>
-            <div className="max-w-xl">
-              <label htmlFor="explainer-reasoning-effort" className="mb-1.5 block text-sm font-medium text-foreground">
-                Reasoning effort
+            <div className="max-w-2xl">
+              <label htmlFor="explainer-api-key" className="mb-1.5 block text-sm font-medium text-foreground">
+                API key
               </label>
-              <Select
-                id="explainer-reasoning-effort"
-                name="reasoning-effort"
-                value={explainerReasoningEffort}
-                onValueChange={(value: string): void => { setExplainerReasoningEffort(value as ReasoningEffort | ""); }}
-              >
-                <SelectItem value="">Automatic (model default)</SelectItem>
-                <SelectItem value="none">None</SelectItem>
-                <SelectItem value="minimal">Minimal</SelectItem>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="xhigh">XHigh</SelectItem>
-                <SelectItem value="max">Max</SelectItem>
-              </Select>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Optional. Models support different effort levels; automatic leaves the provider’s model default unchanged.
-              </p>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="explainer-api-key"
+                  name="explainer-api-key"
+                  autoComplete="new-password"
+                  type="password"
+                  value={explainerApiKey}
+                  onInput={(event): void => {
+                    setExplainerApiKey(event.currentTarget.value);
+                    setExplainerClearApiKey(false);
+                  }}
+                  placeholder={explainerApiKeySet ? "•••••••• (a key is stored)" : "Optional bearer token"}
+                  className="flex-1 rounded-lg bg-background font-mono"
+                />
+                {explainerApiKeySet && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={(): void => {
+                      setExplainerApiKey("");
+                      setExplainerClearApiKey(true);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
             </div>
             {providerCatalogError !== "" && (
               <p className="text-xs text-destructive">
-                Provider catalog unavailable ({providerCatalogError}). Enter the endpoint and model manually.
+                Provider catalog unavailable ({providerCatalogError}). Enter the provider, model, and base URL manually.
               </p>
             )}
           </CardContent>

@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { adminSettings } from "../db/schema";
+import { CUSTOM_PROVIDER_ID, getCatalogProviderModels } from "./model-catalog";
 
 export type Settings = Record<string, unknown>;
 
@@ -17,7 +18,7 @@ const settingDefaults: Record<string, Settings> = {
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
   "approval-webhook": { enabled: false, url: null, secret: null },
   "maintenance-windows": { enabled: false, windows: [] },
-  "plan-explainer": { enabled: false, provider: null, "endpoint-url": null, "api-key": null, model: null, "reasoning-effort": null },
+  "plan-explainer": { enabled: false, provider: null, "base-url": null, "api-key": null, model: null, "reasoning-effort": null },
 };
 
 const SETTINGS_CACHE_TTL_MS = 1_000;
@@ -44,30 +45,40 @@ export async function getSettings(group: string): Promise<Settings> {
   return { ...defaults, ...values };
 }
 
-/**
- * True when the plan-explainer feature is both enabled in admin settings and
- * fully configured (http(s) endpoint + model). This is the single source of
- * truth for both the /runs/:id/explain route (503 vs 404) and the
- * plan-explainer-usable flag the UI gates the Explain button on.
- */
-export function planExplainerUsable(settings: Settings): boolean {
-  const endpointUrl = settings["endpoint-url"];
-  const model = settings.model;
-  const endpointIsUsable = typeof endpointUrl === "string"
-    && endpointUrl !== ""
-    && typeof model === "string" && model !== "";
-  let parsedEndpoint: URL | null = null;
-  if (endpointIsUsable) {
-    try {
-      parsedEndpoint = new URL(endpointUrl);
-    } catch {
-      parsedEndpoint = null;
-    }
+/** Normalize an optional provider base URL and accept the old full endpoint. */
+export function normalizePlanExplainerBaseUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  try {
+    const url = new URL(value.trim());
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.hostname === ""
+      || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") return null;
+    let pathname = url.pathname.replace(/\/+$/, "");
+    if (pathname.endsWith("/chat/completions")) pathname = pathname.slice(0, -"/chat/completions".length).replace(/\/+$/, "");
+    url.pathname = pathname;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return null;
   }
-  const endpointAllowed = parsedEndpoint !== null
-    && (parsedEndpoint.protocol === "http:" || parsedEndpoint.protocol === "https:")
-    && parsedEndpoint.hostname !== "";
-  return settings.enabled === true && endpointIsUsable && endpointAllowed;
+}
+
+/** Resolve a configured override or the selected provider's models.dev URL. */
+export async function resolvePlanExplainerSettings(settings: Readonly<Settings>): Promise<Settings | null> {
+  if (settings.enabled !== true || typeof settings.model !== "string" || settings.model.trim() === "") return null;
+  let baseUrl = normalizePlanExplainerBaseUrl(settings["base-url"])
+    ?? normalizePlanExplainerBaseUrl(settings["endpoint-url"]);
+  const provider = typeof settings.provider === "string" ? settings.provider.trim() : "";
+  if (baseUrl === null && provider !== "" && provider !== CUSTOM_PROVIDER_ID) {
+    baseUrl = (await getCatalogProviderModels(provider))?.baseUrl ?? null;
+  }
+  return baseUrl === null ? null : { ...settings, "base-url": baseUrl };
+}
+
+/**
+ * True when the plan-explainer feature is enabled and has a model plus either
+ * an explicit base URL or a usable base URL from the provider catalog.
+ */
+export async function planExplainerUsable(settings: Readonly<Settings>): Promise<boolean> {
+  return (await resolvePlanExplainerSettings(settings)) !== null;
 }
 
 /**
@@ -79,5 +90,5 @@ export function planExplainerUsable(settings: Settings): boolean {
  */
 export async function getSiteCapabilities(): Promise<Readonly<Record<string, boolean>>> {
   const explainer = await getSettings("plan-explainer");
-  return { "plan-explainer": planExplainerUsable(explainer) };
+  return { "plan-explainer": await planExplainerUsable(explainer) };
 }

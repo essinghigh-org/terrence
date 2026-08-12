@@ -5,7 +5,7 @@ import type { SQL } from "drizzle-orm";
 import { eq, and, or, desc, count, notInArray, like } from "drizzle-orm";
 import { runResource } from "../lib/response";
 import { AvatarService } from "../lib/avatars";
-import { getSettings, invalidateSettingsCache, type Settings } from "../lib/settings";
+import { getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl, type Settings } from "../lib/settings";
 import { listCatalogProviders, getCatalogProviderModels } from "../lib/model-catalog";
 import { refreshTrustedClientIpHeaders } from "../lib/client-ip";
 import { ldapSettings } from "../lib/sso";
@@ -76,8 +76,11 @@ async function operationsSettingsResource(): Promise<Record<string, unknown>> {
   delete approvalSafe.secret;
   const explainerSafe: Record<string, unknown> = {
     ...explainer,
+    "base-url": normalizePlanExplainerBaseUrl(explainer["base-url"])
+      ?? normalizePlanExplainerBaseUrl(explainer["endpoint-url"]),
     "api-key-set": typeof explainer["api-key"] === "string" && explainer["api-key"] !== "",
   };
+  delete explainerSafe["endpoint-url"];
   delete explainerSafe["api-key"];
   return {
     id: "operations-settings",
@@ -1195,10 +1198,21 @@ export const adminRoutes = new Elysia({ name: "admin" })
       const group = value as Record<string, unknown>;
       if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("plan-explainer.enabled must be a boolean");
       if (group.provider !== undefined && group.provider !== null && typeof group.provider !== "string") return reject("plan-explainer.provider must be a string or null");
-      if (group["endpoint-url"] !== undefined && group["endpoint-url"] !== null) {
-        if (typeof group["endpoint-url"] !== "string" || !usableHttpUrl(group["endpoint-url"])) {
+      const normalizedGroup: Record<string, unknown> = { ...group };
+      if ("base-url" in group) {
+        if (group["base-url"] !== null) {
+          const baseUrl = normalizePlanExplainerBaseUrl(group["base-url"]);
+          if (baseUrl === null) return reject("plan-explainer base-url must be an http(s) URL or null");
+          normalizedGroup["base-url"] = baseUrl;
+        }
+        normalizedGroup["endpoint-url"] = null;
+      } else if ("endpoint-url" in group) {
+        const baseUrl = group["endpoint-url"] === null ? null : normalizePlanExplainerBaseUrl(group["endpoint-url"]);
+        if (group["endpoint-url"] !== null && baseUrl === null) {
           return reject("plan-explainer endpoint-url must be an http(s) URL or null");
         }
+        normalizedGroup["base-url"] = baseUrl;
+        normalizedGroup["endpoint-url"] = null;
       }
       if (group["api-key"] !== undefined && group["api-key"] !== null && typeof group["api-key"] !== "string") return reject("plan-explainer api-key must be a string or null");
       if (group.model !== undefined && group.model !== null && typeof group.model !== "string") return reject("plan-explainer model must be a string or null");
@@ -1206,14 +1220,15 @@ export const adminRoutes = new Elysia({ name: "admin" })
         && (typeof group["reasoning-effort"] !== "string" || !REASONING_EFFORTS.includes(group["reasoning-effort"] as ReasoningEffort))) {
         return reject(`plan-explainer reasoning-effort must be one of: ${REASONING_EFFORTS.join(", ")} or null`);
       }
-      await updateSettings("plan-explainer", group);
+      await updateSettings("plan-explainer", normalizedGroup);
     }
     return { data: await operationsSettingsResource() };
   })
   // --- Plan explainer provider/model catalog (kanban 21.2 UI) ----------
   // Additive admin convenience: powers the provider dropdown + model picker.
   // Sourced from the models.dev catalog (6h TTL background refresh); never
-  // part of the explain request itself (endpoint-url remains authoritative).
+  // part of the explain request itself; the selected provider supplies the
+  // default base URL and the saved base-url is only an optional override.
   .get("/api/v2/admin/operations-settings/explainer/providers", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const providers = await listCatalogProviders();
@@ -1223,7 +1238,6 @@ export const adminRoutes = new Elysia({ name: "admin" })
         type: "explainer-providers",
         attributes: {
           name: provider.name,
-          "base-url": provider.baseUrl,
           "model-count": provider.modelCount,
         },
       })),

@@ -13,7 +13,12 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
-import { getSettings, invalidateSettingsCache } from "../../src/lib/settings";
+import {
+  getSettings,
+  invalidateSettingsCache,
+  normalizePlanExplainerBaseUrl,
+  resolvePlanExplainerSettings,
+} from "../../src/lib/settings";
 import {
   inMaintenanceWindow,
   maintenanceWindowsBlockApply,
@@ -337,6 +342,18 @@ describe("change calendar (21.4)", () => {
 });
 
 describe("AI plan explainer (21.2)", () => {
+  it("normalizes a full completion endpoint into an optional base URL", async () => {
+    expect(normalizePlanExplainerBaseUrl("https://api.example.com/v1/chat/completions")).toBe("https://api.example.com/v1");
+    expect(normalizePlanExplainerBaseUrl("file:///etc/passwd")).toBeNull();
+    const resolved = await resolvePlanExplainerSettings({
+      enabled: true,
+      provider: "openrouter",
+      "base-url": null,
+      model: "openai/gpt-5",
+    });
+    expect(resolved?.["base-url"]).toBe("https://openrouter.ai/api/v1");
+  });
+
   it("exposes capabilities.plan-explainer=false on the org resource when disabled", async () => {
     await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
     const response = await request(`/api/v2/organizations/${orgName}`);
@@ -753,6 +770,21 @@ describe("admin operations settings surface", () => {
     expect(body.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
     expect(body.data.attributes["plan-explainer"]["api-key"]).toBeUndefined();
     expect(body.data.attributes["plan-explainer"]["api-key-set"]).toBe(true);
+  });
+
+  it("stores and returns only the optional base URL", async () => {
+    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { "base-url": "https://api.example.com/v1/chat/completions" } } },
+      }),
+    }));
+    expect(patch.status).toBe(200);
+    const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
+    expect(body.data.attributes["plan-explainer"]["base-url"]).toBe("https://api.example.com/v1");
+    expect(body.data.attributes["plan-explainer"]["endpoint-url"]).toBeUndefined();
+    expect((await getSettings("plan-explainer"))["endpoint-url"]).toBeNull();
   });
 
   it("rejects non-http(s) URLs for webhook and explainer endpoints", async () => {

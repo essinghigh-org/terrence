@@ -7,7 +7,7 @@ import {
   findAuthorizedRun,
   workspaceIdsForPermission,
 } from "../lib/utils";
-import { getSettings, planExplainerUsable } from "../lib/settings";
+import { getSettings, resolvePlanExplainerSettings } from "../lib/settings";
 import {
   EXPLAIN_KINDS,
   buildExplainSource,
@@ -161,7 +161,6 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
       if (settings.enabled !== true) return notFound(set);
-      if (!planExplainerUsable(settings)) return notFound(set);
       const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
       if (typeof kindOrError !== "string") return kindOrError.body;
@@ -170,6 +169,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (cached !== undefined) {
         return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
       }
+      const resolvedSettings = await resolvePlanExplainerSettings(settings);
+      if (resolvedSettings === null) return notFound(set);
       const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
@@ -184,10 +185,6 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
       if (settings.enabled !== true) return notFound(set);
-      if (!planExplainerUsable(settings)) {
-        (set as { status: number }).status = 503;
-        return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
-      }
       const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const attributes = readExplainAttributes(body);
       const kindOrError = parseExplainKind(attributes.kind, set);
@@ -195,7 +192,6 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const kind = kindOrError;
       const refresh = attributes.refresh === true;
       const streamRequested = attributes.stream === true;
-      const model = settings.model as string;
       if (!refresh) {
         const cached = await findExplanation(runId, kind);
         if (cached !== undefined) {
@@ -203,14 +199,20 @@ export const operationsRoutes = new Elysia({ name: "operations" })
           return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
         }
       }
+      const resolvedSettings = await resolvePlanExplainerSettings(settings);
+      if (resolvedSettings === null) {
+        (set as { status: number }).status = 503;
+        return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
+      }
+      const model = resolvedSettings.model as string;
       const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
         (set as { status: number }).status = err.status;
         return err.body;
       }
-      if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, reasoningEffort, request, refresh);
-      return explainJsonResponse(set, settings, source, runId, kind, model, reasoningEffort);
+      if (streamRequested) return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh);
+      return explainJsonResponse(set, resolvedSettings, source, runId, kind, model, reasoningEffort);
     });
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {

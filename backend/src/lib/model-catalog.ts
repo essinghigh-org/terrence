@@ -5,8 +5,9 @@ import { join, resolve } from "node:path";
 // Sources the provider dropdown + model picker from the models.dev static
 // catalog (https://models.dev/api.json) — 183 providers, per-model modalities
 // — fetched in the background and cached for MODEL_CATALOG_TTL_MS (6h).
-// Additive convenience only: the explainer itself still talks to whatever
-// endpoint-url the admin configured; this lib never changes run behavior.
+// Additive convenience only: the explainer uses a selected provider's base
+// URL unless the admin supplies an explicit override; this lib never changes
+// run behavior.
 
 export const MODEL_CATALOG_URL = "https://models.dev/api.json";
 export const MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6h, per user request
