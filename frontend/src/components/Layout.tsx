@@ -83,6 +83,7 @@ import { usePageTitle } from "../lib/usePageTitle";
 import { setLastOrganization } from "../lib/lastOrganization";
 import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
+import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
 
@@ -385,20 +386,23 @@ export function Layout({
     hasCurrentOrganizationPermissions
     && organizationPermissions?.["can-read-projects"] === true;
   const hasCurrentWorkspacePermissions = workspacePermissionPath === workspacePath;
+  const [capabilities, setCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
 
   useEffect((): (() => void) | undefined => {
     setOrganizationPermissions(null);
     setOrganizationPermissionPath("");
+    setCapabilities(DEFAULT_CAPABILITIES);
     if (!hasOrg) return undefined;
     const controller = new AbortController();
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}`, {
       signal: controller.signal,
     }).then((response: unknown): void => {
       if (controller.signal.aborted) return;
-      const permissions = (response as {
-        data?: { attributes?: { permissions?: OrganizationPermissions } };
-      }).data?.attributes?.permissions;
-      setOrganizationPermissions(permissions ?? null);
+      const attributes = (response as {
+        data?: { attributes?: { permissions?: OrganizationPermissions; capabilities?: Capabilities } };
+      }).data?.attributes;
+      setOrganizationPermissions(attributes?.permissions ?? null);
+      setCapabilities(attributes?.capabilities ?? DEFAULT_CAPABILITIES);
       setOrganizationPermissionPath(orgPath);
     }).catch((): void => {
       // Management nav hidden when permissions fail
@@ -1402,6 +1406,7 @@ export function Layout({
           className="relative flex min-w-0 flex-1 flex-col overflow-auto bg-background outline-none"
         >
           <div className="w-full flex-1 px-4 py-6 sm:px-6 lg:px-8">
+            <CapabilitiesProvider capabilities={capabilities}>
             {children ?? (
               <Outlet
                 context={{
@@ -1411,6 +1416,7 @@ export function Layout({
                 } satisfies LayoutOutletContext}
               />
             )}
+          </CapabilitiesProvider>
           </div>
         </main>
       </div>

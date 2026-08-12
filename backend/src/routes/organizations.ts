@@ -9,6 +9,7 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { invalidateOrganizationName } from "../lib/metadata-cache";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { getSiteCapabilities } from "../lib/settings";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -41,7 +42,7 @@ async function organizationResourceForPrincipal(
   tokenOrgId: string | null | undefined,
   tokenTeamId: string | null | undefined,
 ): Promise<Record<string, unknown>> {
-  const [canManageOrganization, orgPermissionFlags] = await Promise.all([
+  const [canManageOrganization, orgPermissionFlags, capabilities] = await Promise.all([
     checkOrgPermission(userId, org.id, "owner", tokenOrgId ?? null, tokenTeamId ?? null),
     checkOrganizationPermissionsMany(
       org.id,
@@ -50,6 +51,7 @@ async function organizationResourceForPrincipal(
       tokenTeamId,
       ["manage-workspaces", "read-projects", "manage-projects", "manage-vcs-settings", "manage-agent-pools", "manage-teams", "manage-membership", "manage-organization-access", "manage-policies", "read-policies", "manage-providers"],
     ),
+    getSiteCapabilities(),
   ]);
   const [
     canManageWorkspaces,
@@ -86,6 +88,7 @@ async function organizationResourceForPrincipal(
         "can-manage-providers": canManageProviders,
         "can-manage-organization-access": canUpdateOrganizationAccess,
       },
+      capabilities,
     },
   };
 }

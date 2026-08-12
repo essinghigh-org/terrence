@@ -7,7 +7,7 @@ import {
   findAuthorizedRun,
   workspaceIdsForPermission,
 } from "../lib/utils";
-import { getSettings } from "../lib/settings";
+import { getSettings, planExplainerUsable } from "../lib/settings";
 import { readPlanJsonArtifact } from "../lib/plan-json";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
@@ -137,26 +137,12 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     if (authorized === undefined) return notFound(set);
     const settings = await getSettings("plan-explainer");
     if (settings.enabled !== true) return notFound(set);
-    const endpointUrl = settings["endpoint-url"];
-    const model = settings.model;
-    const endpointIsUsable = typeof endpointUrl === "string"
-      && endpointUrl !== ""
-      && typeof model === "string" && model !== "";
-    let parsedEndpoint: URL | null = null;
-    if (endpointIsUsable) {
-      try {
-        parsedEndpoint = new URL(endpointUrl);
-      } catch {
-        parsedEndpoint = null;
-      }
-    }
-    const endpointAllowed = parsedEndpoint !== null
-      && (parsedEndpoint.protocol === "http:" || parsedEndpoint.protocol === "https:")
-      && parsedEndpoint.hostname !== "";
-    if (!endpointIsUsable || !endpointAllowed) {
+    if (!planExplainerUsable(settings)) {
       (set as { status: number }).status = 503;
       return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
     }
+    const endpointUrl = settings["endpoint-url"] as string;
+    const model = settings.model as string;
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) {
       (set as { status: number }).status = 409;

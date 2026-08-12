@@ -35,6 +35,7 @@ import {
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
 import { ApiError, fetchApi } from "../lib/api";
+import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 
 type RunActions = {
@@ -516,6 +517,7 @@ export function RunDetail({
   const orgName = rawOrgName ?? "";
   const workspaceName = rawWorkspaceName ?? "";
   const runId = rawRunId ?? "";
+  const planExplainerEnabled = useCapability(CAPABILITY_PLAN_EXPLAINER);
   const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const workspacePath = `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`;
   const [run, setRun] = useState<RunResource | null>(null);
@@ -1447,7 +1449,7 @@ export function RunDetail({
                   </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
-                  {["finished", "planned_and_saved"].includes(planStatus) && (
+                  {["finished", "planned_and_saved"].includes(planStatus) && planExplainerEnabled && (
                     <Button
                       type="button"
                       variant="outline"

@@ -43,3 +43,41 @@ export async function getSettings(group: string): Promise<Settings> {
   settingsCache.set(group, { values, fetchedAt: Date.now() });
   return { ...defaults, ...values };
 }
+
+/**
+ * True when the plan-explainer feature is both enabled in admin settings and
+ * fully configured (http(s) endpoint + model). This is the single source of
+ * truth for both the /runs/:id/explain route (503 vs 404) and the
+ * plan-explainer-usable flag the UI gates the Explain button on.
+ */
+export function planExplainerUsable(settings: Settings): boolean {
+  const endpointUrl = settings["endpoint-url"];
+  const model = settings.model;
+  const endpointIsUsable = typeof endpointUrl === "string"
+    && endpointUrl !== ""
+    && typeof model === "string" && model !== "";
+  let parsedEndpoint: URL | null = null;
+  if (endpointIsUsable) {
+    try {
+      parsedEndpoint = new URL(endpointUrl);
+    } catch {
+      parsedEndpoint = null;
+    }
+  }
+  const endpointAllowed = parsedEndpoint !== null
+    && (parsedEndpoint.protocol === "http:" || parsedEndpoint.protocol === "https:")
+    && parsedEndpoint.hostname !== "";
+  return settings.enabled === true && endpointIsUsable && endpointAllowed;
+}
+
+/**
+ * Site-level feature capabilities surfaced to the UI through the org
+ * resource (`attributes.capabilities`). This is the generic primitive for
+ * config-gated UI: add a new capability here, gate any view with the
+ * useCapability() hook, and the button/section hides itself when the
+ * feature is disabled or misconfigured. Keys must be stable kebab-case.
+ */
+export async function getSiteCapabilities(): Promise<Readonly<Record<string, boolean>>> {
+  const explainer = await getSettings("plan-explainer");
+  return { "plan-explainer": planExplainerUsable(explainer) };
+}

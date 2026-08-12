@@ -335,6 +335,22 @@ describe("change calendar (21.4)", () => {
 });
 
 describe("AI plan explainer (21.2)", () => {
+  it("exposes capabilities.plan-explainer=false on the org resource when disabled", async () => {
+    await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
+    const response = await request(`/api/v2/organizations/${orgName}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { attributes: { capabilities: Record<string, boolean> } } };
+    expect(body.data.attributes.capabilities["plan-explainer"]).toBe(false);
+  });
+
+  it("exposes capabilities.plan-explainer=true on the org resource when configured", async () => {
+    await setSettings("plan-explainer", { enabled: true, "endpoint-url": "http://127.0.0.1:1/v1/chat/completions", "api-key": null, model: "test-model" });
+    const response = await request(`/api/v2/organizations/${orgName}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { attributes: { capabilities: Record<string, boolean> } } };
+    expect(body.data.attributes.capabilities["plan-explainer"]).toBe(true);
+  });
+
   it("returns 404 when the feature is disabled", async () => {
     await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
     const response = await request(`/api/v2/runs/${explainerRunId}/explain`, "POST", {});
