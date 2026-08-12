@@ -262,6 +262,199 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
   return data;
 }
 
+export type ExplainKind = "plan" | "apply";
+
+/**
+ * SSE event emitted by the streaming run-explain endpoint. The backend relays
+ * upstream deltas as `meta`, `thinking`, `content`, `done`, and `error`
+ * events; cached generations are replayed under the same envelope (done
+ * carries `cached: true`). All payloads are JSON.
+ */
+export type ExplainStreamEvent = Readonly<
+  | { name: "meta"; data: Readonly<{ kind: ExplainKind; model: string }> }
+  | { name: "thinking"; data: Readonly<{ text: string }> }
+  | { name: "content"; data: Readonly<{ text: string }> }
+  | { name: "done"; data: Readonly<{ model: string; "generated-at": string; cached?: boolean }> }
+  | { name: "error"; data: Readonly<{ message: string }> }
+>;
+
+/**
+ * Stream a run explanation from the AI explainer. Always asks for
+ * `stream: true`; the backend answers through the SSE envelope whether it
+ * regenerates or replays a cached generation, so callers have one parsing
+ * path. Abort through `signal` to cancel (the backend relays the abort
+ * upstream). Resolves on the terminal `done` event; rejects with ApiError on
+ * HTTP errors and throws on a terminal `error` event.
+ */
+export async function streamExplain(
+  runId: string,
+  kind: ExplainKind,
+  refresh: boolean,
+  onEvent: (event: Readonly<ExplainStreamEvent>) => void,
+  signal?: Readonly<AbortSignal>,
+): Promise<void> {
+  const url = `${API_BASE_URL}/runs/${encodeURIComponent(runId)}/explain`;
+  const token = await prepareAuthToken();
+  const headers: HeadersInit = {
+    "Content-Type": "application/vnd.api+json",
+    ...(token !== null ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        data: {
+          type: "plan-explanations",
+          attributes: { kind, stream: true, ...(refresh ? { refresh: true } : {}) },
+        },
+      }),
+      signal,
+    } as RequestInit);
+  } catch (caught: unknown) {
+    if (signal?.aborted === true) return;
+    throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
+  }
+
+  if (!response.ok) {
+    if (response.status === 401 && token !== null) {
+      expireAuthSession();
+    }
+    const errorBody = (await response.json().catch((): null => null)) as Record<string, unknown> | null;
+    const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
+    const errors = Array.isArray(rawErrors) ? (rawErrors as Record<string, unknown>[]) : [];
+    const firstErr = errors[0];
+    const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
+    const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
+    throw new ApiError(
+      response.status,
+      detail ?? title ?? `API request failed (${response.status})`,
+      extractFieldErrors(errors),
+    );
+  }
+
+  if (response.body === null) throw new Error("The explainer stream had no response body.");
+
+  // Providers that ignore stream: true are folded into the SSE protocol
+  // backend-side, so a JSON content-type here means the backend itself broke
+  // its contract; surface it as an error event instead of hanging.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    const parsed = (await response.json().catch((): null => null)) as {
+      data?: { attributes?: { explanation?: string; thinking?: string; model?: string } };
+    } | null;
+    const attributes = parsed?.data?.attributes;
+    if (attributes?.explanation !== undefined && attributes.explanation !== "") {
+      if (attributes.thinking !== undefined && attributes.thinking !== "") {
+        onEvent({ name: "thinking", data: { text: attributes.thinking } });
+      }
+      onEvent({ name: "content", data: { text: attributes.explanation } });
+      onEvent({ name: "done", data: { model: attributes.model ?? "", "generated-at": new Date().toISOString() } });
+      return;
+    }
+    throw new Error("The explainer returned an unexpected response format.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        if (frame.trim() === "") continue;
+        const event = parseExplainFrame(frame);
+        if (event === null) continue;
+        if (event.name === "done") {
+          onEvent(event);
+          await reader.cancel().catch((): null => null);
+          return;
+        }
+        if (event.name === "error") {
+          throw new ApiError(0, event.data.message);
+        }
+        onEvent(event);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  throw new ApiError(0, "The explainer stream ended without a done event.");
+}
+
+function parseExplainFrame(frame: string): ExplainStreamEvent | null {
+  let name = "message";
+  const dataLines: string[] = [];
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("event:")) {
+      name = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  const raw = dataLines.join("\n");
+  if (raw === "[DONE]") return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const object = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  if (object === null) return null;
+  switch (name) {
+    case "meta": {
+      const model = typeof object["model"] === "string" ? object["model"] : "";
+      const kindValue = object["kind"];
+      const kind: ExplainKind = kindValue === "apply" ? "apply" : "plan";
+      return { name: "meta", data: { kind, model } };
+    }
+    case "thinking": {
+      const text = typeof object["text"] === "string" ? object["text"] : "";
+      return text === "" ? null : { name: "thinking", data: { text } };
+    }
+    case "content": {
+      const text = typeof object["text"] === "string" ? object["text"] : "";
+      return { name: "content", data: { text } };
+    }
+    case "done": {
+      const model = typeof object["model"] === "string" ? object["model"] : "";
+      const generatedAt = typeof object["generated-at"] === "string" ? object["generated-at"] : new Date().toISOString();
+      const cached = object["cached"] === true;
+      return { name: "done", data: { model, "generated-at": generatedAt, cached } };
+    }
+    case "error": {
+      const message = typeof object["message"] === "string" && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
+      return { name: "error", data: { message } };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Resolve the bearer token, refreshing it first when it is about to expire. */
+async function prepareAuthToken(): Promise<string | null> {
+  let token = getAuthToken();
+  const expiresAt = getAuthTokenExpiry();
+  if (
+    token !== null
+    && token !== ""
+    && expiresAt !== null
+    && expiresAt <= Date.now()
+    && isRefreshableSession()
+  ) {
+    token = await refreshAccessToken().catch((): null => null) ?? token;
+  }
+  return token;
+}
+
 function removeAuthToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_EXPIRY_KEY);

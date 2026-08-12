@@ -34,7 +34,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { ApiError, fetchApi } from "../lib/api";
+import { ApiError, fetchApi, streamExplain, type ExplainKind } from "../lib/api";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 
@@ -545,10 +545,13 @@ export function RunDetail({
   const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
   const [actionComment, setActionComment] = useState("");
   const [explainerOpen, setExplainerOpen] = useState(false);
+  const [explainerKind, setExplainerKind] = useState<ExplainKind>("plan");
   const [explaining, setExplaining] = useState(false);
   const [explanation, setExplanation] = useState("");
+  const [explainerThinking, setExplainerThinking] = useState("");
   const [explainerModel, setExplainerModel] = useState("");
   const [explainError, setExplainError] = useState("");
+  const explainerAbortRef = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
@@ -643,6 +646,7 @@ export function RunDetail({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         event.preventDefault();
+        cancelExplanation();
         setExplainerOpen(false);
         return;
       }
@@ -915,29 +919,53 @@ export function RunDetail({
     }
   }
 
-  // kanban 21.2: plain-language explanation of the stored plan JSON via the
-  // configured OpenAI-compatible endpoint. Read-only; never mutates the run.
-  async function handleExplainPlan(): Promise<void> {
+  // kanban 21.2: plain-language explanation of the stored plan JSON or a
+  // failed apply log via the configured OpenAI-compatible endpoint. Read-only;
+  // never mutates the run. Streaming path: the backend relays upstream deltas
+  // as SSE events and replays cached generations under the same envelope, so
+  // re-opening the dialog never re-burns tokens.
+  async function handleExplain(kind: ExplainKind, refresh: boolean): Promise<void> {
     setExplainerOpen(true);
+    setExplainerKind(kind);
     setExplaining(true);
     setExplanation("");
+    setExplainerThinking("");
     setExplainerModel("");
     setExplainError("");
+    const controller = new AbortController();
+    explainerAbortRef.current = controller;
     try {
-      const response = await fetchApi(`/api/v2/runs/${runId}/explain`, {
-        method: "POST",
-        body: JSON.stringify({ data: { type: "plan-explanations" } }),
-      }) as { data?: { attributes?: { explanation?: string; model?: string } } };
-      setExplanation(response.data?.attributes?.explanation ?? "");
-      setExplainerModel(response.data?.attributes?.model ?? "");
-      if (response.data?.attributes?.explanation === undefined) {
-        setExplainError("The plan explainer returned an empty response.");
-      }
+      await streamExplain(
+        runId,
+        kind,
+        refresh,
+        (event): void => {
+          if (event.name === "meta") {
+            setExplainerModel(event.data.model);
+          } else if (event.name === "thinking") {
+            setExplainerThinking((current): string => `${current}${event.data.text}`);
+          } else if (event.name === "content") {
+            setExplanation((current): string => `${current}${event.data.text}`);
+          }
+        },
+        controller.signal,
+      );
     } catch (caught: unknown) {
+      if (controller.signal.aborted) {
+        // Intentional cancel: keep whatever was already generated on screen,
+        // the stream helpfully never persisted a partial generation.
+        return;
+      }
       setExplainError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      if (explainerAbortRef.current === controller) explainerAbortRef.current = null;
       setExplaining(false);
     }
+  }
+
+  function cancelExplanation(): void {
+    explainerAbortRef.current?.abort();
+    explainerAbortRef.current = null;
   }
 
   async function handleCommentSubmit(event: React.SyntheticEvent<HTMLFormElement>): Promise<void> {
@@ -1458,7 +1486,7 @@ export function RunDetail({
                         // Inside the plan <summary>: opening the dialog must
                         // not toggle the details section open/closed.
                         event.stopPropagation();
-                        void handleExplainPlan();
+                        void handleExplain("plan", false);
                       }}
                       aria-haspopup="dialog"
                     >
@@ -1677,6 +1705,24 @@ export function RunDetail({
                   </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
+                  {["errored", "unreachable"].includes(applyStatus) && planExplainerEnabled && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
+                        // Inside the apply <summary>: opening the dialog must
+                        // not toggle the details section open/closed.
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleExplain("apply", false);
+                      }}
+                      aria-haspopup="dialog"
+                    >
+                      <Sparkles className="mr-2 size-4" aria-hidden="true" />
+                      Explain failure
+                    </Button>
+                  )}
                   <PhaseMeta
                     phase="apply"
                     status={applyStatus}
@@ -1967,27 +2013,25 @@ export function RunDetail({
             <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
               <h2 id="plan-explainer-heading" className="flex items-center gap-2 text-sm font-semibold text-gray-950">
                 <Sparkles className="size-4 text-gray-500" aria-hidden="true" />
-                Plan explanation
+                {explainerKind === "apply" ? "Apply failure explanation" : "Plan explanation"}
               </h2>
               <Button
                 ref={explainerCloseRef}
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={(): void => { setExplainerOpen(false); }}
-                aria-label="Close plan explanation"
+                onClick={(): void => {
+                  cancelExplanation();
+                  setExplainerOpen(false);
+                }}
+                aria-label={explainerKind === "apply" ? "Close apply failure explanation" : "Close plan explanation"}
               >
                 <X className="size-4" aria-hidden="true" />
                 Close
               </Button>
             </div>
             <div className="flex-1 overflow-auto px-5 py-4">
-              {explaining ? (
-                <div className="flex items-center gap-3 py-8 text-sm text-gray-500">
-                  <Spinner className="size-4" />
-                  Generating explanation…
-                </div>
-              ) : explainError !== "" ? (
+              {explainError !== "" && (
                 <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                   <div>
@@ -1995,15 +2039,62 @@ export function RunDetail({
                     <p className="mt-1">{explainError}</p>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <p className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{explanation}</p>
-                  {explainerModel !== "" && (
-                    <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-400">Generated by {explainerModel}</p>
-                  )}
-                </>
+              )}
+              {explainerThinking !== "" && (
+                <details className="group mb-3 rounded-md border border-gray-200" open={explaining}>
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50">
+                    <ChevronRight className="size-3.5 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                    Thinking
+                  </summary>
+                  <div className="border-t border-gray-100 px-3 py-2 text-xs leading-5 text-gray-500">
+                    <p className="whitespace-pre-wrap">{explainerThinking}</p>
+                  </div>
+                </details>
+              )}
+              {explaining && explanation === "" && explainerThinking === "" && (
+                <div className="flex items-center gap-3 py-8 text-sm text-gray-500">
+                  <Spinner className="size-4" />
+                  Generating explanation…
+                </div>
+              )}
+              {explanation !== "" && (
+                <p className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{explanation}</p>
               )}
             </div>
+            {(explaining || explanation !== "" || explainerThinking !== "" || explainError !== "") && (
+              <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
+                <p className="text-xs text-gray-400">
+                  {explainerModel !== "" ? `Generated by ${explainerModel}` : ""}
+                </p>
+                <div className="flex items-center gap-2">
+                  {explaining ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelExplanation}
+                      aria-label="Stop generating the explanation"
+                    >
+                      Stop
+                    </Button>
+                  ) : (
+                    explanation !== "" || explainerThinking !== "" ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(): void => { void handleExplain(explainerKind, true); }}
+                        aria-label="Regenerate the explanation"
+                        title="Regenerate"
+                      >
+                        <RotateCcw className="size-4" aria-hidden="true" />
+                        Regenerate
+                      </Button>
+                    ) : null
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
