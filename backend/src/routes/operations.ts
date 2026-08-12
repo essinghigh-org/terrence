@@ -11,6 +11,7 @@ import { getSettings, planExplainerUsable } from "../lib/settings";
 import {
   EXPLAIN_KINDS,
   buildExplainSource,
+  configuredReasoningEffort,
   explainError,
   fetchUpstream,
   findExplanation,
@@ -20,6 +21,7 @@ import {
   splitInlineThinking,
   type CompletionParts,
   type ExplainKind,
+  type ReasoningEffort,
   type ExplainSource,
 } from "../lib/run-explanations";
 import { authPlugin } from "../auth";
@@ -160,10 +162,11 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const settings = await getSettings("plan-explainer");
       if (settings.enabled !== true) return notFound(set);
       if (!planExplainerUsable(settings)) return notFound(set);
+      const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
       if (typeof kindOrError !== "string") return kindOrError.body;
       const kind = kindOrError;
-      const source = await buildExplainSource(runId, kind);
+      const source = await buildExplainSource(runId, kind, reasoningEffort);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
         (set as { status: number }).status = err.status;
@@ -171,7 +174,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       }
       const cached = await findExplanation(runId, kind, settings.model as string, source.inputHash);
       if (cached === undefined) return notFound(set);
-      return explanationResource(runId, kind, cached.content, cached.model, new Date(cached.createdAt).toISOString(), true);
+      return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
       const runId = params.run_id ?? "";
@@ -183,6 +186,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         (set as { status: number }).status = 503;
         return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
       }
+      const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const attributes = readExplainAttributes(body);
       const kindOrError = parseExplainKind(attributes.kind, set);
       if (typeof kindOrError !== "string") return kindOrError.body;
@@ -190,7 +194,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const refresh = attributes.refresh === true;
       const streamRequested = attributes.stream === true;
       const model = settings.model as string;
-      const source = await buildExplainSource(runId, kind);
+      const source = await buildExplainSource(runId, kind, reasoningEffort);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
         (set as { status: number }).status = err.status;
@@ -199,11 +203,11 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (!refresh && !streamRequested) {
         const cached = await findExplanation(runId, kind, model, source.inputHash);
         if (cached !== undefined) {
-          return explanationResource(runId, kind, cached.content, cached.model, new Date(cached.createdAt).toISOString(), true);
+          return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
         }
       }
-      if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, request, refresh);
-      return explainJsonResponse(set, settings, source, runId, kind, model);
+      if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, reasoningEffort, request, refresh);
+      return explainJsonResponse(set, settings, source, runId, kind, model, reasoningEffort);
     });
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
@@ -231,6 +235,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     kind: ExplainKind,
     explanation: string,
     model: string,
+    reasoningEffort: ReasoningEffort | null,
     generatedAt: string,
     cached: boolean,
   ): Readonly<{ data: Readonly<{ id: string; type: string; attributes: Record<string, unknown> }> }> {
@@ -242,6 +247,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
           kind,
           explanation,
           model,
+          "reasoning-effort": reasoningEffort,
           "generated-at": generatedAt,
           cached,
         },
@@ -256,6 +262,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     runId: string,
     kind: ExplainKind,
     model: string,
+    reasoningEffort: ReasoningEffort | null,
   ): Promise<unknown> {
     let parts: CompletionParts;
     try {
@@ -284,16 +291,16 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // request simply regenerates.
       log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
     }
-    return explanationResource(runId, kind, parts.content, model, new Date().toISOString(), false);
+    return explanationResource(runId, kind, parts.content, model, reasoningEffort, new Date().toISOString(), false);
   }
 
   /** Replay a cached generation through the SSE envelope (no upstream call). */
-  function cachedSseResponse(content: string, kind: ExplainKind, model: string, createdAt: number): Response {
+  function cachedSseResponse(content: string, kind: ExplainKind, model: string, reasoningEffort: ReasoningEffort | null, createdAt: number): Response {
     const encoder = new TextEncoder();
     const events = [
-      `event: meta\ndata: ${JSON.stringify({ kind, model })}\n\n`,
+      `event: meta\ndata: ${JSON.stringify({ kind, model, "reasoning-effort": reasoningEffort })}\n\n`,
       `event: content\ndata: ${JSON.stringify({ text: content })}\n\n`,
-      `event: done\ndata: ${JSON.stringify({ model, "generated-at": new Date(createdAt).toISOString(), cached: true })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model, "reasoning-effort": reasoningEffort, "generated-at": new Date(createdAt).toISOString(), cached: true })}\n\n`,
     ];
     return new Response(new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
@@ -322,6 +329,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     runId: string,
     kind: ExplainKind,
     model: string,
+    reasoningEffort: ReasoningEffort | null,
     request: Request,
     forceRefresh: boolean,
   ): Promise<Response> {
@@ -333,7 +341,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // the cached generation through the same SSE envelope instead.
       const cached = await findExplanation(runId, kind, model, source.inputHash);
       if (cached !== undefined && cached.content !== "") {
-        return cachedSseResponse(cached.content, kind, model, cached.createdAt);
+        return cachedSseResponse(cached.content, kind, model, reasoningEffort, cached.createdAt);
       }
     }
     const encoder = new TextEncoder();
@@ -348,7 +356,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         // always a real AbortSignal and covers client disconnects.
         const controllerSignal = (controller as ReadableStreamDefaultController<Uint8Array> & { readonly signal?: AbortSignal }).signal;
         const clientSignal = controllerSignal ?? request.signal;
-        send(controller, "meta", { kind, model });
+        send(controller, "meta", { kind, model, "reasoning-effort": reasoningEffort });
         try {
           await fetchUpstream(settings, source.prompt, true, clientSignal, async (upstream, tick) => {
             if (!upstream.ok) throw new Error(`Plan explainer endpoint returned ${upstream.status}`);
@@ -373,7 +381,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");
               }
-              send(controller, "done", { model, "generated-at": new Date().toISOString() });
+              send(controller, "done", { model, "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() });
               return;
             }
             const content: string[] = [];
@@ -410,7 +418,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
                 throw new Error("Failed to persist the explanation");
               }
             }
-            if (!clientSignal.aborted) send(controller, "done", { model, "generated-at": new Date().toISOString() });
+            if (!clientSignal.aborted) send(controller, "done", { model, "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() });
           });
         } catch (error: unknown) {
           if (!clientSignal.aborted) {

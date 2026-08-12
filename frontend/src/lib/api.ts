@@ -263,6 +263,7 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
 }
 
 export type ExplainKind = "plan" | "apply";
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * SSE event emitted by the streaming run-explain endpoint. The backend relays
@@ -271,11 +272,11 @@ export type ExplainKind = "plan" | "apply";
  * carries `cached: true`). All payloads are JSON.
  */
 export type ExplainStreamEvent = Readonly<
-  | { name: "meta"; data: Readonly<{ kind: ExplainKind; model: string }> }
+  | { name: "meta"; data: Readonly<{ kind: ExplainKind; model: string; "reasoning-effort": ReasoningEffort | null }> }
   | { name: "thinking"; data: Readonly<{ text: string }> }
   | { name: "content"; data: Readonly<{ text: string }> }
   | { name: "content-reset"; data: Readonly<{ text: string }> }
-  | { name: "done"; data: Readonly<{ model: string; "generated-at": string; cached?: boolean }> }
+  | { name: "done"; data: Readonly<{ model: string; "reasoning-effort": ReasoningEffort | null; "generated-at": string; cached?: boolean }> }
   | { name: "error"; data: Readonly<{ message: string }> }
 >;
 
@@ -360,12 +361,14 @@ export async function streamExplain(
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     const parsed = (await response.json().catch((): null => null)) as {
-      data?: { attributes?: { explanation?: string; model?: string } };
+      data?: { attributes?: { explanation?: string; model?: string; "reasoning-effort"?: string | null } };
     } | null;
     const attributes = parsed?.data?.attributes;
     if (attributes?.explanation !== undefined && attributes.explanation !== "") {
+      const reasoningEffort = attributes["reasoning-effort"] ?? null;
+      onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort as ReasoningEffort | null } });
       onEvent({ name: "content", data: { text: attributes.explanation } });
-      onEvent({ name: "done", data: { model: attributes.model ?? "", "generated-at": new Date().toISOString() } });
+      onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort as ReasoningEffort | null, "generated-at": new Date().toISOString() } });
       return;
     }
     throw new Error("The explainer returned an unexpected response format.");
@@ -432,9 +435,10 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
   switch (name) {
     case "meta": {
       const model = typeof object["model"] === "string" ? object["model"] : "";
+      const reasoningEffort = typeof object["reasoning-effort"] === "string" ? object["reasoning-effort"] as ReasoningEffort : null;
       const kindValue = object["kind"];
       const kind: ExplainKind = kindValue === "apply" ? "apply" : "plan";
-      return { name: "meta", data: { kind, model } };
+      return { name: "meta", data: { kind, model, "reasoning-effort": reasoningEffort } };
     }
     case "thinking": {
       const text = typeof object["text"] === "string" ? object["text"] : "";
@@ -450,9 +454,10 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
     }
     case "done": {
       const model = typeof object["model"] === "string" ? object["model"] : "";
+      const reasoningEffort = typeof object["reasoning-effort"] === "string" ? object["reasoning-effort"] as ReasoningEffort : null;
       const generatedAt = typeof object["generated-at"] === "string" ? object["generated-at"] : new Date().toISOString();
       const cached = object["cached"] === true;
-      return { name: "done", data: { model, "generated-at": generatedAt, cached } };
+      return { name: "done", data: { model, "reasoning-effort": reasoningEffort, "generated-at": generatedAt, cached } };
     }
     case "error": {
       const message = typeof object["message"] === "string" && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchApi } from "../lib/api";
+import { fetchApi, type ReasoningEffort } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardAction, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
@@ -7,6 +7,7 @@ import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
 import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
+import { Select, SelectItem } from "../components/ui/select";
 import { Check, LockKeyhole, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 
@@ -36,6 +37,7 @@ type PlanExplainerSettings = {
   "api-key-set"?: boolean;
   model?: string | null;
   provider?: string | null;
+  "reasoning-effort"?: ReasoningEffort | null;
 };
 
 type ExplainerProvider = {
@@ -147,6 +149,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [explainerClearApiKey, setExplainerClearApiKey] = useState(false);
   const [explainerModel, setExplainerModel] = useState("");
   const [explainerProvider, setExplainerProvider] = useState(CUSTOM_PROVIDER_ID);
+  const [explainerReasoningEffort, setExplainerReasoningEffort] = useState<ReasoningEffort | "">("");
 
   // Provider/model catalog for the explainer pickers (models.dev via admin API).
   const [providers, setProviders] = useState<ExplainerProvider[]>([]);
@@ -180,6 +183,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
         setExplainerClearApiKey(false);
         setExplainerModel(explainer.model ?? "");
         setExplainerProvider(explainer.provider ?? CUSTOM_PROVIDER_ID);
+        setExplainerReasoningEffort(explainer["reasoning-effort"] ?? "");
       } catch (caught: unknown) {
         setLoadError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -273,6 +277,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
       ...(explainerClearApiKey ? { "api-key": null } : explainerApiKey !== "" ? { "api-key": explainerApiKey } : {}),
       ...(explainerModel !== "" ? { model: explainerModel } : { model: null }),
       ...(explainerProvider !== "" ? { provider: explainerProvider } : { provider: null }),
+      "reasoning-effort": explainerReasoningEffort === "" ? null : explainerReasoningEffort,
     };
     try {
       const response = await fetchApi("/admin/operations-settings", {
@@ -656,6 +661,29 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   className="font-mono"
                 />
               </div>
+            </div>
+            <div className="max-w-xl">
+              <label htmlFor="explainer-reasoning-effort" className="mb-1.5 block text-sm font-medium text-foreground">
+                Reasoning effort
+              </label>
+              <Select
+                id="explainer-reasoning-effort"
+                name="reasoning-effort"
+                value={explainerReasoningEffort}
+                onValueChange={(value: string): void => { setExplainerReasoningEffort(value as ReasoningEffort | ""); }}
+              >
+                <SelectItem value="">Automatic (model default)</SelectItem>
+                <SelectItem value="none">None</SelectItem>
+                <SelectItem value="minimal">Minimal</SelectItem>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="xhigh">XHigh</SelectItem>
+                <SelectItem value="max">Max</SelectItem>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Optional. Models support different effort levels; automatic leaves the provider’s model default unchanged.
+              </p>
             </div>
             {providerCatalogError !== "" && (
               <p className="text-xs text-destructive">

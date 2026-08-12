@@ -24,6 +24,7 @@ import { join } from "node:path";
 // as an admin read-only endpoint instead of shipping it in the bundle.
 import providerSurface from "../data/provider_surface.json";
 import { cachedOrgByName, invalidateOrgLookup } from "../lib/cached-lookups";
+import { REASONING_EFFORTS, type ReasoningEffort } from "../lib/run-explanations";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -1201,6 +1202,10 @@ export const adminRoutes = new Elysia({ name: "admin" })
       }
       if (group["api-key"] !== undefined && group["api-key"] !== null && typeof group["api-key"] !== "string") return reject("plan-explainer api-key must be a string or null");
       if (group.model !== undefined && group.model !== null && typeof group.model !== "string") return reject("plan-explainer model must be a string or null");
+      if (group["reasoning-effort"] !== undefined && group["reasoning-effort"] !== null
+        && (typeof group["reasoning-effort"] !== "string" || !REASONING_EFFORTS.includes(group["reasoning-effort"] as ReasoningEffort))) {
+        return reject(`plan-explainer reasoning-effort must be one of: ${REASONING_EFFORTS.join(", ")} or null`);
+      }
       await updateSettings("plan-explainer", group);
     }
     return { data: await operationsSettingsResource() };

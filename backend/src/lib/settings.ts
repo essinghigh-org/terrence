@@ -17,7 +17,7 @@ const settingDefaults: Record<string, Settings> = {
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
   "approval-webhook": { enabled: false, url: null, secret: null },
   "maintenance-windows": { enabled: false, windows: [] },
-  "plan-explainer": { enabled: false, provider: null, "endpoint-url": null, "api-key": null, model: null },
+  "plan-explainer": { enabled: false, provider: null, "endpoint-url": null, "api-key": null, model: null, "reasoning-effort": null },
 };
 
 const SETTINGS_CACHE_TTL_MS = 1_000;

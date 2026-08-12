@@ -398,7 +398,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   let upstreamCalls = 0;
   let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
   let endpointUrl = "";
-  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; prompt: string | null }>> = [];
+  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; reasoning: unknown; reasoningEffort: unknown; prompt: string | null }>> = [];
 
   beforeAll(async () => {
     await db.insert(runs).values([
@@ -438,22 +438,28 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
         let stream: unknown = null;
         let model: unknown = null;
         let maxTokens: unknown = null;
+        let reasoning: unknown = null;
+        let reasoningEffort: unknown = null;
         let prompt: string | null = null;
         try {
           const body = (await request.json()) as {
             stream?: unknown;
             model?: unknown;
             max_tokens?: unknown;
+            reasoning?: unknown;
+            reasoning_effort?: unknown;
             messages?: Array<{ content?: unknown }>;
           };
           stream = body.stream ?? null;
           model = body.model ?? null;
           maxTokens = body.max_tokens ?? null;
+          reasoning = body.reasoning ?? null;
+          reasoningEffort = body.reasoning_effort ?? null;
           prompt = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : null;
         } catch {
           // Non-JSON request body; keep the captured fields as null.
         }
-        upstreamBodies.push({ stream, model, maxTokens, prompt });
+        upstreamBodies.push({ stream, model, maxTokens, reasoning, reasoningEffort, prompt });
         if (upstreamMode === "sse") {
           const encoder = new TextEncoder();
           const chunks = [
@@ -485,7 +491,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       },
     });
     endpointUrl = `http://127.0.0.1:${upstream.port}/v1/chat/completions`;
-    await setSettings("plan-explainer", { enabled: true, "endpoint-url": endpointUrl, "api-key": null, model: "test-model" });
+    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
   });
 
   afterAll(async () => {
@@ -502,10 +508,11 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "plan" } },
     });
     expect(first.status).toBe(200);
-    const firstBody = (await first.json()) as { data: { attributes: { explanation: string; model: string; cached: boolean; kind: string } } };
+    const firstBody = (await first.json()) as { data: { attributes: { explanation: string; model: string; cached: boolean; kind: string; "reasoning-effort": string | null } } };
     expect(firstBody.data.attributes.kind).toBe("plan");
     expect(firstBody.data.attributes.explanation).toContain("adds one instance");
     expect(firstBody.data.attributes.model).toBe("test-model");
+    expect(firstBody.data.attributes["reasoning-effort"]).toBe("xhigh");
     expect(firstBody.data.attributes.cached).toBe(false);
     expect(upstreamCalls).toBe(1);
     // The upstream saw the configured model, a non-stream request, and a
@@ -513,6 +520,8 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(upstreamBodies[0]?.stream).toBe(false);
     expect(upstreamBodies[0]?.model).toBe("test-model");
     expect(upstreamBodies[0]?.maxTokens).toBeNull();
+    expect(upstreamBodies[0]?.reasoning).toEqual({ effort: "xhigh" });
+    expect(upstreamBodies[0]?.reasoningEffort).toBeNull();
     expect(upstreamBodies[0]?.prompt ?? "").toContain("Terraform plan");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("brief overview");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("aws_instance.web");
@@ -594,6 +603,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(text).toContain("event: meta");
     expect(text).toContain("event: thinking");
     expect(text).toContain("First I inspect the diff.");
+    expect(text).toContain('"reasoning-effort":"xhigh"');
     expect(text).toContain("event: content");
     const streamedContent = text
       .split("event: content\ndata: ")
@@ -609,6 +619,8 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(upstreamBodies[0]?.stream).toBe(true);
     expect(upstreamBodies[0]?.model).toBe("test-model");
     expect(upstreamBodies[0]?.maxTokens).toBeNull();
+    expect(upstreamBodies[0]?.reasoning).toEqual({ effort: "xhigh" });
+    expect(upstreamBodies[0]?.reasoningEffort).toBeNull();
     expect(upstreamBodies[0]?.prompt ?? "").toContain("apply failed");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("troubleshooting steps");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("InvalidParameterValue");
@@ -659,6 +671,20 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     const cachedBody = (await cached.json()) as { data: { attributes: { explanation: string } } };
     expect(cachedBody.data.attributes.explanation).toContain("adds one instance");
     expect(upstreamCalls).toBe(1);
+  });
+
+  it("regenerates when the configured reasoning effort changes", async () => {
+    upstreamMode = "json";
+    upstreamCalls = 0;
+    upstreamBodies = [];
+    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "low" });
+    const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+    }, { Authorization: `Bearer ${adminToken}` });
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(upstreamBodies[0]?.reasoning).toEqual({ effort: "low" });
+    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
   });
 });
 
@@ -758,19 +784,20 @@ describe("admin operations settings surface", () => {
       method: "PATCH",
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
       body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: "openrouter", enabled: true } } },
+        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: "openrouter", enabled: true, "reasoning-effort": "xhigh" } } },
       }),
     }));
     expect(patch.status).toBe(200);
     const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
     expect(body.data.attributes["plan-explainer"].provider).toBe("openrouter");
+    expect(body.data.attributes["plan-explainer"]["reasoning-effort"]).toBe("xhigh");
 
     // Clearing it back to null also validates.
     const clear = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
       method: "PATCH",
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
       body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: null, enabled: false } } },
+        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: null, enabled: false, "reasoning-effort": null } } },
       }),
     }));
     expect(clear.status).toBe(200);
@@ -782,6 +809,17 @@ describe("admin operations settings surface", () => {
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
       body: JSON.stringify({
         data: { type: "operations-settings", attributes: { "plan-explainer": { provider: 42 } } },
+      }),
+    }));
+    expect(patch.status).toBe(422);
+  });
+
+  it("rejects an unsupported plan-explainer reasoning effort", async () => {
+    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { type: "operations-settings", attributes: { "plan-explainer": { "reasoning-effort": "extreme" } } },
       }),
     }));
     expect(patch.status).toBe(422);

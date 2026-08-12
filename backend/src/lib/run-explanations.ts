@@ -17,6 +17,9 @@ import { log } from "./log";
  */
 export type ExplainKind = "plan" | "apply";
 
+export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+
 export const EXPLAIN_KINDS: readonly ExplainKind[] = ["plan", "apply"];
 
 export const EXPLAIN_MAX_PROMPT_CHARS = 100_000;
@@ -27,6 +30,10 @@ export type ExplainSource = Readonly<{
   prompt: string;
   inputHash: string;
 }>;
+
+export function configuredReasoningEffort(value: unknown): ReasoningEffort | null {
+  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value) ? value as ReasoningEffort : null;
+}
 
 export type StoredExplanation = Readonly<{
   id: string;
@@ -44,7 +51,7 @@ export type StoredExplanation = Readonly<{
  * The input hash is the cheap staleness detector: a new plan or a changed
  * apply log yields a different hash, so the cache serves fresh content only.
  */
-export async function buildExplainSource(runId: string, kind: ExplainKind): Promise<ExplainSource | undefined> {
+export async function buildExplainSource(runId: string, kind: ExplainKind, reasoningEffort: ReasoningEffort | null = null): Promise<ExplainSource | undefined> {
   if (kind === "plan") {
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) return undefined;
@@ -53,7 +60,7 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
       ? `${serialized.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
       : serialized;
     const prompt = `Explain the following Terraform plan in plain language for a reviewer. Provide a brief overview of what will be added, changed, or destroyed, and flag anything risky. Use concise bullets where helpful; do not reproduce the full plan or your internal reasoning.\n\n${truncated}`;
-    return { prompt, inputHash: hashInput(prompt) };
+    return { prompt, inputHash: hashInput(`${prompt}\n\n[reasoning-effort=${reasoningEffort ?? "default"}]`) };
   }
   const logEntries = await readRunLogs(runId, "apply");
   if (logEntries.length === 0) return undefined;
@@ -62,7 +69,7 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
     ? `... (earlier output omitted)\n${fullLog.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
     : fullLog;
   const prompt = `A Terraform apply failed. Provide a brief overview of what went wrong, quote the key error, and give 2–3 recommended troubleshooting steps. Focus on practical next actions; do not reproduce the full log or your internal reasoning.\n\n${tail}`;
-  return { prompt, inputHash: hashInput(prompt) };
+  return { prompt, inputHash: hashInput(`${prompt}\n\n[reasoning-effort=${reasoningEffort ?? "default"}]`) };
 }
 
 function hashInput(prompt: string): string {
@@ -164,13 +171,20 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
   const endpointUrl = settings["endpoint-url"] as string;
   const model = settings.model as string;
   const apiKey = typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
+  const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
+  const provider = typeof settings.provider === "string" ? settings.provider.toLowerCase() : "";
+  const reasoningOptions = reasoningEffort === null
+    ? {}
+    : provider === "openrouter"
+      ? { reasoning: { effort: reasoningEffort } }
+      : { reasoning_effort: reasoningEffort };
   return new Request(endpointUrl, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(apiKey !== undefined ? { authorization: `Bearer ${apiKey}` } : {}),
     },
-    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream }),
+    body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], ...reasoningOptions, stream }),
   });
 }
 
