@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { runExplanations } from "../db/schema";
@@ -12,6 +11,8 @@ import { log } from "./log";
  * OpenAI-compatible endpoint. Results are cached per (run, kind) so re-opening
  * the dialog never re-burns tokens; a regenerate action forces a fresh call.
  * Only the final answer is cached; transient provider reasoning is never persisted.
+ * Cache identity is the run and explanation slot, never the current model or
+ * reasoning configuration.
  * All state lives in the `run_explanations` table; the upstream call itself is
  * never part of the trusted apply decision.
  */
@@ -28,7 +29,6 @@ export const EXPLAIN_TIMEOUT_MS = 60_000;
 
 export type ExplainSource = Readonly<{
   prompt: string;
-  inputHash: string;
 }>;
 
 export function configuredReasoningEffort(value: unknown): ReasoningEffort | null {
@@ -41,17 +41,14 @@ export type StoredExplanation = Readonly<{
   kind: ExplainKind;
   model: string;
   content: string;
-  inputHash: string;
   createdAt: number;
 }>;
 
 /**
- * Build the prompt (and its content hash) for a run kind. Returns undefined
+ * Build the prompt for a run kind. Returns undefined
  * when the run has no artifact to explain (callers map that to 409).
- * The input hash is the cheap staleness detector: a new plan or a changed
- * apply log yields a different hash, so the cache serves fresh content only.
  */
-export async function buildExplainSource(runId: string, kind: ExplainKind, reasoningEffort: ReasoningEffort | null = null): Promise<ExplainSource | undefined> {
+export async function buildExplainSource(runId: string, kind: ExplainKind): Promise<ExplainSource | undefined> {
   if (kind === "plan") {
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) return undefined;
@@ -60,7 +57,7 @@ export async function buildExplainSource(runId: string, kind: ExplainKind, reaso
       ? `${serialized.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
       : serialized;
     const prompt = `Explain the following Terraform plan in plain language for a reviewer. Provide a brief overview of what will be added, changed, or destroyed, and flag anything risky. Use concise bullets where helpful; do not reproduce the full plan or your internal reasoning.\n\n${truncated}`;
-    return { prompt, inputHash: hashInput(`${prompt}\n\n[reasoning-effort=${reasoningEffort ?? "default"}]`) };
+    return { prompt };
   }
   const logEntries = await readRunLogs(runId, "apply");
   if (logEntries.length === 0) return undefined;
@@ -69,19 +66,19 @@ export async function buildExplainSource(runId: string, kind: ExplainKind, reaso
     ? `... (earlier output omitted)\n${fullLog.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
     : fullLog;
   const prompt = `A Terraform apply failed. Provide a brief overview of what went wrong, quote the key error, and give 2–3 recommended troubleshooting steps. Focus on practical next actions; do not reproduce the full log or your internal reasoning.\n\n${tail}`;
-  return { prompt, inputHash: hashInput(`${prompt}\n\n[reasoning-effort=${reasoningEffort ?? "default"}]`) };
+  return { prompt };
 }
 
-function hashInput(prompt: string): string {
-  return createHash("sha256").update(prompt).digest("hex");
+/** Stable storage key for the one plan or apply-error answer belonging to a run. */
+export function explanationCacheKey(runId: string, kind: ExplainKind): string {
+  return `${runId}-${kind === "plan" ? "plan" : "apply-error"}`;
 }
 
 /**
- * Latest cached explanation for a (run, kind). A row is a cache hit only when
- * both the model and the artifact hash still match, so a reconfigured model or
- * a re-planned run transparently regenerates instead of serving stale text.
+ * Latest cached explanation for a (run, kind). Model and prompt changes do not
+ * invalidate it; callers must request an explicit refresh to replace it.
  */
-export async function findExplanation(runId: string, kind: ExplainKind, model: string, inputHash: string): Promise<StoredExplanation | undefined> {
+export async function findExplanation(runId: string, kind: ExplainKind): Promise<StoredExplanation | undefined> {
   const rows = await db.query.runExplanations.findMany({
     where: and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind)),
     orderBy: [desc(runExplanations.createdAt)],
@@ -89,14 +86,12 @@ export async function findExplanation(runId: string, kind: ExplainKind, model: s
   });
   const row = rows[0];
   if (row === undefined) return undefined;
-  if (row.model !== model || row.inputHash !== inputHash) return undefined;
   return {
     id: row.id,
     runId: row.runId,
     kind: row.kind as ExplainKind,
     model: row.model,
     content: row.content,
-    inputHash: row.inputHash,
     createdAt: row.createdAt,
   };
 }
@@ -110,19 +105,20 @@ export async function saveExplanation(
   kind: ExplainKind,
   model: string,
   content: string,
-  inputHash: string,
 ): Promise<void> {
   // Delete and insert run as one unit so concurrent regenerations can never
   // leave the table without a row for (run, kind).
   await db.transaction(async (tx) => {
     await tx.delete(runExplanations).where(and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind)));
     await tx.insert(runExplanations).values({
-      id: `rex-${crypto.randomUUID()}`,
+      id: explanationCacheKey(runId, kind),
       runId,
       kind,
       model,
       content,
-      inputHash,
+      // Kept populated for compatibility with the original physical column;
+      // this is now the stable run/slot key, not a content hash.
+      cacheKey: explanationCacheKey(runId, kind),
     });
   });
 }

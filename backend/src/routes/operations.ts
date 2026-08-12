@@ -166,15 +166,17 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
       if (typeof kindOrError !== "string") return kindOrError.body;
       const kind = kindOrError;
-      const source = await buildExplainSource(runId, kind, reasoningEffort);
+      const cached = await findExplanation(runId, kind);
+      if (cached !== undefined) {
+        return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
+      }
+      const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
         (set as { status: number }).status = err.status;
         return err.body;
       }
-      const cached = await findExplanation(runId, kind, settings.model as string, source.inputHash);
-      if (cached === undefined) return notFound(set);
-      return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
+      return notFound(set);
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
       const runId = params.run_id ?? "";
@@ -194,17 +196,18 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const refresh = attributes.refresh === true;
       const streamRequested = attributes.stream === true;
       const model = settings.model as string;
-      const source = await buildExplainSource(runId, kind, reasoningEffort);
+      if (!refresh) {
+        const cached = await findExplanation(runId, kind);
+        if (cached !== undefined) {
+          if (streamRequested) return cachedSseResponse(cached.content, kind, cached.model, reasoningEffort, cached.createdAt);
+          return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
+        }
+      }
+      const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
         (set as { status: number }).status = err.status;
         return err.body;
-      }
-      if (!refresh && !streamRequested) {
-        const cached = await findExplanation(runId, kind, model, source.inputHash);
-        if (cached !== undefined) {
-          return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
-        }
       }
       if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, reasoningEffort, request, refresh);
       return explainJsonResponse(set, settings, source, runId, kind, model, reasoningEffort);
@@ -285,7 +288,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       return err.body;
     }
     try {
-      await saveExplanation(runId, kind, model, parts.content, source.inputHash);
+      await saveExplanation(runId, kind, model, parts.content);
     } catch (error: unknown) {
       // A failed write must not hide a successful generation; the next
       // request simply regenerates.
@@ -339,9 +342,9 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     if (!forceRefresh) {
       // A stream request must never answer with a JSON cache hit; deliver
       // the cached generation through the same SSE envelope instead.
-      const cached = await findExplanation(runId, kind, model, source.inputHash);
+      const cached = await findExplanation(runId, kind);
       if (cached !== undefined && cached.content !== "") {
-        return cachedSseResponse(cached.content, kind, model, reasoningEffort, cached.createdAt);
+        return cachedSseResponse(cached.content, kind, cached.model, reasoningEffort, cached.createdAt);
       }
     }
     const encoder = new TextEncoder();
@@ -376,7 +379,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               send(controller, "content", { text: parts.content });
               if (clientSignal.aborted) return;
               try {
-                await saveExplanation(runId, kind, model, parts.content, source.inputHash);
+                await saveExplanation(runId, kind, model, parts.content);
               } catch (error: unknown) {
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");
@@ -412,7 +415,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             }
             if (!clientSignal.aborted) {
               try {
-                await saveExplanation(runId, kind, model, contentText, source.inputHash);
+                await saveExplanation(runId, kind, model, contentText);
               } catch (error: unknown) {
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");

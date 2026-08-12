@@ -673,17 +673,29 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(upstreamCalls).toBe(1);
   });
 
-  it("regenerates when the configured reasoning effort changes", async () => {
+  it("keeps the cached generation when the model or reasoning effort changes", async () => {
     upstreamMode = "json";
     upstreamCalls = 0;
     upstreamBodies = [];
     await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "low" });
     const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
-      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+      data: { type: "plan-explanations", attributes: { kind: "plan", refresh: true } },
     }, { Authorization: `Bearer ${adminToken}` });
     expect(response.status).toBe(200);
     expect(upstreamCalls).toBe(1);
     expect(upstreamBodies[0]?.reasoning).toEqual({ effort: "low" });
+    // An explanation written by the previous hash-based implementation must
+    // remain a cache hit after the deployment changes that metadata.
+    await db.update(runExplanations).set({ cacheKey: "legacy-content-hash" }).where(eq(runExplanations.runId, cacheRunId));
+    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "different-model", "reasoning-effort": "max" });
+    const cached = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+    }, { Authorization: `Bearer ${adminToken}` });
+    expect(cached.status).toBe(200);
+    const cachedBody = (await cached.json()) as { data: { attributes: { cached: boolean; model: string } } };
+    expect(cachedBody.data.attributes.cached).toBe(true);
+    expect(cachedBody.data.attributes.model).toBe("test-model");
+    expect(upstreamCalls).toBe(1);
     await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
   });
 });

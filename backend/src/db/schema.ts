@@ -453,7 +453,9 @@ export const runExplanations = sqliteTable("run_explanations", {
   model: text("model").notNull(),
   content: text("content").notNull(),
   thinking: text("thinking"),
-  inputHash: text("input_hash").notNull(),
+  // Keep the physical input_hash column for existing databases while treating
+  // it as the stable cache slot key rather than a content hash.
+  cacheKey: text("input_hash").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   index("run_explanations_run_kind_idx").on(table.runId, table.kind),
