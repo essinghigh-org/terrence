@@ -8,6 +8,7 @@ import {
   changeRequests,
   logs,
   organizations,
+  runExplanations,
   runs,
   users,
   workspaces,
@@ -397,7 +398,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   let upstreamCalls = 0;
   let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
   let endpointUrl = "";
-  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; prompt: string | null }>> = [];
+  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; prompt: string | null }>> = [];
 
   beforeAll(async () => {
     await db.insert(runs).values([
@@ -436,20 +437,23 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
         // prompt, so the tests can pin what the routes send upstream.
         let stream: unknown = null;
         let model: unknown = null;
+        let maxTokens: unknown = null;
         let prompt: string | null = null;
         try {
           const body = (await request.json()) as {
             stream?: unknown;
             model?: unknown;
+            max_tokens?: unknown;
             messages?: Array<{ content?: unknown }>;
           };
           stream = body.stream ?? null;
           model = body.model ?? null;
+          maxTokens = body.max_tokens ?? null;
           prompt = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : null;
         } catch {
           // Non-JSON request body; keep the captured fields as null.
         }
-        upstreamBodies.push({ stream, model, prompt });
+        upstreamBodies.push({ stream, model, maxTokens, prompt });
         if (upstreamMode === "sse") {
           const encoder = new TextEncoder();
           const chunks = [
@@ -508,7 +512,9 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     // prompt over the stored plan JSON.
     expect(upstreamBodies[0]?.stream).toBe(false);
     expect(upstreamBodies[0]?.model).toBe("test-model");
+    expect(upstreamBodies[0]?.maxTokens).toBeNull();
     expect(upstreamBodies[0]?.prompt ?? "").toContain("Terraform plan");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("brief overview");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("aws_instance.web");
 
     // A second POST must not hit the upstream again.
@@ -575,7 +581,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(body.errors[0]?.detail ?? "").toContain("apply log");
   });
 
-  it("streams thinking and content deltas and persists the generation", async () => {
+  it("streams transient thinking and persists only the answer", async () => {
     upstreamCalls = 0;
     upstreamMode = "sse";
     upstreamBodies = [];
@@ -589,7 +595,12 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(text).toContain("event: thinking");
     expect(text).toContain("First I inspect the diff.");
     expect(text).toContain("event: content");
-    expect(text).toContain("The plan adds one instance.");
+    const streamedContent = text
+      .split("event: content\ndata: ")
+      .slice(1)
+      .map((event) => (JSON.parse(event.split("\n\n", 1)[0] ?? "{}") as { text?: string }).text ?? "")
+      .join("");
+    expect(streamedContent).toContain("The plan adds one instance.");
     expect(text).toContain("event: done");
     expect(text).not.toContain("event: error");
     expect(upstreamCalls).toBe(1);
@@ -597,14 +608,17 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     // prompt over the stored apply log tail.
     expect(upstreamBodies[0]?.stream).toBe(true);
     expect(upstreamBodies[0]?.model).toBe("test-model");
+    expect(upstreamBodies[0]?.maxTokens).toBeNull();
     expect(upstreamBodies[0]?.prompt ?? "").toContain("apply failed");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("troubleshooting steps");
     expect(upstreamBodies[0]?.prompt ?? "").toContain("InvalidParameterValue");
 
-    // The streamed generation was persisted with its thinking channel.
+    // Reasoning was streamed to the caller but is intentionally not cached.
     const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
-    const cachedBody = (await cached.json()) as { data: { attributes: { thinking?: string; explanation: string } } };
+    const cachedBody = (await cached.json()) as { data: { attributes: { explanation: string } } };
     expect(cachedBody.data.attributes.explanation).toContain("No existing resources change.");
-    expect(cachedBody.data.attributes.thinking ?? "").toContain("First I inspect the diff.");
+    const [stored] = await db.select({ thinking: runExplanations.thinking }).from(runExplanations).where(eq(runExplanations.runId, applyRunId));
+    expect(stored?.thinking).toBeNull();
   });
 
   it("serves a cached generation through the SSE envelope without calling upstream", async () => {
@@ -638,13 +652,12 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "apply", refresh: true } },
     });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { data: { attributes: { explanation: string; thinking?: string } } };
+    const body = (await response.json()) as { data: { attributes: { explanation: string } } };
     expect(body.data.attributes.explanation).toContain("adds one instance");
-    expect(body.data.attributes.thinking ?? "").toContain("Inspecting the diff.");
-    // And it landed in the store.
+    // The answer landed in the store without the transient reasoning.
     const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
-    const cachedBody = (await cached.json()) as { data: { attributes: { thinking?: string } } };
-    expect(cachedBody.data.attributes.thinking ?? "").toContain("Inspecting the diff.");
+    const cachedBody = (await cached.json()) as { data: { attributes: { explanation: string } } };
+    expect(cachedBody.data.attributes.explanation).toContain("adds one instance");
     expect(upstreamCalls).toBe(1);
   });
 });

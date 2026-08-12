@@ -171,7 +171,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       }
       const cached = await findExplanation(runId, kind, settings.model as string, source.inputHash);
       if (cached === undefined) return notFound(set);
-      return explanationResource(runId, kind, cached.content, cached.thinking, cached.model, new Date(cached.createdAt).toISOString(), true);
+      return explanationResource(runId, kind, cached.content, cached.model, new Date(cached.createdAt).toISOString(), true);
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
       const runId = params.run_id ?? "";
@@ -199,7 +199,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (!refresh && !streamRequested) {
         const cached = await findExplanation(runId, kind, model, source.inputHash);
         if (cached !== undefined) {
-          return explanationResource(runId, kind, cached.content, cached.thinking, cached.model, new Date(cached.createdAt).toISOString(), true);
+          return explanationResource(runId, kind, cached.content, cached.model, new Date(cached.createdAt).toISOString(), true);
         }
       }
       if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, request, refresh);
@@ -230,7 +230,6 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     runId: string,
     kind: ExplainKind,
     explanation: string,
-    thinking: string | null | undefined,
     model: string,
     generatedAt: string,
     cached: boolean,
@@ -242,7 +241,6 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         attributes: {
           kind,
           explanation,
-          ...(thinking !== null && thinking !== undefined && thinking !== "" ? { thinking } : {}),
           model,
           "generated-at": generatedAt,
           cached,
@@ -280,21 +278,20 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       return err.body;
     }
     try {
-      await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
+      await saveExplanation(runId, kind, model, parts.content, source.inputHash);
     } catch (error: unknown) {
       // A failed write must not hide a successful generation; the next
       // request simply regenerates.
       log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
     }
-    return explanationResource(runId, kind, parts.content, parts.thinking, model, new Date().toISOString(), false);
+    return explanationResource(runId, kind, parts.content, model, new Date().toISOString(), false);
   }
 
   /** Replay a cached generation through the SSE envelope (no upstream call). */
-  function cachedSseResponse(content: string, thinking: string, kind: ExplainKind, model: string, createdAt: number): Response {
+  function cachedSseResponse(content: string, kind: ExplainKind, model: string, createdAt: number): Response {
     const encoder = new TextEncoder();
     const events = [
       `event: meta\ndata: ${JSON.stringify({ kind, model })}\n\n`,
-      ...(thinking !== "" ? [`event: thinking\ndata: ${JSON.stringify({ text: thinking })}\n\n`] : []),
       `event: content\ndata: ${JSON.stringify({ text: content })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ model, "generated-at": new Date(createdAt).toISOString(), cached: true })}\n\n`,
     ];
@@ -336,7 +333,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // the cached generation through the same SSE envelope instead.
       const cached = await findExplanation(runId, kind, model, source.inputHash);
       if (cached !== undefined && cached.content !== "") {
-        return cachedSseResponse(cached.content, cached.thinking ?? "", kind, model, cached.createdAt);
+        return cachedSseResponse(cached.content, kind, model, cached.createdAt);
       }
     }
     const encoder = new TextEncoder();
@@ -371,7 +368,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               send(controller, "content", { text: parts.content });
               if (clientSignal.aborted) return;
               try {
-                await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
+                await saveExplanation(runId, kind, model, parts.content, source.inputHash);
               } catch (error: unknown) {
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");
@@ -380,16 +377,15 @@ export const operationsRoutes = new Elysia({ name: "operations" })
               return;
             }
             const content: string[] = [];
-            const thinking: string[] = [];
             await forEachUpstreamDelta(
               upstream,
               (channel, text) => {
                 if (clientSignal.aborted) return;
                 if (channel === "thinking") {
-                  thinking.push(text);
-                } else {
-                  content.push(text);
+                  send(controller, channel, { text });
+                  return;
                 }
+                content.push(text);
                 send(controller, channel, { text });
               },
               // Keep the idle deadline alive while deltas keep arriving.
@@ -400,17 +396,15 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             if (clientSignal.aborted) return;
             let contentText = content.join("");
             if (contentText === "") throw new Error("Plan explainer returned no explanation");
-            if (thinking.length === 0 && contentText.includes("<thinking")) {
-              const split = splitInlineThinking(contentText);
-              if (split.thinking !== "") {
-                contentText = split.content;
-                send(controller, "content-reset", { text: contentText });
-                send(controller, "thinking", { text: split.thinking });
-              }
+            const split = splitInlineThinking(contentText);
+            if (split.thinking !== "") {
+              contentText = split.content;
+              send(controller, "content-reset", { text: contentText });
+              send(controller, "thinking", { text: split.thinking });
             }
             if (!clientSignal.aborted) {
               try {
-                await saveExplanation(runId, kind, model, contentText, thinking.join(""), source.inputHash);
+                await saveExplanation(runId, kind, model, contentText, source.inputHash);
               } catch (error: unknown) {
                 log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
                 throw new Error("Failed to persist the explanation");

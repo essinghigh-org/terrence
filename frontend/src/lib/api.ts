@@ -48,7 +48,7 @@ export class ApiError extends Error {
  * surfaced so UIs can render per-field feedback instead of a single blob
  * (26.9). Unparsable pointers are dropped.
  */
-export function extractFieldErrors(rawErrors: readonly Record<string, unknown>[]): Record<string, string> {
+export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, unknown>>[]): Record<string, string> {
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];
@@ -360,13 +360,10 @@ export async function streamExplain(
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     const parsed = (await response.json().catch((): null => null)) as {
-      data?: { attributes?: { explanation?: string; thinking?: string; model?: string } };
+      data?: { attributes?: { explanation?: string; model?: string } };
     } | null;
     const attributes = parsed?.data?.attributes;
     if (attributes?.explanation !== undefined && attributes.explanation !== "") {
-      if (attributes.thinking !== undefined && attributes.thinking !== "") {
-        onEvent({ name: "thinking", data: { text: attributes.thinking } });
-      }
       onEvent({ name: "content", data: { text: attributes.explanation } });
       onEvent({ name: "done", data: { model: attributes.model ?? "", "generated-at": new Date().toISOString() } });
       return;

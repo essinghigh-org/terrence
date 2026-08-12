@@ -303,6 +303,14 @@ function formatDurationSeconds(totalSeconds: number | null | undefined): string 
   return `${hours} hour${hours === 1 ? "" : "s"}${remainder === 0 ? "" : ` ${remainder} min`}`;
 }
 
+export function formatExplainElapsed(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
+}
+
 function formatMonthlyCost(value: string | undefined): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
@@ -562,6 +570,9 @@ export function RunDetail({
   const [explaining, setExplaining] = useState(false);
   const [explanation, setExplanation] = useState("");
   const [explainerThinking, setExplainerThinking] = useState("");
+  const [explainerThinkingOpen, setExplainerThinkingOpen] = useState(false);
+  const [explainerElapsedSeconds, setExplainerElapsedSeconds] = useState(0);
+  const [explainerStartedAt, setExplainerStartedAt] = useState<number | null>(null);
   const [explainerModel, setExplainerModel] = useState("");
   const [explainError, setExplainError] = useState("");
   const explainerAbortRef = useRef<AbortController | null>(null);
@@ -573,6 +584,16 @@ export function RunDetail({
       explainerAbortRef.current = null;
     };
   }, []);
+  useEffect((): (() => void) | undefined => {
+    if (explainerStartedAt === null) return undefined;
+    const updateElapsed = (): void => {
+      setExplainerElapsedSeconds(Math.floor((Date.now() - explainerStartedAt) / 1000));
+    };
+    updateElapsed();
+    if (!explaining) return undefined;
+    const timer = window.setInterval(updateElapsed, 1000);
+    return (): void => { window.clearInterval(timer); };
+  }, [explainerStartedAt, explaining]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
@@ -905,6 +926,9 @@ export function RunDetail({
     setExplaining(true);
     setExplanation("");
     setExplainerThinking("");
+    setExplainerThinkingOpen(false);
+    setExplainerElapsedSeconds(0);
+    setExplainerStartedAt(Date.now());
     setExplainerModel("");
     setExplainError("");
     // Only the latest stream may update the dialog state; abort any earlier
@@ -918,6 +942,7 @@ export function RunDetail({
         kind,
         refresh,
         (event): void => {
+          if (explainerAbortRef.current !== controller) return;
           if (event.name === "meta") {
             setExplainerModel(event.data.model);
           } else if (event.name === "thinking") {
@@ -941,8 +966,11 @@ export function RunDetail({
       }
       setExplainError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      if (explainerAbortRef.current === controller) explainerAbortRef.current = null;
-      setExplaining(false);
+      if (explainerAbortRef.current === controller) {
+        explainerAbortRef.current = null;
+        setExplaining(false);
+        setExplainerThinking("");
+      }
     }
   }
 
@@ -2016,17 +2044,28 @@ export function RunDetail({
                   <div>
                     <p className="font-medium">Could not generate an explanation</p>
                     <p className="mt-1 break-words">{explainError}</p>
+                    <p className="mt-2 text-xs text-destructive/90">Check the explainer endpoint, model, and API key, then try again.</p>
                   </div>
                 </div>
               )}
-              {explainerThinking !== "" && (
-                <details className="group mb-3 rounded-md border border-border" open={explaining}>
-                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                    <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden="true" />
-                    Thinking
+              {explaining && (
+                <details
+                  className="group mb-3 rounded-md border border-border"
+                  open={explainerThinkingOpen}
+                  onToggle={(event): void => { setExplainerThinkingOpen(event.currentTarget.open); }}
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden="true" />
+                      <span>Thinking</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                      {explaining && <Spinner className="size-3.5" aria-label="Thinking in progress" />}
+                      <span>{formatExplainElapsed(explainerElapsedSeconds)}</span>
+                    </span>
                   </summary>
                   <div className="border-t border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
-                    <p className="whitespace-pre-wrap">{explainerThinking}</p>
+                    <p className="break-words whitespace-pre-wrap">{explainerThinking || "Reasoning will appear here if the model provides it."}</p>
                   </div>
                 </details>
               )}
@@ -2037,10 +2076,10 @@ export function RunDetail({
                 </div>
               )}
               {explanation !== "" && (
-                <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{explanation}</p>
+                <p className="break-words whitespace-pre-wrap text-sm leading-6 text-foreground">{explanation}</p>
               )}
           </div>
-          {(explaining || explanation !== "" || explainerThinking !== "" || explainError !== "") && (
+          {(explaining || explanation !== "" || explainError !== "") && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
                 <p className="min-w-0 truncate text-xs text-muted-foreground">
                   {explainerModel !== "" ? `Generated by ${explainerModel}` : ""}
@@ -2057,7 +2096,7 @@ export function RunDetail({
                       Stop
                     </Button>
                   ) : (
-                    explanation !== "" || explainerThinking !== "" ? (
+                    explanation !== "" ? (
                       <Button
                         type="button"
                         variant="ghost"
