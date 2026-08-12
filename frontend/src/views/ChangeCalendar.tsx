@@ -6,6 +6,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { CalendarClock, CheckCircle2, Clock3, GitPullRequest, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type CalendarEntry = {
   id: string;
@@ -59,7 +60,7 @@ export function ChangeCalendar(): React.JSX.Element {
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
 
-  useEffect(() => {
+  useEffect((): (() => void) | undefined => {
     setEntries([]);
     setTotalCount(0);
     setError("");
@@ -72,7 +73,7 @@ export function ChangeCalendar(): React.JSX.Element {
           `/organizations/${encodeURIComponent(orgName)}/change-calendar`,
         ) as { data: CalendarEntry[]; meta?: { "total-count"?: number } };
         if (cancelled || activeOrganizationName.current !== orgName) return;
-        setEntries(response.data ?? []);
+        setEntries(response.data);
         setTotalCount(response.meta?.["total-count"] ?? response.data.length);
       } catch (caught: unknown) {
         if (cancelled || activeOrganizationName.current !== orgName) return;
@@ -92,21 +93,20 @@ export function ChangeCalendar(): React.JSX.Element {
     `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`;
 
   return (
-    <div className="space-y-6">
-      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <CalendarClock className="size-6 text-muted-foreground" aria-hidden="true" />
-          <div>
-            <h1 className="text-xl font-semibold text-foreground">Change calendar</h1>
-            <p className="text-sm text-muted-foreground">
-              Confirmed applies, pending change requests, and scheduled auto-destroys.
-            </p>
-          </div>
-        </div>
-        {!loading && error === "" && (
-          <Badge variant="secondary">{totalCount} upcoming</Badge>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Change calendar`}
+        title={(
+          <span className="flex items-center gap-2">
+            <CalendarClock className="size-7 text-muted-foreground" aria-hidden="true" />
+            Change calendar
+          </span>
         )}
-      </div>
+        description="Confirmed applies, pending change requests, and scheduled auto-destroys."
+        action={!loading && error === "" ? (
+          <Badge variant="secondary">{totalCount} upcoming</Badge>
+        ) : undefined}
+      />
 
       {loading ? (
         <div className="flex justify-center py-16">
@@ -126,13 +126,13 @@ export function ChangeCalendar(): React.JSX.Element {
       ) : (
         <ul className="space-y-3">
           {entries.map((entry): React.JSX.Element => {
-            const Icon = KIND_ICON[entry.attributes.kind];
+            const ICON_COMPONENT = KIND_ICON[entry.attributes.kind];
             return (
               <li key={entry.id}>
                 <Card>
                   <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-3">
-                      <Icon className="mt-0.5 size-5 text-muted-foreground" aria-hidden="true" />
+                      <ICON_COMPONENT className="mt-0.5 size-5 text-muted-foreground" aria-hidden="true" />
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-foreground">{occurrenceLabel(entry)}</span>
@@ -144,7 +144,7 @@ export function ChangeCalendar(): React.JSX.Element {
                           {entry.attributes.workspaceName !== null ? (
                             <Link
                               to={workspaceUrl(entry.attributes.workspaceName)}
-                              className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                              className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                             >
                               {entry.attributes.workspaceName}
                             </Link>
@@ -156,7 +156,7 @@ export function ChangeCalendar(): React.JSX.Element {
                               {" · "}
                               <Link
                                 to={`${workspaceUrl(entry.attributes.workspaceName)}/runs/${encodeURIComponent(entry.attributes.runId)}`}
-                                className="rounded-sm font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                                className="rounded-sm font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                               >
                                 {entry.attributes.runId.slice(0, 8)}
                               </Link>
@@ -178,6 +178,6 @@ export function ChangeCalendar(): React.JSX.Element {
           })}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }

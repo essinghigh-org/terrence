@@ -4,19 +4,19 @@ import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 function Dialog(props: DialogPrimitive.Root.Props): React.JSX.Element {
-  return <DialogPrimitive.Root {...(props as DialogPrimitive.Root.Props)} />;
+  return <DialogPrimitive.Root {...props} />;
 }
 
 function DialogTrigger(props: DialogPrimitive.Trigger.Props): React.JSX.Element {
-  return <DialogPrimitive.Trigger {...(props as DialogPrimitive.Trigger.Props)} />;
+  return <DialogPrimitive.Trigger {...props} />;
 }
 
 function DialogPortal(props: DialogPrimitive.Portal.Props): React.JSX.Element {
-  return <DialogPrimitive.Portal {...(props as DialogPrimitive.Portal.Props)} />;
+  return <DialogPrimitive.Portal {...props} />;
 }
 
 function DialogClose(props: DialogPrimitive.Close.Props): React.JSX.Element {
-  return <DialogPrimitive.Close {...(props as DialogPrimitive.Close.Props)} />;
+  return <DialogPrimitive.Close {...props} />;
 }
 
 function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props): React.JSX.Element {
@@ -26,7 +26,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props):
         "fixed inset-0 z-50 bg-black/80 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
-      {...(props as DialogPrimitive.Backdrop.Props)}
+      {...props}
     />
   );
 }
@@ -40,10 +40,10 @@ function DialogContent({ className, children, ...props }: DialogPrimitive.Popup.
           "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-left-1/2 data-closed:slide-out-to-top-[48%] data-open:slide-in-from-left-1/2 data-open:slide-in-from-top-[48%] sm:rounded-lg",
           className
         )}
-        {...(props as DialogPrimitive.Popup.Props)}
+        {...props}
       >
-        {children as React.ReactNode}
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+        {children}
+        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none">
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
@@ -62,7 +62,7 @@ function DialogHeader({
         "flex flex-col space-y-1.5 text-center sm:text-left",
         className
       )}
-      {...(props as React.HTMLAttributes<HTMLDivElement>)}
+      {...props}
     />
   );
 }
@@ -77,7 +77,7 @@ function DialogFooter({
         "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
         className
       )}
-      {...(props as React.HTMLAttributes<HTMLDivElement>)}
+      {...props}
     />
   );
 }
@@ -89,7 +89,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props): Reac
         "text-lg font-semibold leading-none tracking-tight",
         className
       )}
-      {...(props as DialogPrimitive.Title.Props)}
+      {...props}
     />
   );
 }
@@ -98,7 +98,7 @@ function DialogDescription({ className, ...props }: DialogPrimitive.Description.
   return (
     <DialogPrimitive.Description
       className={cn("text-sm text-muted-foreground", className)}
-      {...(props as DialogPrimitive.Description.Props)}
+      {...props}
     />
   );
 }

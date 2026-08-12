@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type ResourceIdentifier = {
   id: string;
@@ -227,6 +228,9 @@ function VariablesDialog({
                 <FieldLabel htmlFor="variable-key">Key</FieldLabel>
                 <Input
                   id="variable-key"
+                  name="variable-key"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={key}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }}
@@ -238,6 +242,9 @@ function VariablesDialog({
                 <FieldLabel htmlFor="variable-value">Value</FieldLabel>
                 <Input
                   id="variable-value"
+                  name="variable-value"
+                  autoComplete="off"
+                  spellCheck={false}
                   type={sensitive ? "password" : "text"}
                   value={value}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setValue(event.target.value); }}
@@ -249,7 +256,7 @@ function VariablesDialog({
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                <Select value={category} onValueChange={(val: string): void => { setCategory(val as VariableCategory); }}>
+                <Select name="variable-category" value={category} onValueChange={(val: string): void => { setCategory(val as VariableCategory); }}>
                   <SelectTrigger id="variable-category" className="w-full">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
@@ -263,6 +270,9 @@ function VariablesDialog({
                 <FieldLabel htmlFor="variable-description">Description</FieldLabel>
                 <Input
                   id="variable-description"
+                  name="variable-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={description}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
@@ -650,21 +660,20 @@ export function VariableSets(): React.JSX.Element {
   };
 
   return (
-    <main className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Variable sets</h1>
-          <p className="text-sm text-muted-foreground">
-            Reuse configuration across workspaces in this organization.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link to={`/app/${encodeURIComponent(orgName)}`} className={buttonVariants({ variant: "outline" })}>
-            Workspaces
-          </Link>
-          {canManage && <Button onClick={(): void => { openEditor(); }}>New variable set</Button>}
-        </div>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Variable sets"
+        description="Reuse configuration across workspaces in this organization."
+        action={(
+          <div className="flex items-center gap-2">
+            <Link to={`/app/${encodeURIComponent(orgName)}`} className={buttonVariants({ variant: "outline" })}>
+              Workspaces
+            </Link>
+            {canManage && <Button onClick={(): void => { openEditor(); }}>New variable set</Button>}
+          </div>
+        )}
+      />
 
       {pageError !== "" && (
         <p role="alert" className="text-sm text-destructive">
@@ -781,6 +790,9 @@ export function VariableSets(): React.JSX.Element {
                 <FieldLabel htmlFor="variable-set-name">Name</FieldLabel>
                 <Input
                   id="variable-set-name"
+                  name="variable-set-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={name}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
@@ -792,6 +804,9 @@ export function VariableSets(): React.JSX.Element {
                 <FieldLabel htmlFor="variable-set-description">Description</FieldLabel>
                 <Input
                   id="variable-set-description"
+                  name="variable-set-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={description}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
@@ -818,7 +833,7 @@ export function VariableSets(): React.JSX.Element {
                 </Button>
                 <Button type="submit" disabled={savingSet}>
                   {savingSet && <Spinner data-icon="inline-start" />}
-                  {savingSet ? "Saving..." : "Save variable set"}
+                  {savingSet ? "Saving…" : "Save variable set"}
                 </Button>
               </DialogFooter>
             </FieldGroup>
@@ -899,6 +914,6 @@ export function VariableSets(): React.JSX.Element {
           }
         }}
       />
-    </main>
+    </PageShell>
   );
 }

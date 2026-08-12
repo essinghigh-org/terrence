@@ -22,6 +22,7 @@ import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { toast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type Project = Readonly<{
   id: string;
@@ -198,26 +199,27 @@ export function Projects(): React.JSX.Element {
     workspaces.filter((workspace): boolean => workspace.relationships?.project?.data?.id === projectId).length;
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold">Projects</h1>
-          <p className="text-sm text-muted-foreground">Organize workspaces under {orgName}.</p>
-        </div>
-        {canManageProjects && <div className="flex gap-2">
-          <Button variant="outline" onClick={(): void => { setAssignmentsOpen(true); }}>
-            <Layers data-icon="inline-start" />
-            Assign workspaces
-          </Button>
-          <Button onClick={(): void => { openProjectDialog(null); }}>
-            <Plus data-icon="inline-start" />
-            Create project
-          </Button>
-        </div>}
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Projects`}
+        title="Projects"
+        description={`Organize workspaces under ${orgName}.`}
+        action={canManageProjects ? (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={(): void => { setAssignmentsOpen(true); }}>
+              <Layers data-icon="inline-start" />
+              Assign workspaces
+            </Button>
+            <Button onClick={(): void => { openProjectDialog(null); }}>
+              <Plus data-icon="inline-start" />
+              Create project
+            </Button>
+          </div>
+        ) : undefined}
+      />
 
       {loadError !== "" && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <span>Could not load projects: {loadError}</span>
           <Button type="button" variant="outline" onClick={(): void => { void loadData(); }}>
             Try again
@@ -311,6 +313,9 @@ export function Projects(): React.JSX.Element {
                 <FieldLabel htmlFor="project-name">Name</FieldLabel>
                 <Input
                   id="project-name"
+                  name="project-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={name}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                   aria-invalid={formError !== ""}
@@ -320,6 +325,9 @@ export function Projects(): React.JSX.Element {
                 <FieldLabel htmlFor="project-description">Description</FieldLabel>
                 <Input
                   id="project-description"
+                  name="project-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={description}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
                 />
@@ -392,6 +400,6 @@ export function Projects(): React.JSX.Element {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

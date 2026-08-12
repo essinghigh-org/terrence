@@ -132,7 +132,7 @@ export function WorkspaceSshKey({
           </span>
           <Button type="submit" disabled={loading || saving}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : "Save assignment"}
+            {saving ? "Saving…" : "Save assignment"}
           </Button>
         </CardFooter>
       </Card>
@@ -423,7 +423,7 @@ export function WorkspaceHealth({
           </span>
           <Button type="submit" disabled={saving || !canUpdate}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : "Save health settings"}
+            {saving ? "Saving…" : "Save health settings"}
           </Button>
         </CardFooter>
       </Card>

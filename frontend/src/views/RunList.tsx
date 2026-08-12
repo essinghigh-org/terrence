@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  AlertCircle,
   ArrowDown,
   ArrowUp,
   ArrowUpRight,
-  CheckCircle2,
-  Clock,
   Copy,
   Search,
-  XCircle,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
 import { DegradedBanner } from "../components/DegradedBanner";
@@ -25,6 +21,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { StatusBadge } from "../components/ui/status-badge";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
 
@@ -101,10 +98,6 @@ const STATUS_LABELS: Record<string, string> = {
   tag: "Tag",
 };
 
-const FAILED_STATUSES = new Set(["errored", "failed", "unreachable"]);
-const FINISHED_STATUSES = new Set(["applied", "planned_and_finished"]);
-const ATTENTION_STATUSES = new Set(["planned", "planned_and_saved", "policy_soft_failed"]);
-
 type RunType = "empty" | "plan" | "refresh" | "standard";
 
 const RUN_TYPE_DESCRIPTIONS: Record<RunType, string> = {
@@ -136,16 +129,6 @@ function parseAddressList(value: string): string[] | null {
     .map((part: string): string => part.trim())
     .filter((part: string): boolean => part !== "");
   return parts.length > 0 ? [...new Set(parts)] : null;
-}
-
-function StatusIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
-  if (FINISHED_STATUSES.has(status)) return <CheckCircle2 className="size-4 text-success" aria-hidden="true" />;
-  if (FAILED_STATUSES.has(status)) return <XCircle className="size-4 text-destructive" aria-hidden="true" />;
-  if (ATTENTION_STATUSES.has(status)) return <AlertCircle className="size-4 text-amber-600" aria-hidden="true" />;
-  if (["canceled", "discarded", "force_canceled"].includes(status)) {
-    return <XCircle className="size-4 text-muted-foreground" aria-hidden="true" />;
-  }
-  return <Clock className="size-4 text-primary" aria-hidden="true" />;
 }
 
 export function RunList({
@@ -388,10 +371,10 @@ export function RunList({
     }
   };
 
-  if (loading) return <div role="status" className="py-8 text-center text-muted-foreground">Loading runs...</div>;
+  if (loading) return <div role="status" className="py-8 text-center text-muted-foreground">Loading runs…</div>;
   if (error !== "" && runs.length === 0) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-destructive">
+      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
         <p className="font-medium">Could not load runs</p>
         <p className="mt-1">{error}</p>
         <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
@@ -409,10 +392,12 @@ export function RunList({
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             id="run-filter"
+            name="run-filter"
+            autoComplete="off"
             type="search"
             value={filter}
             onChange={(event): void => { setFilter(event.target.value); }}
-            placeholder="Filter runs"
+            placeholder="Filter runs…"
             className="h-9 pl-9"
           />
         </div>
@@ -434,7 +419,7 @@ export function RunList({
         />
       )}
 
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
         {runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
@@ -451,128 +436,129 @@ export function RunList({
             description="Try a different message, status, source, or run ID."
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-border bg-background text-xs font-semibold tracking-wide text-foreground">
-                  <th className="border-r border-border px-4 py-3">Run</th>
-                  <th className="border-r border-border px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={(): void => { toggleSort("status"); }}
-                      className="inline-flex items-center gap-1 rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
-                    >
-                      Status
-                      {sortArrows("status")}
-                    </button>
-                  </th>
-                  <th className="border-r border-border px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={(): void => { toggleSort("created-at"); }}
-                      className="inline-flex items-center gap-1 rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
-                    >
-                      Created
-                      {sortArrows("created-at")}
-                    </button>
-                  </th>
-                  {canStartRun && <th className="px-4 py-3">Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRuns.map((run: RunItem): React.JSX.Element => (
-                  <tr key={run.id} className="border-b border-border transition-colors last:border-b-0 hover:bg-background">
-                    <td className="border-r border-border px-4 py-3">
+          <div className="p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Run history</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">{filteredRuns.length} of {runs.length} runs</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span>Sort by</span>
+                <button
+                  type="button"
+                  onClick={(): void => { toggleSort("status"); }}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Sort runs by status, currently ${sort === "status" ? "ascending" : sort === "-status" ? "descending" : "not sorted"}`}
+                >
+                  Status
+                  {sortArrows("status")}
+                </button>
+                <button
+                  type="button"
+                  onClick={(): void => { toggleSort("created-at"); }}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Sort runs by created date, currently ${sort === "created-at" ? "ascending" : sort === "-created-at" ? "descending" : "not sorted"}`}
+                >
+                  Created
+                  {sortArrows("created-at")}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2 pt-3">
+              {filteredRuns.map((run: RunItem): React.JSX.Element => {
+                const creatorId = run.relationships?.["created-by"]?.data?.id;
+                const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
+                const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
+                const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
+                const sourceLabel = run.attributes["trigger-reason"] === "manual"
+                  ? "UI"
+                  : run.attributes.source === "github"
+                    ? "GitHub"
+                    : run.attributes.source === "gitlab"
+                      ? "GitLab"
+                      : run.attributes.source === "bitbucket"
+                        ? "Bitbucket"
+                        : "UI";
+                const externalSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source);
+                return (
+                  <article
+                    key={run.id}
+                    className="grid gap-3 rounded-lg border border-border bg-background p-4 transition-colors hover:border-primary/40 hover:bg-muted/20 md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center"
+                  >
+                    <div className="min-w-0">
                       <Link
                         to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
-                        className="mb-0.5 block text-[13px] font-medium text-primary hover:underline"
+                        className="block truncate text-sm font-semibold text-primary hover:underline"
                       >
                         {run.attributes.message ?? "Triggered via UI"}
                       </Link>
-                      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
-                        <span>{run.id}</span>
-                        <span aria-hidden="true">|</span>
+                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
+                        <span className="truncate" title={run.id}>{run.id}</span>
                         {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
+                          <><span aria-hidden="true">·</span><span className="text-foreground/85">{run.attributes.operation.replace(/_/g, " ")}</span></>
+                        )}
+                        <span aria-hidden="true">·</span>
+                        <span className="flex items-center gap-1">
+                          {avatarUrl !== "" && (
+                            <Avatar className="inline-flex size-4 rounded-full">
+                              <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
+                            </Avatar>
+                          )}
+                          <span>{username}</span>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>via {sourceLabel}</span>
+                        {externalSource && run.attributes.branch !== null && run.attributes.branch !== undefined && (
+                          <><span aria-hidden="true">·</span><span>{`Branch ${run.attributes.branch}`}</span></>
+                        )}
+                        {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
                           <>
-                            <span className="text-foreground">{run.attributes.operation.replace(/_/g, " ")}</span>
-                            <span aria-hidden="true">|</span>
+                            <span aria-hidden="true">·</span>
+                            {run.attributes["commit-url"] !== null && run.attributes["commit-url"] !== undefined && run.attributes["commit-url"] !== "" ? (
+                              <a
+                                href={run.attributes["commit-url"]}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={run.attributes["commit-sha"]}
+                                className="inline-flex items-center gap-0.5 text-primary underline decoration-primary/40 hover:no-underline"
+                              >
+                                {run.attributes["commit-sha"].slice(0, 7)}
+                                <ArrowUpRight className="size-3" aria-hidden="true" />
+                              </a>
+                            ) : (
+                              <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
+                            )}
                           </>
                         )}
-                        {(() => {
-                          const creatorId = run.relationships?.["created-by"]?.data?.id;
-                          const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
-                          const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
-                          const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
-                          return (
-                            <>
-                              <span className="flex items-center gap-1">
-                                {avatarUrl !== "" && (
-                                  <Avatar className="inline-flex size-4 align-middle rounded-full">
-                                    <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
-                                  </Avatar>
-                                )}
-                                <span>{username}</span>
-                              </span>
-                              <span aria-hidden="true">|</span>
-                              <span>triggered via {run.attributes["trigger-reason"] === "manual" ? "UI" : run.attributes.source === "github" ? "GitHub" : run.attributes.source === "gitlab" ? "GitLab" : run.attributes.source === "bitbucket" ? "Bitbucket" : "UI"}</span>
-                              {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes.branch !== null && run.attributes.branch !== undefined && (<>
-                              <span aria-hidden="true">|</span>
-                                <span>{`Branch ${run.attributes.branch}`}</span>
-                              </>)}
-                              {(["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source) && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
-                                <>
-                                  <span aria-hidden="true">|</span>
-                                  {run.attributes["commit-url"] !== null && run.attributes["commit-url"] !== undefined && run.attributes["commit-url"] !== "" ? (
-                                    <a
-                                      href={run.attributes["commit-url"]}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      title={run.attributes["commit-sha"]}
-                                      className="inline-flex items-center gap-0.5 text-primary underline decoration-primary/40 hover:no-underline"
-                                    >
-                                      {run.attributes["commit-sha"].slice(0, 7)}
-                                      <ArrowUpRight className="size-3" aria-hidden="true" />
-                                    </a>
-                                  ) : (
-                                    <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
-                                  )}
-                                </>
-                              )}
-                            </>
-                          );
-                        })()}
                       </div>
-                    </td>
-                    <td className="border-r border-border px-4 py-3">
-                      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-                        <StatusIcon status={run.attributes.status} />
-                        {statusLabel(run.attributes.status)}
-                      </div>
-                    </td>
-                    <td className="border-r border-border px-4 py-3 text-[13px] text-muted-foreground">
+                    </div>
+                    <div className="flex items-center justify-between gap-3 md:block">
+                      <span className="text-xs text-muted-foreground md:hidden">Status</span>
+                      <StatusBadge status={run.attributes.status} />
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground md:block md:min-w-24 md:text-right">
+                      <span className="md:hidden">Created</span>
                       <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>{formatRelativeTime(run.attributes["created-at"])}</time>
-                    </td>
+                    </div>
                     {canStartRun && (
-                      <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end border-t border-border pt-2 md:border-0 md:pt-0">
                         <Button
                           type="button"
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                          className="gap-1.5"
                           onClick={(): void => { cloneRunSettings(run); }}
                           title="Start a new run with this run's settings (type, destroy, targets, replace addresses)"
                         >
-                          <Copy className="size-3.5" aria-hidden="true" />
+                          <Copy data-icon="inline-start" className="size-3.5" aria-hidden="true" />
                           Clone
                         </Button>
-                      </td>
+                      </div>
                     )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -596,6 +582,8 @@ export function RunList({
                 <label htmlFor="run-message" className="text-sm font-medium">Run name</label>
                 <Input
                   id="run-message"
+                  name="run-message"
+                  autoComplete="off"
                   placeholder="Triggered via UI"
                   value={runMessage}
                   onChange={(event): void => { setRunMessage(event.target.value); }}
@@ -608,7 +596,7 @@ export function RunList({
                     key={type}
                     className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
                       runType === type
-                        ? "border-primary bg-blue-50"
+                        ? "border-primary bg-primary/10"
                         : "border-border hover:border-input hover:bg-background"
                     }`}
                   >
@@ -619,7 +607,7 @@ export function RunList({
                       checked={runType === type}
                       onChange={(): void => { setRunType(type); }}
                       aria-label={RUN_TYPE_LABELS[type]}
-                      className="mt-0.5 size-4 accent-blue-600"
+                      className="mt-0.5 size-4 accent-primary"
                     />
                     <span>
                       <span className="block text-sm font-medium text-foreground">{RUN_TYPE_LABELS[type]}</span>
@@ -630,19 +618,20 @@ export function RunList({
               </fieldset>
               <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 transition-colors hover:border-input hover:bg-background">
                 <input
-                  type="checkbox"
-                  checked={runDestroy}
+                      type="checkbox"
+                      name="run-destroy"
+                      checked={runDestroy}
                   onChange={(event): void => { setRunDestroy(event.target.checked); }}
                   disabled={!canStartRun}
                   aria-label="Destroy infrastructure"
-                  className="mt-0.5 size-4 accent-blue-600"
+                  className="mt-0.5 size-4 accent-primary"
                 />
                 <span>
                   <span className="block text-sm font-medium text-foreground">Destroy infrastructure</span>
                   <span className="mt-0.5 block text-xs text-muted-foreground">
                     Plan a destroy of all managed resources and apply it. Target and replace addresses still apply.
                     {runDestroy && runType === "plan" && (
-                      <span className="mt-0.5 block text-amber-700">A speculative plan-only destroy will not apply changes.</span>
+                      <span className="mt-0.5 block text-warning">A speculative plan-only destroy will not apply changes.</span>
                     )}
                   </span>
                 </span>
@@ -651,6 +640,9 @@ export function RunList({
                 <label htmlFor="run-targets" className="text-sm font-medium">Target addresses</label>
                 <Input
                   id="run-targets"
+                  name="run-targets"
+                  autoComplete="off"
+                  spellCheck={false}
                   placeholder="aws_instance.web, aws_instance.db"
                   value={runTargets}
                   onChange={(event): void => { setRunTargets(event.target.value); }}
@@ -661,6 +653,9 @@ export function RunList({
                 <label htmlFor="run-replace" className="text-sm font-medium">Replace addresses</label>
                 <Input
                   id="run-replace"
+                  name="run-replace"
+                  autoComplete="off"
+                  spellCheck={false}
                   placeholder="aws_instance.web"
                   value={runReplace}
                   onChange={(event): void => { setRunReplace(event.target.value); }}
@@ -671,7 +666,7 @@ export function RunList({
             <DialogFooter>
               <Button type="button" variant="outline" onClick={(): void => { handleDialogOpenChange(false); }}>Cancel</Button>
               <Button type="submit" disabled={creating}>
-                {creating ? "Starting..." : "Start run"}
+                {creating ? "Starting…" : "Start run"}
               </Button>
             </DialogFooter>
           </form>

@@ -13,6 +13,7 @@ import { Badge } from "../components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { PackageOpen, Plus, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type RegistryModule = {
   id: string;
@@ -68,7 +69,6 @@ export function RegistryModules(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage registry modules for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadModules = async (): Promise<void> => {
@@ -147,21 +147,18 @@ export function RegistryModules(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Registry modules</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Private registry modules available to Terraform runs in this organization.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Registry modules"
+        description="Private registry modules available to Terraform runs in this organization."
+        action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />
             New module
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -239,22 +236,23 @@ export function RegistryModules(): React.JSX.Element {
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="registry-module-name">Name</label>
-              <Input id="registry-module-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-module" />
+              <Input id="registry-module-name" name="module-name" autoComplete="off" spellCheck={false} value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-module" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="registry-module-provider">Provider</label>
-              <Input id="registry-module-provider" value={provider} onChange={(e): void => { setProvider(e.target.value); }} placeholder="aws / azurerm / google" />
+              <Input id="registry-module-provider" name="module-provider" autoComplete="off" spellCheck={false} value={provider} onChange={(e): void => { setProvider(e.target.value); }} placeholder="aws / azurerm / google" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="registry-module-namespace">Namespace</label>
-              <Input id="registry-module-namespace" value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
+              <Input id="registry-module-namespace" name="module-namespace" autoComplete="off" spellCheck={false} value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
             </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
             <Button onClick={createModule} disabled={creating}>
-              {creating ? <Spinner /> : "Create module"}
+              {creating && <Spinner data-icon="inline-start" />}
+              {creating ? "Creating module…" : "Create module"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -271,6 +269,6 @@ export function RegistryModules(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

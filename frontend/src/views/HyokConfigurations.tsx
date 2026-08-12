@@ -12,6 +12,7 @@ import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { KeyRound, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type Hyok = {
   id: string;
@@ -108,7 +109,6 @@ export function HyokConfigurations(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage HYOK configurations for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadConfigurations = async (): Promise<void> => {
@@ -220,20 +220,17 @@ export function HyokConfigurations(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">HYOK configurations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Bring-your-own-key configurations let Terraform workspaces encrypt run data with customer-managed KMS keys.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="HYOK configurations"
+        description="Bring-your-own-key configurations let Terraform workspaces encrypt run data with customer-managed KMS keys."
+        action={canManage ? (
           <Button onClick={openCreate}>
             <span className="mr-1.5 text-base leading-none">+</span> New HYOK configuration
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -315,19 +312,20 @@ export function HyokConfigurations(): React.JSX.Element {
           <form id="hyok-create-form" onSubmit={(event): void => { event.preventDefault(); void submit(); }} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="hyok-name">Name</Label>
-              <Input id="hyok-name" value={form.name} onChange={set("name")} placeholder="my-hyok-config" />
+            <Input id="hyok-name" name="hyok-name" autoComplete="off" spellCheck={false} value={form.name} onChange={set("name")} placeholder="my-hyok-config" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="hyok-kek-id">KMS key id</Label>
-              <Input id="hyok-kek-id" value={form.kekId} onChange={set("kekId")} placeholder="alias/terraform/lf4rpw..." />
+              <Input id="hyok-kek-id" name="kek-id" autoComplete="off" spellCheck={false} value={form.kekId} onChange={set("kekId")} placeholder="alias/terraform/lf4rpw…" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="hyok-oidc">OIDC configuration</Label>
               <select
                 id="hyok-oidc"
+                name="oidc-configuration"
                 value={form.oidcConfigId}
                 onChange={set("oidcConfigId")}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">Select an OIDC configuration</option>
                 {oidcConfigs.map((config): React.JSX.Element => (
@@ -344,9 +342,10 @@ export function HyokConfigurations(): React.JSX.Element {
               <Label htmlFor="hyok-agent-pool">Agent pool</Label>
               <select
                 id="hyok-agent-pool"
+                name="agent-pool"
                 value={form.agentPoolId}
                 onChange={set("agentPoolId")}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">None (optional)</option>
                 {agentPools.map((pool): React.JSX.Element => (
@@ -375,6 +374,6 @@ export function HyokConfigurations(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

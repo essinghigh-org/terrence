@@ -181,7 +181,7 @@ export function WorkspaceDestruction({
               </p>
             </div>
           </div>
-          {savingDestroySetting && <p role="status" className="text-sm text-muted-foreground">Saving setting...</p>}
+          {savingDestroySetting && <p role="status" className="text-sm text-muted-foreground">Saving setting…</p>}
           {settingError !== "" && <p role="alert" className="text-sm text-destructive">{settingError}</p>}
           {!canUpdate && (
             <p role="status" className="text-sm text-muted-foreground">
@@ -195,7 +195,7 @@ export function WorkspaceDestruction({
             onClick={(): void => { void queueDestroyPlan(); }}
           >
             {queueingDestroy && <Spinner data-icon="inline-start" />}
-            {queueingDestroy ? "Queueing destroy plan" : "Queue destroy plan"}
+            {queueingDestroy ? "Queueing destroy plan…" : "Queue destroy plan"}
           </Button>
           {queueError !== "" && <p role="alert" className="text-sm text-destructive">{queueError}</p>}
           {!canQueueDestroy && (
@@ -237,6 +237,7 @@ export function WorkspaceDestruction({
                   <Label htmlFor="workspace-delete-confirmation">Workspace name</Label>
                   <Input
                     id="workspace-delete-confirmation"
+                    name="workspace-delete-confirmation"
                     value={confirmation}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                       setConfirmation(event.target.value);

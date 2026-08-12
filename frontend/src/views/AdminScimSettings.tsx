@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Card, CardContent } from "../components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Spinner } from "../components/ui/spinner";
 import { UserCog } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type ScimSettingsAttributes = {
   enabled?: boolean;
@@ -31,6 +32,7 @@ export function AdminScimSettings(): React.JSX.Element {
   const mounted = useRef(true);
 
   const load = async (): Promise<void> => {
+    setLoading(true);
     setLoadError("");
     try {
       const response = await fetchApi("/admin/scim-settings") as {
@@ -110,28 +112,32 @@ export function AdminScimSettings(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <UserCog className="mt-0.5 h-6 w-6 text-muted-foreground" />
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">SCIM settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Configure SCIM provisioning for this installation.
-          </p>
-        </div>
-      </div>
+    <PageShell className="max-w-5xl">
+      <PageHeader
+        eyebrow="Site administration"
+        title={<span className="flex items-center gap-2"><UserCog className="size-7 text-primary" aria-hidden="true" />SCIM settings</span>}
+        description="Configure automated user and group provisioning for this installation."
+      />
 
       <Card>
+        <CardHeader variant="section">
+          <CardTitle>SCIM connection</CardTitle>
+          <CardDescription>Provision users and groups from your identity provider while keeping the connection state visible here.</CardDescription>
+        </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="flex justify-center py-12">
+            <div role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
               <Spinner />
+              Loading SCIM settings…
             </div>
           ) : loadError !== "" ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">{loadError}</div>
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              <span>{loadError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={(): void => { void load(); }} disabled={loading}>Try again</Button>
+            </div>
           ) : (
             <form onSubmit={(event): void => { event.preventDefault(); void save(); }} className="space-y-4">
-              <div className="flex items-center justify-between rounded-md border p-3">
+              <label htmlFor="scim-enabled" className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40">
                 <div className="text-sm">
                   <div className="font-medium">Enabled</div>
                   <div className="text-muted-foreground">
@@ -139,13 +145,14 @@ export function AdminScimSettings(): React.JSX.Element {
                   </div>
                 </div>
                 <Checkbox
+                  id="scim-enabled"
                   checked={enabled}
                   onCheckedChange={(checked: boolean | "indeterminate"): void => { setEnabled(checked === true); }}
                   aria-label="Enabled"
                 />
-              </div>
+              </label>
 
-              <div className="flex items-center justify-between rounded-md border p-3">
+              <label htmlFor="scim-paused" className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40">
                 <div className="text-sm">
                   <div className="font-medium">Paused</div>
                   <div className="text-muted-foreground">
@@ -153,11 +160,12 @@ export function AdminScimSettings(): React.JSX.Element {
                   </div>
                 </div>
                 <Checkbox
+                  id="scim-paused"
                   checked={paused}
                   onCheckedChange={(checked: boolean | "indeterminate"): void => { setPaused(checked === true); }}
                   aria-label="Paused"
                 />
-              </div>
+              </label>
 
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="scim-site-admin-group">
@@ -165,26 +173,27 @@ export function AdminScimSettings(): React.JSX.Element {
                 </label>
                 <Input
                   id="scim-site-admin-group"
+                  name="site-admin-group-display-name"
                   value={siteAdminGroupDisplayName}
                   readOnly
-                  onChange={(e): void => { setSiteAdminGroupDisplayName(e.target.value); }}
                   placeholder="SCIM group that grants site admin access"
                 />
                 <p className="text-xs text-muted-foreground">Read-only — derived from the site-admin group SCIM id.</p>
               </div>
 
-              {saveError !== "" && <div className="text-sm text-red-500">{saveError}</div>}
-              {saved && <div className="text-sm text-green-600">Saved</div>}
+              {saveError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{saveError}</div>}
+              {saved && <div role="status" aria-live="polite" className="text-sm text-success">Saved</div>}
 
               <div className="flex justify-end">
                 <Button type="submit" disabled={saving || loading}>
-                  {saving ? <Spinner /> : "Save"}
+                  {saving ? <Spinner data-icon="inline-start" /> : null}
+                  {saving ? "Saving…" : "Save"}
                 </Button>
               </div>
             </form>
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   );
 }

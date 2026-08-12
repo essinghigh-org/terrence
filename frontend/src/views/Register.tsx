@@ -113,6 +113,7 @@ export function Register(): React.JSX.Element {
                 <FieldLabel htmlFor="register-username">Username</FieldLabel>
                 <Input
                   id="register-username"
+                  name="username"
                   value={username}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }}
                   autoComplete="username"
@@ -125,6 +126,7 @@ export function Register(): React.JSX.Element {
                 <FieldLabel htmlFor="register-email">Email address</FieldLabel>
                 <Input
                   id="register-email"
+                  name="email"
                   type="email"
                   value={email}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }}
@@ -137,6 +139,7 @@ export function Register(): React.JSX.Element {
                 <FieldLabel htmlFor="register-password">Password</FieldLabel>
                 <Input
                   id="register-password"
+                  name="password"
                   type="password"
                   value={password}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.target.value); }}
@@ -152,7 +155,7 @@ export function Register(): React.JSX.Element {
           <CardFooter className="flex flex-col gap-2">
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting && <Spinner data-icon="inline-start" />}
-              {submitting ? "Creating account" : "Create account"}
+              {submitting ? "Creating account…" : "Create account"}
             </Button>
             <Link to="/login" className={buttonVariants({ variant: "link" })}>
               Sign in instead

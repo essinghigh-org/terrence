@@ -20,6 +20,7 @@ import { toast } from "@/components/ui/toast";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getLastOrganization } from "@/lib/lastOrganization";
 import { TableSkeleton } from "@/components/ui/table-skeleton";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type Organization = Readonly<{
   id: string;
@@ -145,34 +146,36 @@ export function Dashboard(): React.JSX.Element {
   }, []);
 
   return (
-    <div className="flex w-full flex-col gap-6">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b pb-6">
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Infrastructure administration</p>
-          <h1 className="text-3xl font-bold tracking-tight">Organizations</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Group projects, workspaces, teams, and shared configuration.
-          </p>
-        </div>
-        <Button onClick={(): void => { setCreateOpen(true); }}>
-          <Plus data-icon="inline-start" />
-          New organization
-        </Button>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Infrastructure administration"
+        title="Organizations"
+        description="Group projects, workspaces, teams, and shared configuration."
+        action={(
+          <Button onClick={(): void => { setCreateOpen(true); }}>
+            <Plus data-icon="inline-start" />
+            New organization
+          </Button>
+        )}
+      />
 
       <div className="relative max-w-md">
         <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
+          id="organization-search"
+          name="organization-search"
+          type="search"
+          autoComplete="off"
           aria-label="Search organizations"
           className="pl-9"
-          placeholder="Search organizations"
+          placeholder="Search organizations…"
           value={search}
           onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
         />
       </div>
 
       {loadError !== "" && organizations.length > 0 && (
-        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           <span>Organizations could not be refreshed. Showing the last loaded results.</span>
           <Button size="sm" variant="outline" onClick={(): void => { void loadOrganizations(); }}>Try again</Button>
         </div>
@@ -260,9 +263,10 @@ export function Dashboard(): React.JSX.Element {
                 <FieldLabel htmlFor="organization-name">Name</FieldLabel>
                 <Input
                   id="organization-name"
+                  name="organization-name"
                   autoFocus
                   autoComplete="off"
-                  placeholder="acme"
+                  placeholder="acme…"
                   value={name}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                 />
@@ -272,7 +276,7 @@ export function Dashboard(): React.JSX.Element {
               </Field>
               <Field>
                 <FieldLabel htmlFor="organization-engine">Default engine</FieldLabel>
-                <Select id="organization-engine" value={iacBinary} onValueChange={setIacBinary}>
+                <Select id="organization-engine" name="default-iac-binary" value={iacBinary} onValueChange={setIacBinary}>
                   <option value="tofu">OpenTofu</option>
                   <option value="terraform">Terraform</option>
                 </Select>
@@ -290,6 +294,6 @@ export function Dashboard(): React.JSX.Element {
           </form>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

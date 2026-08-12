@@ -285,6 +285,9 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-name">Name</FieldLabel>
               <Input
                 id="workspace-name"
+                name="workspace-name"
+                autoComplete="off"
+                spellCheck={false}
                 value={name}
                 onInput={(event): void => { setName(event.currentTarget.value); }}
                 disabled={!canUpdate}
@@ -296,17 +299,21 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-description">Description</FieldLabel>
               <textarea
                 id="workspace-description"
+                name="workspace-description"
+                autoComplete="off"
+                spellCheck={false}
                 rows={4}
                 value={description}
                 onInput={(event): void => { setDescription(event.currentTarget.value); }}
                 disabled={!canUpdate}
-                className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
             </Field>
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-execution-mode">Execution mode</FieldLabel>
               <Select
                 id="workspace-execution-mode"
+                name="execution-mode"
                 value={executionMode}
                 onValueChange={(value: string): void => { setExecutionMode(value as ExecutionMode); }}
                 disabled={!canUpdate}
@@ -325,6 +332,7 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
               <Select
                 id="workspace-iac-binary"
+                name="iac-binary"
                 value={iacBinary}
                 onValueChange={(value: string): void => { setIacBinary(value as IacBinary); }}
                 disabled={!canUpdate}
@@ -340,6 +348,9 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-working-directory">Terraform working directory</FieldLabel>
               <Input
                 id="workspace-working-directory"
+                name="working-directory"
+                autoComplete="off"
+                spellCheck={false}
                 value={workingDirectory}
                 onInput={(event): void => { setWorkingDirectory(event.currentTarget.value); }}
                 placeholder="Defaults to the repository root"
@@ -353,6 +364,7 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-remote-state-sharing">Remote state sharing</FieldLabel>
               <Select
                 id="workspace-remote-state-sharing"
+                name="remote-state-sharing"
                 value={remoteStateSharing}
                 onValueChange={(value: string): void => { setRemoteStateSharing(value as RemoteStateSharing); }}
                 disabled={!canUpdate}
@@ -438,6 +450,9 @@ export function WorkspaceSettings({
               <FieldLabel htmlFor="workspace-terraform-version">Engine version</FieldLabel>
               <Input
                 id="workspace-terraform-version"
+                name="terraform-version"
+                autoComplete="off"
+                spellCheck={false}
                 value={terraformVersion}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                   setTerraformVersion(event.target.value);

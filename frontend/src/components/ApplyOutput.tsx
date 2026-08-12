@@ -84,15 +84,15 @@ type LoadState =
   | Readonly<{ kind: "ready"; plan: PlanJson }>;
 
 const operationConfig = {
-  create: { symbol: "+", className: "text-emerald-700" },
-  update: { symbol: "~", className: "text-blue-700" },
-  delete: { icon: Trash2, className: "text-red-600" },
-  replace: { symbol: "±", className: "text-amber-700" },
-  read: { symbol: "◎", className: "text-purple-700" },
-  import: { symbol: "&", className: "text-gray-950" },
-  move: { symbol: "→", className: "text-slate-700" },
-  remove: { icon: Trash2, className: "text-gray-400" },
-  "no-op": { symbol: "·", className: "text-gray-400" },
+  create: { symbol: "+", className: "text-success" },
+  update: { symbol: "~", className: "text-primary" },
+  delete: { icon: Trash2, className: "text-destructive" },
+  replace: { symbol: "±", className: "text-warning" },
+  read: { symbol: "◎", className: "text-primary" },
+  import: { symbol: "&", className: "text-foreground" },
+  move: { symbol: "→", className: "text-foreground/85" },
+  remove: { icon: Trash2, className: "text-muted-foreground/70" },
+  "no-op": { symbol: "·", className: "text-muted-foreground/70" },
 } satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -244,8 +244,8 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
 
   if (state === "pending") {
     return (
-      <Badge variant="outline" className="gap-1 rounded-md border-gray-300 bg-gray-100 font-medium text-gray-600">
-        <Clock className="size-3 text-gray-400" />
+      <Badge variant="outline" className="gap-1 rounded-md border-input bg-muted font-medium text-muted-foreground">
+        <Clock className="size-3 text-muted-foreground/70" />
         Pending
       </Badge>
     );
@@ -253,28 +253,28 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
 
   if (["creating", "modifying", "destroying", "replacing", "importing", "moving", "removing"].includes(state)) {
     return (
-      <Badge variant="outline" className="gap-1.5 rounded-md border-blue-300 bg-blue-50 font-medium text-blue-700 animate-pulse">
-        <Spinner className="size-3 text-blue-600" />
-        <span className="capitalize">{state}...</span>
-        {elapsed !== undefined && <span className="font-mono text-[10px] text-blue-500">[{elapsed}]</span>}
+      <Badge variant="outline" className="gap-1.5 rounded-md border-primary/40 bg-primary/10 font-medium text-primary animate-pulse">
+        <Spinner className="size-3 text-primary" />
+        <span className="capitalize">{state}…</span>
+        {elapsed !== undefined && <span className="font-mono text-[10px] text-primary">[{elapsed}]</span>}
       </Badge>
     );
   }
 
   if (state === "failed") {
     return (
-      <Badge variant="outline" className="gap-1 rounded-md border-red-300 bg-red-50 font-semibold text-red-700">
-        <XCircle className="size-3 text-red-600" />
+      <Badge variant="outline" className="gap-1 rounded-md border-destructive/50 bg-destructive/10 font-semibold text-destructive">
+        <XCircle className="size-3 text-destructive" />
         Failed
       </Badge>
     );
   }
 
   return (
-    <Badge variant="outline" className="gap-1 rounded-md border-emerald-300 bg-emerald-50 font-medium text-emerald-800">
-      <CheckCircle2 className="size-3 text-emerald-600" />
+    <Badge variant="outline" className="gap-1 rounded-md border-success/40 bg-success/10 font-medium text-success">
+      <CheckCircle2 className="size-3 text-success" />
       <span className="capitalize">{state}</span>
-      {elapsed !== undefined && <span className="font-mono text-[10px] text-emerald-600">({elapsed})</span>}
+      {elapsed !== undefined && <span className="font-mono text-[10px] text-success">({elapsed})</span>}
     </Badge>
   );
 }
@@ -303,12 +303,12 @@ function ApplyResourceRow({
 
   return (
     <details
-      className="group border-b border-gray-200 last:border-b-0"
+      className="group border-b border-border last:border-b-0"
       aria-label={`Apply details for ${resource.address}`}
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-gray-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
           <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
             {"icon" in config ? (
               <config.icon className="size-3" aria-hidden="true" />
@@ -319,29 +319,29 @@ function ApplyResourceRow({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <code className="truncate font-mono text-xs font-semibold text-gray-900">{resource.address}</code>
+              <code className="truncate font-mono text-xs font-semibold text-foreground">{resource.address}</code>
               <button
                 type="button"
                 aria-label={`Copy ${resource.address} address`}
                 title={copied ? "Copied address!" : "Copy resource address"}
-                className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={handleCopy}
               >
-                {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
+                {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
               </button>
             </div>
 
-            <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
+            <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
               <span>Type: <code className="font-mono">{resource.type}</code></span>
               {resource.previous_address !== undefined && (
                 <span className="flex items-center gap-1">
                   Moved from <code className="font-mono">{resource.previous_address}</code>
-                  <ArrowRight className="inline size-3 text-gray-400" />
-                  <code className="font-mono font-medium text-gray-700">{resource.address}</code>
+                  <ArrowRight className="inline size-3 text-muted-foreground/70" />
+                  <code className="font-mono font-medium text-foreground/85">{resource.address}</code>
                 </span>
               )}
               {execution.resourceId !== undefined && (
-                <span>ID: <code className="font-mono text-gray-700">{execution.resourceId}</code></span>
+                <span>ID: <code className="font-mono text-foreground/85">{execution.resourceId}</code></span>
               )}
             </div>
           </div>
@@ -396,7 +396,7 @@ export function ApplyOutput({
 
   if (loadState.kind === "loading") {
     return (
-      <div role="status" className="flex items-center gap-2 border-t border-gray-200 px-5 py-4 text-sm text-gray-500">
+      <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
         <Spinner className="size-4" />
         Loading structured apply output…
       </div>
@@ -405,7 +405,7 @@ export function ApplyOutput({
 
   if (loadState.kind === "error" || loadState.kind !== "ready") {
     return (
-      <div role="status" className="border-t border-gray-200 bg-gray-50 px-5 py-4 text-xs text-gray-500">
+      <div role="status" className="border-t border-border bg-muted px-5 py-4 text-xs text-muted-foreground">
         Apply view is unavailable. See raw apply logs below.
       </div>
     );
@@ -453,44 +453,50 @@ export function ApplyOutput({
   });
 
   return (
-    <section aria-label="Apply output" className="border-t border-gray-200">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
+    <section aria-label="Apply output" className="border-t border-border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted px-5 py-2.5">
         <div className="flex items-center gap-2">
-          <FileCode className="size-4 text-gray-400" />
-          <span className="text-xs font-medium text-gray-700"></span>
+          <FileCode className="size-4 text-muted-foreground/70" />
+          <span className="text-xs font-medium text-foreground/85">Apply output</span>
           {applyStatus === "applying" && (
-            <Badge variant="outline" className="gap-1 rounded border-blue-300 bg-blue-50 text-[10px] text-blue-700 animate-pulse">
-              <Spinner className="size-3 text-blue-600" />
+            <Badge variant="outline" className="gap-1 rounded border-primary/40 bg-primary/10 text-[10px] text-primary animate-pulse">
+              <Spinner className="size-3 text-primary" />
               Apply in progress
             </Badge>
           )}
         </div>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-muted-foreground">
           Terraform {planJson.terraform_version ?? "unknown"}
           {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
-          <span className="ml-1.5 text-gray-400">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
+          <span className="ml-1.5 text-muted-foreground/70">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
         </span>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-gray-200 px-4 py-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex flex-1 flex-wrap gap-2">
-          <label className="min-w-[220px] flex-1 text-xs font-medium text-gray-600">
+          <label className="min-w-[220px] flex-1 text-xs font-medium text-muted-foreground">
             <span className="sr-only">Filter resources by address or type</span>
             <input
+              id="apply-resource-search"
+              name="resource-search"
               type="search"
+              autoComplete="off"
+              spellCheck={false}
               value={search}
               placeholder="Filter resources by address…"
               aria-label="Filter resources by address or type"
-              className="h-8 w-full rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
-          <label className="text-xs font-medium text-gray-600">
+          <label className="text-xs font-medium text-muted-foreground">
             <span className="sr-only">Filter by operation</span>
             <select
+              id="apply-operation-filter"
+              name="operation"
               value={operation}
               aria-label="Filter by operation"
-              className="h-8 rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-8 rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
               onChange={(event): void => { setOperation(event.currentTarget.value as Operation | "all"); }}
             >
               <option value="all">All operations ({changedResources.length})</option>
@@ -505,17 +511,17 @@ export function ApplyOutput({
             </select>
           </label>
         </div>
-        <span aria-live="polite" className="text-xs text-gray-500">
+        <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}
         </span>
       </div>
 
       {filteredResources.length === 0 ? (
-        <p className="px-5 py-6 text-center text-sm text-gray-500">
+        <p className="px-5 py-6 text-center text-sm text-muted-foreground">
           {changedResources.length === 0 ? "No resources to apply." : "No resources match these filters."}
         </p>
       ) : (
-        <div aria-label={`Apply resource list, ${filteredResources.length} items`} className="divide-y divide-gray-100">
+        <div aria-label={`Apply resource list, ${filteredResources.length} items`} className="divide-y divide-border/60">
           {filteredResources.map((resource): React.JSX.Element => {
             const exec = execMap.get(resource.address) ?? { state: "pending" };
             return (

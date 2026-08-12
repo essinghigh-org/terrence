@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowRight, PackageOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type RegistryModule = Readonly<{
   id: string;
@@ -276,14 +277,12 @@ export function NoCodeProvisioning(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-muted-foreground">{orgName} / No-code modules</p>
-        <h1 className="text-3xl font-semibold tracking-tight">Provision no-code infrastructure</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Select an approved private module, configure the workspace, and start its first run without writing configuration.
-        </p>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / No-code modules`}
+        title="Provision no-code infrastructure"
+        description="Select an approved private module, configure the workspace, and start its first run without writing configuration."
+      />
 
       {error !== "" && <FieldError>{error}</FieldError>}
 
@@ -315,7 +314,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor="no-code-module">No-code module</FieldLabel>
-                  <Select id="no-code-module" value={selectedId} onValueChange={setSelectedId}>
+                  <Select id="no-code-module" name="no-code-module" value={selectedId} onValueChange={setSelectedId}>
                     <SelectContent>
                       <optgroup label="Enabled modules">
                         {catalog.map((item: CatalogItem): React.JSX.Element => (
@@ -356,15 +355,39 @@ export function NoCodeProvisioning(): React.JSX.Element {
         <Card>
           <CardHeader>
             <CardTitle>Workspace settings</CardTitle>
-            <CardDescription>The workspace starts a run as soon as it is created.</CardDescription>
+            <CardDescription>
+              {catalog.length === 0 && !loading
+                ? "Enable a no-code module before configuring a workspace."
+                : "The workspace starts a run as soon as it is created."}
+            </CardDescription>
           </CardHeader>
           <form onSubmit={createWorkspace}>
             <CardContent>
+              {!loading && catalog.length === 0 && (
+                <div className="mb-5 flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+                  <PackageOpen aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-foreground">Choose a module to continue</p>
+                    <p className="text-muted-foreground">
+                      Enable a private registry module, then return here to provision it.{" "}
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName)}/settings/registry-modules`}
+                        className="font-medium text-primary underline-offset-2 hover:underline"
+                      >
+                        Open registry modules
+                      </Link>
+                    </p>
+                  </div>
+                </div>
+              )}
               <FieldGroup>
                 <Field data-invalid={error !== "" && workspaceName.trim() === ""}>
                   <FieldLabel htmlFor="no-code-workspace-name">Workspace name</FieldLabel>
                   <Input
                     id="no-code-workspace-name"
+                    name="workspace-name"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={workspaceName}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setWorkspaceName(event.target.value); }}
                     onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setWorkspaceName(event.currentTarget.value); }}
@@ -381,6 +404,9 @@ export function NoCodeProvisioning(): React.JSX.Element {
                   <FieldLabel htmlFor="no-code-description">Description</FieldLabel>
                   <Input
                     id="no-code-description"
+                    name="workspace-description"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={description}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
                     onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
@@ -391,7 +417,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
 
                 <Field>
                   <FieldLabel htmlFor="no-code-project">Project</FieldLabel>
-                  <Select id="no-code-project" value={projectId} onValueChange={setProjectId} disabled={saving || selected === undefined}>
+                  <Select id="no-code-project" name="project" value={projectId} onValueChange={setProjectId} disabled={saving || selected === undefined}>
                     <SelectContent>
                       <optgroup label="Workspace project">
                         <SelectItem value="">No project</SelectItem>
@@ -446,6 +472,8 @@ export function NoCodeProvisioning(): React.JSX.Element {
                           {attributes.options.length > 0 ? (
                             <Select
                               id={id}
+                              name={`module-input-${attributes.name}`}
+                              autoComplete="off"
                               value={value}
                               onValueChange={updateValue}
                               disabled={saving}
@@ -462,6 +490,8 @@ export function NoCodeProvisioning(): React.JSX.Element {
                           ) : attributes.type === "bool" ? (
                             <Select
                               id={id}
+                              name={`module-input-${attributes.name}`}
+                              autoComplete="off"
                               value={value}
                               onValueChange={updateValue}
                               disabled={saving}
@@ -476,6 +506,9 @@ export function NoCodeProvisioning(): React.JSX.Element {
                           ) : (
                             <Input
                               id={id}
+                              name={`module-input-${attributes.name}`}
+                              autoComplete="off"
+                              spellCheck={false}
                               type={attributes.sensitive ? "password" : attributes.type === "number" ? "number" : "text"}
                               value={value}
                               onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { updateValue(event.target.value); }}
@@ -516,6 +549,6 @@ export function NoCodeProvisioning(): React.JSX.Element {
           </form>
         </Card>
       </div>
-    </div>
+    </PageShell>
   );
 }

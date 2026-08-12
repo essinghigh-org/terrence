@@ -13,7 +13,7 @@ export type BadgeProps = Readonly<{
 }> & DeepReadonly<HTMLAttributes<HTMLSpanElement>>;
 
 export function Badge({ className = "", variant = "default", ...props }: BadgeProps): JSX.Element {
-  const baseStyle = "inline-flex max-w-full items-center rounded-full border border-transparent px-2.5 py-0.5 text-xs font-medium leading-4 transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
+  const baseStyle = "inline-flex max-w-full items-center rounded-full border border-transparent px-2.5 py-0.5 text-xs font-medium leading-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
   const variantStyles = {
     default: "bg-primary text-primary-foreground",
     secondary: "bg-secondary text-secondary-foreground",

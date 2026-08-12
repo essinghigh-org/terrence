@@ -340,10 +340,10 @@ export function WorkspaceVcs({
               <FieldLabel htmlFor="vcs-connection">VCS connection</FieldLabel>
               <Select
                 id="vcs-connection"
+                name="vcs-connection"
                 value={connectionValue}
                 onValueChange={(val: string): void => {
                   setConnectionValue(val);
-                  setIdentifier("");
                 }}
                 disabled={!canUpdate || connectionsLoading}
               >
@@ -373,6 +373,7 @@ export function WorkspaceVcs({
               <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
               <VcsRepoSelector
                 id="vcs-identifier"
+                name="vcs-repository"
                 value={identifier}
                 onValueChange={setIdentifier}
                 repositories={vcsRepositories}
@@ -387,6 +388,9 @@ export function WorkspaceVcs({
                 <FieldLabel htmlFor="vcs-branch">VCS branch</FieldLabel>
                 <Input
                   id="vcs-branch"
+                  name="vcs-branch"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={branch}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                     setBranch(event.target.value);
@@ -402,6 +406,9 @@ export function WorkspaceVcs({
                 <FieldLabel htmlFor="vcs-working-directory">Terraform working directory</FieldLabel>
                 <Input
                   id="vcs-working-directory"
+                  name="vcs-working-directory"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={workingDirectory}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                     setWorkingDirectory(event.target.value);
@@ -418,6 +425,9 @@ export function WorkspaceVcs({
               <FieldLabel htmlFor="vcs-tags-regex">Git tag regular expression</FieldLabel>
               <Input
                 id="vcs-tags-regex"
+                name="vcs-tags-regex"
+                autoComplete="off"
+                spellCheck={false}
                 value={tagsRegex}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                   setTagsRegex(event.target.value);
@@ -435,6 +445,9 @@ export function WorkspaceVcs({
                 <FieldLabel htmlFor="vcs-trigger-prefixes">Trigger prefixes</FieldLabel>
                 <Input
                   id="vcs-trigger-prefixes"
+                  name="vcs-trigger-prefixes"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={triggerPrefixes}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                     setTriggerPrefixes(event.target.value);
@@ -451,6 +464,9 @@ export function WorkspaceVcs({
                 <FieldLabel htmlFor="vcs-trigger-patterns">Trigger patterns</FieldLabel>
                 <Input
                   id="vcs-trigger-patterns"
+                  name="vcs-trigger-patterns"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={triggerPatterns}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                     setTriggerPatterns(event.target.value);

@@ -202,6 +202,9 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             <label htmlFor="ws-name" className="text-sm font-medium">Workspace Name</label>
             <Input
               id="ws-name"
+              name="workspace-name"
+              autoComplete="off"
+              spellCheck={false}
               value={name}
               onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
               onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
@@ -213,7 +216,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             <label htmlFor="iac-tool" className="text-sm font-medium">Execution Engine</label>
             <select
               id="iac-tool"
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              name="iac-binary"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={iacBinary}
               onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setIacBinary(event.target.value); }}
             >
@@ -226,7 +230,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             <label htmlFor="tf-version" className="text-sm font-medium">Engine Version</label>
             <select
               id="tf-version"
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              name="terraform-version"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={terraformVersion}
               onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setTerraformVersion(event.target.value); }}
             >
@@ -243,12 +248,13 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             </label>
           </div>
 
-          <div className="pt-4 border-t border-gray-200 mt-2">
+          <div className="pt-4 border-t border-border mt-2">
             <div className="flex flex-col gap-1.5 mb-4">
               <label htmlFor="source-type" className="text-sm font-medium">Workspace Source</label>
               <select
                 id="source-type"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                name="workspace-source"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={sourceType}
                 onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setSourceType(event.target.value); }}
               >
@@ -264,11 +270,11 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                   <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS Connection</label>
                   <select
                     id="vcs-connection"
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                    name="vcs-connection"
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     value={vcsConnectionValue}
                     onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
                       setVcsConnectionValue(event.target.value);
-                      setVcsIdentifier("");
                     }}
                     disabled={loading || vcsConnectionsLoading}
                   >
@@ -281,7 +287,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                   </select>
                   <p
                     role={vcsConnectionsError === "" ? undefined : "alert"}
-                    className={vcsConnectionsError === "" ? "text-xs text-gray-500" : "text-xs text-destructive"}
+                    className={vcsConnectionsError === "" ? "text-xs text-muted-foreground" : "text-xs text-destructive"}
                   >
                     {vcsConnectionsError !== ""
                       ? vcsConnectionsError
@@ -300,7 +306,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                   </div>
 
                   {vcsReposLoading ? (
-                    <div className="flex items-center gap-2 text-xs text-gray-500 py-1">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
                       <Spinner className="size-3.5" /> Loading accessible repositories…
                     </div>
                   ) : (
@@ -319,7 +325,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             )}
 
             {sourceType === "local" && (
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-muted-foreground">
                 Code will be loaded from `/app/backend/storage/local/{orgName}/{"{project_name}"}/{name}`. Make sure to bind mount this path to your Terraform code.
               </p>
             )}

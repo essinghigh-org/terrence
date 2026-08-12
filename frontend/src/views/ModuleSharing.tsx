@@ -7,6 +7,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Spinner } from "../components/ui/spinner";
 import { Plus, Share2, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type ConsumerResource = {
   id: string;
@@ -151,16 +152,12 @@ export function ModuleSharing(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <Share2 className="mt-0.5 h-6 w-6 text-muted-foreground" />
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Module sharing</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Organizations that can consume this organization&apos;s private modules.
-          </p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Module sharing"
+        description="Organizations that can consume this organization&apos;s private modules."
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -227,6 +224,7 @@ export function ModuleSharing(): React.JSX.Element {
               </label>
               <Select
                 id="module-consumer-name"
+                name="module-consumer"
                 value={newConsumer}
                 onValueChange={(value: string): void => { setNewConsumer(value); }}
                 aria-label="Organization to share modules with"
@@ -253,11 +251,11 @@ export function ModuleSharing(): React.JSX.Element {
         )}
         {(error !== "" || saved) && (
           <div className="px-4">
-            {error !== "" && <div className="text-sm text-red-500">{error}</div>}
-            {saved && <div className="text-sm text-green-600">Saved</div>}
+            {error !== "" && <div className="text-sm text-destructive">{error}</div>}
+            {saved && <div className="text-sm text-success">Saved</div>}
           </div>
         )}
       </Card>
-    </div>
+    </PageShell>
   );
 }

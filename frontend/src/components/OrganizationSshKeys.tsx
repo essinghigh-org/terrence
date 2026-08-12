@@ -173,17 +173,20 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <label htmlFor="ssh-name" className="text-sm font-medium">Name</label>
-                <Input id="ssh-name" value={newName} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setNewName(event.currentTarget.value); }} placeholder="Example Key" />
+                <Input id="ssh-name" name="ssh-key-name" autoComplete="off" spellCheck={false} value={newName} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setNewName(event.currentTarget.value); }} placeholder="Example Key" />
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="ssh-value" className="text-sm font-medium">Private SSH Key</label>
                 <textarea
                   id="ssh-value"
+                  name="private-ssh-key"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={newValue}
                   onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => { setNewValue(event.currentTarget.value); }}
-                  placeholder={"-----BEGIN RSA PRIVATE KEY-----\n..."}
+                  placeholder={"-----BEGIN RSA PRIVATE KEY-----\n…"}
                   rows={6}
-                  className="flex min-h-20 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+                  className="flex min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
                 />
               </div>
               {formError !== "" && <p role="alert" className="text-sm text-destructive">{formError}</p>}

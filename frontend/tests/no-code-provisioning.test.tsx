@@ -225,6 +225,9 @@ test("explains when the organization has no enabled no-code modules", async () =
   await waitFor((): void => {
     expect(view.getByText("No no-code modules are enabled.")).toBeTruthy();
   });
+  expect(view.getByRole("link", { name: "Open registry modules" }).getAttribute("href")).toBe(
+    "/app/acme/settings/registry-modules",
+  );
   expect(view.getByRole("button", { name: "Create workspace" }).hasAttribute("disabled")).toBeTrue();
 });
 

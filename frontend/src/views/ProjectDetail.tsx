@@ -625,6 +625,9 @@ export function ProjectDetail({
                     <FieldLabel htmlFor="project-edit-name">Project name</FieldLabel>
                     <Input
                       id="project-edit-name"
+                      name="project-name"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={name}
                       onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                       placeholder="my-project"
@@ -634,6 +637,9 @@ export function ProjectDetail({
                     <FieldLabel htmlFor="project-edit-description">Project description (Optional)</FieldLabel>
                     <Input
                       id="project-edit-description"
+                      name="project-description"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={description}
                       onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
                       placeholder="What is this project for?"
@@ -671,6 +677,9 @@ export function ProjectDetail({
                 <FieldLabel htmlFor="project-edit-dialog-name">Name</FieldLabel>
                 <Input
                   id="project-edit-dialog-name"
+                  name="project-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={name}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                 />
@@ -679,6 +688,9 @@ export function ProjectDetail({
                 <FieldLabel htmlFor="project-edit-dialog-description">Description</FieldLabel>
                 <Input
                   id="project-edit-dialog-description"
+                  name="project-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={description}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}
                 />
@@ -719,6 +731,9 @@ export function ProjectDetail({
                 <FieldLabel htmlFor="project-vs-name">Name</FieldLabel>
                 <Input
                   id="project-vs-name"
+                  name="variable-set-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={vsName}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVsName(event.currentTarget.value); }}
                   placeholder="Shared project variables"
@@ -728,6 +743,9 @@ export function ProjectDetail({
                 <FieldLabel htmlFor="project-vs-description">Description (Optional)</FieldLabel>
                 <Input
                   id="project-vs-description"
+                  name="variable-set-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={vsDescription}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setVsDescription(event.currentTarget.value); }}
                   placeholder="What is this variable set for?"

@@ -393,17 +393,20 @@ export function WorkspaceResources({
         <div className="relative max-w-md">
           <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            id="workspace-resource-search"
+            name="resource-search"
+            autoComplete="off"
             aria-label={`Search ${tab}`}
             className="pl-9"
             value={search}
-            placeholder={`Search ${tab}`}
+            placeholder={`Search ${tab}…`}
             onInput={(event): void => { setSearch(event.currentTarget.value); setPage(1); }}
           />
         </div>
       </div>}
 
       {loading ? (
-        <div className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading current state" /></div>
+        <div role="status" className="flex min-h-36 items-center justify-center"><Spinner aria-label="Loading current state" /></div>
       ) : activeError !== "" ? (
         <div role="alert" className="min-h-36 p-6 text-center">
           <p className="font-medium text-destructive">Could not load {tab}</p>

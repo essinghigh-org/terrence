@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { Select } from "../components/ui/select";
 import { Hourglass, Pencil, Plus, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type TokenTTLPolicy = {
   id: string;
@@ -256,20 +257,17 @@ export function TokenTTLPolicies(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Token TTL policies</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Token TTL policies limit the maximum lifespan of tokens created in this organization.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Token TTL policies"
+        description="Token TTL policies limit the maximum lifespan of tokens created in this organization."
+        action={canManage ? (
           <Button onClick={openAddDialog}>
             <Plus className="mr-1.5 size-4" /> Add policy
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {formError !== "" && (
         <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm font-medium text-destructive">
@@ -365,8 +363,10 @@ export function TokenTTLPolicies(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Max TTL</label>
+              <label className="text-sm font-medium" htmlFor="edit-token-max-ttl">Max TTL</label>
               <Input
+                id="edit-token-max-ttl"
+                name="max-ttl"
                 type="number"
                 min={0}
                 value={editingValue}
@@ -375,12 +375,13 @@ export function TokenTTLPolicies(): React.JSX.Element {
               />
               <p className="text-xs text-muted-foreground">Value in milliseconds.</p>
             </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={(): void => { setEditingPolicy(null); }}>Cancel</Button>
             <Button onClick={savePolicy} disabled={saving}>
-              {saving ? <Spinner /> : "Save"}
+              {saving && <Spinner data-icon="inline-start" />}
+              {saving ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -396,8 +397,10 @@ export function TokenTTLPolicies(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Token type</label>
+              <label className="text-sm font-medium" htmlFor="new-token-type">Token type</label>
               <Select
+                id="new-token-type"
+                name="token-type"
                 value={newTokenType}
                 onValueChange={(value: string): void => { setNewTokenType(value); }}
               >
@@ -416,8 +419,10 @@ export function TokenTTLPolicies(): React.JSX.Element {
               </p>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Max TTL</label>
+              <label className="text-sm font-medium" htmlFor="new-token-max-ttl">Max TTL</label>
               <Input
+                id="new-token-max-ttl"
+                name="max-ttl"
                 type="number"
                 min={0}
                 value={newMaxTtl}
@@ -426,16 +431,17 @@ export function TokenTTLPolicies(): React.JSX.Element {
               />
               <p className="text-xs text-muted-foreground">Value in milliseconds.</p>
             </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={(): void => { setAddDialogOpen(false); }}>Cancel</Button>
             <Button onClick={addPolicy} disabled={adding}>
-              {adding ? <Spinner /> : "Add policy"}
+              {adding && <Spinner data-icon="inline-start" />}
+              {adding ? "Adding policy…" : "Add policy"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

@@ -99,7 +99,7 @@ export function Login(): React.JSX.Element {
               {mfaChallengeToken === null ? (
                 <>
                   {!localAuthEnabled && !ldapEnabled && (
-                    <div role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <div role="status" className="mb-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
                       {!samlEnabled && !oidcEnabled
                         ? "No authentication methods are configured. Contact an administrator."
                         : "Local password sign-in is disabled. Use single sign-on below."}
@@ -109,11 +109,11 @@ export function Login(): React.JSX.Element {
                     <>
                       <Field data-invalid={error !== ""}>
                         <FieldLabel htmlFor="login-username">Username or email address</FieldLabel>
-                        <Input id="login-username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }} />
+                      <Input id="login-username" name="username" value={username} autoComplete="username" autoFocus required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }} />
                       </Field>
                       <Field data-invalid={error !== ""}>
                         <FieldLabel htmlFor="login-password">Password</FieldLabel>
-                        <Input id="login-password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }} />
+                      <Input id="login-password" name="password" type="password" value={password} autoComplete="current-password" required aria-invalid={error !== ""} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }} />
                       </Field>
                     </>
                   )}
@@ -121,7 +121,7 @@ export function Login(): React.JSX.Element {
               ) : (
                 <Field data-invalid={error !== ""}>
                   <FieldLabel htmlFor="login-mfa-code">Authentication code</FieldLabel>
-                  <Input id="login-mfa-code" inputMode="numeric" autoComplete="one-time-code" autoFocus required aria-invalid={error !== ""} value={mfaCode} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
+                  <Input id="login-mfa-code" name="mfa-code" inputMode="numeric" autoComplete="one-time-code" autoFocus required aria-invalid={error !== ""} value={mfaCode} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
                 </Field>
               )}
               <FieldError>{error}</FieldError>

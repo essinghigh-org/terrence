@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
+import { Checkbox } from "../components/ui/checkbox";
 import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
-import { Check, Plus, ShieldAlert, Trash2, X } from "lucide-react";
+import { Check, LockKeyhole, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type ApprovalWebhookSettings = {
   enabled?: boolean;
@@ -91,10 +93,40 @@ const DAYS_ALL = [0, 1, 2, 3, 4, 5, 6];
 const DAYS_WEEKDAYS = [1, 2, 3, 4, 5];
 const DAYS_WEEKEND = [0, 6];
 
+function SettingToggle({
+  id,
+  label,
+  checked,
+  onCheckedChange,
+}: Readonly<{
+  id: string;
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}>): React.JSX.Element {
+  return (
+    <label
+      htmlFor={id}
+      className={`inline-flex min-h-8 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-muted ${
+        checked ? "border-success/30 bg-success/5 text-success" : "border-border bg-background text-muted-foreground"
+      }`}
+    >
+      <Checkbox
+        id={id}
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        aria-label={`${checked ? "Disable" : "Enable"} ${label}`}
+      />
+      <span>{checked ? "Enabled" : "Disabled"}</span>
+    </label>
+  );
+}
+
 export function AdminOperationsSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<OperationsSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [savedAt, setSavedAt] = useState("");
@@ -124,6 +156,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   useEffect((): void => {
     const loadSettings = async (): Promise<void> => {
       setLoading(true);
+      setLoadError("");
       try {
         const response = await fetchApi("/admin/operations-settings") as {
           data?: { attributes?: OperationsSettings };
@@ -154,7 +187,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
       }
     };
     void loadSettings();
-  }, []);
+  }, [loadAttempt]);
 
   // Provider catalog for the explainer pickers, fetched in the background.
   // The backend refreshes from models.dev with a 6h TTL; the picker is a
@@ -163,7 +196,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
     const loadCatalog = async (): Promise<void> => {
       try {
         const response = await fetchApi("/admin/operations-settings/explainer/providers") as {
-          data?: Array<{ id: string; attributes?: { name?: string; "base-url"?: string | null; "model-count"?: number } }>;
+          data?: { id: string; attributes?: { name?: string; "base-url"?: string | null; "model-count"?: number } }[];
         };
         const rows = response.data ?? [];
         setProviders(rows.map((row): ExplainerProvider => ({
@@ -184,13 +217,13 @@ export function AdminOperationsSettings(): React.JSX.Element {
   useEffect((): (() => void) => {
     if (explainerProvider === "") {
       setProviderModels([]);
-      return () => undefined;
+      return (): void => undefined;
     }
     let cancelled = false;
     const loadModels = async (): Promise<void> => {
       try {
         const response = await fetchApi(`/admin/operations-settings/explainer/models?provider=${encodeURIComponent(explainerProvider)}`) as {
-          data?: Array<{ id: string; attributes?: { name?: string; reasoning?: boolean; context?: number | null } }>;
+          data?: { id: string; attributes?: { name?: string; reasoning?: boolean; context?: number | null } }[];
         };
         if (cancelled) return;
         setProviderModels((response.data ?? []).map((row): ExplainerModel => ({
@@ -258,52 +291,55 @@ export function AdminOperationsSettings(): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-16">
-        <Spinner className="size-6" />
-      </div>
+      <PageShell role="status" aria-label="Loading operations settings" className="max-w-5xl">
+        <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+          <Spinner className="size-6" />
+          Loading operations settings…
+        </div>
+      </PageShell>
     );
   }
 
   if (loadError !== "") {
     return (
-      <div className="space-y-6">
+      <PageShell className="max-w-5xl">
         <Card>
-          <CardContent className="py-8 text-center text-sm text-destructive">{loadError}</CardContent>
+          <CardContent role="alert" className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" onClick={(): void => { setLoadAttempt((attempt): number => attempt + 1); }} disabled={loading}>
+              Try again
+            </Button>
+          </CardContent>
         </Card>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="mb-6 flex items-center gap-3">
-        <ShieldAlert className="size-6 text-muted-foreground" aria-hidden="true" />
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Operations</h1>
-          <p className="text-sm text-muted-foreground">Approval webhook, maintenance windows, and the AI plan explainer.</p>
-        </div>
-      </div>
+    <PageShell className="max-w-5xl">
+      <PageHeader
+        eyebrow="Site administration"
+        title={(
+          <span className="flex items-center gap-2">
+            <ShieldAlert className="size-7 text-primary" aria-hidden="true" />
+            Operations
+          </span>
+        )}
+        description="Control approvals, maintenance windows, and plain-language plan explanations."
+      />
 
-      <div className="space-y-6">
+      <div className="space-y-5">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between gap-2">
-              Approval webhook
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-normal text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={approvalEnabled}
-                  onChange={(event): void => { setApprovalEnabled(event.currentTarget.checked); }}
-                  className="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
-                />
-                Enabled
-              </label>
-            </CardTitle>
+          <CardHeader variant="section">
+            <CardTitle>Approval webhook</CardTitle>
             <CardDescription>
               External systems can confirm a run by POSTing {"{ run_id, action: \"confirm\" }"} to{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-xs">/api/v2/webhooks/run-approval</code> with an
               HMAC-SHA256 signature in <code className="rounded bg-muted px-1 py-0.5 text-xs">X-Terrence-Signature</code>.
             </CardDescription>
+            <CardAction>
+              <SettingToggle id="approval-enabled" label="approval webhook" checked={approvalEnabled} onCheckedChange={setApprovalEnabled} />
+            </CardAction>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -312,6 +348,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
               </label>
               <Input
                 id="approval-url"
+                name="approval-callback-url"
+                autoComplete="url"
                 value={approvalUrl}
                 onInput={(event): void => { setApprovalUrl(event.currentTarget.value); }}
                 placeholder="https://example.com/hooks/terrence-approval"
@@ -328,6 +366,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
               <div className="flex max-w-xl items-center gap-2">
                 <Input
                   id="approval-secret"
+                  name="approval-shared-secret"
+                  autoComplete="new-password"
                   type="password"
                   value={approvalSecret}
                   onInput={(event): void => {
@@ -359,30 +399,25 @@ export function AdminOperationsSettings(): React.JSX.Element {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between gap-2">
-              Maintenance windows
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-normal text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={windowsEnabled}
-                  onChange={(event): void => { setWindowsEnabled(event.currentTarget.checked); }}
-                  className="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
-                />
-                Enabled
-              </label>
-            </CardTitle>
+          <CardHeader variant="section">
+            <CardTitle>Maintenance windows</CardTitle>
             <CardDescription>
               Applies are blocked during configured windows. Plans are never affected.
             </CardDescription>
+            <CardAction>
+              <SettingToggle id="maintenance-enabled" label="maintenance windows" checked={windowsEnabled} onCheckedChange={setWindowsEnabled} />
+            </CardAction>
           </CardHeader>
           <CardContent>
             {windows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No maintenance windows configured.</p>
+              <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-8 text-center">
+                <p className="text-sm font-medium text-foreground">No maintenance windows yet</p>
+                <p className="mt-1 text-sm text-muted-foreground">Add a window when applies need a predictable pause.</p>
+              </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 {windows.map((window, index): React.JSX.Element => (
-                  <div key={index} className="rounded-md border border-gray-200 p-4">
+                  <div key={index} className="rounded-md border border-border p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         {DAY_OPTIONS.map((option): React.JSX.Element => (
@@ -394,9 +429,9 @@ export function AdminOperationsSettings(): React.JSX.Element {
                             onClick={(): void => { updateWindow(index, { days: toggleDay(window.days, option.day) }); }}
                             className={`rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
                               window.days.includes(option.day)
-                                ? "bg-blue-600 text-white"
-                                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                            }`}
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:bg-muted/80"
+                          }`}
                           >
                             {option.label}
                           </button>
@@ -419,6 +454,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
                         </label>
                         <Input
                           id={`mw-start-${index}`}
+                          name={`maintenance-${index}-start`}
+                          type="time"
                           value={window["start-time"]}
                           onInput={(event): void => { updateWindow(index, { "start-time": event.currentTarget.value }); }}
                           placeholder="22:00"
@@ -431,6 +468,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
                         </label>
                         <Input
                           id={`mw-end-${index}`}
+                          name={`maintenance-${index}-end`}
+                          type="time"
                           value={window["end-time"]}
                           onInput={(event): void => { updateWindow(index, { "end-time": event.currentTarget.value }); }}
                           placeholder="06:00"
@@ -443,6 +482,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
                         </label>
                         <Input
                           id={`mw-tz-${index}`}
+                          name={`maintenance-${index}-timezone`}
+                          autoComplete="off"
                           value={window.timezone ?? ""}
                           onInput={(event): void => { updateWindow(index, { timezone: event.currentTarget.value }); }}
                           placeholder="UTC"
@@ -499,24 +540,16 @@ export function AdminOperationsSettings(): React.JSX.Element {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between gap-2">
-              AI plan explainer
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-normal text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={explainerEnabled}
-                  onChange={(event): void => { setExplainerEnabled(event.currentTarget.checked); }}
-                  className="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
-                />
-                Enabled
-              </label>
-            </CardTitle>
+        <Card className="overflow-visible">
+          <CardHeader variant="section">
+            <CardTitle>AI plan explainer</CardTitle>
             <CardDescription>
               Sends a sanitized plan summary to an OpenAI-compatible endpoint to produce a plain-language explanation.
               Never affects run status.
             </CardDescription>
+            <CardAction>
+              <SettingToggle id="explainer-enabled" label="AI plan explainer" checked={explainerEnabled} onCheckedChange={setExplainerEnabled} />
+            </CardAction>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -525,6 +558,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
               </label>
               <Input
                 id="explainer-url"
+                name="explainer-endpoint-url"
+                autoComplete="url"
                 value={explainerUrl}
                 onInput={(event): void => { setExplainerUrl(event.currentTarget.value); }}
                 placeholder="https://api.openai.com/v1/chat/completions"
@@ -538,6 +573,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
               <div className="flex max-w-xl items-center gap-2">
                 <Input
                   id="explainer-api-key"
+                  name="explainer-api-key"
+                  autoComplete="new-password"
                   type="password"
                   value={explainerApiKey}
                   onInput={(event): void => {
@@ -562,12 +599,14 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 )}
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label htmlFor="explainer-provider" className="mb-1.5 block text-sm font-medium text-foreground">
                   Provider (optional)
                 </label>
                 <FuzzyCombobox
+                  id="explainer-provider"
+                  name="provider"
                   value={explainerProvider}
                   options={providers.map((provider): { id: string; label: string; hint?: string } => ({
                     id: provider.id,
@@ -588,9 +627,10 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   }}
                   placeholder="e.g. openrouter"
                   emptyText="No providers (catalog unavailable)"
+                  aria-describedby="explainer-provider-help"
                   className="max-w-xl"
                 />
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p id="explainer-provider-help" className="mt-1 text-xs text-muted-foreground">
                   From the models.dev catalog (refreshed every 6h). Picking one fills the endpoint URL and
                   suggests models below. You can still type any provider or endpoint manually.
                 </p>
@@ -600,6 +640,8 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   Model
                 </label>
                 <FuzzyCombobox
+                  id="explainer-model"
+                  name="model"
                   value={explainerModel}
                   options={providerModels.map((model): { id: string; label: string; hint: string } => ({
                     id: model.id,
@@ -624,20 +666,20 @@ export function AdminOperationsSettings(): React.JSX.Element {
         </Card>
       </div>
 
-      <div className="mt-6 flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
         <Button type="button" onClick={(): void => { void save(); }} disabled={saving}>
-          {saving ? <Spinner className="mr-2 size-4" /> : <Check className="mr-2 size-4" />}
-          Save operations settings
+          {saving ? <Spinner data-icon="inline-start" className="size-4" /> : <Check data-icon="inline-start" className="size-4" />}
+          {saving ? "Saving…" : "Save operations settings"}
         </Button>
-        {savedAt !== "" && <span className="text-sm text-muted-foreground">Saved at {savedAt}</span>}
-        {saveError !== "" && <span className="text-sm text-destructive">{saveError}</span>}
+        {savedAt !== "" && <span className="text-sm text-success" role="status" aria-live="polite">Saved at {savedAt}</span>}
+        {saveError !== "" && <span className="text-sm text-destructive" role="alert">{saveError}</span>}
         {settings !== null && (
           <Badge variant="secondary" className="ml-auto">
-            <X className="mr-1 size-3" aria-hidden="true" />
+            <LockKeyhole data-icon="inline-start" className="size-3" aria-hidden="true" />
             Read-only fields are hidden; values are stored encrypted where applicable.
           </Badge>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

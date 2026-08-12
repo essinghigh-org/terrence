@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -15,6 +15,8 @@ import { HelpTooltip } from "../components/ui/help-tooltip";
 import { OrganizationCidrRanges } from "../components/OrganizationCidrRanges";
 import { OrganizationTags } from "../components/OrganizationTags";
 import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
+import { Breadcrumbs } from "../components/Breadcrumbs";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
@@ -531,16 +533,17 @@ export function OrganizationSettings(): React.JSX.Element {
 
   if (loading || (org !== null && !orgIsCurrent)) {
     return (
-      <div role="status" aria-label="Loading organization settings" className="flex max-w-4xl flex-col gap-6">
+      <PageShell role="status" aria-label="Loading organization settings" className="max-w-5xl">
         <div className="h-9 w-72 animate-pulse rounded bg-muted" />
         <div className="h-56 animate-pulse rounded-md border bg-muted/50" />
         <div className="h-40 animate-pulse rounded-md border bg-muted/50" />
-      </div>
+      </PageShell>
     );
   }
   if (org === null) {
     return (
-      <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-red-200 bg-red-50 p-5 text-red-900">
+      <PageShell className="max-w-5xl">
+        <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
           <h1 className="font-semibold">Could not load organization settings</h1>
           <p className="mt-1 text-sm">{loadError !== "" ? loadError : "The organization could not be loaded."}</p>
@@ -548,41 +551,45 @@ export function OrganizationSettings(): React.JSX.Element {
         <Button type="button" variant="outline" onClick={(): void => { void loadOrg(); }}>
           Try again
         </Button>
-      </div>
+        </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="max-w-4xl w-full">
-      {/* Breadcrumb */}
-      <div className="text-xs text-gray-500 mb-2 flex items-center gap-1.5 font-medium">
-        <Link to={`/app`} className="hover:underline">Dashboard</Link>
-        <span className="text-gray-300">/</span>
-        <Link to={`/app/${encodedOrgName}`} className="hover:underline">{orgName}</Link>
-        <span className="text-gray-300">/</span>
-        <span className="text-gray-900">Settings</span>
-      </div>
-
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Organization Settings</h1>
+    <PageShell className="max-w-5xl">
+      <div className="space-y-3">
+        <Breadcrumbs items={[
+          { label: "Dashboard", to: "/app" },
+          { label: orgNameParam, to: `/app/${encodedOrgName}` },
+          { label: "Settings" },
+        ]} />
+        <PageHeader
+          eyebrow="Organization settings"
+          title="Organization Settings"
+          description="Manage organization defaults, access, and lifecycle controls."
+        />
       </div>
 
       <div className="space-y-6">
           {activeTab === "general" && (
             <>
-              <Card className="border-gray-200 shadow-sm rounded-md">
+              <Card className="border-border shadow-sm rounded-md">
                 <CardHeader variant="section">
                   <CardTitle>General settings</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={saveSettings} className="space-y-6 max-w-lg">
                     {!canUpdateOrganization && (
-                      <p className="text-sm text-gray-500">Organization owner access is required to change these settings.</p>
+                      <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>
                     )}
                     <div className="space-y-1.5">
-                      <label htmlFor="org-name" className="text-sm font-semibold text-gray-900">Organization Name</label>
+                      <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization Name</label>
                       <Input
                         id="org-name"
+                        name="organization-name"
+                        autoComplete="off"
+                        spellCheck={false}
                         value={name}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                         disabled={!canUpdateOrganization}
@@ -591,13 +598,14 @@ export function OrganizationSettings(): React.JSX.Element {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label htmlFor="org-iac" className="text-sm font-semibold text-gray-900 flex items-center gap-1">
+                      <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
                         Default IaC Binary
                         <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
                       </label>
                       <select
                         id="org-iac"
-                        className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                        name="default-iac-binary"
+                        className="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary"
                         value={defaultIacBinary}
                         onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
                         disabled={!canUpdateOrganization}
@@ -605,15 +613,17 @@ export function OrganizationSettings(): React.JSX.Element {
                         <option value="tofu">OpenTofu</option>
                         <option value="terraform">Terraform</option>
                       </select>
-                      <p className="text-[13px] text-gray-500 mt-1">The engine used by default for new workspaces.</p>
+                      <p className="text-[13px] text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
                     </div>
                     <div className="space-y-1.5">
-                      <label htmlFor="org-version" className="text-sm font-semibold text-gray-900 flex items-center gap-1">
+                      <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
                         Default Version Constraint
                         <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
                       </label>
                       <Input
                         id="org-version"
+                        name="terraform-version"
+                        autoComplete="off"
                         value={defaultTerraformVersion}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
                         disabled={!canUpdateOrganization}
@@ -622,9 +632,12 @@ export function OrganizationSettings(): React.JSX.Element {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label htmlFor="org-email" className="text-sm font-semibold text-gray-900">Notification email</label>
+                      <label htmlFor="org-email" className="text-sm font-semibold text-foreground">Notification email</label>
                       <Input
                         id="org-email"
+                        name="notification-email"
+                        autoComplete="email"
+                        spellCheck={false}
                         type="email"
                         value={notificationEmail}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNotificationEmail(event.target.value); }}
@@ -632,11 +645,11 @@ export function OrganizationSettings(): React.JSX.Element {
                         placeholder="admin@example.com"
                         className="h-9"
                       />
-                      <p className="text-[13px] text-gray-500 mt-1">Email address used for organization notifications.</p>
+                      <p className="text-[13px] text-muted-foreground mt-1">Email address used for organization notifications.</p>
                     </div>
                     <div className="space-y-2 border-t pt-4">
-                      <p className="text-sm font-semibold text-gray-900">VCS status checks</p>
-                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                      <p className="text-sm font-semibold text-foreground">VCS status checks</p>
+                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
                         <Checkbox
                           checked={aggregatedCommitStatusEnabled}
                           onCheckedChange={(checked: boolean): void => { setAggregatedCommitStatusEnabled(checked); }}
@@ -644,11 +657,11 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Aggregate status checks
-                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
                         </span>
                       </label>
                       {!aggregatedCommitStatusEnabled && (
-                        <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                        <label className="flex items-start gap-3 text-sm font-medium text-foreground">
                           <Checkbox
                             checked={sendPassingStatusesForUntriggeredSpeculativePlans}
                             onCheckedChange={(checked: boolean): void => { setSendPassingStatusesForUntriggeredSpeculativePlans(checked); }}
@@ -656,13 +669,13 @@ export function OrganizationSettings(): React.JSX.Element {
                           />
                           <span>
                             Send passing statuses for unaffected pull requests
-                            <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
+                            <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
                           </span>
                         </label>
                       )}
                     </div>
                     <div className="space-y-2 border-t pt-4">
-                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
                         <Checkbox
                           checked={allowForceDeleteWorkspaces}
                           onCheckedChange={(checked: boolean): void => { setAllowForceDeleteWorkspaces(checked); }}
@@ -670,10 +683,10 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Workspace administrators can force delete workspaces
-                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
                         </span>
                       </label>
-                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
                         <Checkbox
                           checked={stacksEnabled}
                           onCheckedChange={(checked: boolean): void => { setStacksEnabled(checked); }}
@@ -681,10 +694,10 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Stacks
-                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
                         </span>
                       </label>
-                      <label className="flex items-start gap-3 text-sm font-medium text-gray-900">
+                      <label className="flex items-start gap-3 text-sm font-medium text-foreground">
                         <Checkbox
                           checked={showPreReleases}
                           onCheckedChange={(checked: boolean): void => { setShowPreReleases(checked); }}
@@ -692,14 +705,14 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Show Terraform pre-releases
-                          <span className="block text-[13px] font-normal text-gray-500 mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
                         </span>
                       </label>
                     </div>
                     <div className="space-y-2 border-t pt-4">
-                      <p className="text-sm font-semibold text-gray-900">Organizational default execution mode</p>
-                      <p className="text-[13px] text-gray-500">Changing the execution mode discards any active runs in workspaces.</p>
-                      <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                      <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
+                      <p className="text-[13px] text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <input
                           type="radio"
                           name="org-exec-mode"
@@ -710,10 +723,10 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Remote
-                          <span className="block text-[13px] font-normal text-gray-500">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
                         </span>
                       </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <input
                           type="radio"
                           name="org-exec-mode"
@@ -724,38 +737,38 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Local
-                          <span className="block text-[13px] font-normal text-gray-500">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+                          <span className="block text-[13px] font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
                         </span>
                       </label>
                     </div>
                     <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-primary hover:bg-primary/90 h-9">
-                      {saving ? "Saving..." : "Save settings"}
+                          {saving ? "Saving…" : "Save settings"}
                     </Button>
                   </form>
                 </CardContent>
               </Card>
 
               {/* Danger Zone */}
-              <Card className="border-red-200 shadow-sm rounded-md overflow-hidden">
+              <Card className="border-destructive/30 shadow-sm rounded-md overflow-hidden">
                 <CardHeader variant="danger">
                   <CardTitle>Danger Zone</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-gray-700 mb-4">
+                  <p className="text-sm text-foreground/85 mb-4">
                     Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
                   </p>
                   <Button
                     variant="outline"
                     disabled={!canDestroyOrganization}
-                    onClick={(): void => setConfirmDeleteOrgOpen(true)}
-                    className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 h-9"
+                    onClick={(): void => { setConfirmDeleteOrgOpen(true); }}
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive h-9"
                   >
                     <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
                   </Button>
                 </CardContent>
               </Card>
 
-              <Card className="border-gray-200 shadow-sm rounded-md">
+              <Card className="border-border shadow-sm rounded-md">
                 <CardHeader variant="section">
                   <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
                   <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
@@ -764,8 +777,8 @@ export function OrganizationSettings(): React.JSX.Element {
                   <CardContent>
                     {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
                       <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" type="number" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
-                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" type="number" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
+                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
+                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
                       </FieldGroup>
                     )}
                   </CardContent>
@@ -776,7 +789,7 @@ export function OrganizationSettings(): React.JSX.Element {
           )}
 
           {activeTab === "roles" && (
-            <Card className="border-gray-200 shadow-sm rounded-md">
+            <Card className="border-border shadow-sm rounded-md">
               <CardHeader variant="section">
                 <CardTitle>Reusable roles</CardTitle>
                 <CardDescription>Create named permission bundles that can be assigned to organization members.</CardDescription>
@@ -784,8 +797,8 @@ export function OrganizationSettings(): React.JSX.Element {
               <CardContent className="space-y-5">
                 <form onSubmit={saveRole} className="space-y-3 rounded-md border p-4">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <Input aria-label="Role name" placeholder="Role name" value={newRoleName} onChange={(event): void => { setNewRoleName(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
-                    <Input aria-label="Role description" placeholder="Description (optional)" value={newRoleDescription} onChange={(event): void => { setNewRoleDescription(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
+                    <Input id="organization-role-name" name="role-name" autoComplete="off" spellCheck={false} aria-label="Role name" placeholder="Role name…" value={newRoleName} onChange={(event): void => { setNewRoleName(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
+                    <Input id="organization-role-description" name="role-description" autoComplete="off" aria-label="Role description" placeholder="Description (optional)…" value={newRoleDescription} onChange={(event): void => { setNewRoleDescription(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {organizationPermissions.map((permission): React.JSX.Element => (
@@ -819,7 +832,7 @@ export function OrganizationSettings(): React.JSX.Element {
               </CardHeader>
               <CardContent className="space-y-6">
                 {membershipsError !== "" && (
-                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                     <span>Could not load organization members. {membershipsError}</span>
                     <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>Retry</Button>
                   </div>
@@ -859,7 +872,7 @@ export function OrganizationSettings(): React.JSX.Element {
                               else { setMemberToRemove(membership); }
                             }}
                           >
-                            <UserMinus className="size-4 text-gray-500 hover:text-red-600" />
+                            <UserMinus className="size-4 text-muted-foreground hover:text-destructive" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -880,11 +893,11 @@ export function OrganizationSettings(): React.JSX.Element {
                     <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
                       <Field>
                         <FieldLabel htmlFor="users-invite-email">Email Address</FieldLabel>
-                        <Input id="users-invite-email" type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }} disabled={!canManageUsers} required />
+                        <Input id="users-invite-email" name="invite-email" autoComplete="email" spellCheck={false} type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }} disabled={!canManageUsers} required />
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="users-invite-team">Add to teams</FieldLabel>
-                        <Select id="users-invite-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
+                        <Select id="users-invite-team" name="invite-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
                           <option value="">No team</option>
                           {teams.map((team): React.JSX.Element => (
                             <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
@@ -894,7 +907,7 @@ export function OrganizationSettings(): React.JSX.Element {
                       <Field className="justify-end">
                         <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
                           <MailPlus data-icon="inline-start" />
-                          {inviting ? "Inviting" : "Invite"}
+                          {inviting ? "Inviting…" : "Invite"}
                         </Button>
                       </Field>
                     </FieldGroup>
@@ -905,15 +918,20 @@ export function OrganizationSettings(): React.JSX.Element {
           )}
 
           {activeTab === "teams" && (
-            <Card className="border-gray-200 shadow-sm rounded-md">
+            <Card className="border-border shadow-sm rounded-md">
               <CardHeader variant="section">
                 <CardTitle>Teams</CardTitle>
                 <CardDescription>Manage access across the organization.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                <div className="p-5 border-b border-gray-100">
+                <div className="p-5 border-b border-border">
                   <form onSubmit={createTeam} className="flex gap-2 max-w-md">
                     <Input
+                      id="organization-team-name"
+                      name="team-name"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="New team name"
                       placeholder="New team name"
                       value={newTeamName}
                       onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTeamName(event.target.value); }}
@@ -923,15 +941,15 @@ export function OrganizationSettings(): React.JSX.Element {
                     <Button
                       type="submit"
                       disabled={!canCreateTeam || newTeamName.trim() === ""}
-                      className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 h-9 shadow-sm"
+                      className="bg-background text-foreground/85 border border-border hover:bg-muted h-9 shadow-sm"
                     >
                       Create team
                     </Button>
                   </form>
                 </div>
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-border">
                   {teamsError !== "" && (
-                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-red-50 p-4 text-sm text-red-800">
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-destructive/10 p-4 text-sm text-destructive">
                       <span>Could not load teams. {teamsError}</span>
                       <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadTeams(); }}>
                         Retry teams
@@ -942,20 +960,20 @@ export function OrganizationSettings(): React.JSX.Element {
                     const teamName = team.attributes["name"] as string;
                     return (
                       <div key={team.id}>
-                        <div className="flex items-center justify-between gap-3 p-4 hover:bg-gray-50 transition-colors">
+                        <div className="flex items-center justify-between gap-3 p-4 hover:bg-muted transition-colors">
                           <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center border border-gray-200">
-                              <Users className="h-4 w-4 text-gray-500" />
+                            <div className="h-8 w-8 rounded bg-muted flex items-center justify-center border border-border">
+                              <Users className="h-4 w-4 text-muted-foreground" />
                             </div>
                             <div>
-                              <p className="font-semibold text-[14px] text-blue-700">
+                              <p className="font-semibold text-[14px] text-primary">
                                 {teamName}
                               </p>
-                              <p className="text-xs text-gray-500 mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full border border-gray-200 capitalize font-medium tracking-wide">
+                            <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
                               {(team.attributes["visibility"] as string | undefined) ?? "organization"}
                             </span>
                             <Button
@@ -971,15 +989,15 @@ export function OrganizationSettings(): React.JSX.Element {
                           </div>
                         </div>
                         {editingTeamId === team.id && (
-                          <div className="border-t bg-gray-50/70">
+                          <div className="border-t bg-muted/70">
                             {/* Team settings: visibility + token management */}
-                            <div className="border-b border-gray-100 px-4 py-4">
-                              <p className="mb-3 text-sm font-semibold text-gray-900">Team settings for {teamName}</p>
+                            <div className="border-b border-border px-4 py-4">
+                              <p className="mb-3 text-sm font-semibold text-foreground">Team settings for {teamName}</p>
                               <div className="mb-3 flex items-center gap-4">
                                 <div>
-                                  <label className="text-xs font-medium text-gray-700">Visibility</label>
+                                  <label className="text-xs font-medium text-foreground/85">Visibility</label>
                                   <div className="mt-1 flex gap-3 text-sm">
-                                    <label className="flex items-center gap-1.5 font-medium text-gray-800">
+                                    <label className="flex items-center gap-1.5 font-medium text-foreground/85">
                                       <input
                                         type="radio"
                                         name={`visibility-${team.id}`}
@@ -989,7 +1007,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                       />
                                       Visible
                                     </label>
-                                    <label className="flex items-center gap-1.5 font-medium text-gray-800">
+                                    <label className="flex items-center gap-1.5 font-medium text-foreground/85">
                                       <input
                                         type="radio"
                                         name={`visibility-${team.id}`}
@@ -1000,7 +1018,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                       Secret
                                     </label>
                                   </div>
-                                  <p className="mt-0.5 text-xs text-gray-500">Visible to every member of this organization / Only visible to team members and organization owners.</p>
+                                  <p className="mt-0.5 text-xs text-muted-foreground">Visible to every member of this organization / Only visible to team members and organization owners.</p>
                                 </div>
                                 <div className="flex items-center gap-3 text-sm">
                                   <Checkbox
@@ -1008,14 +1026,14 @@ export function OrganizationSettings(): React.JSX.Element {
                                     checked={teamTokenMgmt[team.id] === true}
                                     onCheckedChange={(checked: boolean): void => { void updateTeamSetting(team.id, "allow-member-token-management", checked); }}
                                   />
-                                  <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-gray-900">Team API tokens</label>
+                                  <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-foreground">Team API tokens</label>
                                 </div>
                               </div>
-                              <p className="mb-3 text-xs text-gray-500">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
+                              <p className="mb-3 text-xs text-muted-foreground">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
 
                               {/* Organization access permissions */}
-                              <p className="mb-2 text-sm font-semibold text-gray-900">Organization access for {teamName}</p>
-                              <p className="mb-3 text-xs text-gray-500">
+                              <p className="mb-2 text-sm font-semibold text-foreground">Organization access for {teamName}</p>
+                              <p className="mb-3 text-xs text-muted-foreground">
                                 Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
                               </p>
                               <form onSubmit={saveTeamPermissions}>
@@ -1030,7 +1048,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                           onCheckedChange={(checked: boolean): void => { setTeamPermission(permission, checked); }}
                                           disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
                                         />
-                                        <label htmlFor={id} className="text-sm text-gray-700">{permissionLabel(permission)}</label>
+                                        <label htmlFor={id} className="text-sm text-foreground/85">{permissionLabel(permission)}</label>
                                       </div>
                                     );
                                   })}
@@ -1054,10 +1072,13 @@ export function OrganizationSettings(): React.JSX.Element {
                             {/* Team members */}
                             <div className="px-4 py-4">
                               <div className="flex items-center justify-between mb-3">
-                                <p className="text-sm font-semibold text-gray-900">Members ({(teamMemberCounts[team.id] ?? 0)})</p>
+                                <p className="text-sm font-semibold text-foreground">Members ({(teamMemberCounts[team.id] ?? 0)})</p>
                                 <div className="flex gap-2">
                                   <select
-                                    className="h-8 rounded-md border bg-white px-2 text-xs"
+                                    id={`team-${team.id}-member`}
+                                    name={`team-${team.id}-member`}
+                                    aria-label={`Add a member to ${team.attributes["name"] as string}`}
+                                    className="h-8 rounded-md border bg-background px-2 text-xs"
                                     value={addMemberTeam[team.id] ?? ""}
                                     onChange={(e): void => { setAddMemberTeam((prev) => ({ ...prev, [team.id]: e.target.value })); }}
                                   >
@@ -1077,14 +1098,14 @@ export function OrganizationSettings(): React.JSX.Element {
                                 </div>
                               </div>
                               {(teamMemberList[team.id] ?? []).length === 0 ? (
-                                <p className="text-xs text-gray-500">No members in this team.</p>
+                                <p className="text-xs text-muted-foreground">No members in this team.</p>
                               ) : (
                                 <div className="space-y-1">
                                   {(teamMemberList[team.id] ?? []).map((member): React.JSX.Element => (
-                                    <div key={member.id} className="flex items-center justify-between rounded border bg-white px-3 py-2 text-sm">
+                                    <div key={member.id} className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm">
                                       <div>
                                         <span className="font-medium">{member.username}</span>
-                                        {member.email !== undefined && <span className="ml-2 text-gray-500">{member.email}</span>}
+                                        {member.email !== undefined && <span className="ml-2 text-muted-foreground">{member.email}</span>}
                                       </div>
                                       <Button
                                         type="button"
@@ -1106,7 +1127,7 @@ export function OrganizationSettings(): React.JSX.Element {
                     );
                   })}
                   {teamsError === "" && teams.length === 0 && (
-                    <p className="p-8 text-sm text-gray-500 text-center">No teams created yet.</p>
+                    <p className="p-8 text-sm text-muted-foreground text-center">No teams created yet.</p>
                   )}
                 </div>
                 <div className="flex flex-col gap-5 border-t p-5">
@@ -1122,6 +1143,9 @@ export function OrganizationSettings(): React.JSX.Element {
                         <FieldLabel htmlFor="member-email">Email</FieldLabel>
                         <Input
                           id="member-email"
+                          name="member-email"
+                          autoComplete="email"
+                          spellCheck={false}
                           type="email"
                           value={inviteEmail}
                           onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setInviteEmail(event.currentTarget.value); }}
@@ -1131,7 +1155,7 @@ export function OrganizationSettings(): React.JSX.Element {
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="member-team">Team</FieldLabel>
-                        <Select id="member-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
+                        <Select id="member-team" name="member-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
                           <option value="">No team</option>
                           {teams.map((team): React.JSX.Element => (
                             <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
@@ -1141,13 +1165,13 @@ export function OrganizationSettings(): React.JSX.Element {
                       <Field className="justify-end">
                         <Button type="submit" disabled={!canManageUsers || inviting || inviteEmail.trim() === ""}>
                           <MailPlus data-icon="inline-start" />
-                          {inviting ? "Inviting" : "Invite"}
+                          {inviting ? "Inviting…" : "Invite"}
                         </Button>
                       </Field>
                     </FieldGroup>
                   </form>
                   {membershipsError !== "" && (
-                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                       <span>Could not load organization members. {membershipsError}</span>
                       <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadMemberships(); }}>
                         Retry members
@@ -1180,7 +1204,7 @@ export function OrganizationSettings(): React.JSX.Element {
                                 }
                               }}
                             >
-                              <UserMinus className="h-4 w-4 text-gray-500 hover:text-red-600" />
+                              <UserMinus className="h-4 w-4 text-muted-foreground hover:text-destructive" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -1226,6 +1250,6 @@ export function OrganizationSettings(): React.JSX.Element {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

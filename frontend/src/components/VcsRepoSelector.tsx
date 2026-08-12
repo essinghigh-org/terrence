@@ -17,6 +17,7 @@ type VcsRepoSelectorProps = {
   disabled?: boolean;
   placeholder?: string;
   id?: string;
+  name?: string;
 };
 
 export function VcsRepoSelector({
@@ -27,6 +28,7 @@ export function VcsRepoSelector({
   disabled = false,
   placeholder = "e.g. organization/repository",
   id,
+  name,
 }: Readonly<VcsRepoSelectorProps>): React.JSX.Element {
   const autoId = useId();
   const inputId = id ?? autoId;
@@ -163,6 +165,8 @@ export function VcsRepoSelector({
       <div className="relative">
         <Input
           id={inputId}
+          name={name}
+          autoComplete="off"
           ref={inputRef}
           value={search}
           onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {

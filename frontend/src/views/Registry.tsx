@@ -19,7 +19,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "../components/ui/dialog";
 import {
   Empty,
@@ -32,6 +31,7 @@ import {
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Spinner } from "../components/ui/spinner";
+import { PageHeader, PageShell } from "../components/PageHeader";
 import { fetchAllApiPages } from "../lib/api";
 import { cn } from "../lib/utils";
 
@@ -294,20 +294,17 @@ export function Registry(): JSX.Element {
   }, [newVersion, createdModuleId, orgName]);
 
   return (
-    <div className="space-y-8">
-      <header className="flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            {orgName} / Registry / {tabLabel}
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight">Registry</h1>
-          <p className="text-muted-foreground">
-            Browse private modules and providers available to this organization.
-          </p>
-        </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Registry / ${tabLabel}`}
+        title="Registry"
+        description="Browse private modules and providers available to this organization."
+        action={showPublish ? (
+          <Button type="button" onClick={(): void => { setPublishOpen(true); }}>Publish</Button>
+        ) : undefined}
+      />
         {showPublish && (
           <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
-            <DialogTrigger render={<Button type="button">Publish</Button>} />
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Publish {step === "create-module" ? "module" : "version"}</DialogTitle>
@@ -324,6 +321,9 @@ export function Registry(): JSX.Element {
                     <FieldLabel htmlFor="publish-name">Name</FieldLabel>
                     <Input
                       id="publish-name"
+                      name="module-name"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={newName}
                       onChange={(e): void => { setNewName(e.target.value); }}
                       onInput={(e): void => { setNewName(e.currentTarget.value); }}
@@ -337,6 +337,9 @@ export function Registry(): JSX.Element {
                     <FieldLabel htmlFor="publish-provider">Provider</FieldLabel>
                     <Input
                       id="publish-provider"
+                      name="module-provider"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={newProvider}
                       onChange={(e): void => { setNewProvider(e.target.value); }}
                       onInput={(e): void => { setNewProvider(e.currentTarget.value); }}
@@ -350,6 +353,9 @@ export function Registry(): JSX.Element {
                     <FieldLabel htmlFor="publish-namespace">Namespace</FieldLabel>
                     <Input
                       id="publish-namespace"
+                      name="module-namespace"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={newNamespace}
                       onChange={(e): void => { setNewNamespace(e.target.value); }}
                       onInput={(e): void => { setNewNamespace(e.currentTarget.value); }}
@@ -365,6 +371,9 @@ export function Registry(): JSX.Element {
                     <FieldLabel htmlFor="publish-version">Version</FieldLabel>
                     <Input
                       id="publish-version"
+                      name="module-version"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={newVersion}
                       onChange={(e): void => { setNewVersion(e.target.value); }}
                       onInput={(e): void => { setNewVersion(e.currentTarget.value); }}
@@ -396,15 +405,16 @@ export function Registry(): JSX.Element {
             </DialogContent>
           </Dialog>
         )}
-      </header>
-
       <div className="max-w-4xl space-y-5">
         <Input
+          id="registry-search"
+          name="registry-search"
           aria-label="Search registry"
+          autoComplete="off"
           onInput={(event): void => {
             setSearch(event.currentTarget.value);
           }}
-          placeholder="Filter providers and modules"
+          placeholder="Filter providers and modules…"
           type="search"
           value={search}
         />
@@ -495,6 +505,6 @@ export function Registry(): JSX.Element {
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

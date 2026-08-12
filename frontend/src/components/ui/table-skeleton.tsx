@@ -22,13 +22,13 @@ export function TableSkeleton({
       {Array.from({ length: rows }, (_unused, rowIndex): React.JSX.Element => (
         <div
           key={rowIndex}
-          className="flex items-center gap-4 border-b border-gray-100 px-4 py-3 last:border-b-0"
+          className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0"
         >
           {Array.from({ length: cols }, (_unused, colIndex): React.JSX.Element => (
             <div
               key={colIndex}
-              className="h-3.5 animate-pulse rounded bg-gray-200 dark:bg-gray-800"
-              style={{ width: `${[22, 30, 14, 18, 26, 12][colIndex % 6]}%` }}
+              className="h-3.5 animate-pulse rounded bg-muted"
+              style={{ width: `${[22, 30, 14, 18, 26, 12][colIndex % 6] ?? 20}%` }}
             />
           ))}
         </div>

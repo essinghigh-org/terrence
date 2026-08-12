@@ -14,6 +14,7 @@ import { Select, SelectItem } from "../components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Boxes, Plus, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type RegistryProvider = {
   id: string;
@@ -72,7 +73,6 @@ export function RegistryProviders(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage registry providers for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadProviders = async (): Promise<void> => {
@@ -146,21 +146,18 @@ export function RegistryProviders(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Registry providers</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Private registry providers available to Terraform runs in this organization.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Registry providers"
+        description="Private registry providers available to Terraform runs in this organization."
+        action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />
             Add provider
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -236,26 +233,27 @@ export function RegistryProviders(): React.JSX.Element {
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="registry-provider-name">Name</label>
-              <Input id="registry-provider-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider" />
+              <Input id="registry-provider-name" name="provider-name" autoComplete="off" spellCheck={false} value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="registry-provider-namespace">Namespace</label>
-              <Input id="registry-provider-namespace" value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
+              <Input id="registry-provider-namespace" name="provider-namespace" autoComplete="off" spellCheck={false} value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder={orgName} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Registry name</label>
-              <Select value={registryName} onValueChange={setRegistryName}>
+              <label className="text-sm font-medium" htmlFor="registry-provider-registry">Registry name</label>
+              <Select id="registry-provider-registry" name="registry" value={registryName} onValueChange={setRegistryName}>
                 {REGISTRY_OPTIONS.map((option): React.JSX.Element => (
                   <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                 ))}
               </Select>
             </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
             <Button onClick={createProvider} disabled={creating}>
-              {creating ? <Spinner /> : "Create provider"}
+              {creating && <Spinner data-icon="inline-start" />}
+              {creating ? "Creating provider…" : "Create provider"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -272,6 +270,6 @@ export function RegistryProviders(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

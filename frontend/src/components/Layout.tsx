@@ -210,6 +210,11 @@ export function Layout({
     applyTheme();
   }, []);
 
+  useEffect((): void => {
+    const main = document.getElementById("main-content");
+    if (main instanceof HTMLElement) main.scrollTop = 0;
+  }, [location.pathname]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -1268,9 +1273,9 @@ export function Layout({
               onClick={() => { setCommandPaletteOpen(true); }}
             >
               <Search className="size-3.5" />
-              <span className="text-xs">Search...</span>
+              <span className="text-xs">Search…</span>
               <kbd className="pointer-events-none rounded bg-topbar-foreground/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-topbar-foreground">
-                ⌘K
+                ⌘K / Ctrl+K
               </kbd>
             </Button>
 

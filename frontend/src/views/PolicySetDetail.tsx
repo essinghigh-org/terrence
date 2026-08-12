@@ -226,7 +226,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
 
   if (policySet === null) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
         <p className="font-medium">{error !== "" ? error : "Policy set not found"}</p>
         <Button className="mt-3" variant="outline" onClick={reload}>Try again</Button>
       </div>
@@ -275,7 +275,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     }
   }
 
-  const tagSelectors = policySet?.attributes["tag-selectors"] ?? [];
+  const tagSelectors = policySet.attributes["tag-selectors"] ?? [];
 
   const addTagSelector = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
@@ -393,14 +393,14 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <label htmlFor="ps-name" className="text-sm font-medium">Name</label>
-              <Input id="ps-name" value={overName} disabled={!canManage}
+              <Input id="ps-name" name="policy-set-name" autoComplete="off" spellCheck={false} value={overName} disabled={!canManage}
                 onInput={(e): void => { setOverName(e.currentTarget.value); setOverviewDirty(true); }} />
             </div>
             <div className="space-y-2">
               <label htmlFor="ps-desc" className="text-sm font-medium">Description</label>
-              <textarea id="ps-desc" rows={3} disabled={!canManage} value={overDescription}
+              <textarea id="ps-desc" name="policy-set-description" autoComplete="off" spellCheck={false} rows={3} disabled={!canManage} value={overDescription}
                 onInput={(e): void => { setOverDescription(e.currentTarget.value); setOverviewDirty(true); }}
-                className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" />
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" />
             </div>
             <div className="flex flex-col gap-3">
               <label className="flex items-center gap-2 text-sm">
@@ -417,7 +417,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                 <Button variant="outline" disabled={!overviewDirty || savingOverview} onClick={reload}>Cancel</Button>
                 <Button disabled={!overviewDirty || savingOverview || overName.trim() === ""}
                   onClick={(): void => { void updateOverview(); }}>
-                  {savingOverview ? <Spinner className="size-4" /> : "Save changes"}
+                  {savingOverview && <Spinner data-icon="inline-start" className="size-4" />}
+                  {savingOverview ? "Saving changes…" : "Save changes"}
                 </Button>
               </div>
             )}
@@ -503,6 +504,9 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                       </label>
                       <Input
                         id="selector-key"
+                        name="tag-selector-key"
+                        autoComplete="off"
+                        spellCheck={false}
                         required
                         value={selectorKey}
                         onInput={(e): void => { setSelectorKey(e.currentTarget.value); }}
@@ -515,6 +519,9 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                       </label>
                       <Input
                         id="selector-value"
+                        name="tag-selector-value"
+                        autoComplete="off"
+                        spellCheck={false}
                         value={selectorValue}
                         onInput={(e): void => { setSelectorValue(e.currentTarget.value); }}
                         placeholder="production"
@@ -532,11 +539,12 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                       </label>
                     </div>
                   </div>
-                  {selectorError !== "" && <div className="text-sm text-red-500">{selectorError}</div>}
+                  {selectorError !== "" && <div role="alert" className="text-sm text-destructive">{selectorError}</div>}
                   <div className="flex justify-end">
                     <Button type="submit" disabled={savingSelector || selectorKey.trim() === ""}>
-                      {savingSelector ? <Spinner className="size-4" /> : <Plus className="size-4 mr-1.5" />}
-                      Add selector
+                      {savingSelector && <Spinner data-icon="inline-start" className="size-4" />}
+                      {!savingSelector && <Plus className="size-4 mr-1.5" />}
+                      {savingSelector ? "Adding selector…" : "Add selector"}
                     </Button>
                   </div>
                 </form>
@@ -768,22 +776,24 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             )}
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Name</label>
-                <Input value={policyName} onInput={(e): void => { setPolicyName(e.currentTarget.value); }} placeholder="runtime_version" required />
+                <label className="text-sm font-medium" htmlFor="policy-name">Name</label>
+                <Input id="policy-name" name="name" value={policyName} onInput={(e): void => { setPolicyName(e.currentTarget.value); }} placeholder="runtime_version" required />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Description</label>
-                <Input value={policyDescription} onInput={(e): void => { setPolicyDescription(e.currentTarget.value); }} placeholder="Optional description" />
+                <label className="text-sm font-medium" htmlFor="policy-description">Description</label>
+                <Input id="policy-description" name="description" value={policyDescription} onInput={(e): void => { setPolicyDescription(e.currentTarget.value); }} placeholder="Optional description" />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Enforcement level</label>
-                <Select value={policyEnforcement} onValueChange={setPolicyEnforcement}>
+                <label className="text-sm font-medium" htmlFor="policy-enforcement">Enforcement level</label>
+                <Select id="policy-enforcement" name="enforcement" value={policyEnforcement} onValueChange={setPolicyEnforcement}>
                   {ENFORCEMENTS.map((lvl): React.JSX.Element => <SelectItem key={lvl.value} value={lvl.value}>{lvl.label}</SelectItem>)}
                 </Select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Policy code <span className="font-normal text-muted-foreground">(Sentinel)</span></label>
+                <label className="text-sm font-medium" htmlFor="policy-code">Policy code <span className="font-normal text-muted-foreground">(Sentinel)</span></label>
                 <textarea
+                  id="policy-code"
+                  name="policy-code"
                   rows={14}
                   spellCheck={false}
                   value={policyQuery}
@@ -796,7 +806,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             <DialogFooter>
               <Button type="button" variant="outline" disabled={savingPolicy} onClick={(): void => { setPolicyDialogOpen(false); }}>Cancel</Button>
               <Button type="submit" disabled={savingPolicy || policyName.trim() === ""}>
-                {savingPolicy ? <Spinner className="size-4" /> : editingPolicy === null ? "Create policy" : "Save changes"}
+                {savingPolicy && <Spinner data-icon="inline-start" className="size-4" />}
+                {savingPolicy ? "Saving policy…" : editingPolicy === null ? "Create policy" : "Save changes"}
               </Button>
             </DialogFooter>
           </form>
@@ -815,13 +826,13 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             )}
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Key</label>
-                <Input value={paramKey} onInput={(e): void => { setParamKey(e.currentTarget.value); }} placeholder="allowed_cidrs" required />
+                <label className="text-sm font-medium" htmlFor="policy-param-key">Key</label>
+                <Input id="policy-param-key" name="key" value={paramKey} onInput={(e): void => { setParamKey(e.currentTarget.value); }} placeholder="allowed_cidrs" required />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Value</label>
-                <textarea rows={3} value={paramValue} onInput={(e): void => { setParamValue(e.currentTarget.value); }}
-                  className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                <label className="text-sm font-medium" htmlFor="policy-param-value">Value</label>
+                <textarea id="policy-param-value" name="value" autoComplete="off" spellCheck={false} rows={3} value={paramValue} onInput={(e): void => { setParamValue(e.currentTarget.value); }}
+                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
               </div>
               <div className="flex flex-col gap-3">
                 <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramHcl} onCheckedChange={(c: boolean | "indeterminate"): void => { setParamHcl(c === true); }} /> Parse value as HCL</label>
@@ -831,7 +842,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             <DialogFooter>
               <Button type="button" variant="outline" disabled={savingParam} onClick={(): void => { setParamDialogOpen(false); }}>Cancel</Button>
               <Button type="submit" disabled={savingParam || paramKey.trim() === ""}>
-                {savingParam ? <Spinner className="size-4" /> : editingParam === null ? "Add parameter" : "Save changes"}
+                {savingParam && <Spinner data-icon="inline-start" className="size-4" />}
+                {savingParam ? "Saving parameter…" : editingParam === null ? "Add parameter" : "Save changes"}
               </Button>
             </DialogFooter>
           </form>
@@ -877,7 +889,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
           <DialogFooter>
             <Button type="button" variant="outline" disabled={savingAttach} onClick={(): void => { setAttachWorkspaceOpen(false); setAttachProjectOpen(false); }}>Cancel</Button>
             <Button type="button" disabled={savingAttach} onClick={(): void => { void saveRelationTargets(); }}>
-              {savingAttach ? <Spinner className="size-4" /> : "Save"}
+              {savingAttach && <Spinner data-icon="inline-start" className="size-4" />}
+              {savingAttach ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

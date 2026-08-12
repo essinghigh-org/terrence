@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
+import { Checkbox } from "../components/ui/checkbox";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Spinner } from "../components/ui/spinner";
 import { Input } from "../components/ui/input";
@@ -11,6 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Layers, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type VcsRepo = { identifier?: string; branch?: string | null } | null;
 
@@ -91,7 +93,6 @@ export function StackSettings(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage stacks for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadStacks = async (): Promise<void> => {
@@ -233,20 +234,17 @@ export function StackSettings(): React.JSX.Element {
   const vcsRepo = (stack: Stack): VcsRepo => stack.attributes["vcs-repo"] ?? null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Stacks</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Stacks let you manage collections of workspaces and the infrastructure they deploy.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Stacks"
+        description="Stacks let you manage collections of workspaces and the infrastructure they deploy."
+        action={canManage ? (
           <Button onClick={openCreate}>
             <span className="mr-1.5 text-base leading-none">+</span> New stack
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {error !== "" && !loading && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>
@@ -343,15 +341,16 @@ export function StackSettings(): React.JSX.Element {
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="stack-name">Name</Label>
-              <Input id="stack-name" value={form.name} onChange={set("name")} placeholder="my-stack" />
+              <Input id="stack-name" name="name" autoComplete="off" spellCheck={false} value={form.name} onChange={set("name")} placeholder="my-stack…" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-project">Project</Label>
               <select
                 id="stack-project"
+                name="project"
                 value={form.projectId}
                 onChange={set("projectId")}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 disabled={editingStack !== null}
               >
                 <option value="">Select a project</option>
@@ -362,27 +361,27 @@ export function StackSettings(): React.JSX.Element {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-vcs">VCS repository identifier</Label>
-              <Input id="stack-vcs" value={form.vcsIdentifier} onChange={set("vcsIdentifier")} placeholder="registry-example/hashicorp-aws (owner/repo)" />
+              <Input id="stack-vcs" name="vcs-repository" autoComplete="off" spellCheck={false} value={form.vcsIdentifier} onChange={set("vcsIdentifier")} placeholder="owner/repository…" />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="stack-branch">Branch</Label>
-                <Input id="stack-branch" value={form.vcsBranch} onChange={set("vcsBranch")} placeholder="main (optional)" />
+                <Input id="stack-branch" name="branch" autoComplete="off" value={form.vcsBranch} onChange={set("vcsBranch")} placeholder="main (optional)…" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="stack-working-dir">Working directory</Label>
-                <Input id="stack-working-dir" value={form.workingDirectory} onChange={set("workingDirectory")} placeholder="terraform (optional)" />
+                <Input id="stack-working-dir" name="working-directory" autoComplete="off" value={form.workingDirectory} onChange={set("workingDirectory")} placeholder="terraform (optional)…" />
               </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-description">Description</Label>
-              <Input id="stack-description" value={form.description} onChange={set("description")} placeholder="Optional" />
+              <Input id="stack-description" name="description" autoComplete="off" value={form.description} onChange={set("description")} placeholder="Optional…" />
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+            <label htmlFor="stack-speculative" className="flex cursor-pointer items-center gap-2 text-sm">
+              <Checkbox
+                id="stack-speculative"
                 checked={form.speculative}
-                onChange={(e): void => { setForm((prev): StackForm => ({ ...prev, speculative: e.target.checked })); }}
+                onCheckedChange={(checked: boolean | "indeterminate"): void => { setForm((prev): StackForm => ({ ...prev, speculative: checked === true })); }}
               />
               Speculative planner enabled
             </label>
@@ -407,6 +406,6 @@ export function StackSettings(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

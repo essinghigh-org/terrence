@@ -14,7 +14,7 @@ export function DegradedBanner(props: Readonly<{
 }>): React.JSX.Element {
   const { title, actionLabel, onAction } = props;
   return (
-    <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
       <span>{title}</span>
       {actionLabel !== undefined && onAction !== undefined && (
         <Button variant="outline" onClick={onAction}>{actionLabel}</Button>

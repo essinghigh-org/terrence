@@ -93,6 +93,7 @@ export function ConfirmDialog({
               </Label>
               <Input
                 id="confirm-dialog-input"
+                name="confirmation"
                 value={typedText}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>): void => {
                   setTypedText(e.target.value);
@@ -142,7 +143,7 @@ export function ConfirmDialog({
               disabled={!isConfirmed || loading}
             >
               {loading && <Spinner data-icon="inline-start" className="mr-1.5" />}
-              {loading ? "Processing..." : confirmText}
+              {loading ? "Processing…" : confirmText}
             </Button>
           </DialogFooter>
         </form>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -19,6 +19,9 @@ export function FuzzyCombobox({
   value,
   options,
   onSelect,
+  id,
+  name,
+  "aria-describedby": ariaDescribedBy,
   placeholder,
   allowCustom = true,
   emptyText = "No matches",
@@ -28,6 +31,9 @@ export function FuzzyCombobox({
   value: string;
   options: readonly ComboboxOption[];
   onSelect: (value: string) => void;
+  id?: string;
+  name?: string;
+  "aria-describedby"?: string;
   placeholder?: string;
   allowCustom?: boolean;
   emptyText?: string;
@@ -40,6 +46,8 @@ export function FuzzyCombobox({
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const focusRef = useRef<HTMLInputElement>(null);
+  const generatedId = useId();
+  const listId = id === undefined ? `fuzzy-combobox-list${generatedId}` : `${id}-list`;
 
   const selected = useMemo(
     (): ComboboxOption | undefined => options.find((option): boolean => option.id === value),
@@ -62,7 +70,7 @@ export function FuzzyCombobox({
   const showCustom = allowCustom && query.trim() !== "" && !filtered.some((option): boolean => option.id === query.trim());
 
   useEffect((): (() => void) => {
-    if (!open) return () => undefined;
+    if (!open) return (): void => undefined;
     const onPointerDown = (event: MouseEvent): void => {
       if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) setOpen(false);
     };
@@ -80,7 +88,7 @@ export function FuzzyCombobox({
   useEffect((): void => {
     setHighlighted(0);
     if (listRef.current !== null) listRef.current.scrollTop = 0;
-  }, [query, open]);
+  }, [filtered.length, query, open]);
 
   const commit = (next: string): void => {
     onSelect(next);
@@ -89,6 +97,7 @@ export function FuzzyCombobox({
   };
 
   const rowCount = filtered.length + (showCustom ? 1 : 0);
+  const optionId = (index: number): string => `${listId}-option-${index}`;
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (!open && (event.key === "ArrowDown" || event.key === "Enter")) {
@@ -122,18 +131,27 @@ export function FuzzyCombobox({
       <div className="relative">
         <input
           ref={focusRef}
+          id={id}
+          name={name}
           type="text"
           role="combobox"
           aria-expanded={open}
           aria-autocomplete="list"
-          aria-controls={open ? "fuzzy-combobox-list" : undefined}
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={open && rowCount > 0 ? optionId(highlighted) : undefined}
+          aria-describedby={ariaDescribedBy}
+          autoComplete="off"
           value={open ? query : selected?.label ?? value}
           placeholder={placeholder}
           onInput={(event): void => {
             setQuery(event.currentTarget.value);
             if (!open) setOpen(true);
           }}
-          onFocus={(): void => setOpen(true)}
+          onFocus={(event): void => {
+            setQuery(selected?.label ?? value);
+            setOpen(true);
+            event.currentTarget.select();
+          }}
           onKeyDown={onKeyDown}
           className={cn(
             "h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
@@ -147,7 +165,7 @@ export function FuzzyCombobox({
       </div>
       {open && (
         <ul
-          id="fuzzy-combobox-list"
+          id={listId}
           ref={listRef}
           role="listbox"
           aria-label="Suggestions"
@@ -162,10 +180,11 @@ export function FuzzyCombobox({
             <li key={option.id}>
               <button
                 type="button"
+                id={optionId(index)}
                 role="option"
                 aria-selected={index === highlighted}
-                onMouseEnter={(): void => setHighlighted(index)}
-                onClick={(): void => commit(option.id)}
+                onMouseEnter={(): void => { setHighlighted(index); }}
+                onClick={(): void => { commit(option.id); }}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
                   index === highlighted ? "bg-accent text-accent-foreground" : "",
@@ -183,10 +202,11 @@ export function FuzzyCombobox({
             <li>
               <button
                 type="button"
+                id={optionId(filtered.length)}
                 role="option"
                 aria-selected={highlighted === filtered.length}
-                onMouseEnter={(): void => setHighlighted(filtered.length)}
-                onClick={(): void => commit(query.trim())}
+                onMouseEnter={(): void => { setHighlighted(filtered.length); }}
+                onClick={(): void => { commit(query.trim()); }}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
                   highlighted === filtered.length ? "bg-accent text-accent-foreground" : "",

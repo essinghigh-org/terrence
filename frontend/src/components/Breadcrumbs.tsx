@@ -14,23 +14,24 @@ export type BreadcrumbItem = Readonly<{
 export function Breadcrumbs(props: Readonly<{ items: readonly BreadcrumbItem[] }>): React.JSX.Element {
   const { items } = props;
   return (
-    <nav aria-label="Breadcrumb" className="mb-3 flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium text-gray-500">
+    <nav aria-label="Breadcrumb" className="mb-3 flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <ol className="flex min-w-0 flex-wrap items-center gap-1.5">
-        {items.map((item, index) => {
+        {items.map((item, index): React.JSX.Element => {
           const isLast = index === items.length - 1;
-          const clickable = item.to !== undefined && !isLast;
+          const to = item.to;
+          const clickable = to !== undefined && !isLast;
           return (
             <li key={`${item.label}:${index}`} className="flex min-w-0 items-center gap-1.5">
               {clickable ? (
-                <Link to={item.to!} className="truncate hover:text-gray-900 hover:underline">
+                <Link to={to} className="truncate hover:text-foreground hover:underline">
                   {item.label}
                 </Link>
               ) : (
-                <span aria-current={isLast ? "page" : undefined} className="truncate text-gray-900">
+                <span aria-current={isLast ? "page" : undefined} className="truncate text-foreground">
                   {item.label}
                 </span>
               )}
-              {!isLast && <span aria-hidden="true" className="text-gray-300">/</span>}
+              {!isLast && <span aria-hidden="true" className="text-muted-foreground/70">/</span>}
             </li>
           );
         })}

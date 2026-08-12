@@ -11,6 +11,7 @@ import { Select, SelectItem } from "../components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Fingerprint, Plus, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type OidcConfig = {
   id: string;
@@ -78,7 +79,6 @@ export function OidcConfigurations(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage OIDC configurations for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadConfigs = async (): Promise<void> => {
@@ -160,21 +160,18 @@ export function OidcConfigurations(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">OIDC configurations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Identity provider configurations used by the organization&apos;s runs to authenticate with cloud providers.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="OIDC configurations"
+        description="Identity provider configurations used by the organization&apos;s runs to authenticate with cloud providers."
+        action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />
             Add configuration
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -242,7 +239,7 @@ export function OidcConfigurations(): React.JSX.Element {
           <form id="oidc-create-form" onSubmit={(event): void => { event.preventDefault(); void createConfig(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="oidc-provider-type">Provider</label>
-              <Select id="oidc-provider-type" value={configType} onValueChange={setConfigType}>
+              <Select id="oidc-provider-type" name="provider-type" value={configType} onValueChange={setConfigType}>
                 {Object.entries(TYPE_LABELS).map(([value, label]): React.JSX.Element => (
                   <SelectItem key={value} value={value}>{label}</SelectItem>
                 ))}
@@ -251,7 +248,7 @@ export function OidcConfigurations(): React.JSX.Element {
             {configType === "aws-oidc-configurations" && (
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="oidc-role-arn">Role ARN</label>
-                <Input id="oidc-role-arn" value={roleArn} onChange={(e): void => { setRoleArn(e.target.value); }} placeholder="arn:aws:iam::123456789012:role/my-role" />
+                <Input id="oidc-role-arn" name="role-arn" autoComplete="off" spellCheck={false} value={roleArn} onChange={(e): void => { setRoleArn(e.target.value); }} placeholder="arn:aws:iam::123456789012:role/my-role" />
               </div>
             )}
             {(configType === "azure-oidc-configurations" || configType === "gcp-oidc-configurations") && (
@@ -259,27 +256,28 @@ export function OidcConfigurations(): React.JSX.Element {
                 <label className="text-sm font-medium" htmlFor="oidc-identity">
                   {configType === "azure-oidc-configurations" ? "Identity (client ID)" : "Workload identity provider ID"}
                 </label>
-                <Input id="oidc-identity" value={identity} onChange={(e): void => { setIdentity(e.target.value); }} placeholder={configType === "azure-oidc-configurations" ? "client-id" : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"} />
+                <Input id="oidc-identity" name="identity" autoComplete="off" spellCheck={false} value={identity} onChange={(e): void => { setIdentity(e.target.value); }} placeholder={configType === "azure-oidc-configurations" ? "client-id" : "projects/123/locations/global/workloadIdentityPools/pool/providers/provider"} />
               </div>
             )}
             {configType === "vault-oidc-configurations" && (
               <>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="oidc-address">Address</label>
-                  <Input id="oidc-address" value={address} onChange={(e): void => { setAddress(e.target.value); }} placeholder="https://vault.example.com" />
+                  <Input id="oidc-address" name="vault-address" autoComplete="url" value={address} onChange={(e): void => { setAddress(e.target.value); }} placeholder="https://vault.example.com" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="oidc-namespace">Namespace</label>
-                  <Input id="oidc-namespace" value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder="admin" />
+                  <Input id="oidc-namespace" name="vault-namespace" autoComplete="off" spellCheck={false} value={namespace} onChange={(e): void => { setNamespace(e.target.value); }} placeholder="admin" />
                 </div>
               </>
             )}
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </form>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
             <Button type="submit" form="oidc-create-form" disabled={creating}>
-              {creating ? <Spinner /> : "Create configuration"}
+              {creating && <Spinner data-icon="inline-start" />}
+              {creating ? "Creating configuration…" : "Create configuration"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -295,6 +293,6 @@ export function OidcConfigurations(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

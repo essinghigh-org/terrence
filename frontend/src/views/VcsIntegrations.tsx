@@ -10,6 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type OAuthClient = Readonly<{
   readonly id: string;
@@ -381,13 +382,12 @@ export function VcsIntegrations({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{orgName} / VCS Integrations</h1>
-          <p className="text-sm text-muted-foreground">Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs.</p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${currentOrgName} / Settings`}
+        title="VCS integrations"
+        description="Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs."
+      />
 
       {accessStatus === "loading" && (
         <Card>
@@ -634,7 +634,7 @@ export function VcsIntegrations({
           </DialogHeader>
 
           {formError !== "" && (
-            <div className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
+            <div role="alert" className="rounded bg-destructive/15 p-3 text-xs font-medium text-destructive">
               {formError}
             </div>
           )}
@@ -644,6 +644,9 @@ export function VcsIntegrations({
               <label htmlFor="vcs-name" className="text-sm font-medium">Name</label>
               <Input
                 id="vcs-name"
+                name="vcs-integration-name"
+                autoComplete="off"
+                spellCheck={false}
                 value={name}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                 placeholder="GitHub Commercial"
@@ -655,7 +658,8 @@ export function VcsIntegrations({
               <label htmlFor="vcs-provider" className="text-sm font-medium">VCS Type</label>
               <select
                 id="vcs-provider"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                name="service-provider"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={serviceProvider}
                 onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
                   const provider = event.target.value as ServiceProvider;
@@ -676,6 +680,8 @@ export function VcsIntegrations({
                 <label htmlFor="vcs-http-url" className="text-xs font-medium">HTTP URL</label>
                 <Input
                   id="vcs-http-url"
+                  name="http-url"
+                  autoComplete="url"
                   value={httpUrl}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setHttpUrl(event.target.value); }}
                   placeholder={serviceProvider === "github_enterprise"
@@ -688,6 +694,8 @@ export function VcsIntegrations({
                 <label htmlFor="vcs-api-url" className="text-xs font-medium">API URL</label>
                 <Input
                   id="vcs-api-url"
+                  name="api-url"
+                  autoComplete="url"
                   value={apiUrl}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setApiUrl(event.target.value); }}
                   placeholder={serviceProvider === "github_enterprise"
@@ -702,6 +710,9 @@ export function VcsIntegrations({
               <label htmlFor="vcs-key" className="text-sm font-medium">OAuth Application Client ID</label>
               <Input
                 id="vcs-key"
+                name="client-id"
+                autoComplete="off"
+                spellCheck={false}
                 value={key}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
                 placeholder="Client ID or Application ID"
@@ -713,6 +724,8 @@ export function VcsIntegrations({
               <label htmlFor="vcs-secret" className="text-sm font-medium">OAuth Client Secret</label>
               <Input
                 id="vcs-secret"
+                name="client-secret"
+                autoComplete="new-password"
                 type="password"
                 value={secret}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSecret(event.target.value); }}
@@ -723,7 +736,8 @@ export function VcsIntegrations({
 
             <DialogFooter className="pt-4">
               <Button type="submit" disabled={creating}>
-                {creating ? <Spinner className="size-4" /> : "Connect VCS Provider"}
+                {creating && <Spinner data-icon="inline-start" className="size-4" />}
+                {creating ? "Connecting VCS provider…" : "Connect VCS Provider"}
               </Button>
             </DialogFooter>
           </form>
@@ -769,6 +783,6 @@ export function VcsIntegrations({
       />
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

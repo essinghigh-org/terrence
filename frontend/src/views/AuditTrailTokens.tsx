@@ -8,6 +8,7 @@ import { Spinner } from "../components/ui/spinner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { FileClock, KeyRound, RefreshCw, ShieldX } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type AuditTrailToken = {
   id: string;
@@ -61,7 +62,6 @@ export function AuditTrailTokens(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage the audit trail token for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadAuditTrailToken = async (): Promise<void> => {
@@ -144,21 +144,18 @@ export function AuditTrailTokens(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Audit trail token</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            An organization-scoped token used to export audit trail (activity log) records.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Audit trail token"
+        description="An organization-scoped token used to export audit trail (activity log) records."
+        action={canManage ? (
           <Button onClick={(): void => { void generateToken(); }} disabled={generating}>
             <RefreshCw className={generating ? "mr-2 h-4 w-4 animate-spin" : "mr-2 h-4 w-4"} />
             {token !== null ? "Rotate token" : "Generate new token"}
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {actionError !== "" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -225,6 +222,9 @@ export function AuditTrailTokens(): React.JSX.Element {
               <label className="text-sm font-medium" htmlFor="expires-in">Expires in</label>
               <Input
                 id="expires-in"
+                name="expires-in"
+                autoComplete="off"
+                spellCheck={false}
                 value={expiresIn}
                 onChange={(e): void => { setExpiresIn(e.target.value); }}
                 placeholder="ISO timestamp, e.g. 2026-12-31T23:59:59.000Z (leave empty for no expiry)"
@@ -235,12 +235,8 @@ export function AuditTrailTokens(): React.JSX.Element {
             </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={(): void => { void generateToken(); }} disabled={generating}>
-                {generating ? <Spinner /> : (
-                  <>
-                    <KeyRound className="mr-2 h-4 w-4" />
-                    Generate new token
-                  </>
-                )}
+                {generating ? <Spinner data-icon="inline-start" /> : <KeyRound data-icon="inline-start" />}
+                {generating ? "Generating token…" : "Generate new token"}
               </Button>
               {token !== null && (
                 <Button variant="destructive" onClick={(): void => { setRevokeOpen(true); }} disabled={revoking}>
@@ -263,6 +259,6 @@ export function AuditTrailTokens(): React.JSX.Element {
         loading={revoking}
         onConfirm={revokeToken}
       />
-    </div>
+    </PageShell>
   );
 }

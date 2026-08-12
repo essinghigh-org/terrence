@@ -314,6 +314,9 @@ export function WorkspaceNotifications({
                 <FieldLabel htmlFor="notification-name">Name</FieldLabel>
                 <Input
                   id="notification-name"
+                  name="notification-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={name}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
@@ -325,6 +328,7 @@ export function WorkspaceNotifications({
                 <FieldLabel htmlFor="notification-destination">Destination type</FieldLabel>
                 <Select
                   id="notification-destination"
+                  name="destination-type"
                   value={destinationType}
                   onValueChange={(value: string): void => { setDestinationType(value as DestinationType); }}
                 >
@@ -337,6 +341,8 @@ export function WorkspaceNotifications({
                 <FieldLabel htmlFor="notification-url">Webhook URL</FieldLabel>
                 <Input
                   id="notification-url"
+                  name="webhook-url"
+                  autoComplete="url"
                   type="url"
                   value={url}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUrl(event.target.value); }}
@@ -349,6 +355,7 @@ export function WorkspaceNotifications({
                 <FieldLabel htmlFor="notification-token">Token</FieldLabel>
                 <Input
                   id="notification-token"
+                  name="webhook-token"
                   type="password"
                   value={token}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setToken(event.target.value); }}

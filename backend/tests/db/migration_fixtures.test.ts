@@ -10,12 +10,11 @@ import { join } from "path";
 /**
  * DB migration fixtures (review item 22.10), post-squash.
  *
- * The migration history was squashed to a single baseline
- * (drizzle/meta/_journal.json has one entry, 0000_squashed_initial) because
- * the pre-public server is the only consumer and the 60 historical steps had
- * no upgrade value. Properties still pinned here:
- *   - the single baseline applies cleanly to a fresh DB and records exactly
- *     one applied migration,
+ * The migration history was squashed to a baseline, with small repair
+ * migrations added when a released baseline was missing a table. Properties
+ * still pinned here:
+ *   - the complete migration history applies cleanly to a fresh DB and
+ *     records one applied row per migration,
  *   - the baseline is the COMPLETE schema (not a subset): the tables that
  *     later migrations + the runtime convergence path added are all present,
  *   - re-running the migrator on an already-migrated DB is a no-op,
@@ -98,21 +97,23 @@ function validateDropTargets(): string[] {
   for (const file of files) {
     const sql = readFileSync(join(DRIZZLE_DIR, file), "utf8");
     for (const stmt of sql.split("--> statement-breakpoint")) {
-      const create = stmt.match(/CREATE TABLE (?:IF NOT EXISTS )?`?([\w-]+)`?/);
-      if (create !== null) {
-        existing.add(create[1] as string);
+      const createTable = /CREATE TABLE (?:IF NOT EXISTS )?`?([\w-]+)`?/.exec(stmt)?.[1];
+      if (createTable !== undefined) {
+        existing.add(createTable);
         continue;
       }
-      const rename = stmt.match(/ALTER TABLE `?([\w-]+)`? RENAME TO `?([\w-]+)`?/);
-      if (rename !== null) {
-        existing.delete(rename[1] as string);
-        existing.add(rename[2] as string);
+      const rename = /ALTER TABLE `?([\w-]+)`? RENAME TO `?([\w-]+)`?/.exec(stmt);
+      const renamedFrom = rename?.[1];
+      const renamedTo = rename?.[2];
+      if (renamedFrom !== undefined && renamedTo !== undefined) {
+        existing.delete(renamedFrom);
+        existing.add(renamedTo);
         continue;
       }
-      const drop = stmt.match(/DROP TABLE (IF EXISTS )?`?([\w-]+)`?/);
-      if (drop !== null) {
-        const guarded = drop[1] !== undefined;
-        const target = drop[2] as string;
+      const drop = /DROP TABLE (IF EXISTS )?`?([\w-]+)`?/.exec(stmt);
+      const target = drop?.[2];
+      if (target !== undefined) {
+        const guarded = drop?.[1] !== undefined;
         if (!guarded && !existing.has(target)) {
           violations.push(`${file} drops ${target} which no earlier statement created`);
         }
@@ -126,12 +127,13 @@ function validateDropTargets(): string[] {
 /** Journal `when` timestamps must be strictly ascending (drizzle compares against the last-applied row on upgrade). */
 function journalOrderViolations(): string[] {
   const journal = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta/_journal.json"), "utf8")) as {
-    entries: Array<{ idx: number; tag: string; when: number }>;
+    entries: readonly { idx: number; tag: string; when: number }[];
   };
   const violations: string[] = [];
   for (let i = 1; i < journal.entries.length; i += 1) {
-    const prev = journal.entries[i - 1] as { idx: number; tag: string; when: number };
-    const cur = journal.entries[i] as { idx: number; tag: string; when: number };
+    const prev = journal.entries[i - 1];
+    const cur = journal.entries[i];
+    if (prev === undefined || cur === undefined) continue;
     if (cur.when <= prev.when) {
       violations.push(`journal entry ${cur.idx} (${cur.tag}) when=${cur.when} is not > entry ${prev.idx} when=${prev.when}`);
     }
@@ -139,14 +141,38 @@ function journalOrderViolations(): string[] {
   return violations;
 }
 
-test("squashed baseline applies cleanly to a fresh DB as exactly one migration", async () => {
+test("migration history applies cleanly to a fresh DB", async () => {
   const folder = await mkdtemp(join(tmpdir(), "terrence-mig-baseline-"));
   try {
     await cp(DRIZZLE_DIR, folder, { recursive: true });
     const { journalCount, tables } = await applyBaseline(folder);
-    expect(journalCount).toBe(1);
+    expect(journalCount).toBe(2);
     // The baseline must be substantial (it replaces 60 migrations), not a stub.
     expect(tables.length).toBeGreaterThan(90);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("repairs run_explanations on a database with the baseline already applied", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "terrence-mig-repair-"));
+  try {
+    await cp(DRIZZLE_DIR, folder, { recursive: true });
+    const raw = new Database(":memory:");
+    try {
+      const db = drizzle(raw);
+      migrate(db, { migrationsFolder: folder });
+      raw.run("DROP TABLE run_explanations");
+      const latest = raw.query("SELECT hash FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1").get() as { hash: string };
+      raw.run("DELETE FROM __drizzle_migrations WHERE hash = ?", [latest.hash]);
+      migrate(db, { migrationsFolder: folder });
+      expect(pragmaTables(raw)).toContain("run_explanations");
+      expect(pragmaColumns(raw, "run_explanations")).toEqual([
+        "id", "run_id", "kind", "model", "content", "thinking", "input_hash", "created_at",
+      ]);
+    } finally {
+      raw.close();
+    }
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
@@ -181,7 +207,7 @@ test("re-running the migrator on an already-migrated DB is a no-op", async () =>
       const second = pragmaTables(raw);
       const count = (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c;
       expect(second).toEqual(first);
-      expect(count).toBe(1);
+      expect(count).toBe(2);
     } finally {
       raw.close();
     }

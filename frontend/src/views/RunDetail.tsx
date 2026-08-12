@@ -26,6 +26,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -394,19 +401,19 @@ function phaseStatusFromRun(
 }
 
 function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
-  if (status === "finished") return <CheckCircle2 className="size-5 text-emerald-600" aria-hidden="true" />;
-  if (status === "errored" || status === "unreachable") return <XCircle className="size-5 text-red-600" aria-hidden="true" />;
-  if (status === "canceled") return <AlertCircle className="size-5 text-gray-500" aria-hidden="true" />;
+  if (status === "finished") return <CheckCircle2 className="size-5 text-success" aria-hidden="true" />;
+  if (status === "errored" || status === "unreachable") return <XCircle className="size-5 text-destructive" aria-hidden="true" />;
+  if (status === "canceled") return <AlertCircle className="size-5 text-muted-foreground" aria-hidden="true" />;
   if (status === "running") {
     return (
       <span className="relative flex size-5 items-center justify-center">
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-blue-400 opacity-75" />
-        <Clock className="relative size-4 text-blue-600" aria-hidden="true" />
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
+        <Clock className="relative size-4 text-primary" aria-hidden="true" />
       </span>
     );
   }
-  if (status === "queued") return <Clock className="size-5 text-blue-600" aria-hidden="true" />;
-  return <Circle className="size-5 text-gray-300" aria-hidden="true" />;
+  if (status === "queued") return <Clock className="size-5 text-primary" aria-hidden="true" />;
+  return <Circle className="size-5 text-muted-foreground/50" aria-hidden="true" />;
 }
 
 function ResourceCounts({
@@ -428,17 +435,17 @@ function ResourceCounts({
     || typeof changes !== "number"
     || typeof destructions !== "number") {
     return (
-      <span className="text-xs font-medium text-gray-500">
+      <span className="text-xs font-medium text-muted-foreground">
         {pending ? "Resources pending" : "Resources unavailable"}
       </span>
     );
   }
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
-      {typeof imports === "number" && imports > 0 && <span className="text-gray-950">&amp;{imports} to import</span>}
-      <span className="text-emerald-700">+{additions} to add</span>
-      <span className="text-blue-700">~{changes} to change</span>
-      <span className="text-red-700">−{destructions} to destroy</span>
+      {typeof imports === "number" && imports > 0 && <span className="text-foreground">&amp;{imports} to import</span>}
+      <span className="text-success">+{additions} to add</span>
+      <span className="text-primary">~{changes} to change</span>
+      <span className="text-destructive">−{destructions} to destroy</span>
     </div>
   );
 }
@@ -479,7 +486,7 @@ function PhaseMeta({
     : null;
   if (started === undefined && completed === undefined && !hasLogUrl) return <></>;
   return (
-    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-gray-500">
+    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {started !== undefined && (
         <span>Started <time dateTime={started} title={formatDateTime(started)}>{formatRelativeTime(started)}</time></span>
       )}
@@ -490,13 +497,22 @@ function PhaseMeta({
         <>
           <button
             type="button"
-            onClick={onToggleLogWrap}
+            onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleLogWrap();
+            }}
             aria-pressed={logWrap}
-            className="rounded-sm font-medium text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Wrap {logWrap ? "on" : "off"}
           </button>
-          <a href={logUrl} download className="font-medium text-blue-700 hover:underline">
+          <a
+            href={logUrl}
+            download
+            onClick={(event: React.MouseEvent<HTMLAnchorElement>): void => { event.stopPropagation(); }}
+            className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             Download raw log
           </a>
         </>
@@ -533,9 +549,6 @@ export function RunDetail({
   const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
   const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement | null>(null);
-  const explainerTriggerRef = useRef<HTMLElement | null>(null);
-  const explainerCloseRef = useRef<HTMLButtonElement | null>(null);
-  const explainerContainerRef = useRef<HTMLDivElement | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
@@ -586,7 +599,7 @@ export function RunDetail({
       await navigator.clipboard.writeText(runPermalink);
       setCopiedPermalink(true);
       toast.add({ title: "Run permalink copied", type: "success" });
-      window.setTimeout((): void => setCopiedPermalink(false), 2000);
+      window.setTimeout((): void => { setCopiedPermalink(false); }, 2000);
     } catch {
       toast.add({ title: "Could not copy link", type: "error" });
     }
@@ -623,8 +636,9 @@ export function RunDetail({
           event.preventDefault();
           return;
         }
-        const first = focusable[0]!;
-        const last = focusable[focusable.length - 1]!;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (first === undefined || last === undefined) return;
         const active = document.activeElement;
         if (event.shiftKey) {
           if (active === null || active === first || !container.contains(active)) {
@@ -644,53 +658,6 @@ export function RunDetail({
       fullscreenTriggerRef.current = null;
     };
   }, [fullscreenLog]);
-
-  // Same focus contract for the plan-explainer dialog: focus the close
-  // button on open, trap Tab, close on Escape, restore focus on close.
-  useEffect((): (() => void) => {
-    if (!explainerOpen) return () => {};
-    explainerTriggerRef.current = document.activeElement as HTMLElement | null;
-    explainerCloseRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelExplanation();
-        setExplainerOpen(false);
-        return;
-      }
-      if (event.key === "Tab") {
-        const container = explainerContainerRef.current;
-        if (container === null) return;
-        const focusable = Array.from(
-          container.querySelectorAll<HTMLElement>(
-            'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
-          ),
-        );
-        if (focusable.length === 0) {
-          event.preventDefault();
-          return;
-        }
-        const first = focusable[0]!;
-        const last = focusable[focusable.length - 1]!;
-        const active = document.activeElement;
-        if (event.shiftKey) {
-          if (active === null || active === first || !container.contains(active)) {
-            event.preventDefault();
-            last.focus();
-          }
-        } else if (active === null || active === last || !container.contains(active)) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      explainerTriggerRef.current?.focus();
-      explainerTriggerRef.current = null;
-    };
-  }, [explainerOpen]);
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
@@ -1017,7 +984,7 @@ export function RunDetail({
     "You have an unsaved comment draft. Are you sure you want to leave this page?",
   );
 
-  if (run !== null && run.id !== runId) return <div className="p-8 text-gray-500">Loading run...</div>;
+  if (run !== null && run.id !== runId) return <div className="p-8 text-muted-foreground">Loading run…</div>;
   if (loading && run === null) return (
     <div role="status" aria-label="Loading run" className="flex flex-col gap-5">
       <div className="h-3 w-40 animate-pulse rounded bg-muted" />
@@ -1028,7 +995,7 @@ export function RunDetail({
   );
   if (run === null) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
         <p className="font-medium">{loadError !== "" ? loadError : "Run not found"}</p>
         <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
           Try again
@@ -1150,7 +1117,8 @@ export function RunDetail({
   const costPending = ["queued", "pending"].includes(costStatus);
   const costFailed = ["errored", "canceled"].includes(costStatus);
   const showCostEstimate = costEstimate !== null
-    && costEstimate.attributes["infracost-enabled"] === true
+    && costAttributes !== undefined
+    && costAttributes["infracost-enabled"] !== false
     && !["skipped", "disabled", "unavailable"].includes(costStatus);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
@@ -1227,14 +1195,17 @@ export function RunDetail({
     && comments.length === 0;
 
   const commentForm = canComment ? (
-    <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-gray-200 p-5">
-      <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-gray-900">Add a comment</label>
+    <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-border p-5">
+      <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-foreground">Add a comment</label>
       <textarea
         id="run-comment"
+        name="run-comment"
+        autoComplete="off"
+        spellCheck={false}
         rows={3}
         value={commentBody}
         onChange={(event): void => { setCommentBody(event.target.value); }}
-        className="w-full resize-y rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+            className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
         placeholder="Share context about this run"
       />
       <div className="mt-2 flex justify-end">
@@ -1271,25 +1242,25 @@ export function RunDetail({
         />
       )}
 
-      <header className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-5 lg:flex-row lg:items-start lg:justify-between">
+      <header className="mb-6 flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <Badge
               variant={["errored", "failed", "unreachable"].includes(status) ? "destructive" : "secondary"}
-              className={successfulStatus ? "rounded bg-emerald-100 text-emerald-800" : "rounded"}
+              className={successfulStatus ? "rounded bg-success/10 text-success" : "rounded"}
             >
               {statusLabel(status)}
             </Badge>
             <span aria-live="polite" className="sr-only">Run status: {statusLabel(status)}</span>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
             {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
-            {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-purple-700 border-purple-200 bg-purple-50">Refresh only</Badge>}
-            {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-blue-700 border-blue-200 bg-blue-50">Allow empty apply</Badge>}
+            {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Refresh only</Badge>}
+            {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Allow empty apply</Badge>}
           </div>
-          <h2 className="break-words text-3xl font-bold tracking-tight text-gray-950">
+          <h2 className="break-words text-3xl font-bold tracking-tight text-foreground">
             {attributes.message ?? "Manual run"}
           </h2>
-          <p className="mt-2 text-[13px] text-gray-600">
+          <p className="mt-2 text-[13px] text-muted-foreground">
             {statusLabel(attributes["trigger-reason"] ?? "manual")} · {attributes["trigger-reason"] === "manual" ? "UI" : sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
@@ -1339,7 +1310,7 @@ export function RunDetail({
             </Button>
           )}
           {rerunError !== "" && (
-            <p role="alert" className="w-full text-xs text-red-600">{rerunError}</p>
+            <p role="alert" className="w-full text-xs text-destructive">{rerunError}</p>
           )}
           {(canCancel || canForceCancel || canOverridePolicy) && (
             <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
@@ -1375,26 +1346,26 @@ export function RunDetail({
           </div>
       </header>
 
-      <dl className="mb-5 grid overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
-        <div className="border-b border-gray-200 px-5 py-4 sm:border-b-0 sm:border-r">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <dl className="mb-5 grid overflow-hidden rounded-md border border-border bg-background shadow-sm sm:grid-cols-3">
+        <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {attributes["plan-only"] === true ? "Plan duration" : "Plan & apply duration"}
           </dt>
-          <dd className="mt-1 text-sm font-semibold text-gray-950">{duration}</dd>
+          <dd className="mt-1 text-sm font-semibold text-foreground">{duration}</dd>
           {(() => {
             const baseline = attributes["duration-baseline"];
             if (baseline?.["is-slow"] !== true || baseline["median-duration-seconds"] === null || baseline["median-duration-seconds"] === undefined) {
               return null;
             }
             return (
-              <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+              <p className="mt-1 text-xs font-medium text-warning">
                 Slower than typical (median {formatDurationSeconds(baseline["median-duration-seconds"])})
               </p>
             );
           })()}
         </div>
-        <div className="border-b border-gray-200 px-5 py-4 sm:border-b-0 sm:border-r">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Resources changed</dt>
+        <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Resources changed</dt>
           <dd className="mt-1">
             <ResourceCounts
               additions={summaryCounts?.["resource-additions"]}
@@ -1406,8 +1377,8 @@ export function RunDetail({
           </dd>
         </div>
         <div className="px-5 py-4">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</dt>
-          <dd className="mt-1 text-sm font-semibold text-gray-950">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</dt>
+          <dd className="mt-1 text-sm font-semibold text-foreground">
             {planActionCount === null
               ? "Unavailable"
               : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`}
@@ -1415,61 +1386,61 @@ export function RunDetail({
         </div>
       </dl>
 
-      <details className="mb-5 overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-        <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-gray-950 hover:bg-gray-50">
+      <details className="mb-5 overflow-hidden rounded-md border border-border bg-background shadow-sm">
+        <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           Run details
         </summary>
-        <dl className="grid gap-4 border-t border-gray-200 px-5 py-4 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
+        <dl className="grid gap-4 border-t border-border px-5 py-4 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</dt>
-            <dd className="mt-1 font-medium text-gray-950">{statusLabel(status)}</dd>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt>
+            <dd className="mt-1 font-medium text-foreground">{statusLabel(status)}</dd>
           </div>
           {creatorUsername !== "" && (
             <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Created by</dt>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Created by</dt>
               <dd className="mt-1 flex items-center gap-2">
                 <Avatar className="size-6 rounded-full">
                   {creatorAvatarUrl !== "" ? (
                     <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
                   ) : (
-                    <AvatarFallback className="rounded-full bg-gray-100 text-[10px] text-gray-600">
+                    <AvatarFallback className="rounded-full bg-muted text-[10px] text-muted-foreground">
                       {creatorUsername.slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   )}
                 </Avatar>
-                <span className="font-medium text-gray-700">{creatorUsername}</span>
+                <span className="font-medium text-foreground/85">{creatorUsername}</span>
               </dd>
             </div>
           )}
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Workspace</dt>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Workspace</dt>
             <dd className="mt-1">
-              <Link to={workspacePath} className="font-medium text-blue-700 hover:underline">
+              <Link to={workspacePath} className="font-medium text-primary hover:underline">
                 {workspaceName}
               </Link>
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Operation</dt>
-            <dd className="mt-1 capitalize text-gray-900">{statusLabel(attributes.operation ?? "plan_and_apply")}</dd>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Operation</dt>
+            <dd className="mt-1 capitalize text-foreground">{statusLabel(attributes.operation ?? "plan_and_apply")}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Auto apply</dt>
-            <dd className="mt-1 text-gray-900">{attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</dd>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Auto apply</dt>
+            <dd className="mt-1 text-foreground">{attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Terraform version</dt>
-            <dd className="mt-1 text-gray-900">{attributes["terraform-version"] ?? "Workspace default"}</dd>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terraform version</dt>
+            <dd className="mt-1 text-foreground">{attributes["terraform-version"] ?? "Workspace default"}</dd>
           </div>
         </dl>
         {timestampEntries.length > 0 && (
-          <div className="border-t border-gray-200 px-5 py-4">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Run timeline</h3>
+          <div className="border-t border-border px-5 py-4">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Run timeline</h3>
             <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
               {timestampEntries.map(([key, value]): React.JSX.Element => (
                 <div key={key}>
-                  <dt className="capitalize text-gray-500">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
-                  <dd className="mt-0.5 text-gray-900">{formatDate(value)}</dd>
+                  <dt className="capitalize text-muted-foreground">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
+                  <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
                 </div>
               ))}
             </dl>
@@ -1480,15 +1451,15 @@ export function RunDetail({
       <div className="min-w-0 space-y-5">
           <details
             aria-labelledby="plan-heading"
-            className="group overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm"
+            className="group overflow-hidden rounded-md border border-border bg-background shadow-sm"
             open={!applied && ["running", "finished", "errored", "unreachable"].includes(planStatus)}
           >
-            <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+            <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
-                  <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                  <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
-                  <h3 id="plan-heading" className="font-semibold capitalize text-gray-950">
+                  <h3 id="plan-heading" className="font-semibold capitalize text-foreground">
                     Plan {planStatus.replace(/_/g, " ")}
                   </h3>
                 </div>
@@ -1501,6 +1472,7 @@ export function RunDetail({
                       onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
                         // Inside the plan <summary>: opening the dialog must
                         // not toggle the details section open/closed.
+                        event.preventDefault();
                         event.stopPropagation();
                         void handleExplain("plan", false);
                       }}
@@ -1539,9 +1511,9 @@ export function RunDetail({
             />
 
             <details
-              className="group border-t border-gray-200"
+              className="group border-t border-border"
             >
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <span>Raw plan log</span>
                 <Button
                   type="button"
@@ -1561,42 +1533,42 @@ export function RunDetail({
           </details>
 
           {showCostEstimate && (
-          <section aria-labelledby="cost-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+          <section aria-labelledby="cost-heading" className="overflow-hidden rounded-md border border-border bg-background shadow-sm">
             <div className="flex items-center justify-between gap-4 px-5 py-4">
               <div className="flex items-center gap-3">
                 {costPending ? (
-                  <Clock className="size-5 text-blue-600" aria-hidden="true" />
+                  <Clock className="size-5 text-primary" aria-hidden="true" />
                 ) : costFailed ? (
-                  <XCircle className="size-5 text-red-600" aria-hidden="true" />
+                  <XCircle className="size-5 text-destructive" aria-hidden="true" />
                 ) : (
-                  <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
+                  <CheckCircle2 className="size-5 text-muted-foreground/70" aria-hidden="true" />
                 )}
-                <h3 id="cost-heading" className="font-semibold text-gray-950">Cost estimation</h3>
+                <h3 id="cost-heading" className="font-semibold text-foreground">Cost estimation</h3>
               </div>
               <Badge variant={costFailed ? "destructive" : "secondary"} className="rounded capitalize">{costStatus}</Badge>
             </div>
             {costAttributes !== undefined && (
-              <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 border-t border-gray-200 px-5 py-4 text-sm md:grid-cols-4">
+              <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 border-t border-border px-5 py-4 text-sm md:grid-cols-4">
                 <div>
-                  <dt className="text-xs text-gray-500">Prior monthly</dt>
+                  <dt className="text-xs text-muted-foreground">Prior monthly</dt>
                   <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">Proposed monthly</dt>
+                  <dt className="text-xs text-muted-foreground">Proposed monthly</dt>
                   <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">Monthly delta</dt>
+                  <dt className="text-xs text-muted-foreground">Monthly delta</dt>
                   <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-gray-500">Priced resources</dt>
+                  <dt className="text-xs text-muted-foreground">Priced resources</dt>
                   <dd className="mt-1 font-medium">
                     {costAttributes["matched-resources-count"] ?? 0} of {costAttributes["resources-count"] ?? 0}
                   </dd>
                 </div>
                 {costAttributes["error-message"] !== null && costAttributes["error-message"] !== undefined && (
-                  <div className="col-span-full text-red-700">{costAttributes["error-message"]}</div>
+                  <div className="col-span-full text-destructive">{costAttributes["error-message"]}</div>
                 )}
               </dl>
             )}
@@ -1604,24 +1576,24 @@ export function RunDetail({
           )}
 
           {showPolicyChecks && (
-          <section aria-labelledby="policy-heading" className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+          <section aria-labelledby="policy-heading" className="overflow-hidden rounded-md border border-border bg-background shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
               <div className="flex items-center gap-3">
                 {hasFailedPolicy ? (
-                  <AlertCircle className="size-5 text-red-600" aria-hidden="true" />
+                  <AlertCircle className="size-5 text-destructive" aria-hidden="true" />
                 ) : policySummary === "checking" ? (
-                  <Clock className="size-5 text-blue-600" aria-hidden="true" />
+                  <Clock className="size-5 text-primary" aria-hidden="true" />
                 ) : (
-                  <CheckCircle2 className="size-5 text-gray-400" aria-hidden="true" />
+                  <CheckCircle2 className="size-5 text-muted-foreground/70" aria-hidden="true" />
                 )}
-                <h3 id="policy-heading" className="font-semibold text-gray-950">Policy check</h3>
+                <h3 id="policy-heading" className="font-semibold text-foreground">Policy check</h3>
               </div>
               <Badge variant={hasFailedPolicy ? "destructive" : "secondary"} className="rounded capitalize">
                 {policySummary}
               </Badge>
             </div>
             {policyChecks.length > 0 && (
-              <div className="border-t border-gray-200 px-5 py-3">
+              <div className="border-t border-border px-5 py-3">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1639,7 +1611,7 @@ export function RunDetail({
                           </div>
                           {check.attributes["policy-name"] !== null
                             && check.attributes["policy-name"] !== undefined && (
-                            <code className="text-[11px] text-gray-500">{check.id}</code>
+                            <code className="text-[11px] text-muted-foreground">{check.id}</code>
                           )}
                         </TableCell>
                         <TableCell className="whitespace-normal">{policyResultText(check.attributes.result)}</TableCell>
@@ -1668,13 +1640,13 @@ export function RunDetail({
           )}
 
           {assessmentChecks.length > 0 && (
-            <details className="group overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-              <summary className="cursor-pointer list-none">
-                <div className="flex items-center justify-between gap-3 px-5 py-4 group-open:border-b group-open:border-gray-200">
+            <details className="group overflow-hidden rounded-md border border-border bg-background shadow-sm">
+              <summary className="cursor-pointer list-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                <div className="flex items-center justify-between gap-3 px-5 py-4 group-open:border-b group-open:border-border">
                   <div className="flex items-center gap-3">
-                    <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                    <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                     <div>
-                      <h3 id="assessment-heading" className="font-semibold text-gray-950">Health checks</h3>
+                      <h3 id="assessment-heading" className="font-semibold text-foreground">Health checks</h3>
                       <p className="mt-1 text-xs text-muted-foreground">Terraform checks and drift validation reported for this run.</p>
                     </div>
                   </div>
@@ -1706,17 +1678,17 @@ export function RunDetail({
           {showApply && (
           <details
             aria-labelledby="apply-heading"
-            className={`group overflow-hidden rounded-md border bg-white shadow-sm ${
-              ["errored", "unreachable"].includes(applyStatus) ? "border-red-300" : "border-gray-200"
+            className={`group overflow-hidden rounded-md border bg-background shadow-sm ${
+              ["errored", "unreachable"].includes(applyStatus) ? "border-destructive/50" : "border-border"
             }`}
             open={applied || ["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
           >
-            <summary className="cursor-pointer list-none border-b border-gray-200 px-5 py-4 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+            <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
-                  <ChevronRight className="size-4 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                  <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
-                  <h3 id="apply-heading" className="font-semibold capitalize text-gray-950">
+                  <h3 id="apply-heading" className="font-semibold capitalize text-foreground">
                     Apply {canApply ? "needs confirmation" : applyStatus.replace(/_/g, " ")}
                   </h3>
                 </div>
@@ -1761,9 +1733,9 @@ export function RunDetail({
             </summary>
 
             {applyDisabledReasons.length > 0 && (
-              <div className="border-b border-gray-200 bg-gray-50 px-5 py-3">
-                <p className="text-sm font-medium text-gray-700">Why is Apply disabled?</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-gray-600">
+              <div className="border-b border-border bg-muted px-5 py-3">
+                <p className="text-sm font-medium text-foreground/85">Why is Apply disabled?</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
                   {applyDisabledReasons.map((reason: string): React.JSX.Element => (
                     <li key={reason}>{reason}</li>
                   ))}
@@ -1781,15 +1753,15 @@ export function RunDetail({
             )}
 
             {["errored", "unreachable"].includes(applyStatus) && (
-              <section aria-labelledby="apply-diagnostics-heading" className="border-t border-red-200 bg-red-50/70 px-5 py-4">
-                <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-red-900">Diagnostics</h4>
-                <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white p-4 font-mono text-xs leading-5 text-red-900">
+              <section aria-labelledby="apply-diagnostics-heading" className="border-t border-destructive/30 bg-destructive/10 px-5 py-4">
+                <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">Diagnostics</h4>
+                <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-destructive/30 bg-background p-4 font-mono text-xs leading-5 text-destructive">
                   {applyLogs !== "" ? applyLogs : "The apply failed before diagnostic output became available."}
                 </pre>
               </section>
             )}
             <details className="group">
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <span>Raw apply log</span>
                 <Button
                   type="button"
@@ -1812,11 +1784,11 @@ export function RunDetail({
           {(canApply || canDiscard) && (
             <section
               aria-labelledby="run-confirmation-heading"
-              className="mx-auto w-full max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-5 py-4 shadow-sm"
+              className="mx-auto w-full max-w-2xl rounded-md border border-warning/30 bg-warning/10 px-5 py-4 shadow-sm"
             >
               {confirmationAction === null ? (
                 <>
-                  <h3 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                  <h3 id="run-confirmation-heading" className="font-semibold text-warning">
                     Please review the planned changes before continuing
                   </h3>
                   <div className="mt-3">
@@ -1828,7 +1800,7 @@ export function RunDetail({
                       status={planStatus}
                     />
                   </div>
-                  <p className="mt-3 text-sm text-amber-900">
+                  <p className="mt-3 text-sm text-warning">
                     Choose an action to review it, then confirm it in the next step.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -1863,26 +1835,29 @@ export function RunDetail({
                 </>
               ) : (
                 <>
-                  <h3 id="run-confirmation-heading" className="font-semibold text-amber-950">
+                  <h3 id="run-confirmation-heading" className="font-semibold text-warning">
                     {confirmationAction === "apply" ? "Confirm apply" : "Confirm discard"}
                   </h3>
-                  <p className="mt-2 text-sm text-amber-900">
+                  <p className="mt-2 text-sm text-warning">
                     {confirmationAction === "apply"
                       ? "This will execute the planned changes against this workspace."
                       : "This will discard the plan without changing the workspace."}
                   </p>
                   {canComment && (
                     <div className="mt-4">
-                      <label htmlFor="run-action-comment" className="mb-2 block text-sm font-medium text-amber-950">
+                      <label htmlFor="run-action-comment" className="mb-2 block text-sm font-medium text-warning">
                         Optional comment
                       </label>
                       <textarea
                         id="run-action-comment"
+                        name="run-action-comment"
+                        autoComplete="off"
+                        spellCheck={false}
                         rows={3}
                         autoFocus
                         value={actionComment}
                         onInput={(event): void => { setActionComment(event.currentTarget.value); }}
-                        className="w-full resize-y rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                        className="w-full resize-y rounded-md border border-warning/50 bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
                         placeholder="Add context for this decision"
                       />
                     </div>
@@ -1911,28 +1886,28 @@ export function RunDetail({
           )}
 
           {showCombinedEmptyActivity ? (
-            <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
-              <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
-                <History className="size-5 text-gray-400" aria-hidden="true" />
-                <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
-                <h3 id="activity-heading" className="font-semibold text-gray-950">Activity &amp; comments</h3>
-                <span className="text-xs text-gray-500">0</span>
+            <section aria-labelledby="activity-heading" className="rounded-md border border-border bg-background shadow-sm">
+              <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+                <History className="size-5 text-muted-foreground/70" aria-hidden="true" />
+                <MessageSquare className="size-5 text-muted-foreground/70" aria-hidden="true" />
+                <h3 id="activity-heading" className="font-semibold text-foreground">Activity &amp; comments</h3>
+                <span className="text-xs text-muted-foreground">0</span>
               </div>
-              <p className="px-5 py-4 text-sm text-gray-500">No run activity or comments yet.</p>
+              <p className="px-5 py-4 text-sm text-muted-foreground">No run activity or comments yet.</p>
               {commentForm}
             </section>
           ) : (
             <>
-          <section aria-labelledby="activity-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
-            <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
-              <History className="size-5 text-gray-400" aria-hidden="true" />
-              <h3 id="activity-heading" className="font-semibold text-gray-950">Activity</h3>
-              <span className="text-xs text-gray-500">{runEvents.length}</span>
+          <section aria-labelledby="activity-heading" className="rounded-md border border-border bg-background shadow-sm">
+            <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+              <History className="size-5 text-muted-foreground/70" aria-hidden="true" />
+              <h3 id="activity-heading" className="font-semibold text-foreground">Activity</h3>
+              <span className="text-xs text-muted-foreground">{runEvents.length}</span>
             </div>
             {runEvents.length === 0 ? (
-              <p className="px-5 py-3 text-xs text-gray-500">No run activity yet.</p>
+              <p className="px-5 py-3 text-xs text-muted-foreground">No run activity yet.</p>
             ) : (
-              <ol className="divide-y divide-gray-100">
+              <ol className="divide-y divide-border/60">
                 {runEvents.map((event: RunEvent): React.JSX.Element => {
                   const actor = event.attributes["actor-username"] ?? "System";
                   const fromStatus = event.attributes.details?.fromStatus;
@@ -1945,31 +1920,31 @@ export function RunDetail({
                         {event.attributes["actor-avatar-url"] ? (
                           <AvatarImage src={event.attributes["actor-avatar-url"]} alt={actor} className="rounded-full object-cover" />
                         ) : (
-                          <AvatarFallback className="rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
+                          <AvatarFallback className="rounded-full bg-muted text-xs font-semibold text-muted-foreground">
                             {actor.slice(0, 2).toUpperCase()}
                           </AvatarFallback>
                         )}
                       </Avatar>
                       <div className="min-w-0 flex-1 text-sm">
                         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                          <p className="text-gray-800">
-                            <span className="font-semibold text-gray-950">{actor}</span>{" "}
+                          <p className="text-foreground/85">
+                            <span className="font-semibold text-foreground">{actor}</span>{" "}
                             {RUN_EVENT_LABELS[event.attributes.action] ?? statusLabel(event.attributes.action)}
                           </p>
                           <time
-                            className="text-xs text-gray-500"
+                            className="text-xs text-muted-foreground"
                             dateTime={event.attributes["created-at"]}
                           >
                             {formatDate(event.attributes["created-at"])}
                           </time>
                         </div>
                         {fromStatus !== undefined && toStatus !== undefined && (
-                          <p className="mt-0.5 text-xs text-gray-500">
+                          <p className="mt-0.5 text-xs text-muted-foreground">
                             {statusLabel(fromStatus)} → {statusLabel(toStatus)}
                           </p>
                         )}
                         {event.attributes.action === "create" && eventSource !== undefined && (
-                          <p className="mt-0.5 text-xs text-gray-500">
+                          <p className="mt-0.5 text-xs text-muted-foreground">
                             {statusLabel(triggerReason ?? "manual")} from {sourceLabel(eventSource)}
                           </p>
                         )}
@@ -1981,24 +1956,24 @@ export function RunDetail({
             )}
           </section>
 
-          <section aria-labelledby="comments-heading" className="rounded-md border border-gray-200 bg-white shadow-sm">
-            <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
-              <MessageSquare className="size-5 text-gray-400" aria-hidden="true" />
-              <h3 id="comments-heading" className="font-semibold text-gray-950">Comments</h3>
-              <span className="text-xs text-gray-500">{comments.length}</span>
+          <section aria-labelledby="comments-heading" className="rounded-md border border-border bg-background shadow-sm">
+            <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+              <MessageSquare className="size-5 text-muted-foreground/70" aria-hidden="true" />
+              <h3 id="comments-heading" className="font-semibold text-foreground">Comments</h3>
+              <span className="text-xs text-muted-foreground">{comments.length}</span>
             </div>
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-border/60">
               {comments.length === 0 ? (
-                <p className="px-5 py-4 text-sm text-gray-500">No comments yet.</p>
+                <p className="px-5 py-4 text-sm text-muted-foreground">No comments yet.</p>
               ) : comments.map((comment: RunComment): React.JSX.Element => (
                 <article key={comment.id} className="px-5 py-4">
-                  <div className="mb-1 flex items-center justify-between gap-3 text-xs text-gray-500">
-                    <span className="flex items-center gap-2 font-medium text-gray-700">
+                  <div className="mb-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-2 font-medium text-foreground/85">
                       <Avatar className="size-5 rounded-full">
                         {comment.attributes["actor-avatar-url"] ? (
                           <AvatarImage src={comment.attributes["actor-avatar-url"]} alt={comment.attributes["actor-username"] ?? "User"} className="rounded-full object-cover" />
                         ) : (
-                          <AvatarFallback className="rounded-full bg-gray-100 text-[9px] text-gray-600">
+                          <AvatarFallback className="rounded-full bg-muted text-[9px] text-muted-foreground">
                             {(comment.attributes["actor-username"] ?? "S").slice(0, 2).toUpperCase()}
                           </AvatarFallback>
                         )}
@@ -2007,7 +1982,7 @@ export function RunDetail({
                     </span>
                     <time dateTime={comment.attributes["created-at"]}>{formatDate(comment.attributes["created-at"])}</time>
                   </div>
-                  <p className="whitespace-pre-wrap text-sm text-gray-800">{comment.attributes.body}</p>
+                  <p className="whitespace-pre-wrap text-sm text-foreground/85">{comment.attributes.body}</p>
                 </article>
               ))}
             </div>
@@ -2017,69 +1992,57 @@ export function RunDetail({
           )}
       </div>
 
-      {explainerOpen && (
-        <div
-          ref={explainerContainerRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="plan-explainer-heading"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-        >
-          <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
-              <h2 id="plan-explainer-heading" className="flex items-center gap-2 text-sm font-semibold text-gray-950">
-                <Sparkles className="size-4 text-gray-500" aria-hidden="true" />
-                {explainerKind === "apply" ? "Apply failure explanation" : "Plan explanation"}
-              </h2>
-              <Button
-                ref={explainerCloseRef}
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={(): void => {
-                  cancelExplanation();
-                  setExplainerOpen(false);
-                }}
-                aria-label={explainerKind === "apply" ? "Close apply failure explanation" : "Close plan explanation"}
-              >
-                <X className="size-4" aria-hidden="true" />
-                Close
-              </Button>
-            </div>
-            <div className="flex-1 overflow-auto px-5 py-4" aria-live="polite" aria-busy={explaining}>
+      <Dialog
+        open={explainerOpen}
+        onOpenChange={(open): void => {
+          if (!open) cancelExplanation();
+          setExplainerOpen(open);
+        }}
+      >
+        <DialogContent className="flex max-h-[80dvh] flex-col gap-0 overflow-hidden overscroll-contain p-0 sm:max-w-2xl">
+          <DialogHeader className="border-b border-border px-5 py-4 pr-16 text-left">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="size-4 text-primary" aria-hidden="true" />
+              {explainerKind === "apply" ? "Apply failure explanation" : "Plan explanation"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              A plain-language explanation generated from the stored {explainerKind === "apply" ? "apply failure" : "plan"} data.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4" aria-live="polite" aria-busy={explaining}>
               {explainError !== "" && (
-                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                   <div>
                     <p className="font-medium">Could not generate an explanation</p>
-                    <p className="mt-1">{explainError}</p>
+                    <p className="mt-1 break-words">{explainError}</p>
                   </div>
                 </div>
               )}
               {explainerThinking !== "" && (
-                <details className="group mb-3 rounded-md border border-gray-200" open={explaining}>
-                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50">
-                    <ChevronRight className="size-3.5 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+                <details className="group mb-3 rounded-md border border-border" open={explaining}>
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                    <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden="true" />
                     Thinking
                   </summary>
-                  <div className="border-t border-gray-100 px-3 py-2 text-xs leading-5 text-gray-500">
+                  <div className="border-t border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
                     <p className="whitespace-pre-wrap">{explainerThinking}</p>
                   </div>
                 </details>
               )}
               {explaining && explanation === "" && explainerThinking === "" && (
-                <div className="flex items-center gap-3 py-8 text-sm text-gray-500">
+                <div className="flex items-center gap-3 py-8 text-sm text-muted-foreground">
                   <Spinner className="size-4" />
                   Generating explanation…
                 </div>
               )}
               {explanation !== "" && (
-                <p className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{explanation}</p>
+                <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{explanation}</p>
               )}
-            </div>
-            {(explaining || explanation !== "" || explainerThinking !== "" || explainError !== "") && (
-              <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
-                <p className="text-xs text-gray-400">
+          </div>
+          {(explaining || explanation !== "" || explainerThinking !== "" || explainError !== "") && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
+                <p className="min-w-0 truncate text-xs text-muted-foreground">
                   {explainerModel !== "" ? `Generated by ${explainerModel}` : ""}
                 </p>
                 <div className="flex items-center gap-2">
@@ -2103,17 +2066,16 @@ export function RunDetail({
                         aria-label="Regenerate the explanation"
                         title="Regenerate"
                       >
-                        <RotateCcw className="size-4" aria-hidden="true" />
+                        <RotateCcw data-icon="inline-start" className="size-4" aria-hidden="true" />
                         Regenerate
                       </Button>
                     ) : null
                   )}
                 </div>
               </div>
-            )}
-          </div>
-        </div>
-      )}
+          )}
+        </DialogContent>
+      </Dialog>
 
       {fullscreenLog !== null && (
         <div
@@ -2121,10 +2083,10 @@ export function RunDetail({
           role="dialog"
           aria-modal="true"
           aria-label={fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}
-          className="fixed inset-0 z-50 flex flex-col bg-white"
+          className="fixed inset-0 z-50 flex flex-col bg-background"
         >
-          <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
-            <h2 className="text-sm font-semibold text-gray-950">
+          <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-3">
+            <h2 className="text-sm font-semibold text-foreground">
               {fullscreenLog === "plan" ? "Raw plan log" : "Raw apply log"}
             </h2>
             <Button
@@ -2132,7 +2094,7 @@ export function RunDetail({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setFullscreenLog(null)}
+              onClick={(): void => { setFullscreenLog(null); }}
               aria-label="Close fullscreen log"
             >
               <X className="size-4" aria-hidden="true" />

@@ -19,6 +19,7 @@ import { setDisplayTimezone } from "../lib/display-timezone";
 import { setDisplayTimeFormat } from "../lib/display-time-format";
 import { useDisplayTimezone } from "../lib/useDisplayTimezone";
 import { useDisplayTimeFormat } from "../lib/useDisplayTimeFormat";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -362,11 +363,19 @@ export function AccountSettings(): React.JSX.Element {
   }
 
   if (loading) {
-    return <Spinner className="mx-auto mt-16" />;
+    return (
+      <PageShell className="max-w-4xl">
+        <div role="status" aria-label="Loading account settings" className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+          <Spinner className="size-4" />
+          Loading account settings…
+        </div>
+      </PageShell>
+    );
   }
   if (account === null) {
     return (
-      <div role="alert" className="mx-auto mt-16 flex max-w-lg flex-col items-start gap-3 rounded-md border border-red-200 bg-red-50 p-5 text-red-900">
+      <PageShell className="max-w-4xl">
+        <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
           <h1 className="font-semibold">Could not load account settings</h1>
           <p className="mt-1 text-sm">{error !== "" ? error : "Your account details could not be loaded."}</p>
@@ -374,23 +383,29 @@ export function AccountSettings(): React.JSX.Element {
         <Button type="button" variant="outline" onClick={(): void => { void loadAccount(); }}>
           Try again
         </Button>
-      </div>
+        </div>
+      </PageShell>
     );
   }
 
   /* ── Render ─────────────────────────────────────── */
   return (
-    <div className="max-w-3xl mx-auto py-8 space-y-8">
+    <PageShell className="max-w-4xl space-y-8">
+      <PageHeader
+        eyebrow="Account"
+        title="Account settings"
+        description="Manage your profile, appearance, sessions, security, and API access."
+      />
 
       {/* Error / Success */}
       {error !== "" && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-md text-sm">{error}</div>
+        <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
       )}
       {successMsg !== "" && (
-        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-md text-sm">{successMsg}</div>
+        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success px-4 py-3 rounded-md text-sm">{successMsg}</div>
       )}
       {mustChangePassword && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-md text-sm">
+        <div role="status" className="bg-warning/10 border border-warning/30 text-warning px-4 py-3 rounded-md text-sm">
           Change the temporary administrator password before continuing.
         </div>
       )}
@@ -423,18 +438,18 @@ export function AccountSettings(): React.JSX.Element {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label htmlFor="account-username" className="text-sm font-medium">Username</label>
-                <Input id="account-username" value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
+                <Input id="account-username" name="username" autoComplete="username" spellCheck={false} value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }} />
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="account-email" className="text-sm font-medium">Email</label>
-                <Input id="account-email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional" />
+                <Input id="account-email" name="email" autoComplete="email" spellCheck={false} type="email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }} placeholder="optional…" />
               </div>
             </div>
           </form>
         </CardContent>
         <CardFooter>
           <Button type="submit" form="account-profile-form" disabled={updatingProfile}>
-            {updatingProfile ? "Saving..." : "Save Profile"}
+            {updatingProfile ? "Saving…" : "Save Profile"}
           </Button>
         </CardFooter>
       </Card>
@@ -451,6 +466,8 @@ export function AccountSettings(): React.JSX.Element {
           <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
           <select
             id="account-theme"
+            name="theme"
+            autoComplete="off"
             value={themeId}
             disabled={updatingTheme}
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { void handleThemeChange(event.target.value); }}
@@ -477,6 +494,8 @@ export function AccountSettings(): React.JSX.Element {
           <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
           <select
             id="account-timezone"
+            name="timezone"
+            autoComplete="off"
             value={displayTimezone}
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
               setDisplayTimezone(event.target.value === "utc" ? "utc" : "local");
@@ -489,6 +508,8 @@ export function AccountSettings(): React.JSX.Element {
           <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
           <select
             id="account-time-format"
+            name="time-format"
+            autoComplete="off"
             value={timeFormat}
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
               setDisplayTimeFormat(event.target.value === "12" ? "12" : "24");
@@ -611,6 +632,8 @@ export function AccountSettings(): React.JSX.Element {
             <label htmlFor="account-current-password" className="text-sm font-medium">Current password</label>
             <Input
               id="account-current-password"
+              name="current-password"
+              autoComplete="current-password"
               type="password"
               value={currentPassword}
               onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setCurrentPassword(event.target.value); }}
@@ -622,6 +645,8 @@ export function AccountSettings(): React.JSX.Element {
               <label htmlFor="account-new-password" className="text-sm font-medium">New password</label>
               <Input
                 id="account-new-password"
+                name="new-password"
+                autoComplete="new-password"
                 type="password"
                 value={newPassword}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewPassword(event.target.value); }}
@@ -632,6 +657,8 @@ export function AccountSettings(): React.JSX.Element {
               <label htmlFor="account-confirm-password" className="text-sm font-medium">Confirm new password</label>
               <Input
                 id="account-confirm-password"
+                name="confirm-password"
+                autoComplete="new-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setConfirmPassword(event.target.value); }}
@@ -642,7 +669,7 @@ export function AccountSettings(): React.JSX.Element {
         </CardContent>
         <CardFooter>
           <Button onClick={handlePasswordChange} disabled={updatingPassword}>
-            {updatingPassword ? "Changing..." : "Change Password"}
+            {updatingPassword ? "Changing…" : "Change Password"}
           </Button>
         </CardFooter>
       </Card>
@@ -666,7 +693,7 @@ export function AccountSettings(): React.JSX.Element {
                 </div>
                 <div className="space-y-1.5">
                   <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
-                  <Input id="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
+                  <Input id="mfa-disable-code" name="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
                 </div>
               </>
             ) : mfaEnrollment !== null ? (
@@ -686,7 +713,7 @@ export function AccountSettings(): React.JSX.Element {
                 </div>
                 <div className="space-y-1.5">
                   <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
-                  <Input id="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
+                  <Input id="mfa-enrollment-code" name="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
                 </div>
               </div>
             ) : (
@@ -734,12 +761,12 @@ export function AccountSettings(): React.JSX.Element {
           />
 
           {createdTokenSecret != null && (
-            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md text-sm space-y-1">
+            <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-1">
               <p className="font-semibold flex items-center gap-1">
                 <ShieldCheck className="w-4 h-4" />
                 Token created. Copy it now; it won't be shown again.
               </p>
-              <code className="block bg-blue-100 px-2 py-1 rounded text-xs break-all select-all">
+              <code className="block bg-primary/10 px-2 py-1 rounded text-xs break-all select-all">
                 {createdTokenSecret}
               </code>
             </div>
@@ -842,6 +869,6 @@ export function AccountSettings(): React.JSX.Element {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

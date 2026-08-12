@@ -205,7 +205,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <label htmlFor="rtk-key" className="text-sm font-medium">Key</label>
-                <Input id="rtk-key" value={key} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }} placeholder="environment" />
+                <Input id="rtk-key" name="reserved-tag-key" autoComplete="off" spellCheck={false} value={key} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }} placeholder="environment" />
               </div>
               <label className="flex items-start gap-3 text-sm font-medium">
                 <Checkbox checked={disableOverrides} onCheckedChange={(checked: boolean): void => { setDisableOverrides(checked); }} />

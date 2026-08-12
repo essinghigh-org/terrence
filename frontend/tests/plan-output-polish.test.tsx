@@ -254,7 +254,7 @@ test("counts an imported resource's planned update as both import and change", a
 
   expect(view.getByLabelText("1 to import")).toBeTruthy();
   expect(view.getByLabelText("1 to change")).toBeTruthy();
-  expect(view.getByText("change")).toBeTruthy();
+  expect(view.getByText("to change")).toBeTruthy();
   expect(view.getByText("import")).toBeTruthy();
   expect(onSummaryChange).toHaveBeenLastCalledWith({ actionCount: 0, importCount: 1 });
 
@@ -285,7 +285,7 @@ test("counts a moved resource's planned update as both move and change", async (
 
   expect(view.getByLabelText("1 to change")).toBeTruthy();
   expect(view.getByText("1 move")).toBeTruthy();
-  expect(view.getByText("change")).toBeTruthy();
+  expect(view.getByText("to change")).toBeTruthy();
   expect(view.getByText("move")).toBeTruthy();
 
   fireEvent.change(view.getByLabelText("Filter by operation"), {
@@ -374,7 +374,7 @@ test("shows a neutral state when a terminal run never produced a plan artifact",
   );
 
   await waitFor((): void => {
-    expect(view.getByText("Structured plan output was not produced for this run.")).toBeTruthy();
+    expect(view.getByText("Plan output was not produced for this run.")).toBeTruthy();
   });
   expect(view.queryByRole("alert")).toBeNull();
   expect(view.queryByRole("button", { name: "Try again" })).toBeNull();

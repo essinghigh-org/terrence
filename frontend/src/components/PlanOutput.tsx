@@ -100,15 +100,15 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
 ]);
 
 const operationConfig = {
-  create: { symbol: "+", className: "text-emerald-700" },
-  update: { symbol: "~", className: "text-blue-700" },
-  delete: { icon: Trash2, className: "text-red-600" },
-  replace: { symbol: "±", className: "text-amber-700" },
-  read: { symbol: "◎", className: "text-purple-700" },
-  import: { symbol: "&", className: "text-gray-950" },
-  move: { symbol: "→", className: "text-slate-700" },
-  remove: { icon: Trash2, className: "text-gray-400" },
-  "no-op": { symbol: "·", className: "text-gray-400" },
+  create: { symbol: "+", className: "text-success" },
+  update: { symbol: "~", className: "text-primary" },
+  delete: { icon: Trash2, className: "text-destructive" },
+  replace: { symbol: "±", className: "text-warning" },
+  read: { symbol: "◎", className: "text-primary" },
+  import: { symbol: "&", className: "text-foreground" },
+  move: { symbol: "→", className: "text-foreground/85" },
+  remove: { icon: Trash2, className: "text-muted-foreground/70" },
+  "no-op": { symbol: "·", className: "text-muted-foreground/70" },
 } satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -415,15 +415,15 @@ function buildDiffNode(
 type DiffLine = {
   depth: number;
   path: string;
-  parts: ReadonlyArray<Readonly<{ text: string; cls: string }>>;
+  parts: readonly { text: string; cls: string }[];
   replacement: boolean;
 };
 
 type DiffMarker = "add" | "del" | "mod";
 const diffMarkerClasses: Record<DiffMarker, string> = {
-  add: "text-emerald-700",
-  del: "text-red-600",
-  mod: "text-blue-700",
+  add: "text-success",
+  del: "text-destructive",
+  mod: "text-primary",
 };
 const diffMarkerText: Readonly<Record<DiffMarker, string>> = {
   add: "+",
@@ -489,7 +489,7 @@ function emitArrayItemBlock(
   lines.push({
     depth,
     path: node.path,
-    parts: [{ text: close, cls: "text-gray-400" }],
+    parts: [{ text: close, cls: "text-muted-foreground/70" }],
     replacement: false,
   });
 }
@@ -513,8 +513,8 @@ function flattenDiff(
         path: node.path,
         parts: [
           { text: "- ", cls: diffMarkerClasses.del },
-          { text: formatValue(node.before), cls: "text-gray-700" },
-          { text: ",", cls: "text-gray-400" },
+          { text: formatValue(node.before), cls: "text-foreground/85" },
+          { text: ",", cls: "text-muted-foreground/70" },
         ],
         replacement: forcesReplacement(node.path),
       });
@@ -523,8 +523,8 @@ function flattenDiff(
         path: node.path,
         parts: [
           { text: "+ ", cls: diffMarkerClasses.add },
-          { text: formatValue(node.after), cls: "text-gray-700" },
-          { text: ",", cls: "text-gray-400" },
+          { text: formatValue(node.after), cls: "text-foreground/85" },
+          { text: ",", cls: "text-muted-foreground/70" },
         ],
         replacement: forcesReplacement(node.path),
       });
@@ -533,24 +533,24 @@ function flattenDiff(
     const parts: { text: string; cls: string }[] = [];
     if (marker !== null) parts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
     if (keyText !== null) {
-      parts.push({ text: keyText, cls: "text-gray-900" });
-      parts.push({ text: " = ", cls: "text-gray-400" });
+      parts.push({ text: keyText, cls: "text-foreground" });
+      parts.push({ text: " = ", cls: "text-muted-foreground/70" });
     }
     if (node.sensitive) {
-      parts.push({ text: "Sensitive value", cls: "font-medium italic text-gray-500" });
+      parts.push({ text: "Sensitive value", cls: "font-medium italic text-muted-foreground" });
     } else if (node.unknown) {
-      parts.push({ text: "Known after apply", cls: "font-medium italic text-purple-700" });
+      parts.push({ text: "Known after apply", cls: "font-medium italic text-primary" });
     } else if (marker === "mod") {
-      parts.push({ text: formatValue(node.before), cls: "text-gray-700" });
-      parts.push({ text: " -> ", cls: "text-gray-400" });
-      parts.push({ text: formatValue(node.after), cls: "text-gray-700" });
+      parts.push({ text: formatValue(node.before), cls: "text-foreground/85" });
+      parts.push({ text: " -> ", cls: "text-muted-foreground/70" });
+      parts.push({ text: formatValue(node.after), cls: "text-foreground/85" });
     } else {
       parts.push({
         text: formatValue(marker === "del" ? node.before : node.after),
-        cls: node.unchanged ? "text-gray-500" : "text-gray-700",
+        cls: node.unchanged ? "text-muted-foreground" : "text-foreground/85",
       });
     }
-    if (inArray) parts.push({ text: ",", cls: "text-gray-400" });
+    if (inArray) parts.push({ text: ",", cls: "text-muted-foreground/70" });
     lines.push({ depth, path: node.path, parts, replacement: forcesReplacement(node.path) });
     return;
   }
@@ -583,7 +583,7 @@ function flattenDiff(
       emitArrayItemBlock(node, "del", context, depth, forcesReplacement, lines);
       emitArrayItemBlock(node, "add", context, depth, forcesReplacement, lines);
     } else {
-      emitArrayItemBlock(node, childForce === null ? "del" : childForce, context, depth, forcesReplacement, lines);
+      emitArrayItemBlock(node, childForce ?? "del", context, depth, forcesReplacement, lines);
     }
     return;
   }
@@ -592,8 +592,8 @@ function flattenDiff(
   const close = node.kind === "array" ? "]" : "}";
   const keyedParts: { text: string; cls: string }[] = [];
   if (marker !== null) keyedParts.push({ text: `${diffMarkerText[marker]} `, cls: diffMarkerClasses[marker] });
-  keyedParts.push({ text: keyText ?? "", cls: "text-gray-900" });
-  keyedParts.push({ text: ` = ${open}`, cls: "text-gray-400" });
+  keyedParts.push({ text: keyText ?? "", cls: "text-foreground" });
+  keyedParts.push({ text: ` = ${open}`, cls: "text-muted-foreground/70" });
   lines.push({ depth, path: node.path, parts: keyedParts, replacement: forcesReplacement(node.path) });
   for (const child of node.children) {
     flattenDiff(
@@ -607,7 +607,7 @@ function flattenDiff(
       lines,
     );
   }
-  lines.push({ depth, path: node.path, parts: [{ text: close, cls: "text-gray-400" }], replacement: false });
+  lines.push({ depth, path: node.path, parts: [{ text: close, cls: "text-muted-foreground/70" }], replacement: false });
 }
 
 export function AttributeDiff({
@@ -635,7 +635,7 @@ export function AttributeDiff({
     : "";
   if (visibleRows.length === 0) {
     return (
-      <p className="px-4 py-3 text-xs text-gray-500">
+      <p className="px-4 py-3 text-xs text-muted-foreground">
         No attribute-level changes to show.{unchangedSummary === "" ? "" : ` ${unchangedSummary}.`}
       </p>
     );
@@ -646,7 +646,7 @@ export function AttributeDiff({
         const op = operationFor(change.actions);
         if (op === "create") return { text: "+", cls: diffMarkerClasses.add };
         if (op === "delete" || op === "remove") return { text: "-", cls: diffMarkerClasses.del };
-        if (op === "replace") return { text: "-/", cls: "text-amber-700" };
+        if (op === "replace") return { text: "-/", cls: "text-warning" };
         return { text: "~", cls: diffMarkerClasses.mod };
       })()
     : null;
@@ -668,7 +668,7 @@ export function AttributeDiff({
       path: "",
       parts: [
         { text: `${header.text} resource `, cls: header.cls },
-        { text: `"${type}" "${name}" {`, cls: "text-gray-900" },
+        { text: `"${type}" "${name}" {`, cls: "text-foreground" },
       ],
       replacement: false,
     });
@@ -687,27 +687,27 @@ export function AttributeDiff({
     lines.push({
       depth: 1,
       path: "",
-      parts: [{ text: `# (${unchangedSummary})`, cls: "text-blue-600" }],
+      parts: [{ text: `# (${unchangedSummary})`, cls: "text-primary" }],
       replacement: false,
     });
   }
   if (hasHeader) {
-    lines.push({ depth: 0, path: "", parts: [{ text: "}", cls: "text-gray-400" }], replacement: false });
+    lines.push({ depth: 0, path: "", parts: [{ text: "}", cls: "text-muted-foreground/70" }], replacement: false });
   }
 
   return (
-    <div aria-label={`Attribute changes for ${address}`} className="overflow-x-auto border-t border-gray-200 bg-gray-50 px-4 pb-3">
+    <div aria-label={`Attribute changes for ${address}`} className="overflow-x-auto border-t border-border bg-muted px-4 pb-3">
       <div className="min-w-[560px] py-2 font-mono text-xs leading-5">
         {lines.map((line, index): React.JSX.Element => (
           <div key={index} className="flex items-baseline whitespace-pre">
             <code>
-              <span className="text-gray-400">{" ".repeat(line.depth * 2)}</span>
+              <span className="text-muted-foreground/70">{" ".repeat(line.depth * 2)}</span>
               {line.parts.map((part, partIndex): React.JSX.Element => (
                 <span key={partIndex} className={part.cls}>{part.text}</span>
               ))}
             </code>
             {line.replacement && (
-              <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+              <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-warning">
                 Forces replacement
               </span>
             )}
@@ -765,11 +765,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
 
   return (
     <details
-      className="group border-b border-gray-200 last:border-b-0"
+      className="group border-b border-border last:border-b-0"
       onToggle={(event): void => { setExpanded(event.currentTarget.open); }}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-open:rotate-90" aria-hidden="true" />
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
         <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
           {"icon" in config ? (
             <config.icon className="size-3" aria-hidden="true" />
@@ -778,31 +778,31 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
           )}
         </span>
         {resource.change.importing !== undefined && operationForResource(resource) !== "import" && (
-          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-gray-950">
+          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-foreground">
             <span aria-hidden="true">&</span>
             <span>import</span>
           </span>
         )}
         {resource.previous_address !== undefined && operationForResource(resource) !== "move" && (
-          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-slate-700">
+          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-foreground/85">
             <span aria-hidden="true">→</span>
             <span>move</span>
           </span>
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <code className="truncate font-mono text-xs font-semibold text-gray-900">{resource.address}</code>
+            <code className="truncate font-mono text-xs font-semibold text-foreground">{resource.address}</code>
             <button
               type="button"
               aria-label={`Copy ${resource.address} address`}
               title={copied ? "Copied address!" : "Copy resource address"}
-              className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               onClick={handleCopy}
             >
-              {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
+              {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
             </button>
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
+          <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
             <span>Type: <code className="font-mono">{resource.type}</code></span>
             {resource.module_address !== undefined && (
               <span>Module: <code className="font-mono">{resource.module_address}</code></span>
@@ -817,8 +817,8 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
             {resource.previous_address !== undefined && (
               <span className="flex items-center gap-1">
                 Moved from <code className="font-mono">{resource.previous_address}</code>
-                <ArrowRight className="inline size-3 text-gray-400" />
-                <code className="font-mono font-medium text-gray-700">{resource.address}</code>
+                <ArrowRight className="inline size-3 text-muted-foreground/70" />
+                <code className="font-mono font-medium text-foreground/85">{resource.address}</code>
               </span>
             )}
             {resource.change.importing !== undefined && (
@@ -844,11 +844,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
 function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvocation[] }>): React.JSX.Element {
   if (actions.length === 0) return <></>;
   return (
-    <details className="border-t border-gray-200">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50">
-        Actions to invoke <span className="font-normal text-gray-500">({actions.length})</span>
+    <details className="border-t border-border">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        Actions to invoke <span className="font-normal text-muted-foreground">({actions.length})</span>
       </summary>
-      <div className="divide-y divide-gray-100 border-t border-gray-100">
+      <div className="divide-y divide-border/60 border-t border-border/60">
         {actions.map((action, index): React.JSX.Element => {
           const configuredLabel = action.address
             ?? [action.type, action.name].filter((value): value is string => value !== undefined && value !== "").join(".");
@@ -856,10 +856,10 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
           const trigger = action.lifecycle_action_trigger;
           return (
             <div key={`${label}:${index}`} className="flex items-start gap-3 px-5 py-3 text-xs">
-              <span className="inline-flex items-center gap-1 rounded-md border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-xs font-semibold leading-5 text-purple-700">invoke</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold leading-5 text-primary">invoke</span>
               <div className="min-w-0">
-                <code className="break-all font-mono font-semibold text-gray-900">{label}</code>
-                <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
+                <code className="break-all font-mono font-semibold text-foreground">{label}</code>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
                   {action.provider_name !== undefined && (
                     <span>Provider: <code className="font-mono">{providerLabel(action.provider_name)}</code></span>
                   )}
@@ -956,16 +956,16 @@ function resourceMatches(
 function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change][] }>): React.JSX.Element {
   if (outputs.length === 0) return <></>;
   return (
-    <details className="border-t border-gray-200">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50">
-        Output changes <span className="font-normal text-gray-500">({outputs.length})</span>
+    <details className="border-t border-border">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        Output changes <span className="font-normal text-muted-foreground">({outputs.length})</span>
       </summary>
-      <div className="border-t border-gray-100">
+      <div className="border-t border-border/60">
         {outputs.map(([name, output]): React.JSX.Element => (
-          <details key={name} className="border-b border-gray-100 last:border-b-0">
-            <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-gray-50">
-              <span className="inline-flex items-center rounded border border-gray-300 bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
-              <span className="text-gray-500">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
+          <details key={name} className="border-b border-border/60 last:border-b-0">
+            <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+              <span className="inline-flex items-center rounded border border-input bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
+              <span className="text-muted-foreground">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
             </summary>
             <AttributeDiff change={output} address={`output.${name}`} name={name} />
           </details>
@@ -1065,7 +1065,7 @@ export function PlanOutput({
 
   if (activeRunId.current !== runId || loadState.kind === "loading") {
     return (
-      <div role="status" className="flex items-center gap-2 border-t border-gray-200 px-5 py-4 text-sm text-gray-500">
+      <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
         <Spinner className="size-4" />
         Loading structured plan output…
       </div>
@@ -1074,10 +1074,10 @@ export function PlanOutput({
 
   if (loadState.kind === "waiting") {
     return (
-      <div role="status" className="flex items-start gap-3 border-t border-gray-200 bg-blue-50/50 px-5 py-4 text-sm text-gray-600">
-        <Spinner className="mt-0.5 size-4 text-blue-600" />
+      <div role="status" className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground">
+        <Spinner className="mt-0.5 size-4 text-primary" />
         <div>
-          <p className="font-medium text-gray-800">Preparing structured plan output…</p>
+          <p className="font-medium text-foreground/85">Preparing structured plan output…</p>
           <p className="mt-0.5 text-xs">This view will update automatically when the plan is ready.</p>
         </div>
       </div>
@@ -1086,20 +1086,20 @@ export function PlanOutput({
 
   if (loadState.kind === "unavailable") {
     return (
-      <div role="status" className="border-t border-gray-200 bg-gray-50 px-5 py-4">
-        <p className="text-sm font-medium text-gray-700">Plan output was not produced for this run.</p>
+      <div role="status" className="border-t border-border bg-muted px-5 py-4">
+        <p className="text-sm font-medium text-foreground/85">Plan output was not produced for this run.</p>
       </div>
     );
   }
 
   if (loadState.kind === "error") {
     return (
-      <div role="alert" className="border-t border-gray-200 bg-red-50/60 px-5 py-4">
-        <p className="text-sm font-medium text-red-800">Could not load plan output</p>
-        <p className="mt-1 text-xs text-red-700">{loadState.message}</p>
+      <div role="alert" className="border-t border-border bg-destructive/10 px-5 py-4">
+        <p className="text-sm font-medium text-destructive">Could not load plan output</p>
+        <p className="mt-1 text-xs text-destructive">{loadState.message}</p>
         <button
           type="button"
-          className="mt-3 rounded border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="mt-3 rounded border border-destructive/30 bg-background px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(): void => {
             setLoadState({ kind: "loading" });
             setRetry((value): number => value + 1);
@@ -1133,25 +1133,25 @@ export function PlanOutput({
       count: importCount,
       label: "to import",
       symbol: "&",
-      className: "text-gray-950",
+      className: "text-foreground",
     },
     {
       count: counts.add,
       label: "to create",
       symbol: "+",
-      className: "text-emerald-700",
+      className: "text-success",
     },
     {
       count: counts.change,
       label: "to change",
       symbol: "~",
-      className: "text-blue-700",
+      className: "text-primary",
     },
     {
       count: counts.destroy,
       label: "to destroy",
       symbol: "−",
-      className: "text-red-700",
+      className: "text-destructive",
     },
   ].filter((item): boolean => item.count > 0);
 
@@ -1167,20 +1167,20 @@ export function PlanOutput({
   };
 
   return (
-    <section aria-label="Plan output" className="border-t border-gray-200">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
+    <section aria-label="Plan output" className="border-t border-border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted px-5 py-2.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             aria-label="Copy plan summary as markdown"
             title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
-            className="rounded border border-gray-200 bg-white p-1 text-gray-500 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500"
+            className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
               const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
               if (clipboard !== undefined) {
                 void clipboard.writeText(planSummaryMarkdown({ ...counts, importCount })).then((): void => {
                   setSummaryCopied(true);
-                  window.setTimeout((): void => setSummaryCopied(false), 2_000);
+                  window.setTimeout((): void => { setSummaryCopied(false); }, 2_000);
                 });
               }
             }}
@@ -1190,15 +1190,15 @@ export function PlanOutput({
               : <Copy className="size-3.5" aria-hidden="true" />}
           </button>
         </div>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-muted-foreground">
           Terraform {planJson.terraform_version ?? "unknown"}
           {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
         </span>
       </div>
 
-      <div aria-label="Resource change summary" className="flex flex-wrap gap-2 border-b border-gray-200 p-4">
+      <div aria-label="Resource change summary" className="flex flex-wrap gap-2 border-b border-border p-4">
         {operationSummary.length === 0 ? (
-          <div aria-label="No resource changes" className="w-full rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-600">
+          <div aria-label="No resource changes" className="w-full rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground">
             No resource changes
           </div>
         ) : operationSummary.map((item): React.JSX.Element => (
@@ -1213,7 +1213,7 @@ export function PlanOutput({
         ))}
       </div>
       {(counts.replace > 0 || moveCount > 0 || driftResources.length > 0 || actionInvocations.length > 0) && (
-        <div className="flex flex-wrap gap-2 border-b border-gray-200 px-4 py-2 text-xs text-gray-600">
+        <div className="flex flex-wrap gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
           {counts.replace > 0 && <span>{counts.replace} replacement{counts.replace === 1 ? "" : "s"}</span>}
           {moveCount > 0 && <span>{moveCount} move{moveCount === 1 ? "" : "s"}</span>}
           {driftResources.length > 0 && <span>{driftResources.length} drifted resource{driftResources.length === 1 ? "" : "s"}</span>}
@@ -1223,23 +1223,29 @@ export function PlanOutput({
         </div>
       )}
 
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-gray-200 px-4 py-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex flex-1 flex-wrap gap-2">
-          <label className="min-w-[220px] flex-1 text-xs font-medium text-gray-600">
+          <label className="min-w-[220px] flex-1 text-xs font-medium text-muted-foreground">
             <span className="sr-only">Filter resources by address or type</span>
             <input
+              id="plan-resource-search"
+              name="resource-search"
               type="search"
+              autoComplete="off"
+              spellCheck={false}
               value={search}
               placeholder="Filter resources by address…"
               aria-label="Filter resources by address or type"
-              className="h-8 w-full rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
           <select
+            id="plan-operation-filter"
+            name="operation"
             value={operation}
             aria-label="Filter by operation"
-            className="h-8 rounded-md border border-gray-300 bg-white px-2.5 text-sm font-normal text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="h-8 rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
             onChange={(event): void => {
               const val = ((event.currentTarget || event.target)).value as Operation | "all";
               setOperation(val);
@@ -1256,14 +1262,14 @@ export function PlanOutput({
               <option value="read">Read ({opCounts.read})</option>
             </select>
           </div>
-        <span aria-live="polite" className="text-xs text-gray-500">
+        <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}
           {driftResources.length > 0 && ` · ${filteredDrift.length} of ${driftResources.length} drift`}
         </span>
       </div>
 
       {filteredResources.length === 0 ? (
-        <p className="px-5 py-6 text-center text-sm text-gray-500">
+        <p className="px-5 py-6 text-center text-sm text-muted-foreground">
           {changedResources.length === 0
             ? actionInvocations.length === 0
               ? "This plan has no resource changes."
@@ -1279,16 +1285,16 @@ export function PlanOutput({
       )}
 
       {driftResources.length > 0 && (
-        <details className="border-t border-gray-200">
-          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50">
-            Resource drift <span className="font-normal text-gray-500">({filteredDrift.length})</span>
+        <details className="border-t border-border">
+          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+            Resource drift <span className="font-normal text-muted-foreground">({filteredDrift.length})</span>
           </summary>
           {filteredDrift.length === 0 ? (
-            <p className="border-t border-gray-100 px-5 py-4 text-sm text-gray-500">
+            <p className="border-t border-border/60 px-5 py-4 text-sm text-muted-foreground">
               No drifted resources match these filters.
             </p>
           ) : (
-            <div className="border-t border-gray-100">
+            <div className="border-t border-border/60">
               {filteredDrift.map((resource): React.JSX.Element => (
                 <ResourceRow key={`${resource.address}:${resource.deposed ?? ""}`} resource={resource} />
               ))}

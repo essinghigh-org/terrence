@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
@@ -12,6 +13,7 @@ import { Badge } from "../components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Boxes, Plus, Trash2 } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type ProviderSet = {
   id: string;
@@ -66,7 +68,6 @@ export function ProviderSets(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage provider sets for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadProviderSets = async (): Promise<void> => {
@@ -141,21 +142,18 @@ export function ProviderSets(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Provider sets</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Provider sets let Terraform workers fetch provider binaries from a specified provider source.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Provider sets"
+        description="Provider sets let Terraform workers fetch provider binaries from a specified provider source."
+        action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />
             Add provider set
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -227,29 +225,30 @@ export function ProviderSets(): React.JSX.Element {
           <form id="provider-set-create-form" onSubmit={(event): void => { event.preventDefault(); void createProviderSet(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="provider-set-name">Name</label>
-              <Input id="provider-set-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider-set" />
+              <Input id="provider-set-name" name="provider-set-name" autoComplete="off" spellCheck={false} value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-provider-set" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="provider-set-source">Provider source</label>
-              <Input id="provider-set-source" value={providerSource} onChange={(e): void => { setProviderSource(e.target.value); }} placeholder="registry.terraform.io/hashicorp/aws" />
+              <Input id="provider-set-source" name="provider-source" autoComplete="off" spellCheck={false} value={providerSource} onChange={(e): void => { setProviderSource(e.target.value); }} placeholder="registry.terraform.io/hashicorp/aws" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="provider-set-description">Description</label>
-              <Input id="provider-set-description" value={description} onChange={(e): void => { setDescription(e.target.value); }} placeholder="Optional" />
+              <Input id="provider-set-description" name="provider-set-description" autoComplete="off" value={description} onChange={(e): void => { setDescription(e.target.value); }} placeholder="Optional description…" />
             </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <label className="text-sm" htmlFor="provider-set-global">
+            <label className="flex cursor-pointer items-center justify-between rounded-md border p-3 text-sm transition-colors hover:bg-muted/40" htmlFor="provider-set-global">
+              <span>
                 <div className="font-medium">Use in all runs</div>
                 <div className="text-muted-foreground">When enabled, applies the provider set to every run in the organization.</div>
-              </label>
-              <input id="provider-set-global" type="checkbox" className="h-4 w-4" checked={global} onChange={(e): void => { setGlobal(e.target.checked); }} />
-            </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+              </span>
+              <Checkbox id="provider-set-global" checked={global} onCheckedChange={(checked: boolean | "indeterminate"): void => { setGlobal(checked === true); }} aria-label="Use provider set in all runs" />
+            </label>
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </form>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
             <Button type="submit" form="provider-set-create-form" disabled={creating}>
-              {creating ? <Spinner /> : "Create provider set"}
+              {creating && <Spinner data-icon="inline-start" />}
+              {creating ? "Creating provider set…" : "Create provider set"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -266,6 +265,6 @@ export function ProviderSets(): React.JSX.Element {
         loading={deleting}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PageShell>
   );
 }

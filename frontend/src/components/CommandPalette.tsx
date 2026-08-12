@@ -339,9 +339,14 @@ export function CommandPalette({
         <div className="flex items-center border-b px-3.5 py-2.5">
           <Search className="mr-2.5 size-4 text-muted-foreground shrink-0" />
           <Input
+            id="command-palette-search"
+            name="command-palette-search"
+            type="search"
+            autoComplete="off"
+            aria-label="Search commands and resources"
             autoFocus
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
-            placeholder="Type a command or search organizations & workspaces..."
+            placeholder="Type a command or search organizations & workspaces…"
             value={search}
             onChange={(e) => { setSearch(e.target.value); }}
           />

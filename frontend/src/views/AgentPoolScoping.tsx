@@ -7,9 +7,11 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Boxes, Plus } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 // The GET /organizations/:org/agent-pools serializer emits each pool's scope
 // relationships as raw resource identifiers ({ id, type }) — the backend
@@ -84,7 +86,6 @@ export function AgentPoolScoping(): React.JSX.Element {
     } else {
       setError(orgPermissions.error ?? "You do not have permission to manage agent pools for this organization.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgPermissions.loaded, orgPermissions.has]);
 
   const loadPools = async (): Promise<void> => {
@@ -142,21 +143,18 @@ export function AgentPoolScoping(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Agent pool scoping</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Which workspaces and projects each agent pool is allowed, or explicitly excluded, from running in.
-          </p>
-        </div>
-        {canManage && (
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Agent pool scoping"
+        description="Which workspaces and projects each agent pool is allowed, or explicitly excluded, from running in."
+        action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />
             New agent pool
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -226,25 +224,26 @@ export function AgentPoolScoping(): React.JSX.Element {
           <form id="agent-pool-create-form" onSubmit={(event): void => { event.preventDefault(); void createAgentPool(); }} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="agent-pool-name">Name</label>
-              <Input id="agent-pool-name" value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-agent-pool" />
+              <Input id="agent-pool-name" name="agent-pool-name" autoComplete="off" spellCheck={false} value={name} onChange={(e): void => { setName(e.target.value); }} placeholder="my-agent-pool" />
             </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <label className="text-sm" htmlFor="agent-pool-org-scoped">
+            <label className="flex cursor-pointer items-center justify-between rounded-md border p-3 text-sm transition-colors hover:bg-muted/40" htmlFor="agent-pool-org-scoped">
+              <span>
                 <div className="font-medium">Organization-scoped</div>
                 <div className="text-muted-foreground">When enabled, the agent pool is scoped to the whole organization by default.</div>
-              </label>
-              <input id="agent-pool-org-scoped" type="checkbox" className="h-4 w-4" checked={organizationScoped} onChange={(e): void => { setOrganizationScoped(e.target.checked); }} />
-            </div>
-            {formError !== "" && <div className="text-sm text-red-500">{formError}</div>}
+              </span>
+              <Checkbox id="agent-pool-org-scoped" checked={organizationScoped} onCheckedChange={(checked: boolean | "indeterminate"): void => { setOrganizationScoped(checked === true); }} aria-label="Organization-scoped agent pool" />
+            </label>
+            {formError !== "" && <div role="alert" className="text-sm text-destructive">{formError}</div>}
           </form>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
             <Button type="submit" form="agent-pool-create-form" disabled={creating}>
-              {creating ? <Spinner /> : "Create agent pool"}
+              {creating && <Spinner data-icon="inline-start" />}
+              {creating ? "Creating agent pool…" : "Create agent pool"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

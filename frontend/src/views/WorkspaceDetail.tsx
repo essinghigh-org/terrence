@@ -457,7 +457,7 @@ export function WorkspaceDetail({
               <Copy aria-hidden="true" />
             </Button>
           </div>
-          {(() => {
+          {((): React.JSX.Element | null => {
             const ownedByType = workspace.attributes["owned-by-type"];
             const ownedById = workspace.attributes["owned-by-id"];
             const contactEmail = workspace.attributes["contact-email"];
@@ -480,9 +480,9 @@ export function WorkspaceDetail({
           {canToggleLock && (
             <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
               {workspace.attributes.locked === true ? (
-                <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking..." : "Unlock"}</>
+                <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock"}</>
               ) : (
-                <><Lock data-icon="inline-start" /> {togglingLock ? "Locking..." : "Lock"}</>
+                <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock"}</>
               )}
             </Button>
           )}
@@ -523,19 +523,22 @@ export function WorkspaceDetail({
               </label>
               <textarea
                 id="workspace-lock-reason"
+                name="lock-reason"
+                autoComplete="off"
+                spellCheck={false}
                 rows={4}
                 maxLength={300}
                 autoFocus
                 value={lockReason}
                 onInput={(event): void => { setLockReason(event.currentTarget.value); }}
-                placeholder="Why is this being locked?"
-                className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                placeholder="Maintenance reason…"
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <p className="text-sm text-muted-foreground">300 characters allowed</p>
             </div>
             <DialogFooter className="mt-6 gap-2">
               <Button type="submit" disabled={togglingLock}>
-                {togglingLock ? "Locking..." : "Lock workspace"}
+                {togglingLock ? "Locking…" : "Lock workspace"}
               </Button>
               <Button
                 type="button"
@@ -671,7 +674,7 @@ export function WorkspaceDetail({
                         <code className="font-mono">{latestRun.id}</code>
                       </div>
                       {latestRunError && (
-                        <p role="status" className="mt-2 text-xs text-amber-700">Run status may be out of date.</p>
+                        <p role="status" className="mt-2 text-xs text-warning">Run status may be out of date.</p>
                       )}
                     </>
                   )}
@@ -870,9 +873,9 @@ export function WorkspaceDetail({
               <CardFooter className="justify-end">
                 <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
                   {workspace.attributes.locked === true ? (
-                    <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking..." : "Unlock workspace"}</>
+                    <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock workspace"}</>
                   ) : (
-                    <><Lock data-icon="inline-start" /> {togglingLock ? "Locking..." : "Lock workspace"}</>
+                    <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock workspace"}</>
                   )}
                 </Button>
               </CardFooter>

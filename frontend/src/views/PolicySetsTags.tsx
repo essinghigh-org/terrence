@@ -6,6 +6,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
 import { Tags } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 // Matches the backend policySetAttributes serializer (backend/src/routes/policies.ts):
 //   "tag-selectors": selectors.map((s) => ({ "tag-key": s.key, "tag-value": s.value, "is-exclude": s.isExclude === true }))
@@ -89,15 +90,12 @@ export function PolicySetsTags(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Tag-based policy sets</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Policy sets scoped by tag selectors are automatically applied to workspaces whose tags match.
-          </p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title="Tag-based policy sets"
+        description="Policy sets scoped by tag selectors are automatically applied to workspaces whose tags match."
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -164,6 +162,6 @@ export function PolicySetsTags(): React.JSX.Element {
             </Table>
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   );
 }

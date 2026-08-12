@@ -13,6 +13,7 @@ import { Spinner } from "../components/ui/spinner";
 import { Server, Plus, Trash2, Key, ShieldCheck, Cpu } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type AgentPool = {
   id: string;
@@ -225,19 +226,22 @@ export function AgentPools(): React.JSX.Element {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Agent Pools</h1>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title={
+          <span className="flex items-center gap-2">
+            Agent pools
             <HelpTooltip content="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure." />
-          </div>
-          <p className="text-sm text-muted-foreground">Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure.</p>
-        </div>
-        {canManage && <Button onClick={(): void => { setPoolDialogOpen(true); }}>
-          <Plus className="mr-1.5 size-4" /> Create Agent Pool
-        </Button>}
-      </div>
+          </span>
+        }
+        description="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure."
+        action={canManage ? (
+          <Button onClick={(): void => { setPoolDialogOpen(true); }}>
+            <Plus className="mr-1.5 size-4" /> Create agent pool
+          </Button>
+        ) : undefined}
+      />
 
       {error !== "" && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
@@ -346,6 +350,9 @@ export function AgentPools(): React.JSX.Element {
                 <label htmlFor="agent-pool-name" className="text-sm font-medium">Pool Name</label>
                 <Input
                   id="agent-pool-name"
+                  name="agent-pool-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={poolName}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPoolName(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPoolName(event.currentTarget.value); }}
@@ -357,7 +364,8 @@ export function AgentPools(): React.JSX.Element {
             <DialogFooter>
               <Button type="button" variant="outline" onClick={(): void => { setPoolDialogOpen(false); }}>Cancel</Button>
               <Button type="submit" disabled={creatingPool || poolName.trim() === ""}>
-                {creatingPool ? <Spinner className="size-4" /> : "Create Pool"}
+                {creatingPool ? <Spinner className="size-4" /> : null}
+                {creatingPool ? "Creating pool…" : "Create pool"}
               </Button>
             </DialogFooter>
           </form>
@@ -380,6 +388,8 @@ export function AgentPools(): React.JSX.Element {
                 <label htmlFor="agent-token-desc" className="text-xs font-medium">New Token Description</label>
                 <Input
                   id="agent-token-desc"
+                  name="agent-token-description"
+                  autoComplete="off"
                   value={tokenDesc}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setTokenDesc(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTokenDesc(event.currentTarget.value); }}
@@ -389,13 +399,13 @@ export function AgentPools(): React.JSX.Element {
               </div>
               <Button type="submit" disabled={creatingToken} size="sm">
                 {creatingToken ? <Spinner className="size-3.5" /> : <Plus className="size-3.5 mr-1" />}
-                Generate Token
+                {creatingToken ? "Generating…" : "Generate token"}
               </Button>
             </form>
 
             {createdSecret != null && (
-              <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-1">
-                <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
+              <div className="rounded border border-success/30 bg-success/10 p-3 space-y-1">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-success">
                   <ShieldCheck className="size-4" /> Agent Token Created!
                 </div>
                 <div className="rounded bg-background p-2 font-mono text-xs font-semibold select-all break-all border">
@@ -492,6 +502,6 @@ export function AgentPools(): React.JSX.Element {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

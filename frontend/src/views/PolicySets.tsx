@@ -14,6 +14,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
 import { ShieldCheck, Plus, Trash2, FolderKanban } from "lucide-react";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 type PolicySet = {
   id: string;
@@ -151,19 +152,22 @@ export function PolicySets(): React.JSX.Element {
   const projectCount = (policySet: PolicySet): number => policySet.relationships?.projects?.data?.length ?? 0;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">{orgName} / Policy sets</h1>
+    <PageShell>
+      <PageHeader
+        eyebrow={`${orgName} / Settings`}
+        title={
+          <span className="flex items-center gap-2">
+            Policy sets
             <HelpTooltip content="Policy sets group Sentinel policies that are run against workspace plans and applies." />
-          </div>
-          <p className="text-sm text-muted-foreground">Manage Sentinel policy sets for this organization, attach them to projects and workspaces, and configure enforcement.</p>
-        </div>
-        {canManage && <Button onClick={(): void => { setCreateDialogOpen(true); }}>
-          <Plus className="mr-1.5 size-4" /> Create policy set
-        </Button>}
-      </div>
+          </span>
+        }
+        description="Manage Sentinel policy sets for this organization, attach them to projects and workspaces, and configure enforcement."
+        action={canManage ? (
+          <Button onClick={(): void => { setCreateDialogOpen(true); }}>
+            <Plus className="mr-1.5 size-4" /> Create policy set
+          </Button>
+        ) : undefined}
+      />
 
       {error !== "" && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
@@ -269,6 +273,9 @@ export function PolicySets(): React.JSX.Element {
                 <label htmlFor="policy-set-name" className="text-sm font-medium">Name</label>
                 <Input
                   id="policy-set-name"
+                  name="policy-set-name"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={name}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                   placeholder="e.g. security-baseline"
@@ -279,16 +286,19 @@ export function PolicySets(): React.JSX.Element {
                 <label htmlFor="policy-set-description" className="text-sm font-medium">Description <span className="font-normal text-muted-foreground">(Optional)</span></label>
                 <textarea
                   id="policy-set-description"
+                  name="policy-set-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   rows={3}
                   value={description}
                   onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => { setDescription(event.currentTarget.value); }}
                   placeholder="What does this set enforce?"
-                  className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
               </div>
               <div className="space-y-2">
                 <label htmlFor="policy-set-kind" className="text-sm font-medium">Framework</label>
-                <Select id="policy-set-kind" value={kind} onValueChange={setKind}>
+                <Select id="policy-set-kind" name="policy-set-kind" value={kind} onValueChange={setKind}>
                   <SelectItem value="sentinel">Sentinel</SelectItem>
                 </Select>
               </div>
@@ -306,7 +316,8 @@ export function PolicySets(): React.JSX.Element {
             <DialogFooter>
               <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); }}>Cancel</Button>
               <Button type="submit" disabled={creating || name.trim() === ""}>
-                {creating ? <Spinner className="size-4" /> : "Create policy set"}
+                {creating && <Spinner data-icon="inline-start" className="size-4" />}
+                {creating ? "Creating policy set…" : "Create policy set"}
               </Button>
             </DialogFooter>
           </form>
@@ -332,6 +343,6 @@ export function PolicySets(): React.JSX.Element {
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

@@ -169,6 +169,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
           <>
             <input
               ref={fileInputRef}
+              name="state-upload"
               className="hidden"
               type="file"
               accept=".tfstate,.json,application/json"
@@ -274,7 +275,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
                     disabled={loadingStateId === s.id}
                     onClick={(): void => { void handleViewJson(s); }}
                   >
-                    {loadingStateId === s.id ? "Loading..." : "View JSON"}
+                    {loadingStateId === s.id ? "Loading…" : "View JSON"}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={(): void => { void handleDownload(s); }}>
                     Download state
@@ -284,7 +285,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
             ))}
             {loadState.kind === "ready" && loadState.states.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                   No state versions recorded yet.
                 </TableCell>
               </TableRow>
@@ -298,7 +299,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
           <DialogHeader>
             <DialogTitle>State Payload JSON</DialogTitle>
           </DialogHeader>
-          <pre className="bg-slate-900 text-slate-100 p-4 rounded-md text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+          <pre className="bg-code-background text-code-foreground p-4 rounded-md text-xs font-mono overflow-x-auto whitespace-pre-wrap">
             {selectedState}
           </pre>
         </DialogContent>

@@ -23,6 +23,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { toast } from "../components/ui/toast";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { PageHeader, PageShell } from "../components/PageHeader";
 
 export type AdminSection =
   | "security"
@@ -64,7 +66,6 @@ async function saveAuthSettings(options: Readonly<{
     options.setSaving(false);
   }
 }
-
 type ItemAttrs = {
   username?: string;
   email?: string | null;
@@ -117,7 +118,7 @@ function ProviderStatusRow(props: Readonly<{ label: string; enabled: boolean }>)
   return (
     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
       <span>{label}</span>
-      <span className={enabled ? "font-medium text-green-700" : "text-gray-500"}>{enabled ? "Enabled" : "Disabled"}</span>
+      <span className={enabled ? "font-medium text-success" : "text-muted-foreground"}>{enabled ? "Enabled" : "Disabled"}</span>
     </div>
   );
 }
@@ -154,16 +155,16 @@ function DatabaseStorageCard(): React.JSX.Element {
       cancelled = true;
     };
   }, []);
-  const totalBytes = metrics === null ? null : (metrics.sizeBytes ?? 0) + (metrics.walSizeBytes ?? 0);
+  const totalBytes = metrics === null ? null : metrics.sizeBytes + (metrics.walSizeBytes ?? 0);
   const renderRow = (label: string, value: string): React.JSX.Element => (
     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
       <span>{label}</span>
-      <span className="font-mono text-xs text-gray-700">{value}</span>
+      <span className="font-mono text-xs text-foreground/85">{value}</span>
     </div>
   );
   return (
     <Card>
-      <CardHeader>
+      <CardHeader variant="section">
         <CardTitle className="text-base">Database storage</CardTitle>
         <CardDescription>On-disk footprint of the SQLite store.</CardDescription>
       </CardHeader>
@@ -196,13 +197,13 @@ function SecurityOverview(props: Readonly<{
   return (
             <div className="space-y-6">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Security overview</h2>
-                <p className="text-sm text-gray-500">A quick read of the instance-wide controls that protect access and runs.</p>
+                <h2 className="text-lg font-semibold text-foreground">Security overview</h2>
+                <p className="text-sm text-muted-foreground">A quick read of the instance-wide controls that protect access and runs.</p>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <Card>
-                  <CardHeader>
+                  <CardHeader variant="section">
                     <CardTitle className="text-base">Identity providers</CardTitle>
                     <CardDescription>Configured sign-in paths for this instance.</CardDescription>
                   </CardHeader>
@@ -219,64 +220,64 @@ function SecurityOverview(props: Readonly<{
                 <DatabaseStorageCard />
 
                 <Card>
-                  <CardHeader>
+                  <CardHeader variant="section">
                     <CardTitle className="text-base">Account safeguards</CardTitle>
                     <CardDescription>Local access and privileged-account posture.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>Local account signup</span>
-                      <span className={securitySummary.signupEnabled ? "font-medium text-amber-700" : "font-medium text-green-700"}>
+                      <span className={securitySummary.signupEnabled ? "font-medium text-warning" : "font-medium text-success"}>
                         {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>Site administrators</span>
-                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
+                      <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
                     </div>
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>Suspended users</span>
-                      <span className="font-medium text-gray-900">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
+                      <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
                     </div>
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardHeader>
+                  <CardHeader variant="section">
                     <CardTitle className="text-base">Execution isolation</CardTitle>
                     <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>Sandbox required</span>
-                      <span className={securitySummary.sandboxEnabled ? "font-medium text-green-700" : "font-medium text-amber-700"}>
+                      <span className={securitySummary.sandboxEnabled ? "font-medium text-success" : "font-medium text-warning"}>
                         {securitySummary.sandboxEnabled ? "Yes" : "No"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span>Sandbox available</span>
-                      <span className={securitySummary.sandboxAvailable ? "font-medium text-green-700" : "font-medium text-red-700"}>
+                      <span className={securitySummary.sandboxAvailable ? "font-medium text-success" : "font-medium text-destructive"}>
                         {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
                       </span>
                     </div>
                     {securitySummary.sandboxReason !== null && (
-                      <p className="text-xs text-gray-500">{securitySummary.sandboxReason}</p>
+                      <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
                     )}
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardHeader>
+                  <CardHeader variant="section">
                     <CardTitle className="text-base">Latest audit events</CardTitle>
                     <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <p className="text-2xl font-semibold text-gray-900">{auditLogs.length}</p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
+                    <p className="text-sm text-muted-foreground">
                       {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
                     </p>
                     {auditLogs[0]?.attributes.action !== undefined && (
-                      <p className="truncate text-sm text-gray-700">Latest: {auditLogs[0].attributes.action}</p>
+                      <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
                     )}
                     <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/audit"); }}>
                       Open audit log
@@ -302,15 +303,15 @@ function UsersAdmin(props: Readonly<{
   };
   return (
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
+              <CardHeader variant="section">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <CardTitle className="text-lg">Registered Users</CardTitle>
                     <CardDescription>Manage user accounts across this instance. Use the admin user creation form to add local accounts.</CardDescription>
                   </div>
                   <Button
                     size="sm"
-                    className="gap-2"
+                    className="gap-2 self-start sm:self-auto"
                     onClick={(): void => { setCreateDialogOpen(true); }}
                   >
                     <Plus className="h-4 w-4" />
@@ -319,50 +320,50 @@ function UsersAdmin(props: Readonly<{
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Username</th>
-                        <th className="px-4 py-3">Email</th>
-                        <th className="px-4 py-3">Site Admin</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">User ID</th>
-                        <th className="px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border overflow-x-auto">
+                  <Table className="w-full text-left text-sm">
+                    <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                      <TableRow>
+                        <TableHead className="px-4 py-3">Username</TableHead>
+                        <TableHead className="px-4 py-3">Email</TableHead>
+                        <TableHead className="px-4 py-3">Site Admin</TableHead>
+                        <TableHead className="px-4 py-3">Status</TableHead>
+                        <TableHead className="px-4 py-3">User ID</TableHead>
+                        <TableHead className="px-4 py-3">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y">
                       {users.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
+                        <TableRow>
+                          <TableCell colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
                             No users found.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : (
                         users.map((u): React.JSX.Element => (
-                          <tr key={u.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{u.attributes.username}</td>
-                            <td className="px-4 py-3 text-gray-600">{u.attributes.email ?? "—"}</td>
-                            <td className="px-4 py-3">
+                          <TableRow key={u.id} className="hover:bg-muted/50">
+                            <TableCell className="px-4 py-3 font-medium text-foreground">{u.attributes.username}</TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">{u.attributes.email ?? "—"}</TableCell>
+                            <TableCell className="px-4 py-3">
                               {u.attributes["is-site-admin"] === true ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700 border border-green-200">
+                                <span className="inline-flex items-center gap-1 rounded bg-success/10 px-2 py-0.5 text-xs font-semibold text-success border border-success/30">
                                   <CheckCircle2 className="h-3 w-3" /> Yes
                                 </span>
                               ) : (
-                                <span className="text-gray-400 text-xs">No</span>
+                                <span className="text-muted-foreground/70 text-xs">No</span>
                               )}
-                            </td>
-                            <td className="px-4 py-3">
+                            </TableCell>
+                            <TableCell className="px-4 py-3">
                               {u.attributes["is-suspended"] === true ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 border border-red-200">
+                                <span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive border border-destructive/30">
                                   Suspended
                                 </span>
                               ) : (
-                                <span className="text-gray-400 text-xs">Active</span>
+                                <span className="text-muted-foreground/70 text-xs">Active</span>
                               )}
-                            </td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{u.id}</td>
-                            <td className="px-4 py-3">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-xs font-mono text-muted-foreground/70">{u.id}</TableCell>
+                            <TableCell className="px-4 py-3">
                               <div className="flex gap-1.5 flex-wrap">
                                 {/* Promote / Demote Admin */}
                                 {u.attributes["is-site-admin"] === true ? (
@@ -415,12 +416,12 @@ function UsersAdmin(props: Readonly<{
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
                               </div>
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         ))
                       )}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -431,44 +432,44 @@ function OrgsAdmin(props: Readonly<{ orgs: DataItem[]; }>): React.JSX.Element {
   const { orgs } = props;
   return (
             <Card>
-              <CardHeader>
+              <CardHeader variant="section">
                 <CardTitle className="text-lg">Organizations</CardTitle>
                 <CardDescription>Overview of all active tenant organizations</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Organization Name</th>
-                        <th className="px-4 py-3">Default Engine</th>
-                        <th className="px-4 py-3">Default Version</th>
-                        <th className="px-4 py-3">Org ID</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border overflow-x-auto">
+                  <Table className="w-full text-left text-sm">
+                    <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                      <TableRow>
+                        <TableHead className="px-4 py-3">Organization Name</TableHead>
+                        <TableHead className="px-4 py-3">Default Engine</TableHead>
+                        <TableHead className="px-4 py-3">Default Version</TableHead>
+                        <TableHead className="px-4 py-3">Org ID</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y">
                       {orgs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                        <TableRow>
+                          <TableCell colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
                             No organizations found.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : (
                         orgs.map((o): React.JSX.Element => (
-                          <tr key={o.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{o.attributes.name}</td>
-                            <td className="px-4 py-3">
-                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">
+                          <TableRow key={o.id} className="hover:bg-muted/50">
+                            <TableCell className="px-4 py-3 font-medium text-foreground">{o.attributes.name}</TableCell>
+                            <TableCell className="px-4 py-3">
+                              <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary border border-primary/20">
                                 {o.attributes["iac-binary"] ?? "tofu"}
                               </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{o.attributes["default-terraform-version"] ?? "latest"}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{o.id}</td>
-                          </tr>
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">{o.attributes["default-terraform-version"] ?? "latest"}</TableCell>
+                            <TableCell className="px-4 py-3 text-xs font-mono text-muted-foreground/70">{o.id}</TableCell>
+                          </TableRow>
                         ))
                       )}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -479,48 +480,48 @@ function WorkspacesAdmin(props: Readonly<{ workspaces: DataItem[]; }>): React.JS
   const { workspaces } = props;
   return (
             <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Global Workspaces</CardTitle>
+              <CardHeader variant="section">
+                <CardTitle className="text-lg">Workspaces</CardTitle>
                 <CardDescription>Instance-wide inventory of managed infrastructure workspaces</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Workspace Name</th>
-                        <th className="px-4 py-3">Auto Apply</th>
-                        <th className="px-4 py-3">Lock Status</th>
-                        <th className="px-4 py-3">Workspace ID</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border overflow-x-auto">
+                  <Table className="w-full text-left text-sm">
+                    <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                      <TableRow>
+                        <TableHead className="px-4 py-3">Workspace Name</TableHead>
+                        <TableHead className="px-4 py-3">Auto Apply</TableHead>
+                        <TableHead className="px-4 py-3">Lock Status</TableHead>
+                        <TableHead className="px-4 py-3">Workspace ID</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y">
                       {workspaces.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                        <TableRow>
+                          <TableCell colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
                             No workspaces found.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : (
                         workspaces.map((w): React.JSX.Element => (
-                          <tr key={w.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{w.attributes.name}</td>
-                            <td className="px-4 py-3 text-gray-600">{w.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</td>
-                            <td className="px-4 py-3">
+                          <TableRow key={w.id} className="hover:bg-muted/50">
+                            <TableCell className="px-4 py-3 font-medium text-foreground">{w.attributes.name}</TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">{w.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</TableCell>
+                            <TableCell className="px-4 py-3">
                               {w.attributes.locked === true ? (
-                                <span className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 border border-amber-200">
+                                <span className="rounded bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning border border-warning/30">
                                   Locked
                                 </span>
                               ) : (
-                                <span className="text-gray-400 text-xs">Unlocked</span>
+                                <span className="text-muted-foreground/70 text-xs">Unlocked</span>
                               )}
-                            </td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{w.id}</td>
-                          </tr>
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-xs font-mono text-muted-foreground/70">{w.id}</TableCell>
+                          </TableRow>
                         ))
                       )}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -531,39 +532,39 @@ function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: 
   const { runs, handleCancelRun } = props;
   return (
             <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">System Runs Queue</CardTitle>
+              <CardHeader variant="section">
+                <CardTitle className="text-lg">System run queue</CardTitle>
                 <CardDescription>Monitor and control active execution runs</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Run ID</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">Message</th>
-                        <th className="px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border overflow-x-auto">
+                  <Table className="w-full text-left text-sm">
+                    <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                      <TableRow>
+                        <TableHead className="px-4 py-3">Run ID</TableHead>
+                        <TableHead className="px-4 py-3">Status</TableHead>
+                        <TableHead className="px-4 py-3">Message</TableHead>
+                        <TableHead className="px-4 py-3">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y">
                       {runs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                        <TableRow>
+                          <TableCell colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
                             No active runs found.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : (
                         runs.map((r): React.JSX.Element => (
-                          <tr key={r.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-900">{r.id}</td>
-                            <td className="px-4 py-3">
-                              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                          <TableRow key={r.id} className="hover:bg-muted/50">
+                            <TableCell className="px-4 py-3 font-mono text-xs font-semibold text-foreground">{r.id}</TableCell>
+                            <TableCell className="px-4 py-3">
+                              <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
                                 {r.attributes.status}
                               </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{r.attributes.message ?? "—"}</td>
-                            <td className="px-4 py-3">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">{r.attributes.message ?? "—"}</TableCell>
+                            <TableCell className="px-4 py-3">
                               {r.attributes.actions !== undefined && (
                                 <div className="flex gap-2">
                                   {r.attributes.actions["is-cancelable"] === true && (
@@ -578,12 +579,12 @@ function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: 
                                   )}
                                 </div>
                               )}
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         ))
                       )}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -605,15 +606,17 @@ function VersionsAdmin(props: Readonly<{
   return (
             <div className="space-y-6">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Register New Terraform Version</CardTitle>
+                <CardHeader variant="section">
+                  <CardTitle className="text-lg">Register a Terraform version</CardTitle>
                   <CardDescription>Add binary versions available for workspace execution</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleAddVersion} className="flex gap-4 items-end">
                     <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">Version</label>
+                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version">Version</label>
                       <Input
+                        id="admin-version"
+                        name="version"
                         placeholder="1.6.2"
                         value={newVersion}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewVersion(event.target.value); }}
@@ -621,17 +624,23 @@ function VersionsAdmin(props: Readonly<{
                       />
                     </div>
                     <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">Download URL (Optional)</label>
+                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-url">Download URL (Optional)</label>
                       <Input
-                        placeholder="https://releases.hashicorp.com/terraform/..."
+                        id="admin-version-url"
+                        name="download-url"
+                        type="url"
+                        placeholder="https://releases.hashicorp.com/terraform/…"
                         value={newUrl}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewUrl(event.target.value); }}
                       />
                     </div>
                     <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-gray-700">SHA256 (Optional)</label>
+                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-sha">SHA256 (Optional)</label>
                       <Input
-                        placeholder="a1b2c3..."
+                        id="admin-version-sha"
+                        name="sha256"
+                        autoComplete="off"
+                        placeholder="a1b2c3…"
                         value={newSha}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewSha(event.target.value); }}
                       />
@@ -644,49 +653,49 @@ function VersionsAdmin(props: Readonly<{
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Available Terraform / OpenTofu Versions</CardTitle>
+                <CardHeader variant="section">
+                  <CardTitle className="text-lg">Available Terraform and OpenTofu versions</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                        <tr>
-                          <th className="px-4 py-3">Version</th>
-                          <th className="px-4 py-3">URL</th>
-                          <th className="px-4 py-3">SHA256</th>
-                          <th className="px-4 py-3">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
+                  <div className="rounded-md border overflow-x-auto">
+                    <Table className="w-full text-left text-sm">
+                      <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                        <TableRow>
+                          <TableHead className="px-4 py-3">Version</TableHead>
+                          <TableHead className="px-4 py-3">URL</TableHead>
+                          <TableHead className="px-4 py-3">SHA256</TableHead>
+                          <TableHead className="px-4 py-3">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody className="divide-y">
                         {tfVersions.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                              No custom versions registered. (Defaulting to latest releases)
-                            </td>
-                          </tr>
+                          <TableRow>
+                            <TableCell colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
+                              No custom versions registered. Defaulting to the latest releases.
+                            </TableCell>
+                          </TableRow>
                         ) : (
                           tfVersions.map((v): React.JSX.Element => (
-                            <tr key={v.id} className="hover:bg-gray-50/50">
-                              <td className="px-4 py-3 font-semibold text-gray-900">{v.attributes.version}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500 truncate max-w-xs">{v.attributes.url ?? "Default download"}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{v.attributes.sha != null ? v.attributes.sha.slice(0, 12) + "..." : "—"}</td>
-                            <td className="px-4 py-3">
+                            <TableRow key={v.id} className="hover:bg-muted/50">
+                              <TableCell className="px-4 py-3 font-semibold text-foreground">{v.attributes.version}</TableCell>
+                            <TableCell className="px-4 py-3 text-xs text-muted-foreground truncate max-w-xs">{v.attributes.url ?? "Default download"}</TableCell>
+                            <TableCell className="px-4 py-3 text-xs font-mono text-muted-foreground/70">{v.attributes.sha != null ? v.attributes.sha.slice(0, 12) + "…" : "—"}</TableCell>
+                            <TableCell className="px-4 py-3">
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                className="text-red-600 hover:text-red-700"
+                                className="text-destructive hover:text-destructive"
                                 aria-label="Delete version"
                                 onClick={(): void => { setVersionToDelete({ id: v.id, label: v.attributes.version ?? v.id }); }}
                               >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
-                              </td>
-                            </tr>
+                              </TableCell>
+                            </TableRow>
                           ))
                         )}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                   </div>
                 </CardContent>
               </Card>
@@ -698,47 +707,47 @@ function AuditAdmin(props: Readonly<{ auditLogs: DataItem[]; }>): React.JSX.Elem
   const { auditLogs } = props;
   return (
             <Card>
-              <CardHeader>
+              <CardHeader variant="section">
                 <CardTitle className="text-lg">Instance Audit Trail</CardTitle>
                 <CardDescription>Security audit log of administrative actions</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-gray-50 border-b text-gray-500 font-medium">
-                      <tr>
-                        <th className="px-4 py-3">Timestamp</th>
-                        <th className="px-4 py-3">Action</th>
-                        <th className="px-4 py-3">Resource Type</th>
-                        <th className="px-4 py-3">Resource ID</th>
-                        <th className="px-4 py-3">Actor</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
+                <div className="rounded-md border overflow-x-auto">
+                  <Table className="w-full text-left text-sm">
+                    <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
+                      <TableRow>
+                        <TableHead className="px-4 py-3">Timestamp</TableHead>
+                        <TableHead className="px-4 py-3">Action</TableHead>
+                        <TableHead className="px-4 py-3">Resource Type</TableHead>
+                        <TableHead className="px-4 py-3">Resource ID</TableHead>
+                        <TableHead className="px-4 py-3">Actor</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y">
                       {auditLogs.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                        <TableRow>
+                          <TableCell colSpan={5} className="px-4 py-6 text-center text-muted-foreground">
                             No audit log entries recorded.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : (
                         auditLogs.map((log): React.JSX.Element => (
-                          <tr key={log.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 text-xs text-gray-500">{formatDateTime(log.attributes["created-at"])}</td>
-                            <td className="px-4 py-3 font-medium text-gray-900">{log.attributes.action}</td>
-                            <td className="px-4 py-3 text-gray-600">{log.attributes["resource-type"]}</td>
-                            <td className="px-4 py-3 text-xs font-mono text-gray-400">{log.attributes["resource-id"] ?? "—"}</td>
-                            <td className="px-4 py-3 text-gray-600">
+                          <TableRow key={log.id} className="hover:bg-muted/50">
+                            <TableCell className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(log.attributes["created-at"])}</TableCell>
+                            <TableCell className="px-4 py-3 font-medium text-foreground">{log.attributes.action}</TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">{log.attributes["resource-type"]}</TableCell>
+                            <TableCell className="px-4 py-3 text-xs font-mono text-muted-foreground/70">{log.attributes["resource-id"] ?? "—"}</TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">
                               {log.attributes["actor-username"] ?? log.attributes["actor-email"] ?? "System"}
                               {log.attributes["actor-email"] !== null && log.attributes["actor-email"] !== undefined && (
-                                <span className="block text-xs text-gray-400">{log.attributes["actor-email"]}</span>
+                                <span className="block text-xs text-muted-foreground/70">{log.attributes["actor-email"]}</span>
                               )}
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         ))
                       )}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -955,49 +964,54 @@ function AuthAdmin(props: Readonly<{
             <div className="space-y-8">
               {/* LOCAL AUTHENTICATION */}
               <Card>
-                <CardHeader>
+                <CardHeader variant="section">
                   <CardTitle className="text-lg">Local Authentication</CardTitle>
                   <CardDescription>Username and password sign-in for this instance</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {generalLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading sign-in settings...</div>
+                    <div role="status" className="py-6 text-center text-sm text-muted-foreground">Loading sign-in settings…</div>
                   ) : (
                     <form onSubmit={handleSaveGeneral} className="space-y-5">
                       {generalError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                        <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm flex items-center gap-2">
                           <AlertCircle className="h-4 w-4 shrink-0" />
                           <span>{generalError}</span>
                         </div>
                       )}
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
+                          id="local-auth-enabled"
+                          name="local-auth-enabled"
                           type="checkbox"
                           checked={localAuthEnabled}
                           onChange={(e): void => { setLocalAuthEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
+                          className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           aria-label="Allow local password authentication"
                         />
                         Allow local password authentication
                       </label>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-xs text-muted-foreground">
                         When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
                         configured). Existing local accounts cannot sign in with a password until this is re-enabled.
                       </p>
 
                       <div className="space-y-2 pt-1">
-                        <label htmlFor="trusted-client-ip-headers" className="block text-sm font-medium text-gray-900">
+                        <label htmlFor="trusted-client-ip-headers" className="block text-sm font-medium text-foreground">
                           Trusted client-IP headers
                         </label>
                         <input
                           id="trusted-client-ip-headers"
+                          name="trusted-client-ip-headers"
                           type="text"
+                          autoComplete="off"
+                          spellCheck={false}
                           value={trustedClientIpHeaders}
                           onChange={(e): void => { setTrustedClientIpHeaders(e.target.value); }}
                           placeholder="CF-Connecting-IP, X-Forwarded-For"
-                          className="h-9 w-full max-w-md rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          className="h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
                         />
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-muted-foreground">
                           Comma-separated proxy headers, ordered by priority, used to determine the real client IP
                           for browser sessions and rate limiting. Only set this when the app sits behind a trusting
                           reverse proxy (e.g. Cloudflare). Leave empty to always trust the direct connection.
@@ -1008,10 +1022,10 @@ function AuthAdmin(props: Readonly<{
                         disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
                         aria-label="Save sign-in settings"
                       >
-                        {generalSaving ? "Saving..." : "Save sign-in settings"}
+                        {generalSaving ? "Saving…" : "Save sign-in settings"}
                       </Button>
                       {(persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null) && (
-                        <p className="text-xs text-amber-700">Waiting for all SSO settings to load before saving local authentication.</p>
+                        <p className="text-xs text-warning">Waiting for all SSO settings to load before saving local authentication.</p>
                       )}
                     </form>
                   )}
@@ -1020,7 +1034,7 @@ function AuthAdmin(props: Readonly<{
 
               {/* SAML SSO */}
               <Card>
-                <CardHeader>
+                <CardHeader variant="section">
                   <div className="flex items-center justify-between">
                     <div>
                       <CardTitle className="text-lg">SAML SSO</CardTitle>
@@ -1030,11 +1044,11 @@ function AuthAdmin(props: Readonly<{
                 </CardHeader>
                 <CardContent>
                   {samlLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading SAML settings...</div>
+                    <div role="status" className="py-6 text-center text-sm text-muted-foreground">Loading SAML settings…</div>
                   ) : (
                     <form onSubmit={handleSaveSaml} className="space-y-5">
                       {samlError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                        <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm flex items-center gap-2">
                           <AlertCircle className="h-4 w-4 shrink-0" />
                           <span>{samlError}</span>
                         </div>
@@ -1042,38 +1056,47 @@ function AuthAdmin(props: Readonly<{
                       <div className="grid gap-5 sm:grid-cols-2">
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                           <input
+                            id="saml-enabled"
+                            name="saml-enabled"
                             type="checkbox"
                             checked={samlEnabled}
                             onChange={(e): void => { setSamlEnabled(e.target.checked); }}
-                            className="rounded border-gray-300"
+                            className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             aria-label="Enable SAML SSO"
                           />
                           Enable SAML SSO
                         </label>
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                           <input
+                            id="saml-debug"
+                            name="saml-debug"
                             type="checkbox"
                             checked={samlDebug}
                             onChange={(e): void => { setSamlDebug(e.target.checked); }}
-                            className="rounded border-gray-300"
+                            className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            aria-label="Enable SAML debug mode"
                           />
                           Debug mode
                         </label>
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                           <input
+                            id="saml-link-by-email"
+                            name="saml-link-by-email"
                             type="checkbox"
                             checked={samlLinkByEmail}
                             onChange={(e): void => { setSamlLinkByEmail(e.target.checked); }}
-                            className="rounded border-gray-300"
+                            className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             aria-label="Allow SAML email linking"
                           />
                           Link verified email addresses to existing accounts
                         </label>
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="saml-sso-url" className="text-xs font-medium text-gray-700">SSO Endpoint URL</label>
+                        <label htmlFor="saml-sso-url" className="text-xs font-medium text-foreground/85">SSO Endpoint URL</label>
                         <Input
                           id="saml-sso-url"
+                          name="saml-sso-url"
+                          autoComplete="url"
                           placeholder="https://idp.example.com/sso"
                           value={samlSsoUrl}
                           onChange={(e): void => { setSamlSsoUrl(e.target.value); }}
@@ -1081,9 +1104,11 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="saml-idp-entity-id" className="text-xs font-medium text-gray-700">IdP Entity ID</label>
+                        <label htmlFor="saml-idp-entity-id" className="text-xs font-medium text-foreground/85">IdP Entity ID</label>
                         <Input
                           id="saml-idp-entity-id"
+                          name="saml-idp-entity-id"
+                          autoComplete="url"
                           placeholder="https://idp.example.com/metadata"
                           value={samlIdpEntityId}
                           onChange={(e): void => { setSamlIdpEntityId(e.target.value); }}
@@ -1091,9 +1116,11 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="saml-slo-url" className="text-xs font-medium text-gray-700">SLO Endpoint URL</label>
+                        <label htmlFor="saml-slo-url" className="text-xs font-medium text-foreground/85">SLO Endpoint URL</label>
                         <Input
                           id="saml-slo-url"
+                          name="saml-slo-url"
+                          autoComplete="url"
                           placeholder="https://idp.example.com/slo"
                           value={samlSloUrl}
                           onChange={(e): void => { setSamlSloUrl(e.target.value); }}
@@ -1101,54 +1128,75 @@ function AuthAdmin(props: Readonly<{
                         />
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="saml-idp-cert" className="text-xs font-medium text-gray-700">IdP Certificate (PEM)</label>
-                        <Input
+                        <label htmlFor="saml-idp-cert" className="text-xs font-medium text-foreground/85">IdP Certificate (PEM)</label>
+                        <textarea
                           id="saml-idp-cert"
+                          name="saml-idp-certificate"
+                          autoComplete="off"
+                          spellCheck={false}
+                          rows={5}
                           placeholder="Paste IdP certificate"
                           value={samlIdpCert}
                           onChange={(e): void => { setSamlIdpCert(e.target.value); }}
+                          aria-label="IdP Certificate (PEM)"
+                          className="min-h-28 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
                       </div>
                       <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-3">Attribute mappings</p>
+                        <p className="text-xs font-semibold text-foreground/85 mb-3">Attribute mappings</p>
                         <div className="grid gap-4 sm:grid-cols-2">
                           <div className="space-y-1">
-                            <label htmlFor="saml-attr-username" className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <label htmlFor="saml-attr-username" className="text-xs font-medium text-foreground/85">Username attribute</label>
                             <Input
                               id="saml-attr-username"
+                              name="saml-username-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={samlAttrUsername}
                               onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="saml-attr-groups" className="text-xs font-medium text-gray-700">Groups attribute</label>
+                            <label htmlFor="saml-attr-groups" className="text-xs font-medium text-foreground/85">Groups attribute</label>
                             <Input
                               id="saml-attr-groups"
+                              name="saml-groups-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={samlAttrGroups}
                               onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="saml-attr-email" className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <label htmlFor="saml-attr-email" className="text-xs font-medium text-foreground/85">Email attribute</label>
                             <Input
                               id="saml-attr-email"
+                              name="saml-email-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={samlAttrEmail}
                               onChange={(e): void => { setSamlAttrEmail(e.target.value); }}
                               aria-label="SAML email attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="saml-attr-site-admin" className="text-xs font-medium text-gray-700">Site admin attribute</label>
+                            <label htmlFor="saml-attr-site-admin" className="text-xs font-medium text-foreground/85">Site admin attribute</label>
                             <Input
                               id="saml-attr-site-admin"
+                              name="saml-site-admin-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={samlAttrSiteAdmin}
                               onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="saml-site-admin-role" className="text-xs font-medium text-gray-700">Site admin role value</label>
+                            <label htmlFor="saml-site-admin-role" className="text-xs font-medium text-foreground/85">Site admin role value</label>
                             <Input
                               id="saml-site-admin-role"
+                              name="saml-site-admin-role"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={samlSiteAdminRole}
                               onChange={(e): void => { setSamlSiteAdminRole(e.target.value); }}
                             />
@@ -1156,32 +1204,34 @@ function AuthAdmin(props: Readonly<{
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="saml-timeout" className="text-xs font-medium text-gray-700">SSO API token session timeout (seconds)</label>
+                        <label htmlFor="saml-timeout" className="text-xs font-medium text-foreground/85">SSO API token session timeout (seconds)</label>
                         <Input
                           id="saml-timeout"
+                          name="saml-session-timeout"
+                          inputMode="numeric"
                           type="number"
                           value={samlTimeout}
                           onChange={(e): void => { setSamlTimeout(Number(e.target.value)); }}
                         />
                       </div>
                       <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-2">Service provider endpoints</p>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs font-semibold text-foreground/85 mb-2">Service provider endpoints</p>
+                        <p className="text-xs text-muted-foreground">
                           Use these URLs to register this instance with your identity provider.
                         </p>
                         <dl className="mt-2 space-y-1 text-xs">
                           <div className="flex flex-col gap-0.5">
-                            <dt className="font-medium text-gray-700">ACS consumer URL</dt>
-                            <dd className="break-all text-gray-600 font-mono">{samlAcsUrl !== "" ? samlAcsUrl : "—"}</dd>
+                            <dt className="font-medium text-foreground/85">ACS consumer URL</dt>
+                            <dd className="break-all text-muted-foreground font-mono">{samlAcsUrl !== "" ? samlAcsUrl : "—"}</dd>
                           </div>
                           <div className="flex flex-col gap-0.5">
-                            <dt className="font-medium text-gray-700">Metadata URL</dt>
-                            <dd className="break-all text-gray-600 font-mono">{samlMetadataUrl !== "" ? samlMetadataUrl : "—"}</dd>
+                            <dt className="font-medium text-foreground/85">Metadata URL</dt>
+                            <dd className="break-all text-muted-foreground font-mono">{samlMetadataUrl !== "" ? samlMetadataUrl : "—"}</dd>
                           </div>
                         </dl>
                       </div>
                       <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
-                        {samlSaving ? "Saving..." : "Save SAML settings"}
+                        {samlSaving ? "Saving…" : "Save SAML settings"}
                       </Button>
                     </form>
                   )}
@@ -1190,46 +1240,52 @@ function AuthAdmin(props: Readonly<{
 
               {/* OIDC */}
               <Card>
-                <CardHeader>
+                <CardHeader variant="section">
                   <CardTitle className="text-lg">OpenID Connect</CardTitle>
                   <CardDescription>OpenID Connect provider configuration</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {oidcLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading OIDC settings...</div>
+                    <div role="status" className="py-6 text-center text-sm text-muted-foreground">Loading OIDC settings…</div>
                   ) : (
                     <form onSubmit={handleSaveOidc} className="space-y-5">
                       {oidcError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                        <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm flex items-center gap-2">
                           <AlertCircle className="h-4 w-4 shrink-0" />
                           <span>{oidcError}</span>
                         </div>
                       )}
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
+                          id="oidc-enabled"
+                          name="oidc-enabled"
                           type="checkbox"
                           checked={oidcEnabled}
                           onChange={(e): void => { setOidcEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
+                          className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           aria-label="Enable OIDC"
                         />
                         Enable OpenID Connect
                       </label>
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
+                          id="oidc-link-by-email"
+                          name="oidc-link-by-email"
                           type="checkbox"
                           checked={oidcLinkByEmail}
                           onChange={(e): void => { setOidcLinkByEmail(e.target.checked); }}
-                          className="rounded border-gray-300"
+                          className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           aria-label="Allow OIDC email linking"
                         />
                         Link verified email addresses to existing accounts
                       </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">
-                          <label htmlFor="oidc-issuer" className="text-xs font-medium text-gray-700">Issuer URL</label>
+                          <label htmlFor="oidc-issuer" className="text-xs font-medium text-foreground/85">Issuer URL</label>
                           <Input
                             id="oidc-issuer"
+                            name="oidc-issuer"
+                            autoComplete="url"
                             placeholder="https://accounts.example.com"
                             value={oidcIssuer}
                             onChange={(e): void => { setOidcIssuer(e.target.value); }}
@@ -1237,18 +1293,23 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="oidc-client-id" className="text-xs font-medium text-gray-700">Client ID</label>
+                          <label htmlFor="oidc-client-id" className="text-xs font-medium text-foreground/85">Client ID</label>
                           <Input
                             id="oidc-client-id"
+                            name="oidc-client-id"
+                            autoComplete="off"
+                            spellCheck={false}
                             value={oidcClientId}
                             onChange={(e): void => { setOidcClientId(e.target.value); }}
                             aria-label="Client ID"
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="oidc-client-secret" className="text-xs font-medium text-gray-700">Client Secret</label>
+                          <label htmlFor="oidc-client-secret" className="text-xs font-medium text-foreground/85">Client Secret</label>
                           <Input
                             id="oidc-client-secret"
+                            name="oidc-client-secret"
+                            autoComplete="new-password"
                             type="password"
                             placeholder={oidcClientSecretSet ? "····· (leave blank to keep)" : undefined}
                             value={oidcClientSecret}
@@ -1256,29 +1317,36 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="oidc-scopes" className="text-xs font-medium text-gray-700">Scopes</label>
+                          <label htmlFor="oidc-scopes" className="text-xs font-medium text-foreground/85">Scopes</label>
                           <Input
                             id="oidc-scopes"
+                            name="oidc-scopes"
+                            autoComplete="off"
+                            spellCheck={false}
                             value={oidcScopes}
                             onChange={(e): void => { setOidcScopes(e.target.value); }}
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="oidc-pkce-method" className="text-xs font-medium text-gray-700">PKCE Method</label>
+                          <label htmlFor="oidc-pkce-method" className="text-xs font-medium text-foreground/85">PKCE Method</label>
                           <Input
                             id="oidc-pkce-method"
+                            name="oidc-pkce-method"
+                            autoComplete="off"
+                            spellCheck={false}
                             placeholder="S256"
                             value={oidcPkceMethod}
                             onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="oidc-signing-alg" className="text-xs font-medium text-gray-700">ID token signing algorithm</label>
+                          <label htmlFor="oidc-signing-alg" className="text-xs font-medium text-foreground/85">ID token signing algorithm</label>
                           <select
                             id="oidc-signing-alg"
+                            name="oidc-signing-algorithm"
                             value={oidcSigningAlg}
                             onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                             aria-label="OIDC signing algorithm"
                           >
                             <option value="">Provider-advertised asymmetric algorithm</option>
@@ -1290,7 +1358,7 @@ function AuthAdmin(props: Readonly<{
                         </div>
                       </div>
                       <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
-                        {oidcSaving ? "Saving..." : "Save OIDC settings"}
+                        {oidcSaving ? "Saving…" : "Save OIDC settings"}
                       </Button>
                     </form>
                   )}
@@ -1299,46 +1367,53 @@ function AuthAdmin(props: Readonly<{
 
               {/* LDAP */}
               <Card>
-                <CardHeader>
+                <CardHeader variant="section">
                   <CardTitle className="text-lg">LDAP</CardTitle>
                   <CardDescription>Lightweight Directory Access Protocol password authentication</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {ldapLoading ? (
-                    <div className="py-6 text-center text-sm text-gray-500">Loading LDAP settings...</div>
+                    <div role="status" className="py-6 text-center text-sm text-muted-foreground">Loading LDAP settings…</div>
                   ) : (
                     <form onSubmit={handleSaveLdap} className="space-y-5">
                       {ldapError !== null && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
+                        <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm flex items-center gap-2">
                           <AlertCircle className="h-4 w-4 shrink-0" />
                           <span>{ldapError}</span>
                         </div>
                       )}
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
+                          id="ldap-enabled"
+                          name="ldap-enabled"
                           type="checkbox"
                           checked={ldapEnabled}
                           onChange={(e): void => { setLdapEnabled(e.target.checked); }}
-                          className="rounded border-gray-300"
+                          className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           aria-label="Enable LDAP"
                         />
                         Enable LDAP authentication
                       </label>
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
+                          id="ldap-link-by-email"
+                          name="ldap-link-by-email"
                           type="checkbox"
                           checked={ldapLinkByEmail}
                           onChange={(e): void => { setLdapLinkByEmail(e.target.checked); }}
-                          className="rounded border-gray-300"
+                          className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           aria-label="Allow LDAP email linking"
                         />
                         Link directory email addresses to existing accounts
                       </label>
                       <div className="grid gap-5 sm:grid-cols-2">
                         <div className="space-y-1">
-                          <label htmlFor="ldap-host" className="text-xs font-medium text-gray-700">Host</label>
+                          <label htmlFor="ldap-host" className="text-xs font-medium text-foreground/85">Host</label>
                           <Input
                             id="ldap-host"
+                            name="ldap-host"
+                            autoComplete="off"
+                            spellCheck={false}
                             placeholder="ldap.example.com"
                             value={ldapHost}
                             onChange={(e): void => { setLdapHost(e.target.value); }}
@@ -1346,9 +1421,11 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="ldap-port" className="text-xs font-medium text-gray-700">Port</label>
+                          <label htmlFor="ldap-port" className="text-xs font-medium text-foreground/85">Port</label>
                           <Input
                             id="ldap-port"
+                            name="ldap-port"
+                            inputMode="numeric"
                             type="number"
                             value={ldapPort}
                             onChange={(e): void => { setLdapPort(Number(e.target.value)); }}
@@ -1356,12 +1433,13 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="ldap-encryption" className="text-xs font-medium text-gray-700">Encryption</label>
+                          <label htmlFor="ldap-encryption" className="text-xs font-medium text-foreground/85">Encryption</label>
                           <select
                             id="ldap-encryption"
+                            name="ldap-encryption"
                             value={ldapEncryption}
                             onChange={(e): void => { setLdapEncryption(e.target.value); }}
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                             aria-label="LDAP encryption"
                           >
                             <option value="plain">Plain (LDAP)</option>
@@ -1369,16 +1447,19 @@ function AuthAdmin(props: Readonly<{
                             <option value="ldaps">LDAPS</option>
                           </select>
                           {ldapEncryption === "plain" && (
-                            <p className="text-xs text-amber-700">
+                            <p className="text-xs text-warning">
                               Warning: plain LDAP transmits the bind password and user passwords without
                               encryption. Use StartTLS or LDAPS when possible.
                             </p>
                           )}
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="ldap-base-dn" className="text-xs font-medium text-gray-700">Base DN</label>
+                          <label htmlFor="ldap-base-dn" className="text-xs font-medium text-foreground/85">Base DN</label>
                           <Input
                             id="ldap-base-dn"
+                            name="ldap-base-dn"
+                            autoComplete="off"
+                            spellCheck={false}
                             placeholder="dc=example,dc=com"
                             value={ldapBaseDn}
                             onChange={(e): void => { setLdapBaseDn(e.target.value); }}
@@ -1386,9 +1467,12 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="ldap-bind-dn" className="text-xs font-medium text-gray-700">Bind DN (service account, optional)</label>
+                          <label htmlFor="ldap-bind-dn" className="text-xs font-medium text-foreground/85">Bind DN (service account, optional)</label>
                           <Input
                             id="ldap-bind-dn"
+                            name="ldap-bind-dn"
+                            autoComplete="off"
+                            spellCheck={false}
                             placeholder="cn=service,dc=example,dc=com"
                             value={ldapBindDn}
                             onChange={(e): void => { setLdapBindDn(e.target.value); }}
@@ -1396,9 +1480,11 @@ function AuthAdmin(props: Readonly<{
                           />
                         </div>
                         <div className="space-y-1">
-                          <label htmlFor="ldap-bind-password" className="text-xs font-medium text-gray-700">Bind password</label>
+                          <label htmlFor="ldap-bind-password" className="text-xs font-medium text-foreground/85">Bind password</label>
                           <Input
                             id="ldap-bind-password"
+                            name="ldap-bind-password"
+                            autoComplete="new-password"
                             type="password"
                             placeholder={ldapBindPasswordSet ? "····· (leave blank to keep)" : undefined}
                             value={ldapBindPassword}
@@ -1408,53 +1494,65 @@ function AuthAdmin(props: Readonly<{
                         </div>
                       </div>
                       <div className="border-t pt-4">
-                        <p className="text-xs font-semibold text-gray-700 mb-3">User mapping</p>
+                        <p className="text-xs font-semibold text-foreground/85 mb-3">User mapping</p>
                         <div className="grid gap-4 sm:grid-cols-2">
                           <div className="space-y-1">
-                            <label htmlFor="ldap-user-filter" className="text-xs font-medium text-gray-700">User filter (containing &#123;&#123;username&#125;&#125;)</label>
+                            <label htmlFor="ldap-user-filter" className="text-xs font-medium text-foreground/85">User filter (containing &#123;&#123;username&#125;&#125;)</label>
                             <Input
                               id="ldap-user-filter"
+                              name="ldap-user-filter"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={ldapUserFilter}
                               onChange={(e): void => { setLdapUserFilter(e.target.value); }}
                               aria-label="LDAP user filter"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="ldap-attr-username" className="text-xs font-medium text-gray-700">Username attribute</label>
+                            <label htmlFor="ldap-attr-username" className="text-xs font-medium text-foreground/85">Username attribute</label>
                             <Input
                               id="ldap-attr-username"
+                              name="ldap-username-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={ldapAttrUsername}
                               onChange={(e): void => { setLdapAttrUsername(e.target.value); }}
                               aria-label="LDAP username attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="ldap-attr-email" className="text-xs font-medium text-gray-700">Email attribute</label>
+                            <label htmlFor="ldap-attr-email" className="text-xs font-medium text-foreground/85">Email attribute</label>
                             <Input
                               id="ldap-attr-email"
+                              name="ldap-email-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={ldapAttrEmail}
                               onChange={(e): void => { setLdapAttrEmail(e.target.value); }}
                               aria-label="LDAP email attribute"
                             />
                           </div>
                           <div className="space-y-1">
-                            <label htmlFor="ldap-attr-display-name" className="text-xs font-medium text-gray-700">Display name attribute</label>
+                            <label htmlFor="ldap-attr-display-name" className="text-xs font-medium text-foreground/85">Display name attribute</label>
                             <Input
                               id="ldap-attr-display-name"
+                              name="ldap-display-name-attribute"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={ldapAttrDisplayName}
                               onChange={(e): void => { setLdapAttrDisplayName(e.target.value); }}
                               aria-label="LDAP display name attribute"
                             />
                           </div>
                         </div>
-                        <p className="mt-3 text-xs text-gray-500">
+                        <p className="mt-3 text-xs text-muted-foreground">
                           The sign-in form first attempts LDAP, then falls back to local passwords (when enabled).
                           A user who already exists locally with the same username will block LDAP provisioning to
                           avoid account takeover.
                         </p>
                       </div>
                       <Button type="submit" disabled={ldapSaving} aria-label="Save LDAP settings">
-                        {ldapSaving ? "Saving..." : "Save LDAP settings"}
+                        {ldapSaving ? "Saving…" : "Save LDAP settings"}
                       </Button>
                     </form>
                   )}
@@ -2045,36 +2143,40 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     });
   };
 
-  if (!accountLoaded) return <p className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
+  if (!accountLoaded) return <p role="status" className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
   if (!siteAdmin) return <Navigate to="/app" replace />;
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
-      <div className="flex items-center justify-between border-b pb-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-100 rounded-lg text-blue-700">
-            <Shield className="h-6 w-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Site Administration</h1>
-            <p className="text-sm text-gray-500">Instance-wide governance, security, and version management</p>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={(): void => { void loadAdminData(); }} className="gap-2">
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </Button>
-      </div>
+    <PageShell className="max-w-7xl space-y-8">
+      <PageHeader
+        eyebrow="Administration"
+        title={(
+          <span className="flex items-center gap-2">
+            <Shield className="size-7 text-primary" aria-hidden="true" />
+            Site administration
+          </span>
+        )}
+        description="Instance-wide governance, security, and version management."
+        action={(
+          <Button variant="outline" size="sm" onClick={(): void => { void loadAdminData(); }} className="gap-2">
+            <RefreshCw className="size-4" aria-hidden="true" />
+            Refresh
+          </Button>
+        )}
+      />
 
       {error != null && error !== "" && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 shrink-0" />
+        <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
           <span>{error}</span>
         </div>
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-gray-500 text-sm">Loading admin resources...</div>
+        <div role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+          <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
+          Loading admin resources…
+        </div>
       ) : (
         <>
           {/* SECURITY OVERVIEW TAB */}
@@ -2267,11 +2369,15 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           </DialogHeader>
           <form onSubmit={handleCreateUser} className="flex flex-col gap-4">
             {createUserError !== null && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{createUserError}</div>
+              <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm">{createUserError}</div>
             )}
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-700">Username *</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-username">Username *</label>
               <Input
+                id="admin-new-username"
+                name="username"
+                autoComplete="username"
+                spellCheck={false}
                 placeholder="jdoe"
                 value={newUsername}
                 onChange={(e): void => { setNewUsername(e.target.value); }}
@@ -2279,18 +2385,24 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-700">Email (optional)</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-email">Email (optional)</label>
               <Input
+                id="admin-new-email"
+                name="email"
                 type="email"
+                autoComplete="email"
                 placeholder="jdoe@example.com"
                 value={newEmail}
                 onChange={(e): void => { setNewEmail(e.target.value); }}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-700">Password *</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-password">Password *</label>
               <Input
+                id="admin-new-password"
+                name="password"
                 type="password"
+                autoComplete="new-password"
                 placeholder="At least 10 characters"
                 value={newPassword}
                 onChange={(e): void => { setNewPassword(e.target.value); }}
@@ -2300,10 +2412,13 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
             </div>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
+                id="new-user-site-admin"
+                name="site-admin"
                 type="checkbox"
                 checked={newIsAdmin}
                 onChange={(e): void => { setNewIsAdmin(e.target.checked); }}
-                className="rounded border-gray-300"
+                className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Grant site admin privileges"
               />
               Grant site admin privileges
             </label>
@@ -2312,7 +2427,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 Cancel
               </Button>
               <Button type="submit" disabled={creatingUser}>
-                {creatingUser ? "Creating..." : "Create User"}
+                {creatingUser ? "Creating…" : "Create User"}
               </Button>
             </DialogFooter>
           </form>
@@ -2334,6 +2449,6 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           }
         }}
       />
-    </div>
+    </PageShell>
   );
 }

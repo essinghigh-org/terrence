@@ -292,6 +292,9 @@ export function WorkspaceVariables({
                 <FieldLabel htmlFor="workspace-variable-key">Key</FieldLabel>
                 <Input
                   id="workspace-variable-key"
+                  name="variable-key"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={key}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setKey(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setKey(event.currentTarget.value); }}
@@ -303,6 +306,9 @@ export function WorkspaceVariables({
                 <FieldLabel htmlFor="workspace-variable-value">Value</FieldLabel>
                 <Input
                   id="workspace-variable-value"
+                  name="variable-value"
+                  autoComplete="off"
+                  spellCheck={false}
                   type={sensitive ? "password" : "text"}
                   value={value}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setValue(event.target.value); }}
@@ -316,6 +322,7 @@ export function WorkspaceVariables({
                 <FieldLabel htmlFor="workspace-variable-category">Category</FieldLabel>
                 <Select
                   id="workspace-variable-category"
+                  name="variable-category"
                   value={category}
                   onValueChange={(next: string): void => { setCategory(next as VariableCategory); }}
                 >
@@ -327,6 +334,9 @@ export function WorkspaceVariables({
                 <FieldLabel htmlFor="workspace-variable-description">Description</FieldLabel>
                 <Input
                   id="workspace-variable-description"
+                  name="variable-description"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={description}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDescription(event.target.value); }}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(event.currentTarget.value); }}

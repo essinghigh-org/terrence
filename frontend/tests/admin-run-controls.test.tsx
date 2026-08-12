@@ -135,6 +135,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   const userDialog = view.getByRole("dialog");
   expect(within(userDialog).getByText(/Permanently delete user "henry\.essing"\?/)).toBeTruthy();
   expect(within(userDialog).getByText(/cannot be undone/)).toBeTruthy();
+  fireEvent.input(within(userDialog).getByRole("textbox"), { target: { value: "henry.essing" } });
   fireEvent.click(within(userDialog).getByRole("button", { name: "Delete User" }));
   await waitFor((): void => {
     expect(deleted).toContain("user");
@@ -159,6 +160,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   const versionDialog = versionsView.getByRole("dialog", { name: "Delete Terraform Version" });
   expect(within(versionDialog).getByText(/Permanently delete version "1\.11\.0"/)).toBeTruthy();
   expect(within(versionDialog).getByText(/cannot be undone/)).toBeTruthy();
+  fireEvent.input(within(versionDialog).getByRole("textbox"), { target: { value: "1.11.0" } });
   fireEvent.click(within(versionDialog).getByRole("button", { name: "Delete Version" }));
   await waitFor((): void => {
     expect(deleted).toContain("version");

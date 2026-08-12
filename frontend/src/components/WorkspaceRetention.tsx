@@ -86,12 +86,12 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="retention-count">Keep state versions</FieldLabel>
-              <Input id="retention-count" type="number" min="0" value={count} onChange={(event): void => { setCount(Number(event.target.value)); }} />
+              <Input id="retention-count" name="state-versions-count" type="number" inputMode="numeric" min="0" value={count} onChange={(event): void => { setCount(Number(event.target.value)); }} />
               <FieldDescription>Set to 0 to use age-based retention only.</FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="retention-days">Delete versions older than (days)</FieldLabel>
-              <Input id="retention-days" type="number" min="0" value={days} onChange={(event): void => { setDays(Number(event.target.value)); }} />
+              <Input id="retention-days" name="delete-older-than-days" type="number" inputMode="numeric" min="0" value={days} onChange={(event): void => { setDays(Number(event.target.value)); }} />
               <FieldDescription>Set to 0 to retain state indefinitely by age.</FieldDescription>
             </Field>
             <FieldError>{error}</FieldError>
@@ -99,7 +99,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
         </CardContent>
         <CardFooter className="justify-between">
           <span role="status" className="text-sm text-muted-foreground">{notice || (policy === null ? "No policy configured." : "")}</span>
-          <Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}Save policy</Button>
+          <Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{saving ? "Saving…" : "Save policy"}</Button>
         </CardFooter>
       </Card>
     </form>

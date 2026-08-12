@@ -38,11 +38,12 @@ import { getTablePreferences, setTablePreferences } from "@/lib/table-preference
 import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/lib/workspace-shortcuts";
 import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
 /** Toggleable table columns (kanban 14.21). "workspace" is always shown. */
-const WORKSPACE_TABLE_COLUMNS: Readonly<{ id: string; label: string }[]> = [
+const WORKSPACE_TABLE_COLUMNS: readonly { id: string; label: string }[] = [
   { id: "repository", label: "Repository" },
   { id: "tags", label: "Tags" },
   { id: "project", label: "Project" },
@@ -124,12 +125,12 @@ export function Workspaces(): React.JSX.Element {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useSyncedSearchParam("status", "");
   const [projectFilter, setProjectFilter] = useState("");
-  const [density, setDensity] = useState<TableDensity>(() => {
+  const [density, setDensity] = useState<TableDensity>((): TableDensity => {
     const prefs = getTablePreferences("workspaces");
     return prefs?.density ?? "comfortable";
   });
   const [pinsRevision, setPinsRevision] = useState(0);
-  const [savedViews, setSavedViews] = useState<SavedView[]>(() => getSavedViews(orgName));
+  const [savedViews, setSavedViews] = useState<SavedView[]>((): SavedView[] => getSavedViews(orgName));
   const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
   const [activeViewName, setActiveViewName] = useState("");
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
@@ -392,44 +393,43 @@ export function Workspaces(): React.JSX.Element {
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
 
   return (
-    <div className="flex w-full flex-col gap-6">
-      <header className="flex items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <p className="text-xs text-muted-foreground">{orgName} / Workspaces</p>
-          <h1 className="text-3xl font-bold tracking-tight">Workspaces</h1>
-        </div>
-        {canManageWorkspaces && (
+    <PageShell className="max-w-7xl">
+      <PageHeader
+        eyebrow={orgName}
+        title="Workspaces"
+        description="Review workspace health, current runs, and configuration at a glance."
+        action={canManageWorkspaces ? (
           <Button onClick={(): void => { setCreateOpen(true); }}>
             <Plus data-icon="inline-start" />
             New workspace
           </Button>
-        )}
-      </header>
+        ) : undefined}
+      />
 
       {/* Top KPI Metrics Bar */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{totalsUnavailable ? "—" : totalWorkspaceCount}</div>
+          <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : totalWorkspaceCount}</div>
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
-          <div className="mt-1 text-2xl font-bold text-primary">{activeRunsCount}</div>
+          <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{activeRunsCount}</div>
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
-          <div className={cn("mt-1 text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
+          <div className={cn("mt-1 tabular-nums text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
             {attentionNeededCount}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
-          <div className="mt-1 text-2xl font-bold">{totalsUnavailable ? "—" : lockedWorkspaceCount}</div>
+          <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : lockedWorkspaceCount}</div>
         </div>
       </div>
 
       {totalsUnavailable && (
-        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
+        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           Organization-wide workspace totals are stale: the workspace count could not be refreshed while a status filter is active.
         </p>
       )}
@@ -463,8 +463,12 @@ export function Workspaces(): React.JSX.Element {
           </div>
         )}
         <Input
+          id="workspace-search"
+          name="workspace-search"
+          type="search"
+          autoComplete="off"
           aria-label="Search workspaces"
-          placeholder="Search by workspace name or tag"
+          placeholder="Search by workspace name or tag…"
           className="min-w-[9rem] max-w-md flex-1"
           value={search}
           onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
@@ -473,7 +477,7 @@ export function Workspaces(): React.JSX.Element {
           }}
         />
         <div className="w-36 shrink-0">
-          <Select aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
+          <Select id="workspace-status-filter" name="status" aria-label="Status filter" value={statusFilter} onValueChange={(value: string): void => {
             setStatusFilter(value);
             setActiveViewName("");
           }}>
@@ -486,7 +490,7 @@ export function Workspaces(): React.JSX.Element {
           </Select>
         </div>
         <div className="w-36 shrink-0">
-          <Select aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
+          <Select id="workspace-project-filter" name="project" aria-label="Project filter" value={projectFilter} onValueChange={(value: string): void => {
             setProjectFilter(value);
             setActiveViewName("");
           }}>
@@ -572,12 +576,12 @@ export function Workspaces(): React.JSX.Element {
       </section>
 
       {runStatusError && (
-        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
+        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           Run statuses could not be refreshed. Workspace results and filters are still available.
         </p>
       )}
       {projectDataError && (
-        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
+        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           Projects could not be refreshed. Workspace results are still available.
         </p>
       )}
@@ -656,7 +660,7 @@ export function Workspaces(): React.JSX.Element {
                         className={cn(
                           "size-3.5",
                           isWorkspacePinned(orgName, workspace.attributes.name)
-                            ? "fill-amber-400 text-amber-500"
+                            ? "fill-warning text-warning"
                             : "text-muted-foreground",
                         )}
                         aria-hidden="true"
@@ -698,7 +702,7 @@ export function Workspaces(): React.JSX.Element {
                     ) : (
                       <div className="max-w-64">
                         <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
-                        {(() => {
+                        {((): React.JSX.Element | null => {
                           const created = latestRuns.get(workspace.id)?.attributes["created-at"];
                           if (created === undefined || created === "") return null;
                           return (
@@ -760,6 +764,8 @@ export function Workspaces(): React.JSX.Element {
                 <FieldLabel htmlFor="workspace-tag-key">Key</FieldLabel>
                 <Input
                   id="workspace-tag-key"
+                  name="tag-key"
+                  autoComplete="off"
                   value={tagKey}
                   disabled={editingTagKey !== null}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTagKey(event.currentTarget.value); }}
@@ -769,6 +775,8 @@ export function Workspaces(): React.JSX.Element {
                 <FieldLabel htmlFor="workspace-tag-value">Value</FieldLabel>
                 <Input
                   id="workspace-tag-value"
+                  name="tag-value"
+                  autoComplete="off"
                   value={tagValue}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setTagValue(event.currentTarget.value); }}
                 />
@@ -860,10 +868,12 @@ export function Workspaces(): React.JSX.Element {
                 <FieldLabel htmlFor="saved-view-name">View name</FieldLabel>
                 <Input
                   id="saved-view-name"
+                  name="view-name"
+                  autoComplete="off"
                   value={viewName}
                   autoFocus
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setViewName(event.currentTarget.value); }}
-                  placeholder="e.g. Production attention"
+                  placeholder="e.g. Production attention…"
                 />
               </Field>
             </FieldGroup>
@@ -874,6 +884,6 @@ export function Workspaces(): React.JSX.Element {
           </form>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

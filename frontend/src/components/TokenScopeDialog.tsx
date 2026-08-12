@@ -438,14 +438,20 @@ export function TokenScopeDialog({
       return (
         <div className="flex items-center gap-2">
           <Input
+            name={`tag-key-${path.join("-")}`}
             aria-label="Tag key"
+            autoComplete="off"
+            spellCheck={false}
             placeholder="key (e.g. environment)"
             value={node.key}
             onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, e.currentTarget.value, node.value); }}
             className="h-9"
           />
           <Input
+            name={`tag-value-${path.join("-")}`}
             aria-label="Tag value"
+            autoComplete="off"
+            spellCheck={false}
             placeholder="value (e.g. production)"
             value={node.value}
             onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, node.key, e.currentTarget.value); }}
@@ -463,7 +469,7 @@ export function TokenScopeDialog({
           {!isRoot && <span aria-hidden="true" className="text-muted-foreground">(</span>}
           <select
             aria-label="Combine with"
-            className="h-8 rounded-md border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="h-8 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
             value={node.combinator}
             onChange={(e): void => { setCombinator(path, e.target.value as "AND" | "OR"); }}
           >
@@ -475,7 +481,7 @@ export function TokenScopeDialog({
           <Button type="button" variant="outline" size="sm" onClick={(): void => { addGroup(path); }}>Add group</Button>
           {!isRoot && <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} aria-label="Remove group">✕</Button>}
         </div>
-        <div className="space-y-1.5 border-l border-gray-200 pl-3">
+        <div className="space-y-1.5 border-l border-border pl-3">
           {node.rules.map((child, index): React.JSX.Element => (
             <div key={index} className="space-y-1.5">
               {renderRuleRow(child, [...path, index])}
@@ -500,7 +506,7 @@ export function TokenScopeDialog({
         <div className="space-y-5">
           <div className="space-y-1.5">
             <label htmlFor="token-desc" className="text-sm font-medium">Description</label>
-            <Input id="token-desc" value={description} onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(e.currentTarget.value); }} placeholder="e.g. CI/CD deploy token" />
+            <Input id="token-desc" name="token-description" autoComplete="off" value={description} onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(e.currentTarget.value); }} placeholder="e.g. CI/CD deploy token" />
           </div>
 
           <label className="flex items-center gap-3 text-sm font-medium">
@@ -519,7 +525,8 @@ export function TokenScopeDialog({
                 <label htmlFor="token-org" className="text-sm font-medium">Organization</label>
                 <select
                   id="token-org"
-                  className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  name="token-organization"
+                  className="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                   value={orgId}
                   onChange={(e): void => { setOrgId(e.target.value); setSelectedProjects(new Set()); setSelectedWorkspaces(new Set()); }}
                 >
