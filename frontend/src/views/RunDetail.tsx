@@ -552,6 +552,14 @@ export function RunDetail({
   const [explainerModel, setExplainerModel] = useState("");
   const [explainError, setExplainError] = useState("");
   const explainerAbortRef = useRef<AbortController | null>(null);
+  // Abort any in-flight explanation when the view unmounts (e.g. the user
+  // navigates away mid-stream).
+  useEffect((): (() => void) => {
+    return (): void => {
+      explainerAbortRef.current?.abort();
+      explainerAbortRef.current = null;
+    };
+  }, []);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [auxiliaryError, setAuxiliaryError] = useState(false);
@@ -932,6 +940,9 @@ export function RunDetail({
     setExplainerThinking("");
     setExplainerModel("");
     setExplainError("");
+    // Only the latest stream may update the dialog state; abort any earlier
+    // generation (e.g. a double-click on the button).
+    explainerAbortRef.current?.abort();
     const controller = new AbortController();
     explainerAbortRef.current = controller;
     try {
@@ -946,6 +957,11 @@ export function RunDetail({
             setExplainerThinking((current): string => `${current}${event.data.text}`);
           } else if (event.name === "content") {
             setExplanation((current): string => `${current}${event.data.text}`);
+          } else if (event.name === "content-reset") {
+            // Replace the accumulated text: the provider streamed thinking
+            // inline inside content deltas, so the cleaned text supersedes
+            // everything already appended.
+            setExplanation(event.data.text);
           }
         },
         controller.signal,
@@ -2030,7 +2046,7 @@ export function RunDetail({
                 Close
               </Button>
             </div>
-            <div className="flex-1 overflow-auto px-5 py-4">
+            <div className="flex-1 overflow-auto px-5 py-4" aria-live="polite" aria-busy={explaining}>
               {explainError !== "" && (
                 <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />

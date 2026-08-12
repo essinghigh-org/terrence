@@ -274,6 +274,7 @@ export type ExplainStreamEvent = Readonly<
   | { name: "meta"; data: Readonly<{ kind: ExplainKind; model: string }> }
   | { name: "thinking"; data: Readonly<{ text: string }> }
   | { name: "content"; data: Readonly<{ text: string }> }
+  | { name: "content-reset"; data: Readonly<{ text: string }> }
   | { name: "done"; data: Readonly<{ model: string; "generated-at": string; cached?: boolean }> }
   | { name: "error"; data: Readonly<{ message: string }> }
 >;
@@ -294,14 +295,14 @@ export async function streamExplain(
   signal?: Readonly<AbortSignal>,
 ): Promise<void> {
   const url = `${API_BASE_URL}/runs/${encodeURIComponent(runId)}/explain`;
-  const token = await prepareAuthToken();
-  const headers: HeadersInit = {
-    "Content-Type": "application/vnd.api+json",
-    ...(token !== null ? { Authorization: `Bearer ${token}` } : {}),
-  };
-  let response: Response;
-  try {
-    response = await fetch(url, {
+  // Same refresh-and-retry semantics as fetchApi: an expired token is
+  // refreshed once and the request replayed before the session is expired.
+  const send = async (accessToken: string | null): Promise<Response> => {
+    const headers: HeadersInit = {
+      "Content-Type": "application/vnd.api+json",
+      ...(accessToken !== null ? { Authorization: `Bearer ${accessToken}` } : {}),
+    };
+    return fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -312,13 +313,30 @@ export async function streamExplain(
       }),
       signal,
     } as RequestInit);
+  };
+  let token = await prepareAuthToken();
+  let response: Response;
+  try {
+    response = await send(token);
   } catch (caught: unknown) {
     if (signal?.aborted === true) return;
     throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
   }
+  if (response.status === 401 && token !== null && token !== "" && isRefreshableSession()) {
+    const refreshedToken = await refreshAccessToken().catch((): null => null);
+    if (refreshedToken !== null) {
+      token = refreshedToken;
+      try {
+        response = await send(refreshedToken);
+      } catch (caught: unknown) {
+        if (signal?.aborted === true) return;
+        throw new ApiError(0, caught instanceof Error ? caught.message : String(caught));
+      }
+    }
+  }
 
   if (!response.ok) {
-    if (response.status === 401 && token !== null) {
+    if (response.status === 401 && token !== null && token !== "") {
       expireAuthSession();
     }
     const errorBody = (await response.json().catch((): null => null)) as Record<string, unknown> | null;
@@ -359,6 +377,7 @@ export async function streamExplain(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -372,6 +391,7 @@ export async function streamExplain(
         if (event === null) continue;
         if (event.name === "done") {
           onEvent(event);
+          completed = true;
           await reader.cancel().catch((): null => null);
           return;
         }
@@ -382,6 +402,9 @@ export async function streamExplain(
       }
     }
   } finally {
+    // Cancel the underlying body on error and unexpected-end exits so the
+    // connection is released; done-path cancellation is handled above.
+    if (!completed) await reader.cancel().catch((): null => null);
     reader.releaseLock();
   }
   throw new ApiError(0, "The explainer stream ended without a done event.");
@@ -423,6 +446,10 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
     case "content": {
       const text = typeof object["text"] === "string" ? object["text"] : "";
       return { name: "content", data: { text } };
+    }
+    case "content-reset": {
+      const text = typeof object["text"] === "string" ? object["text"] : "";
+      return { name: "content-reset", data: { text } };
     }
     case "done": {
       const model = typeof object["model"] === "string" ? object["model"] : "";

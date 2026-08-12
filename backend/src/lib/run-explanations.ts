@@ -108,15 +108,19 @@ export async function saveExplanation(
   thinking: string | null,
   inputHash: string,
 ): Promise<void> {
-  await db.delete(runExplanations).where(and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind)));
-  await db.insert(runExplanations).values({
-    id: `rex-${crypto.randomUUID()}`,
-    runId,
-    kind,
-    model,
-    content,
-    thinking: thinking !== null && thinking !== "" ? thinking : null,
-    inputHash,
+  // Delete and insert run as one unit so concurrent regenerations can never
+  // leave the table without a row for (run, kind).
+  await db.transaction(async (tx) => {
+    await tx.delete(runExplanations).where(and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind)));
+    await tx.insert(runExplanations).values({
+      id: `rex-${crypto.randomUUID()}`,
+      runId,
+      kind,
+      model,
+      content,
+      thinking: thinking !== null && thinking !== "" ? thinking : null,
+      inputHash,
+    });
   });
 }
 
@@ -195,6 +199,7 @@ export function parseCompletionBody(parsed: unknown): CompletionParts {
 export async function forEachUpstreamDelta(
   upstream: Readonly<Response>,
   onDelta: (channel: "thinking" | "content", text: string) => void | Promise<void>,
+  onChunk?: () => void,
 ): Promise<void> {
   if (upstream.body === null) return;
   const reader = upstream.body.getReader();
@@ -203,6 +208,7 @@ export async function forEachUpstreamDelta(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    onChunk?.();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
@@ -233,18 +239,41 @@ export async function forEachUpstreamDelta(
   }
 }
 
-/** Shared upstream fetch with timeout; failures are reported via thrown Error. */
-export async function fetchUpstream(settings: Readonly<Record<string, unknown>>, prompt: string, stream: boolean, signal?: Readonly<AbortSignal>): Promise<Response> {
+/**
+ * Shared upstream fetch with an idle timeout that stays armed for the whole
+ * exchange, including body consumption. `tick` resets the deadline after each
+ * chunk of activity, so a provider that answers headers and then stalls is
+ * still aborted after EXPLAIN_TIMEOUT_MS of silence. Errors thrown by
+ * `consume` propagate unwrapped; only the fetch itself is labeled
+ * "endpoint unreachable".
+ */
+export async function fetchUpstream<T>(
+  settings: Readonly<Record<string, unknown>>,
+  prompt: string,
+  stream: boolean,
+  signal: Readonly<AbortSignal> | undefined,
+  consume: (upstream: Readonly<Response>, tick: () => void) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout((): void => controller.abort(new Error("request timed out")), EXPLAIN_TIMEOUT_MS);
+  const abortWithTimeout = (): void => controller.abort(new Error("request timed out"));
+  let deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
+  const tick = (): void => {
+    clearTimeout(deadline);
+    deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
+  };
   const onExternalAbort = (): void => controller.abort();
   signal?.addEventListener("abort", onExternalAbort, { once: true });
   try {
-    return await fetch(upstreamRequest(settings, prompt, stream), { signal: controller.signal });
-  } catch (error: unknown) {
-    throw new Error(`Plan explainer endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    let upstream: Readonly<Response>;
+    try {
+      upstream = await fetch(upstreamRequest(settings, prompt, stream), { signal: controller.signal });
+    } catch (error: unknown) {
+      throw new Error(`Plan explainer endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+    tick();
+    return await consume(upstream, tick);
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", onExternalAbort);
   }
 }

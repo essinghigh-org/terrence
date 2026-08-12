@@ -397,6 +397,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   let upstreamCalls = 0;
   let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
   let endpointUrl = "";
+  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; prompt: string | null }>> = [];
 
   beforeAll(async () => {
     await db.insert(runs).values([
@@ -429,8 +430,26 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     });
     upstream = Bun.serve({
       port: 0,
-      fetch(): Response {
+      async fetch(request: Request): Promise<Response> {
         upstreamCalls += 1;
+        // Capture the request contract: stream flag, selected model, and the
+        // prompt, so the tests can pin what the routes send upstream.
+        let stream: unknown = null;
+        let model: unknown = null;
+        let prompt: string | null = null;
+        try {
+          const body = (await request.json()) as {
+            stream?: unknown;
+            model?: unknown;
+            messages?: Array<{ content?: unknown }>;
+          };
+          stream = body.stream ?? null;
+          model = body.model ?? null;
+          prompt = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : null;
+        } catch {
+          // Non-JSON request body; keep the captured fields as null.
+        }
+        upstreamBodies.push({ stream, model, prompt });
         if (upstreamMode === "sse") {
           const encoder = new TextEncoder();
           const chunks = [
@@ -474,6 +493,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   it("persists a plan explanation and serves it from cache on repeat POSTs", async () => {
     upstreamCalls = 0;
     upstreamMode = "json";
+    upstreamBodies = [];
     const first = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
       data: { type: "plan-explanations", attributes: { kind: "plan" } },
     });
@@ -484,6 +504,12 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(firstBody.data.attributes.model).toBe("test-model");
     expect(firstBody.data.attributes.cached).toBe(false);
     expect(upstreamCalls).toBe(1);
+    // The upstream saw the configured model, a non-stream request, and a
+    // prompt over the stored plan JSON.
+    expect(upstreamBodies[0]?.stream).toBe(false);
+    expect(upstreamBodies[0]?.model).toBe("test-model");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("Terraform plan");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("aws_instance.web");
 
     // A second POST must not hit the upstream again.
     const second = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
@@ -552,6 +578,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   it("streams thinking and content deltas and persists the generation", async () => {
     upstreamCalls = 0;
     upstreamMode = "sse";
+    upstreamBodies = [];
     const response = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
       data: { type: "plan-explanations", attributes: { kind: "apply", stream: true, refresh: true } },
     });
@@ -566,6 +593,12 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     expect(text).toContain("event: done");
     expect(text).not.toContain("event: error");
     expect(upstreamCalls).toBe(1);
+    // Streaming requests carry stream: true, the configured model, and a
+    // prompt over the stored apply log tail.
+    expect(upstreamBodies[0]?.stream).toBe(true);
+    expect(upstreamBodies[0]?.model).toBe("test-model");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("apply failed");
+    expect(upstreamBodies[0]?.prompt ?? "").toContain("InvalidParameterValue");
 
     // The streamed generation was persisted with its thinking channel.
     const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
@@ -575,16 +608,26 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   });
 
   it("serves a cached generation through the SSE envelope without calling upstream", async () => {
+    // Seed the cache row in this test's own setup so the assertion never
+    // depends on another test's persistence side effects.
+    upstreamMode = "json";
     upstreamCalls = 0;
-    const response = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
-      data: { type: "plan-explanations", attributes: { kind: "apply", stream: true } },
+    const seeded = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+    });
+    expect(seeded.status).toBe(200);
+    upstreamCalls = 0;
+    const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan", stream: true } },
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const text = await response.text();
     expect(text).toContain("event: content");
-    expect(text).toContain("No existing resources change.");
-    expect(text).toContain("cached");
+    expect(text).toContain("adds one instance");
+    // The done event carries the structured cache marker, not just a bare
+    // "cached" substring.
+    expect(text).toContain('"cached":true');
     expect(upstreamCalls).toBe(0);
   });
 

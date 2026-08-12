@@ -18,6 +18,7 @@ import {
   parseCompletionBody,
   saveExplanation,
   splitInlineThinking,
+  type CompletionParts,
   type ExplainKind,
   type ExplainSource,
 } from "../lib/run-explanations";
@@ -157,6 +158,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
+      if (settings.enabled !== true) return notFound(set);
       if (!planExplainerUsable(settings)) return notFound(set);
       const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
       if (typeof kindOrError !== "string") return kindOrError.body;
@@ -257,35 +259,33 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     kind: ExplainKind,
     model: string,
   ): Promise<unknown> {
-    let upstream: Response;
+    let parts: CompletionParts;
     try {
-      upstream = await fetchUpstream(settings, source.prompt, false);
+      parts = await fetchUpstream(settings, source.prompt, false, undefined, async (upstream) => {
+        if (!upstream.ok) throw new Error(`Plan explainer endpoint returned ${upstream.status}`);
+        let parsed: unknown;
+        try {
+          parsed = await upstream.json();
+        } catch (error: unknown) {
+          log.warn(`Plan explainer returned unparseable body for run ${runId}: ${String(error)}`);
+          throw new Error("Plan explainer returned an unparseable response");
+        }
+        const completion = parseCompletionBody(parsed);
+        if (completion.content === "") throw new Error("Plan explainer returned no explanation");
+        return completion;
+      });
     } catch (error: unknown) {
       const err = explainError(502, "Bad Gateway", error instanceof Error ? error.message : String(error));
       (set as { status: number }).status = err.status;
       return err.body;
     }
-    if (!upstream.ok) {
-      const err = explainError(502, "Bad Gateway", `Plan explainer endpoint returned ${upstream.status}`);
-      (set as { status: number }).status = err.status;
-      return err.body;
-    }
-    let parsed: unknown;
     try {
-      parsed = await upstream.json();
+      await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
     } catch (error: unknown) {
-      log.warn(`Plan explainer returned unparseable body for run ${runId}: ${String(error)}`);
-      const err = explainError(502, "Bad Gateway", "Plan explainer returned an unparseable response");
-      (set as { status: number }).status = err.status;
-      return err.body;
+      // A failed write must not hide a successful generation; the next
+      // request simply regenerates.
+      log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
     }
-    const parts = parseCompletionBody(parsed);
-    if (parts.content === "") {
-      const err = explainError(502, "Bad Gateway", "Plan explainer returned no explanation");
-      (set as { status: number }).status = err.status;
-      return err.body;
-    }
-    await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
     return explanationResource(runId, kind, parts.content, parts.thinking, model, new Date().toISOString(), false);
   }
 
@@ -351,107 +351,78 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         // always a real AbortSignal and covers client disconnects.
         const controllerSignal = (controller as ReadableStreamDefaultController<Uint8Array> & { readonly signal?: AbortSignal }).signal;
         const clientSignal = controllerSignal ?? request.signal;
-        let upstream: Response;
+        send(controller, "meta", { kind, model });
         try {
-          upstream = await fetchUpstream(settings, source.prompt, true, request.signal);
+          await fetchUpstream(settings, source.prompt, true, clientSignal, async (upstream, tick) => {
+            if (!upstream.ok) throw new Error(`Plan explainer endpoint returned ${upstream.status}`);
+            if (!(upstream.headers.get("content-type") ?? "").includes("text/event-stream")) {
+              // Provider ignored stream: true. Fold the JSON response into the same
+              // event protocol so the client has one parsing path.
+              let parsed: unknown;
+              try {
+                parsed = await upstream.json();
+              } catch (error: unknown) {
+                log.warn(`Plan explainer returned an unparseable non-stream body for run ${runId}: ${String(error)}`);
+                throw new Error("Plan explainer returned an unparseable response");
+              }
+              const parts = parseCompletionBody(parsed);
+              if (parts.content === "") throw new Error("Plan explainer returned no explanation");
+              if (parts.thinking !== "") send(controller, "thinking", { text: parts.thinking });
+              send(controller, "content", { text: parts.content });
+              if (clientSignal.aborted) return;
+              try {
+                await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
+              } catch (error: unknown) {
+                log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
+                throw new Error("Failed to persist the explanation");
+              }
+              send(controller, "done", { model, "generated-at": new Date().toISOString() });
+              return;
+            }
+            const content: string[] = [];
+            const thinking: string[] = [];
+            await forEachUpstreamDelta(
+              upstream,
+              (channel, text) => {
+                if (clientSignal.aborted) return;
+                if (channel === "thinking") {
+                  thinking.push(text);
+                } else {
+                  content.push(text);
+                }
+                send(controller, channel, { text });
+              },
+              // Keep the idle deadline alive while deltas keep arriving.
+              // An upstream that answers headers and then stalls is aborted
+              // by fetchUpstream after EXPLAIN_TIMEOUT_MS of silence.
+              tick,
+            );
+            if (clientSignal.aborted) return;
+            let contentText = content.join("");
+            if (contentText === "") throw new Error("Plan explainer returned no explanation");
+            if (thinking.length === 0 && contentText.includes("<thinking")) {
+              const split = splitInlineThinking(contentText);
+              if (split.thinking !== "") {
+                contentText = split.content;
+                send(controller, "content-reset", { text: contentText });
+                send(controller, "thinking", { text: split.thinking });
+              }
+            }
+            if (!clientSignal.aborted) {
+              try {
+                await saveExplanation(runId, kind, model, contentText, thinking.join(""), source.inputHash);
+              } catch (error: unknown) {
+                log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
+                throw new Error("Failed to persist the explanation");
+              }
+            }
+            if (!clientSignal.aborted) send(controller, "done", { model, "generated-at": new Date().toISOString() });
+          });
         } catch (error: unknown) {
           if (!clientSignal.aborted) {
             send(controller, "error", { message: error instanceof Error ? error.message : String(error) });
           }
-          controller.close();
-          return;
         }
-        if (!upstream.ok) {
-          if (!clientSignal.aborted) {
-            send(controller, "error", { message: `Plan explainer endpoint returned ${upstream.status}` });
-          }
-          controller.close();
-          return;
-        }
-        const abortUpstream = (): void => {
-          void upstream.body?.cancel().catch((): void => {});
-        };
-        clientSignal.addEventListener("abort", abortUpstream, { once: true });
-        send(controller, "meta", { kind, model });
-        if (!(upstream.headers.get("content-type") ?? "").includes("text/event-stream")) {
-          // Provider ignored stream: true. Fold the JSON response into the same
-          // event protocol so the client has one parsing path.
-          let parsed: unknown;
-          try {
-            parsed = await upstream.json();
-          } catch (error: unknown) {
-            log.warn(`Plan explainer returned an unparseable non-stream body for run ${runId}: ${String(error)}`);
-            send(controller, "error", { message: "Plan explainer returned an unparseable response" });
-            controller.close();
-            return;
-          }
-          const parts = parseCompletionBody(parsed);
-          if (parts.content === "") {
-            send(controller, "error", { message: "Plan explainer returned no explanation" });
-            controller.close();
-            return;
-          }
-          if (parts.thinking !== "") send(controller, "thinking", { text: parts.thinking });
-          send(controller, "content", { text: parts.content });
-          if (!clientSignal.aborted) {
-            try {
-              await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
-            } catch (error: unknown) {
-              log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
-              send(controller, "error", { message: "Failed to persist the explanation" });
-              controller.close();
-              return;
-            }
-            send(controller, "done", { model, "generated-at": new Date().toISOString() });
-          }
-          controller.close();
-          return;
-        }
-        const content: string[] = [];
-        const thinking: string[] = [];
-        try {
-          await forEachUpstreamDelta(upstream, (channel, text) => {
-            if (clientSignal.aborted) return;
-            if (channel === "thinking") {
-              thinking.push(text);
-            } else {
-              content.push(text);
-              send(controller, "content", { text });
-            }
-            if (channel === "thinking") send(controller, "thinking", { text });
-          });
-        } catch (error: unknown) {
-          log.warn(`Plan explainer upstream stream failed for run ${runId}: ${String(error)}`);
-        }
-        if (clientSignal.aborted) {
-          controller.close();
-          return;
-        }
-        let contentText = content.join("");
-        if (contentText === "") {
-          send(controller, "error", { message: "Plan explainer returned no explanation" });
-          controller.close();
-          return;
-        }
-        if (thinking.length === 0 && contentText.includes("<thinking")) {
-          const split = splitInlineThinking(contentText);
-          if (split.thinking !== "") {
-            contentText = split.content;
-            send(controller, "content-reset", { text: contentText });
-            send(controller, "thinking", { text: split.thinking });
-          }
-        }
-        if (!clientSignal.aborted) {
-          try {
-            await saveExplanation(runId, kind, model, contentText, thinking.join(""), source.inputHash);
-          } catch (error: unknown) {
-            log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
-            send(controller, "error", { message: "Failed to persist the explanation" });
-            controller.close();
-            return;
-          }
-        }
-        if (!clientSignal.aborted) send(controller, "done", { model, "generated-at": new Date().toISOString() });
         controller.close();
       },
     });
