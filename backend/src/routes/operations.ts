@@ -158,8 +158,9 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
       if (!planExplainerUsable(settings)) return notFound(set);
-      const kind = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
-      if (kind === null) return;
+      const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
+      if (typeof kindOrError !== "string") return kindOrError.body;
+      const kind = kindOrError;
       const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
@@ -181,8 +182,9 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
       }
       const attributes = readExplainAttributes(body);
-      const kind = parseExplainKind(attributes.kind, set);
-      if (kind === null) return;
+      const kindOrError = parseExplainKind(attributes.kind, set);
+      if (typeof kindOrError !== "string") return kindOrError.body;
+      const kind = kindOrError;
       const refresh = attributes.refresh === true;
       const streamRequested = attributes.stream === true;
       const model = settings.model as string;
@@ -209,13 +211,13 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     return attributes !== null && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {};
   }
 
-  function parseExplainKind(value: unknown, set: SetObj): ExplainKind | null {
+  function parseExplainKind(value: unknown, set: SetObj): ExplainKind | Readonly<{ status: number; body: unknown }> {
     if (value === undefined || value === null || value === "") return "plan";
     const asString = typeof value === "string" ? value : "";
     if (EXPLAIN_KINDS.includes(asString as ExplainKind)) return asString as ExplainKind;
     const err = explainError(422, "Unprocessable Entity", `explain kind must be one of: ${EXPLAIN_KINDS.join(", ")}`);
     (set as { status: number }).status = err.status;
-    return null;
+    return err;
   }
 
   function explainMissingArtifactDetail(kind: ExplainKind): string {
