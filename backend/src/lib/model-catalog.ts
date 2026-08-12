@@ -12,6 +12,18 @@ export const MODEL_CATALOG_URL = "https://models.dev/api.json";
 export const MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6h, per user request
 export const MODEL_CATALOG_FETCH_TIMEOUT_MS = 30_000;
 
+/** Synthetic provider id for arbitrary OpenAI-compatible endpoints. Always
+ * listed first in the admin dropdown (the default choice) and usable even
+ * when the models.dev catalog is unreachable. */
+export const CUSTOM_PROVIDER_ID = "custom";
+
+const CUSTOM_PROVIDER: CatalogProvider = Object.freeze({
+  id: CUSTOM_PROVIDER_ID,
+  name: "OpenAI Compatible (Custom)",
+  baseUrl: null,
+  models: [],
+});
+
 const catalogDirectory = resolve(
   process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
   "model-catalog",
@@ -191,7 +203,8 @@ export async function getModelCatalog(now: number = Date.now()): Promise<ModelCa
 }
 
 /** Providers for the admin dropdown: id, name, base URL (when known), and
- * text-capable model count. Sorted by name. */
+ * text-capable model count. Sorted by name, with the synthetic
+ * "OpenAI Compatible (Custom)" entry pinned first (it is the default). */
 export async function listCatalogProviders(now: number = Date.now()): Promise<ReadonlyArray<Readonly<{
   id: string;
   name: string;
@@ -199,20 +212,25 @@ export async function listCatalogProviders(now: number = Date.now()): Promise<Re
   modelCount: number;
 }>>> {
   const catalog = await getModelCatalog(now);
-  return catalog.providers.map((provider) => ({
-    id: provider.id,
-    name: provider.name,
-    baseUrl: provider.baseUrl,
-    modelCount: provider.models.length,
-  }));
+  const rows = catalog.providers
+    .filter((provider) => provider.id !== CUSTOM_PROVIDER_ID)
+    .map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      modelCount: provider.models.length,
+    }));
+  return [{ id: CUSTOM_PROVIDER_ID, name: CUSTOM_PROVIDER.name, baseUrl: null, modelCount: 0 }, ...rows];
 }
 
-/** Text-output-capable models for one provider, or undefined when the
- * provider id is unknown. */
+/** Text-output-capable models for one provider. The synthetic custom
+ * provider always resolves (to zero catalog models: the admin types the
+ * model id); unknown provider ids return undefined. */
 export async function getCatalogProviderModels(
   providerId: string,
   now: number = Date.now(),
 ): Promise<CatalogProvider | undefined> {
+  if (providerId === CUSTOM_PROVIDER_ID) return CUSTOM_PROVIDER;
   const catalog = await getModelCatalog(now);
   return catalog.providers.find((provider) => provider.id === providerId);
 }

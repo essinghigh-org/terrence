@@ -529,6 +529,22 @@ describe("admin operations settings surface", () => {
     expect(providersBody.data.length).toBeGreaterThan(0);
     const ids = providersBody.data.map((p) => p.id);
     expect(ids).toContain("openrouter");
+    // Synthetic "OpenAI Compatible (Custom)" is pinned first.
+    expect(ids[0]).toBe("custom");
+    const customEntry = providersBody.data[0];
+    expect(customEntry).toBeDefined();
+    expect(customEntry?.attributes.name).toBe("OpenAI Compatible (Custom)");
+    expect(customEntry?.attributes["model-count"]).toBe(0);
+
+    // The synthetic custom provider resolves with zero catalog models
+    // (the admin types the model id), never a 404.
+    const customModels = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=custom", {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }));
+    expect(customModels.status).toBe(200);
+    const customBody = (await customModels.json()) as { data: unknown[]; meta: { "model-count": number } };
+    expect(customBody.data).toEqual([]);
+    expect(customBody.meta["model-count"]).toBe(0);
 
     const models = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=openrouter", {
       headers: { Authorization: `Bearer ${adminToken}` },

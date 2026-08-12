@@ -50,6 +50,10 @@ type ExplainerModel = {
   context: number | null;
 };
 
+/** Synthetic provider id for arbitrary OpenAI-compatible endpoints, always
+ * listed first by the backend catalog and the default selection. */
+const CUSTOM_PROVIDER_ID = "custom";
+
 type OperationsSettings = {
   "approval-webhook"?: ApprovalWebhookSettings;
   "maintenance-windows"?: MaintenanceWindowsSettings;
@@ -110,7 +114,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [explainerApiKeySet, setExplainerApiKeySet] = useState(false);
   const [explainerClearApiKey, setExplainerClearApiKey] = useState(false);
   const [explainerModel, setExplainerModel] = useState("");
-  const [explainerProvider, setExplainerProvider] = useState("");
+  const [explainerProvider, setExplainerProvider] = useState(CUSTOM_PROVIDER_ID);
 
   // Provider/model catalog for the explainer pickers (models.dev via admin API).
   const [providers, setProviders] = useState<ExplainerProvider[]>([]);
@@ -142,7 +146,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
         setExplainerApiKeySet(explainer["api-key-set"] === true);
         setExplainerClearApiKey(false);
         setExplainerModel(explainer.model ?? "");
-        setExplainerProvider(explainer.provider ?? "");
+        setExplainerProvider(explainer.provider ?? CUSTOM_PROVIDER_ID);
       } catch (caught: unknown) {
         setLoadError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -565,10 +569,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 </label>
                 <FuzzyCombobox
                   value={explainerProvider}
-                  options={providers.map((provider): { id: string; label: string; hint: string } => ({
+                  options={providers.map((provider): { id: string; label: string; hint?: string } => ({
                     id: provider.id,
                     label: provider.name,
-                    hint: `${provider["model-count"]} models`,
+                    hint: provider.id === CUSTOM_PROVIDER_ID
+                      ? "any OpenAI-compatible endpoint"
+                      : `${provider["model-count"]} models`,
                   }))}
                   onSelect={(providerId: string): void => {
                     setExplainerProvider(providerId);
@@ -602,7 +608,9 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   }))}
                   onSelect={setExplainerModel}
                   placeholder="gpt-4o-mini"
-                  emptyText="No models for this provider"
+                  emptyText={explainerProvider === CUSTOM_PROVIDER_ID
+                    ? "Type a model id (no catalog for custom providers)"
+                    : "No models for this provider"}
                   className="font-mono"
                 />
               </div>

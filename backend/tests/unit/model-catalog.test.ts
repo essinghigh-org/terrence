@@ -117,12 +117,21 @@ describe("getModelCatalog / listCatalogProviders / getCatalogProviderModels", ()
     expect(catalog.providers).toHaveLength(3);
 
     const listed = await listCatalogProviders(now);
-    expect(listed).toHaveLength(3);
+    expect(listed).toHaveLength(4);
+    // Synthetic "OpenAI Compatible (Custom)" pinned first, even when the
+    // catalog has no such entry.
+    expect(listed[0]).toEqual({ id: "custom", name: "OpenAI Compatible (Custom)", baseUrl: null, modelCount: 0 });
     const openrouter = listed.find((p) => p.id === "openrouter");
     expect(openrouter?.modelCount).toBe(1); // image-only filtered out
 
     const openai = await getCatalogProviderModels("openai", now);
     expect(openai?.models.map((m) => m.id)).toEqual(["gpt-4o", "gpt-4o-mini"]);
+
+    // The synthetic custom provider resolves with an empty catalog (the
+    // admin types the model id); truly unknown ids stay undefined.
+    const custom = await getCatalogProviderModels("custom", now);
+    expect(custom?.models).toEqual([]);
+    expect(custom?.baseUrl).toBeNull();
 
     const unknown = await getCatalogProviderModels("nope", now);
     expect(unknown).toBeUndefined();
