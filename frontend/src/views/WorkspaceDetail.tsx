@@ -315,7 +315,7 @@ export function WorkspaceDetail({
   );
   if (workspace == null) {
     return (
-      <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-destructive">
+      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive">
         <p className="font-medium">Could not load workspace</p>
         <p className="mt-1">{loadError !== "" ? loadError : "Workspace not found"}</p>
         <Button className="mt-3" variant="outline" onClick={(): void => { void loadWorkspace(); }}>
@@ -663,7 +663,7 @@ export function WorkspaceDetail({
                           && typeof latestRunCounts["resource-changes"] === "number"
                           && typeof latestRunCounts["resource-destructions"] === "number" && (
                           <span className="flex items-center gap-3 font-medium">
-                            <span className="text-emerald-700">+{latestRunCounts["resource-additions"]}</span>
+                            <span className="text-success">+{latestRunCounts["resource-additions"]}</span>
                             <span className="text-primary">~{latestRunCounts["resource-changes"]}</span>
                             <span className="text-destructive">−{latestRunCounts["resource-destructions"]}</span>
                           </span>
