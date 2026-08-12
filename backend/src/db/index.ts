@@ -159,6 +159,27 @@ const session = (db as unknown as { session: SQLiteBunSession<Record<string, unk
 
 migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
 
+// Drizzle orders migrations by journal timestamps. Databases created before
+// the migration squash can have a later legacy timestamp, which makes the
+// repair migration look applied even when this table is missing. Keep this
+// narrow guard idempotent so those databases are repaired at boot as well.
+client.run(`
+  CREATE TABLE IF NOT EXISTS run_explanations (
+    id TEXT PRIMARY KEY NOT NULL,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    model TEXT NOT NULL,
+    content TEXT NOT NULL,
+    thinking TEXT,
+    input_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`);
+client.run(`
+  CREATE INDEX IF NOT EXISTS run_explanations_run_kind_idx
+    ON run_explanations (run_id, kind)
+`);
+
 
 // ---------------------------------------------------------------------------
 // Id-format migration: re-key persisted rows that predate the current ID

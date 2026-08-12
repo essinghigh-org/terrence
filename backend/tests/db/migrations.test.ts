@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -70,6 +73,51 @@ test("migrates a fresh database on startup", async () => {
       oauthClientColumns: expect.arrayContaining(["agent_pool_id"]),
       foreignKeys: 1,
     });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs the explainer table when a legacy journal skips the repair migration", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-legacy-migration-"));
+  const databasePath = join(testDir, "terrence.db");
+  const migrationFolder = join(import.meta.dir, "../../drizzle");
+  try {
+    const raw = new Database(databasePath);
+    migrate(drizzle(raw), { migrationsFolder: migrationFolder });
+    raw.run("DROP TABLE run_explanations");
+    raw.run("DELETE FROM __drizzle_migrations");
+    raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
+      "legacy-last-migration",
+      1787055000000,
+    ]);
+    raw.close();
+
+    const dbModule = pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href;
+    const script = `
+      const { db } = await import(${JSON.stringify(dbModule)});
+      const { sql } = await import("drizzle-orm");
+      const rows = await db.all(sql.raw("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_explanations'"));
+      console.log(JSON.stringify(rows));
+    `;
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        DATABASE_URL: `file:${databasePath}`,
+        STORAGE_DIR: join(testDir, "storage"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([{ name: "run_explanations" }]);
   } finally {
     await rm(testDir, { recursive: true, force: true });
   }
