@@ -8,7 +8,19 @@ import {
   workspaceIdsForPermission,
 } from "../lib/utils";
 import { getSettings, planExplainerUsable } from "../lib/settings";
-import { readPlanJsonArtifact } from "../lib/plan-json";
+import {
+  EXPLAIN_KINDS,
+  buildExplainSource,
+  explainError,
+  fetchUpstream,
+  findExplanation,
+  forEachUpstreamDelta,
+  parseCompletionBody,
+  saveExplanation,
+  splitInlineThinking,
+  type ExplainKind,
+  type ExplainSource,
+} from "../lib/run-explanations";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -19,7 +31,7 @@ type ParamCtx = Readonly<{
   user?: Readonly<{ readonly id: string }> | null;
   orgId: string | null;
   teamId: string | null;
-  request: Readonly<{ url: string }>;
+  request: Request;
   set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 }>;
 
@@ -127,62 +139,325 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     }));
     return { data, meta: { "total-count": data.length } };
   })
-  // --- AI plan explainer (kanban 21.2) ----------------------------------
-  // Read-only convenience: feeds the sanitized stored plan JSON to a
-  // user-configured OpenAI-compatible endpoint and returns the plain-
-  // language explanation. Never part of the trusted apply decision.
-  .post("/api/v2/runs/:run_id/explain", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
-    if (authorized === undefined) return notFound(set);
-    const settings = await getSettings("plan-explainer");
-    if (settings.enabled !== true) return notFound(set);
-    if (!planExplainerUsable(settings)) {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
-    }
-    const endpointUrl = settings["endpoint-url"] as string;
-    const model = settings.model as string;
-    const planJson = await readPlanJsonArtifact(runId);
-    if (planJson === undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "No plan JSON is available for this run" }] };
-    }
-    const serialized = JSON.stringify(planJson);
-    const truncated = serialized.length > 100_000 ? `${serialized.slice(0, 100_000)}\n... (truncated)` : serialized;
-    const content = `Explain the following Terraform plan in plain language for a reviewer. Summarize what will be added, changed, and destroyed, flag anything risky, and keep it under 250 words.\n\n${truncated}`;
-    const apiKey = typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
-    let response: Response;
-    try {
-      response = await fetch(endpointUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey !== undefined ? { authorization: `Bearer ${apiKey}` } : {}),
+  // --- AI run explainer (kanban 21.2) ------------------------------------
+    // Read-only convenience: feeds the sanitized stored plan JSON (or a failed
+    // apply log) to a user-configured OpenAI-compatible endpoint and returns the
+    // plain-language explanation. Explanations are cached per (run, kind) so
+    // re-opening the dialog never re-burns tokens; `refresh: true` forces a
+    // fresh generation and `stream: true` relays upstream SSE deltas. Never part
+    // of the trusted apply decision.
+
+    // POST body shape: { data: { type: "plan-explanations",
+    //   attributes: { kind: "plan" | "apply", refresh?: boolean, stream?: boolean } } }.
+    // kind/refresh/stream are additive; the original { data: { type } } payload
+    // still means kind="plan", no refresh, JSON response.
+
+    .get("/api/v2/runs/:run_id/explain", async ({ params, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
+      const runId = params.run_id ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
+      if (authorized === undefined) return notFound(set);
+      const settings = await getSettings("plan-explainer");
+      if (!planExplainerUsable(settings)) return notFound(set);
+      const kind = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
+      if (kind === null) return;
+      const source = await buildExplainSource(runId, kind);
+      if (source === undefined) {
+        const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
+        (set as { status: number }).status = err.status;
+        return err.body;
+      }
+      const cached = await findExplanation(runId, kind, settings.model as string, source.inputHash);
+      if (cached === undefined) return notFound(set);
+      return explanationResource(runId, kind, cached.content, cached.thinking, cached.model, new Date(cached.createdAt).toISOString(), true);
+    })
+    .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
+      const runId = params.run_id ?? "";
+      const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
+      if (authorized === undefined) return notFound(set);
+      const settings = await getSettings("plan-explainer");
+      if (settings.enabled !== true) return notFound(set);
+      if (!planExplainerUsable(settings)) {
+        (set as { status: number }).status = 503;
+        return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
+      }
+      const attributes = readExplainAttributes(body);
+      const kind = parseExplainKind(attributes.kind, set);
+      if (kind === null) return;
+      const refresh = attributes.refresh === true;
+      const streamRequested = attributes.stream === true;
+      const model = settings.model as string;
+      const source = await buildExplainSource(runId, kind);
+      if (source === undefined) {
+        const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
+        (set as { status: number }).status = err.status;
+        return err.body;
+      }
+      if (!refresh && !streamRequested) {
+        const cached = await findExplanation(runId, kind, model, source.inputHash);
+        if (cached !== undefined) {
+          return explanationResource(runId, kind, cached.content, cached.thinking, cached.model, new Date(cached.createdAt).toISOString(), true);
+        }
+      }
+      if (streamRequested) return streamExplainResponse(settings, source, runId, kind, model, request, refresh);
+      return explainJsonResponse(set, settings, source, runId, kind, model);
+    });
+
+  function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload["data"];
+    const attributes = data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : undefined;
+    return attributes !== null && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {};
+  }
+
+  function parseExplainKind(value: unknown, set: SetObj): ExplainKind | null {
+    if (value === undefined || value === null || value === "") return "plan";
+    const asString = typeof value === "string" ? value : "";
+    if (EXPLAIN_KINDS.includes(asString as ExplainKind)) return asString as ExplainKind;
+    const err = explainError(422, "Unprocessable Entity", `explain kind must be one of: ${EXPLAIN_KINDS.join(", ")}`);
+    (set as { status: number }).status = err.status;
+    return null;
+  }
+
+  function explainMissingArtifactDetail(kind: ExplainKind): string {
+    return kind === "plan" ? "No plan JSON is available for this run" : "No apply log is available for this run";
+  }
+
+  function explanationResource(
+    runId: string,
+    kind: ExplainKind,
+    explanation: string,
+    thinking: string | null | undefined,
+    model: string,
+    generatedAt: string,
+    cached: boolean,
+  ): Readonly<{ data: Readonly<{ id: string; type: string; attributes: Record<string, unknown> }> }> {
+    return {
+      data: {
+        id: runId,
+        type: "plan-explanations",
+        attributes: {
+          kind,
+          explanation,
+          ...(thinking !== null && thinking !== undefined && thinking !== "" ? { thinking } : {}),
+          model,
+          "generated-at": generatedAt,
+          cached,
         },
-        body: JSON.stringify({ model, messages: [{ role: "user", content }], max_tokens: 500 }),
-        signal: AbortSignal.timeout(60_000),
-      });
-    } catch (error: unknown) {
-      (set as { status: number }).status = 502;
-      return { errors: [{ status: "502", title: "Bad Gateway", detail: `Plan explainer endpoint unreachable: ${error instanceof Error ? error.message : String(error)}` }] };
-    }
-    if (!response.ok) {
-      (set as { status: number }).status = 502;
-      return { errors: [{ status: "502", title: "Bad Gateway", detail: `Plan explainer endpoint returned ${response.status}` }] };
-    }
-    let explanation = "";
+      },
+    };
+  }
+
+  async function explainJsonResponse(
+    set: SetObj,
+    settings: Readonly<Record<string, unknown>>,
+    source: ExplainSource,
+    runId: string,
+    kind: ExplainKind,
+    model: string,
+  ): Promise<unknown> {
+    let upstream: Response;
     try {
-      const parsed: unknown = await response.json();
-      const choices = (parsed as Readonly<{ choices?: ReadonlyArray<Readonly<{ message?: Readonly<{ content?: unknown }> }>> }>)?.choices;
-      const contentValue = choices?.[0]?.message?.content;
-      explanation = typeof contentValue === "string" ? contentValue : "";
+      upstream = await fetchUpstream(settings, source.prompt, false);
+    } catch (error: unknown) {
+      const err = explainError(502, "Bad Gateway", error instanceof Error ? error.message : String(error));
+      (set as { status: number }).status = err.status;
+      return err.body;
+    }
+    if (!upstream.ok) {
+      const err = explainError(502, "Bad Gateway", `Plan explainer endpoint returned ${upstream.status}`);
+      (set as { status: number }).status = err.status;
+      return err.body;
+    }
+    let parsed: unknown;
+    try {
+      parsed = await upstream.json();
     } catch (error: unknown) {
       log.warn(`Plan explainer returned unparseable body for run ${runId}: ${String(error)}`);
+      const err = explainError(502, "Bad Gateway", "Plan explainer returned an unparseable response");
+      (set as { status: number }).status = err.status;
+      return err.body;
     }
-    if (explanation === "") {
-      (set as { status: number }).status = 502;
-      return { errors: [{ status: "502", title: "Bad Gateway", detail: "Plan explainer returned no explanation" }] };
+    const parts = parseCompletionBody(parsed);
+    if (parts.content === "") {
+      const err = explainError(502, "Bad Gateway", "Plan explainer returned no explanation");
+      (set as { status: number }).status = err.status;
+      return err.body;
     }
-    return { data: { id: runId, type: "plan-explanations", attributes: { explanation, model, "generated-at": new Date().toISOString() } } };
-  });
+    await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
+    return explanationResource(runId, kind, parts.content, parts.thinking, model, new Date().toISOString(), false);
+  }
+
+  /** Replay a cached generation through the SSE envelope (no upstream call). */
+  function cachedSseResponse(content: string, thinking: string, kind: ExplainKind, model: string, createdAt: number): Response {
+    const encoder = new TextEncoder();
+    const events = [
+      `event: meta\ndata: ${JSON.stringify({ kind, model })}\n\n`,
+      ...(thinking !== "" ? [`event: thinking\ndata: ${JSON.stringify({ text: thinking })}\n\n`] : []),
+      `event: content\ndata: ${JSON.stringify({ text: content })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model, "generated-at": new Date(createdAt).toISOString(), cached: true })}\n\n`,
+    ];
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller: ReadableStreamDefaultController<Uint8Array>) {
+        for (const event of events) controller.enqueue(encoder.encode(event));
+        controller.close();
+      },
+    }), {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
+  }
+
+  /**
+   * Streaming path: relay upstream SSE deltas to the browser as
+   * `meta` / `thinking` / `content` / `done` / `error` events, persisting the
+   * completed generation before `done` (a client abort skips persistence).
+   * Providers that ignore `stream: true` and return plain JSON are folded into
+   * the same event protocol so the client has a single parsing path.
+   */
+  async function streamExplainResponse(
+    settings: Readonly<Record<string, unknown>>,
+    source: ExplainSource,
+    runId: string,
+    kind: ExplainKind,
+    model: string,
+    request: Request,
+    forceRefresh: boolean,
+  ): Promise<Response> {
+    if (request.signal.aborted) {
+      return new Response(null, { status: 499 });
+    }
+    if (!forceRefresh) {
+      // A stream request must never answer with a JSON cache hit; deliver
+      // the cached generation through the same SSE envelope instead.
+      const cached = await findExplanation(runId, kind, model, source.inputHash);
+      if (cached !== undefined && cached.content !== "") {
+        return cachedSseResponse(cached.content, cached.thinking ?? "", kind, model, cached.createdAt);
+      }
+    }
+    const encoder = new TextEncoder();
+    const send = (controller: ReadableStreamDefaultController<Uint8Array>, name: string, data: unknown): void => {
+      controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller: ReadableStreamDefaultController<Uint8Array>) {
+        // Some runtimes expose a signal on the controller (fires on stream
+        // cancellation) but Bun's controller currently does not, and the TS
+        // lib types omit it anyway. Fall back to the request signal, which is
+        // always a real AbortSignal and covers client disconnects.
+        const controllerSignal = (controller as ReadableStreamDefaultController<Uint8Array> & { readonly signal?: AbortSignal }).signal;
+        const clientSignal = controllerSignal ?? request.signal;
+        let upstream: Response;
+        try {
+          upstream = await fetchUpstream(settings, source.prompt, true, request.signal);
+        } catch (error: unknown) {
+          if (!clientSignal.aborted) {
+            send(controller, "error", { message: error instanceof Error ? error.message : String(error) });
+          }
+          controller.close();
+          return;
+        }
+        if (!upstream.ok) {
+          if (!clientSignal.aborted) {
+            send(controller, "error", { message: `Plan explainer endpoint returned ${upstream.status}` });
+          }
+          controller.close();
+          return;
+        }
+        const abortUpstream = (): void => {
+          void upstream.body?.cancel().catch((): void => {});
+        };
+        clientSignal.addEventListener("abort", abortUpstream, { once: true });
+        send(controller, "meta", { kind, model });
+        if (!(upstream.headers.get("content-type") ?? "").includes("text/event-stream")) {
+          // Provider ignored stream: true. Fold the JSON response into the same
+          // event protocol so the client has one parsing path.
+          let parsed: unknown;
+          try {
+            parsed = await upstream.json();
+          } catch (error: unknown) {
+            log.warn(`Plan explainer returned an unparseable non-stream body for run ${runId}: ${String(error)}`);
+            send(controller, "error", { message: "Plan explainer returned an unparseable response" });
+            controller.close();
+            return;
+          }
+          const parts = parseCompletionBody(parsed);
+          if (parts.content === "") {
+            send(controller, "error", { message: "Plan explainer returned no explanation" });
+            controller.close();
+            return;
+          }
+          if (parts.thinking !== "") send(controller, "thinking", { text: parts.thinking });
+          send(controller, "content", { text: parts.content });
+          if (!clientSignal.aborted) {
+            try {
+              await saveExplanation(runId, kind, model, parts.content, parts.thinking, source.inputHash);
+            } catch (error: unknown) {
+              log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
+              send(controller, "error", { message: "Failed to persist the explanation" });
+              controller.close();
+              return;
+            }
+            send(controller, "done", { model, "generated-at": new Date().toISOString() });
+          }
+          controller.close();
+          return;
+        }
+        const content: string[] = [];
+        const thinking: string[] = [];
+        try {
+          await forEachUpstreamDelta(upstream, (channel, text) => {
+            if (clientSignal.aborted) return;
+            if (channel === "thinking") {
+              thinking.push(text);
+            } else {
+              content.push(text);
+              send(controller, "content", { text });
+            }
+            if (channel === "thinking") send(controller, "thinking", { text });
+          });
+        } catch (error: unknown) {
+          log.warn(`Plan explainer upstream stream failed for run ${runId}: ${String(error)}`);
+        }
+        if (clientSignal.aborted) {
+          controller.close();
+          return;
+        }
+        let contentText = content.join("");
+        if (contentText === "") {
+          send(controller, "error", { message: "Plan explainer returned no explanation" });
+          controller.close();
+          return;
+        }
+        if (thinking.length === 0 && contentText.includes("<thinking")) {
+          const split = splitInlineThinking(contentText);
+          if (split.thinking !== "") {
+            contentText = split.content;
+            send(controller, "content-reset", { text: contentText });
+            send(controller, "thinking", { text: split.thinking });
+          }
+        }
+        if (!clientSignal.aborted) {
+          try {
+            await saveExplanation(runId, kind, model, contentText, thinking.join(""), source.inputHash);
+          } catch (error: unknown) {
+            log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
+            send(controller, "error", { message: "Failed to persist the explanation" });
+            controller.close();
+            return;
+          }
+        }
+        if (!clientSignal.aborted) send(controller, "done", { model, "generated-at": new Date().toISOString() });
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
+  }

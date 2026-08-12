@@ -1375,3 +1375,17 @@ CREATE TABLE `workspaces` (
 	FOREIGN KEY (`ssh_key_id`) REFERENCES `ssh_keys`(`id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`agent_pool_id`) REFERENCES `agent_pools`(`id`) ON UPDATE no action ON DELETE set null
 );
+--> statement-breakpoint
+CREATE TABLE `run_explanations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`run_id` text NOT NULL,
+	`kind` text NOT NULL,
+	`model` text NOT NULL,
+	`content` text NOT NULL,
+	`thinking` text,
+	`input_hash` text NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `run_explanations_run_kind_idx` ON `run_explanations` (`run_id`,`kind`);

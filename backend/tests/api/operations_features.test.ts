@@ -6,6 +6,7 @@ import {
   adminSettings,
   apiTokens,
   changeRequests,
+  logs,
   organizations,
   runs,
   users,
@@ -386,6 +387,222 @@ describe("AI plan explainer (21.2)", () => {
   it("still reads settings after the feature group was written", async () => {
     const settings = await getSettings("plan-explainer");
     expect(settings.enabled).toBe(true);
+  });
+});
+
+describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
+  const cacheRunId = `ops-explain-cache-${suffix}`;
+  const applyRunId = `ops-explain-apply-${suffix}`;
+  let upstream: ReturnType<typeof Bun.serve> | undefined;
+  let upstreamCalls = 0;
+  let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
+  let endpointUrl = "";
+
+  beforeAll(async () => {
+    await db.insert(runs).values([
+      {
+        id: cacheRunId,
+        workspaceId,
+        status: "planned",
+        createdAt: Date.now() - 8_000,
+      },
+      {
+        id: applyRunId,
+        workspaceId,
+        status: "errored",
+        createdAt: Date.now() - 6_000,
+        statusTimestamps: { "applying-at": new Date(Date.now() - 5_000).toISOString() },
+      },
+    ]);
+    await db.insert(logs).values({
+      id: `ops-explain-apply-log-${suffix}`,
+      runId: applyRunId,
+      phase: "apply",
+      outputText: "aws_instance.web: Error creating instance: InvalidParameterValue: unsupported instance type",
+      createdAt: Date.now() - 4_000,
+    });
+    await writePlanJsonArtifact(cacheRunId, {
+      format_version: "1.2",
+      resource_changes: [
+        { address: "aws_instance.web", mode: "managed", change: { actions: ["create"], after: { ami: "ami-123" } } },
+      ],
+    });
+    upstream = Bun.serve({
+      port: 0,
+      fetch(): Response {
+        upstreamCalls += 1;
+        if (upstreamMode === "sse") {
+          const encoder = new TextEncoder();
+          const chunks = [
+            { choices: [{ delta: { role: "assistant" } }] },
+            { choices: [{ delta: { reasoning_content: "First I inspect the diff." } }] },
+            { choices: [{ delta: { reasoning_content: " Then I check counts." } }] },
+            { choices: [{ delta: { content: "The plan adds one instance. " } }] },
+            { choices: [{ delta: { content: "No existing resources change." } }] },
+          ];
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller: ReadableStreamDefaultController<Uint8Array>) {
+              for (const chunk of chunks) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              }
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          });
+          return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+        }
+        if (upstreamMode === "json-reasoning") {
+          return Response.json({
+            choices: [{ message: { reasoning_content: "Inspecting the diff.", content: "The plan adds one instance." } }],
+          });
+        }
+        return Response.json({
+          choices: [{ message: { content: "The plan adds one instance and leaves existing resources untouched." } }],
+        });
+      },
+    });
+    endpointUrl = `http://127.0.0.1:${upstream.port}/v1/chat/completions`;
+    await setSettings("plan-explainer", { enabled: true, "endpoint-url": endpointUrl, "api-key": null, model: "test-model" });
+  });
+
+  afterAll(async () => {
+    upstream?.stop(true);
+    await deletePlanJsonArtifact(cacheRunId).catch((): void => {});
+    await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
+  });
+
+  it("persists a plan explanation and serves it from cache on repeat POSTs", async () => {
+    upstreamCalls = 0;
+    upstreamMode = "json";
+    const first = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { data: { attributes: { explanation: string; model: string; cached: boolean; kind: string } } };
+    expect(firstBody.data.attributes.kind).toBe("plan");
+    expect(firstBody.data.attributes.explanation).toContain("adds one instance");
+    expect(firstBody.data.attributes.model).toBe("test-model");
+    expect(firstBody.data.attributes.cached).toBe(false);
+    expect(upstreamCalls).toBe(1);
+
+    // A second POST must not hit the upstream again.
+    const second = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "plan" } },
+    });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { data: { attributes: { cached: boolean } } };
+    expect(secondBody.data.attributes.cached).toBe(true);
+    expect(upstreamCalls).toBe(1);
+  });
+
+  it("GET returns 404 before a generation exists and the cached row afterwards", async () => {
+    upstreamCalls = 0;
+    upstreamMode = "json";
+    // Same kind as the plan artifact; use the run that has never been explained.
+    const missing = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
+    expect(missing.status).toBe(404);
+    // Explain the failed apply (JSON path).
+    const generated = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply" } },
+    });
+    expect(generated.status).toBe(200);
+    const generatedBody = (await generated.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
+    expect(generatedBody.data.attributes.explanation).toContain("adds one instance");
+    expect(generatedBody.data.attributes.cached).toBe(false);
+    // GET now serves the cache.
+    const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
+    expect(cached.status).toBe(200);
+    const cachedBody = (await cached.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
+    expect(cachedBody.data.attributes.explanation).toContain("adds one instance");
+    expect(cachedBody.data.attributes.cached).toBe(true);
+    expect(upstreamCalls).toBe(1);
+  });
+
+  it("regenerates and replaces the cache when refresh=true", async () => {
+    upstreamCalls = 0;
+    upstreamMode = "json";
+    const refreshed = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply", refresh: true } },
+    });
+    expect(refreshed.status).toBe(200);
+    const body = (await refreshed.json()) as { data: { attributes: { cached: boolean } } };
+    expect(body.data.attributes.cached).toBe(false);
+    expect(upstreamCalls).toBe(1);
+    // The replaced row is the only one left for (run, kind).
+    const again = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
+    expect(again.status).toBe(200);
+  });
+
+  it("rejects an invalid kind with 422", async () => {
+    const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "destroy" } },
+    });
+    expect(response.status).toBe(422);
+  });
+
+  it("returns 409 for an apply explanation when the run has no apply log", async () => {
+    const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply" } },
+    });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { errors: { detail: string }[] };
+    expect(body.errors[0]?.detail ?? "").toContain("apply log");
+  });
+
+  it("streams thinking and content deltas and persists the generation", async () => {
+    upstreamCalls = 0;
+    upstreamMode = "sse";
+    const response = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply", stream: true, refresh: true } },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    expect(text).toContain("event: meta");
+    expect(text).toContain("event: thinking");
+    expect(text).toContain("First I inspect the diff.");
+    expect(text).toContain("event: content");
+    expect(text).toContain("The plan adds one instance.");
+    expect(text).toContain("event: done");
+    expect(text).not.toContain("event: error");
+    expect(upstreamCalls).toBe(1);
+
+    // The streamed generation was persisted with its thinking channel.
+    const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
+    const cachedBody = (await cached.json()) as { data: { attributes: { thinking?: string; explanation: string } } };
+    expect(cachedBody.data.attributes.explanation).toContain("No existing resources change.");
+    expect(cachedBody.data.attributes.thinking ?? "").toContain("First I inspect the diff.");
+  });
+
+  it("serves a cached generation through the SSE envelope without calling upstream", async () => {
+    upstreamCalls = 0;
+    const response = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply", stream: true } },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    expect(text).toContain("event: content");
+    expect(text).toContain("No existing resources change.");
+    expect(text).toContain("cached");
+    expect(upstreamCalls).toBe(0);
+  });
+
+  it("extracts reasoning_content from a non-streaming provider response", async () => {
+    upstreamCalls = 0;
+    upstreamMode = "json-reasoning";
+    const response = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
+      data: { type: "plan-explanations", attributes: { kind: "apply", refresh: true } },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { attributes: { explanation: string; thinking?: string } } };
+    expect(body.data.attributes.explanation).toContain("adds one instance");
+    expect(body.data.attributes.thinking ?? "").toContain("Inspecting the diff.");
+    // And it landed in the store.
+    const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
+    const cachedBody = (await cached.json()) as { data: { attributes: { thinking?: string } } };
+    expect(cachedBody.data.attributes.thinking ?? "").toContain("Inspecting the diff.");
+    expect(upstreamCalls).toBe(1);
   });
 });
 

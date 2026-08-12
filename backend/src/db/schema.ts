@@ -446,6 +446,19 @@ export const logs = sqliteTable("logs", {
   index("logs_run_phase_idx").on(table.runId, table.phase),
 ]);
 
+export const runExplanations = sqliteTable("run_explanations", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // 'plan' | 'apply'
+  model: text("model").notNull(),
+  content: text("content").notNull(),
+  thinking: text("thinking"),
+  inputHash: text("input_hash").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("run_explanations_run_kind_idx").on(table.runId, table.kind),
+]);
+
 export const apiTokens = sqliteTable("api_tokens", {
   id: text("id").primaryKey(),
   token: text("token").notNull().unique(),
