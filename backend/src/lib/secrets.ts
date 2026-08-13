@@ -5,6 +5,7 @@ import {
   scryptSync,
 } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { log } from "./log";
 
@@ -255,4 +256,107 @@ export async function decryptSecret(value: string): Promise<string> {
     }
     throw error;
   }
+}
+
+/**
+ * Synchronous counterpart of decryptSecret, used at boot time by the boot
+ * configuration resolver (lib/boot-config.ts). db/index.ts must stay
+ * synchronous (a top-level await made it a TLA module and broke Bun worker
+ * threads), so URL secrets cannot go through the async fs/promises path.
+ *
+ * Unlike the async loader, this never CREATES key material: a missing key
+ * or salt at boot is a configuration error (the file was written by the
+ * wizard through encryptSecret, which mints the key/salt first). Fail fast
+ * with a message naming the missing file.
+ */
+export function decryptSecretSync(value: string, storageDir: string): string {
+  if (!isEncryptedSecret(value)) return value;
+
+  const [, , ivEncoded, tagEncoded, ciphertextEncoded] = value.split(":");
+  if (ivEncoded === undefined || tagEncoded === undefined || ciphertextEncoded === undefined) {
+    throw new Error("Invalid encrypted secret");
+  }
+
+  const iv = Buffer.from(ivEncoded, "base64");
+  const tag = Buffer.from(tagEncoded, "base64");
+  const ciphertext = Buffer.from(ciphertextEncoded, "base64");
+
+  const decrypt = (key: Buffer): string => {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]).toString("utf8");
+  };
+
+  try {
+    return decrypt(loadEncryptionKeySync(storageDir));
+  } catch (error) {
+    const password = process.env.ENCRYPTION_PASSWORD;
+    if (password !== undefined && password !== "") {
+      try {
+        return decrypt(legacyEncryptionKey(password));
+      } catch {
+        // fall through to the primary error
+      }
+    }
+    throw error;
+  }
+}
+
+function loadEncryptionKeySync(storageDir: string): Buffer {
+  const resolvedDir = resolve(storageDir);
+
+  // Reuse the async loader's cache when the directory matches: a key
+  // already loaded by encryptSecret/decryptSecret is valid here too.
+  if (cachedKey !== undefined && cachedStorageDir === resolvedDir) {
+    return cachedKey;
+  }
+
+  const password = process.env.ENCRYPTION_PASSWORD;
+  if (password !== undefined && password !== "") {
+    const saltPath = join(resolvedDir, SALT_FILE_NAME);
+    let saltText: string;
+    try {
+      saltText = readFileSync(saltPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `Cannot decrypt storage secret: KDF salt not found at ${saltPath}. ` +
+          "Persist STORAGE_DIR whenever ENCRYPTION_PASSWORD is configured.",
+        );
+      }
+      throw error;
+    }
+    const salt = Buffer.from(saltText.trim(), "base64");
+    if (salt.length < SALT_LENGTH) {
+      throw new Error(`Invalid KDF salt in ${saltPath}`);
+    }
+    const key = scryptSync(password, salt, KEY_LENGTH);
+    cachedKey = key;
+    cachedStorageDir = resolvedDir;
+    return key;
+  }
+
+  const keyPath = join(resolvedDir, KEY_FILE_NAME);
+  let keyText: string;
+  try {
+    keyText = readFileSync(keyPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Cannot decrypt storage secret: encryption key not found at ${keyPath}. ` +
+        "The boot config references a URL secret, but no key exists in storage.",
+      );
+    }
+    throw error;
+  }
+  const key = Buffer.from(keyText.trim(), "base64");
+  if (key.length !== KEY_LENGTH) {
+    throw new Error(`Invalid encryption key in ${keyPath}`);
+  }
+  cachedKey = key;
+  cachedStorageDir = resolvedDir;
+  return key;
 }
