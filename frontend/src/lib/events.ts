@@ -69,9 +69,6 @@ export function subscribeEvents(
         return;
       }
       if (!response.ok) throw new ApiError(response.status, `Event stream failed (${response.status})`);
-      // A successful connect resets the backoff; drops after this point
-      // reconnect quickly.
-      retryMs = 1000;
       const reader = response.body?.getReader();
       if (reader === undefined) throw new Error("Event stream had no body");
       const decoder = new TextDecoder();
@@ -86,7 +83,13 @@ export function subscribeEvents(
         for (const frame of frames) {
           if (frame.trim() === "") continue;
           const event = parseEventFrame(frame);
-          if (event !== null) onEvent(event);
+          if (event !== null) {
+            // Backoff resets only once the stream has demonstrated health
+            // by delivering frames; a connect that drops instantly must
+            // keep backing off.
+            retryMs = 1000;
+            onEvent(event);
+          }
         }
       }
     } catch {

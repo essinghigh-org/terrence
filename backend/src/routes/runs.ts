@@ -761,7 +761,16 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
     }
-    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
+    const before = await db.query.runs.findFirst({
+      where: and(
+        eq(runs.id, runId),
+        inArray(runs.status, ["planned", "planned_and_saved"]),
+        // plan-only / saved-plan runs never apply; scheduling them would
+        // leave them confirmed forever (the poller skips them).
+        eq(runs.planOnly, false),
+        eq(runs.savePlan, false),
+      ),
+    });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const attributes = payload.data !== null && typeof payload.data === "object"

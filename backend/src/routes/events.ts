@@ -15,7 +15,9 @@ type ParamCtx = Readonly<{
 
 const HEARTBEAT_MS = 15_000;
 const MAX_CONNECTIONS = 50;
+const MAX_CONNECTIONS_PER_USER = 5;
 let activeConnections = 0;
+const activeConnectionsByUser = new Map<string, number>();
 
 function sseFrame(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -44,15 +46,26 @@ export const eventsRoutes = new Elysia({ name: "events" })
         headers: { "Content-Type": "application/json" },
       });
     }
+    const userStreams = activeConnectionsByUser.get(user.id) ?? 0;
+    if (userStreams >= MAX_CONNECTIONS_PER_USER) {
+      return new Response(JSON.stringify({ errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams for this user" }] }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     // Reserve the slot BEFORE the async membership lookup so concurrent
     // connects cannot both pass the cap check; the reservation is released
     // on abort, stream cancel, or the one-hour lifetime limit.
     activeConnections += 1;
+    activeConnectionsByUser.set(user.id, userStreams + 1);
     let slotReserved = true;
     const releaseSlot = (): void => {
       if (!slotReserved) return;
       slotReserved = false;
       activeConnections = Math.max(0, activeConnections - 1);
+      const remaining = (activeConnectionsByUser.get(user.id) ?? 1) - 1;
+      if (remaining <= 0) activeConnectionsByUser.delete(user.id);
+      else activeConnectionsByUser.set(user.id, remaining);
     };
 
     // Allowed orgs resolved once: site admins see everything; org tokens see
@@ -90,7 +103,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
     const stream = new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
         let cleanedUp = false;
-        cleanup = (): void => {
+        const baseCleanup = (): void => {
           if (cleanedUp) return;
           cleanedUp = true;
           unsubscribe();
@@ -102,6 +115,14 @@ export const eventsRoutes = new Elysia({ name: "events" })
             // Already closed or errored; nothing to do.
           }
         };
+        // The wrapped cleanup (which also clears the lifetime timer) is
+        // installed BEFORE abort registration so an already-aborted request
+        // always runs the full cleanup path.
+        cleanup = (): void => {
+          if (lifetime !== undefined) clearTimeout(lifetime);
+          baseCleanup();
+        };
+        let lifetime: ReturnType<typeof setTimeout> | undefined;
         const enqueue = (event: string, data: unknown): void => {
           if (controller.desiredSize !== null && controller.desiredSize <= 0) {
             // Backpressure: the client stopped reading; end the stream and
@@ -129,19 +150,12 @@ export const eventsRoutes = new Elysia({ name: "events" })
 
         // One-hour lifetime: the allowed-org snapshot ages; closing forces
         // clients to reconnect and re-resolve permissions.
-        const lifetime = setTimeout(cleanup, 60 * 60 * 1000);
+        lifetime = setTimeout(cleanup, 60 * 60 * 1000);
         const abort = (): void => {
           cleanup();
         };
         request.signal.addEventListener("abort", abort, { once: true });
         if (request.signal.aborted) abort();
-        cleanup = ((): () => void => {
-          const base = cleanup;
-          return (): void => {
-            clearTimeout(lifetime);
-            base();
-          };
-        })();
       },
       cancel(): void {
         // Client disconnected (reader canceled): release the subscription

@@ -332,13 +332,17 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
       changeRequestValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.insert(changeRequests).values(records);
     for (const record of records) queueChangeRequestNotification(record.id);
-    // Audit writes are independent of the notifications; run them
-    // concurrently instead of serializing the bulk path.
-    await Promise.all(records.map((record): Promise<void> =>
-      auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
-        workspaceId: record.workspaceId,
-        toStatus: "pending",
-      })));
+    // Audit writes are independent of the notifications; run them with
+    // bounded concurrency so a very large bulk action cannot open hundreds
+    // of simultaneous write transactions.
+    const AUDIT_CONCURRENCY = 10;
+    for (let i = 0; i < records.length; i += AUDIT_CONCURRENCY) {
+      await Promise.all(records.slice(i, i + AUDIT_CONCURRENCY).map((record): Promise<void> =>
+        auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
+          workspaceId: record.workspaceId,
+          toStatus: "pending",
+        })));
+    }
     (set as { status: number }).status = 201;
     return {
       data: {
@@ -386,18 +390,48 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
       // must still be well-formed.
       return { data: [], ...pagination(request, number, size, 0) };
     }
-    const baseWhere = and(
-      inArray(changeRequests.workspaceId, orgWorkspaceIds),
-      ...(statuses === null ? [] : [inArray(changeRequests.status, statuses)]),
-    );
+    // SQLite drivers cap bound parameters per statement; chunk huge id
+    // lists and merge in JS so org-wide inboxes cannot hit the limit.
+    const ID_CHUNK = 500;
+    const statusesWhere = statuses === null ? [] : [inArray(changeRequests.status, statuses)];
+    const chunkCount = Math.ceil(orgWorkspaceIds.length / ID_CHUNK);
+    const chunked = async <T>(
+      run: (ids: readonly string[]) => Promise<T[]>,
+      combine: (chunks: T[][]) => T[],
+    ): Promise<T[]> => {
+      const results: T[][] = [];
+      for (let i = 0; i < chunkCount; i += 1) {
+        const ids = orgWorkspaceIds.slice(i * ID_CHUNK, (i + 1) * ID_CHUNK);
+        results.push(await run(ids));
+      }
+      return combine(results);
+    };
     const [rows, counts] = await Promise.all([
-      db.query.changeRequests.findMany({
-        where: baseWhere,
-        orderBy: [desc(changeRequests.createdAt), desc(changeRequests.id)],
-        limit: size,
-        offset: (number - 1) * size,
-      }),
-      db.select({ total: count() }).from(changeRequests).where(baseWhere),
+      chunked(
+        (ids): Promise<Readonly<typeof changeRequests.$inferSelect>[]> =>
+          db.query.changeRequests.findMany({
+            where: and(inArray(changeRequests.workspaceId, ids), ...statusesWhere),
+            orderBy: [desc(changeRequests.createdAt), desc(changeRequests.id)],
+            // Each chunk must cover the FULL requested window from its own
+            // start (offset 0): a row that ranks early in its chunk would
+            // otherwise fall outside a chunk-local offset window and vanish
+            // from the merged page.
+            limit: number * size,
+          }),
+        (chunks): Readonly<typeof changeRequests.$inferSelect>[] => {
+          const merged = chunks.flat().sort((a, b): number =>
+            b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+          return merged.slice((number - 1) * size, number * size);
+        },
+      ),
+      chunked(
+        (ids): Promise<Readonly<{ total: number }>[]> =>
+          db.select({ total: count() }).from(changeRequests)
+            .where(and(inArray(changeRequests.workspaceId, ids), ...statusesWhere)),
+        (chunks): { total: number }[] => [{
+          total: chunks.reduce((sum: number, chunk): number => sum + (chunk[0]?.total ?? 0), 0),
+        }],
+      ),
     ]);
     const [namesById, userRows] = await Promise.all([
       rows.length === 0

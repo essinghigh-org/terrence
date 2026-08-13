@@ -2480,7 +2480,9 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   // canceled, or rescheduled).
   const dueIds = new Set(dueRuns.map((run): string => run.id));
   for (const key of scheduledBlockReasons.keys()) {
-    const runId = key.startsWith("scheduled:") ? key.slice("scheduled:".length) : "";
+    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:")
+      ? key.slice(key.indexOf(":") + 1)
+      : "";
     if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
   }
   const applied: string[] = [];
@@ -2522,12 +2524,19 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
           pool?.orgId !== workspace.orgId
           || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
         ) {
-          await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+          // Persistent pool failures must not spam the run log on every
+          // poll; log once per reason like the gate-block path.
+          const key = `agent-pool:${run.id}`;
+          if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
+            scheduledBlockReasons.set(key, "pool-unreachable");
+            await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+          }
           // Restore the confirmed state so the next poll retries once the
           // pool is reachable, mirroring the manual-apply path.
           await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id));
           continue;
         }
+        scheduledBlockReasons.delete(`agent-pool:${run.id}`);
         const job = await enqueueAgentApplyJob(run.id, pool.id);
         if (job === undefined) {
           // The agent job queue rejected the claim; restore for retry.

@@ -64,7 +64,9 @@ type CalendarBound = Readonly<{ ms: number; iso: string }>;
 function parseCalendarBound(raw: string | null): CalendarBound | null | undefined {
   if (raw === null || raw === "") return undefined;
   const ms = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
-  if (!Number.isFinite(ms)) return null;
+  // ECMAScript Date time-value range: out-of-range numeric bounds would
+  // throw RangeError from toISOString() and 500 the handler.
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return null;
   return { ms, iso: new Date(ms).toISOString() };
 }
 

@@ -870,6 +870,10 @@ export function RunDetail({
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout((): void => {
         debounceTimer = undefined;
+        // Drop the armed poll timer: an SSE-triggered refresh supersedes it,
+        // so the two cannot chain duplicate refreshes.
+        if (timer !== undefined) window.clearTimeout(timer);
+        timer = undefined;
         if (!stopped && !controller.signal.aborted) void refresh();
       }, 500);
     }, controller.signal);
