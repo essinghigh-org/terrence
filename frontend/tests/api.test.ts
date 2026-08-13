@@ -88,6 +88,22 @@ test("invalidates an authenticated session after a 401 response", async () => {
   }
 });
 
+test("uses absolute /api/* endpoints verbatim instead of double-prefixing", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    calls.push(requestUrl(input));
+    return Response.json({ version: "test", build: "unknown" });
+  }) as typeof fetch;
+
+  try {
+    await fetchApi("/api/v1/metadata");
+    expect(calls).toEqual(["/api/v1/metadata"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("rotates an expired browser session before sending the API request", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; authorization: string | null; credentials?: RequestCredentials }[] = [];
