@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { setAuthToken } from "../src/lib/api";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { WorkspaceVcs } from "../src/components/WorkspaceVcs";
 
@@ -36,7 +37,8 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
   const onCreated = mock((): void => {
     // Asserted below.
   });
-  localStorage.setItem("tfe_token", "manage-workspaces-only");
+  localStorage.removeItem("tfe_token");
+  setAuthToken("manage-workspaces-only");
   const fetchMock = mock(async (
     input: string | URL | Request,
     init?: RequestInit,

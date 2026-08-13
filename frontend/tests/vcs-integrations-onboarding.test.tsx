@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
+import { expireAuthSession, setAuthToken } from "../src/lib/api";
 import { VcsIntegrations } from "../src/views/VcsIntegrations";
 
 const originalFetch = globalThis.fetch;
@@ -32,12 +33,13 @@ function organization(canManageVcsSettings: boolean, name = "acme"): Response {
 
 afterEach((): void => {
   cleanup();
+  expireAuthSession();
   localStorage.removeItem("tfe_token");
   globalThis.fetch = originalFetch;
 });
 
 test("derives VCS status from persisted connections and opens server-issued onboarding URLs", async () => {
-  localStorage.setItem("tfe_token", "spa-token");
+  setAuthToken("spa-token");
   const requests: { accept: string | null; authorization: string | null; url: string }[] = [];
   const deletedInstallations: string[] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -209,7 +211,7 @@ test("derives VCS status from persisted connections and opens server-issued onbo
 });
 
 test("creates an OAuth client and immediately starts its real authorization flow", async () => {
-  localStorage.setItem("tfe_token", "spa-token");
+  setAuthToken("spa-token");
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme") return organization(true);

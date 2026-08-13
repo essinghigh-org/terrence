@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AccountSettings } from "../src/views/AccountSettings";
+import { getAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
 
 const originalFetch = globalThis.fetch;
@@ -67,7 +68,8 @@ test("completes an MFA login challenge without exposing the password again", asy
   await waitFor((): void => {
     expect(calls.some(([requestUrl]) => requestUrl === "/api/v2/users/login/mfa")).toBeTrue();
   });
-  expect(localStorage.getItem("tfe_token")).toBe("access-1");
+  expect(localStorage.getItem("tfe_token")).toBeNull();
+  expect(getAuthToken()).toBe("access-1");
 });
 
 test("disables MFA with a current authenticator code", async () => {

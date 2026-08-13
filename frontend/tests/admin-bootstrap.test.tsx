@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { AccountSettings } from "../src/views/AccountSettings";
+import { getAuthToken, setAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
 
 const originalFetch = globalThis.fetch;
@@ -51,11 +52,13 @@ test("sends a temporary administrator to the password page", async () => {
   });
 
   await waitFor((): void => { expect(view.getByText("Password page")).toBeTruthy(); });
-  expect(localStorage.getItem("tfe_token")).toBe("temporary-token");
+  // Access tokens live in memory; localStorage must stay clean.
+  expect(localStorage.getItem("tfe_token")).toBeNull();
+  expect(getAuthToken()).toBe("temporary-token");
 });
 
 test("uses the account API to clear a forced password change", async () => {
-  localStorage.setItem("tfe_token", "temporary-token");
+  setAuthToken("temporary-token");
   let requiresChange = true;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
@@ -100,7 +103,8 @@ test("uses the account API to clear a forced password change", async () => {
   await waitFor((): void => {
     expect(view.queryByText("Change the temporary administrator password before continuing.")).toBeNull();
   });
-  const passwordCall = fetchMock.mock.calls.find(([url]): boolean => url === "/api/v2/account/password");
+  const passwordCall = fetchMock.mock.calls.find(([url]: [string | URL | Request]): boolean =>
+    url === "/api/v2/account/password");
   expect(passwordCall).toBeDefined();
   expect(JSON.parse(passwordCall![1]!.body as string)).toEqual({
     data: {
