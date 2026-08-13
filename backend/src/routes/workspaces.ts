@@ -550,14 +550,57 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         where: inArray(workspaceTags.workspaceId, wsList.map((w: WsItem): string => w.id)),
         orderBy: [asc(workspaceTags.key)],
       });
+    // Server-side latest-run aggregation (10.1/10.4): when the caller asks
+    // for include=current_run, resolve the newest run per workspace of the
+    // current page IN SQL (ROW_NUMBER window over runs(workspace_id,
+    // created_at), rowid ASC tie-break) instead of transferring org-wide run
+    // history. The same query shape as the current-run status filter above.
+    const includeCurrentRun = (searchParams.get("include") ?? "")
+      .split(",")
+      .map((value: string): string => value.trim())
+      .includes("current_run");
+    type LatestRunRow = Readonly<{
+      id: string;
+      workspaceId: string;
+      status: string;
+      message: string | null;
+      isDestroy: boolean;
+      createdAt: number;
+      autoApply: boolean;
+    }>;
+    const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
+      ? db.all<LatestRunRow>(sql`
+          SELECT id, workspace_id AS workspaceId, status, message,
+                 is_destroy AS isDestroy, created_at AS createdAt,
+                 auto_apply AS autoApply
+          FROM (
+            SELECT id, workspace_id, status, message, is_destroy, created_at,
+                   auto_apply,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY workspace_id ORDER BY created_at DESC, rowid ASC
+                   ) AS rn
+            FROM runs
+            WHERE ${inArray(runs.workspaceId, wsList.map((w: WsItem): string => w.id))}
+          )
+          WHERE rn = 1
+        `)
+      : [];
+    const currentRunsByWorkspace = new Map(latestRunRows.map((row): [string, LatestRunRow] => [row.workspaceId, row]));
     const tagsByWorkspace = new Map<string, DeepReadonly<typeof workspaceTags.$inferSelect>[]>();
     for (const tag of tagRows) {
       const list = tagsByWorkspace.get(tag.workspaceId) ?? [];
       list.push(tag);
       tagsByWorkspace.set(tag.workspaceId, list);
     }
-    const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> =>
-      workspaceResource(w, org.defaultIacBinary, {
+    const data = await Promise.all(wsList.map(async (w: WsItem): Promise<Record<string, unknown>> => {
+      const baseOptions = {
+        orgName: org.name,
+        tags: tagsByWorkspace.get(w.id) ?? [],
+      };
+      const resourceOptions = includeCurrentRun
+        ? { ...baseOptions, currentRun: currentRunsByWorkspace.get(w.id) ?? null }
+        : baseOptions;
+      return workspaceResource(w, org.defaultIacBinary, {
         canAdmin: workspaceAllows(permSets.admin, w.id),
         canApply: workspaceAllows(permSets.apply, w.id),
         canLock: workspaceAllows(permSets.lock, w.id),
@@ -567,11 +610,25 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         canWriteStateVersions: workspaceAllows(permSets.stateWrite, w.id),
         canReadVariables: workspaceAllows(permSets.variablesRead, w.id),
         canWriteVariables: workspaceAllows(permSets.variablesWrite, w.id),
-      }, {
-        orgName: org.name,
-        tags: tagsByWorkspace.get(w.id) ?? [],
-      })));
-    return { data, ...pagination(request, number, size, totalCount) };
+      }, resourceOptions);
+    }));
+    const included = includeCurrentRun
+      ? latestRunRows.map((run: LatestRunRow): Record<string, unknown> => ({
+          id: run.id,
+          type: "runs",
+          attributes: {
+            status: run.status,
+            message: run.message,
+            "created-at": new Date(run.createdAt).toISOString(),
+            "is-destroy": run.isDestroy,
+            "auto-apply": run.autoApply,
+          },
+          relationships: {
+            workspace: { data: { id: run.workspaceId, type: "workspaces" } },
+          },
+        }))
+      : undefined;
+    return { data, ...(included === undefined ? {} : { included }), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/workspaces", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";

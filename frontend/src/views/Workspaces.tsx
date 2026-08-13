@@ -73,7 +73,10 @@ type Workspace = Readonly<{
     "tag-names"?: readonly string[];
     "vcs-repo"?: Readonly<{ identifier: string }> | null;
   }>;
-  relationships?: Readonly<{ project?: Readonly<{ data: Readonly<{ id: string }> | null }> }>;
+  relationships?: Readonly<{
+    project?: Readonly<{ data: Readonly<{ id: string }> | null }>;
+    "current-run"?: Readonly<{ data: Readonly<{ id: string }> | null }>;
+  }>;
 }>;
 
 type TagBinding = Readonly<{
@@ -82,6 +85,7 @@ type TagBinding = Readonly<{
 }>;
 
 type RunSummary = Readonly<{
+  type: "runs";
   attributes: Readonly<{
     "created-at"?: string;
     message?: string | null;
@@ -89,6 +93,48 @@ type RunSummary = Readonly<{
   }>;
   relationships: Readonly<{ workspace: Readonly<{ data: Readonly<{ id: string }> }> }>;
 }>;
+
+/**
+ * Page through a workspace list collecting both `data` and the `included`
+ * current-run resources (10.1): the server aggregates the latest run per
+ * workspace, so the view no longer bulk-fetches the org run history.
+ */
+async function fetchWorkspacePages(
+  endpoint: string,
+  signal?: Readonly<AbortSignal>,
+): Promise<Readonly<{ workspaces: Workspace[]; runs: RunSummary[] }>> {
+  const workspaces: Workspace[] = [];
+  const runs: RunSummary[] = [];
+  const visited = new Set<string>();
+  let pageEndpoint: string | null = endpoint;
+
+  while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
+    visited.add(pageEndpoint);
+    const response = await fetchApi(
+      pageEndpoint,
+      signal === undefined ? {} : { signal },
+    ) as {
+      data?: Workspace[];
+      included?: RunSummary[];
+      meta?: { pagination?: Record<string, unknown> };
+    };
+    if (Array.isArray(response.data)) workspaces.push(...response.data);
+    if (Array.isArray(response.included)) {
+      runs.push(...response.included.filter((item): boolean => item.type === "runs"));
+    }
+
+    const nextPage = response.meta?.pagination?.["next-page"];
+    if (typeof nextPage !== "number" || !Number.isSafeInteger(nextPage) || nextPage < 1) {
+      pageEndpoint = null;
+      continue;
+    }
+    const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
+    nextUrl.searchParams.set("page[number]", String(nextPage));
+    pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
+  }
+
+  return { workspaces, runs };
+}
 
 // The "running" set mirrors the executor's active statuses (worker.ts
 // blockerStatuses minus the completed-plan states, which belong to on-hold):
@@ -150,22 +196,19 @@ export function Workspaces(): React.JSX.Element {
     try {
       const statuses = runStatusFilters[statusFilter];
       const query = statuses === undefined
-        ? "?page%5Bsize%5D=100"
-        : `?page%5Bsize%5D=100&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
-      const [workspaceData, totalsData, projectResult, runResult, canManage] = await Promise.all([
-        fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
+        ? "?page%5Bsize%5D=100&include=current_run"
+        : `?page%5Bsize%5D=100&include=current_run&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
+      const [workspaceResult, totalsResult, projectResult, canManage] = await Promise.all([
+        fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
         // KPIs must reflect the whole org, not the filtered page: fetch the
         // unfiltered list solely for counting when a status filter is active.
         statuses === undefined
           ? Promise.resolve(null)
-          : fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100`, signal)
+          : fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&include=current_run`, signal)
             .catch((): null => null),
         fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
           .then((data): Readonly<{ data: Project[]; failed: false }> => ({ data, failed: false }))
           .catch((): Readonly<{ data: Project[]; failed: true }> => ({ data: [], failed: true })),
-        fetchAllApiPages<RunSummary>(`/organizations/${encodeURIComponent(orgName)}/runs?page%5Bsize%5D=100`, signal)
-          .then((data): Readonly<{ data: RunSummary[]; failed: false }> => ({ data, failed: false }))
-          .catch((): Readonly<{ data: RunSummary[]; failed: true }> => ({ data: [], failed: true })),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}`,
           signal === undefined ? {} : { signal },
@@ -175,11 +218,11 @@ export function Workspaces(): React.JSX.Element {
           .catch((): false => false),
       ]);
       if (signal?.aborted === true) return;
-      setWorkspaces(workspaceData);
-      if (statuses === undefined || totalsData !== null) {
-        const totalsSource = totalsData ?? workspaceData;
-        setTotalWorkspaceCount(totalsSource.length);
-        setLockedWorkspaceCount(totalsSource.filter((workspace): boolean => workspace.attributes.locked === true).length);
+      setWorkspaces(workspaceResult.workspaces);
+      if (statuses === undefined || totalsResult !== null) {
+        const totalsSource = totalsResult ?? workspaceResult;
+        setTotalWorkspaceCount(totalsSource.workspaces.length);
+        setLockedWorkspaceCount(totalsSource.workspaces.filter((workspace): boolean => workspace.attributes.locked === true).length);
         setTotalsUnavailable(false);
       } else {
         // Unfiltered counting failed under an active filter: keep the last
@@ -190,13 +233,16 @@ export function Workspaces(): React.JSX.Element {
       setProjects(projectResult.data);
       setProjectDataError(projectResult.failed);
       setCanManageWorkspaces(canManage);
+      // The server aggregates the latest run per workspace (include=current_run,
+      // review 10.1); the org-wide runs fetch is gone. Runs whose workspace
+      // left the page are dropped, which is correct for a paginated table.
       const byWorkspace = new Map<string, RunSummary>();
-      for (const run of runResult.data) {
+      for (const run of workspaceResult.runs) {
         const workspaceId = run.relationships.workspace.data.id;
         if (!byWorkspace.has(workspaceId)) byWorkspace.set(workspaceId, run);
       }
       setLatestRuns(byWorkspace);
-      setRunStatusError(runResult.failed);
+      setRunStatusError(false);
     } catch (error: unknown) {
       if (signal?.aborted === true) return;
       setLoadError(error instanceof Error ? error.message : "Could not load workspaces");

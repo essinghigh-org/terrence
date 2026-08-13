@@ -129,6 +129,66 @@ describe("TFE API v2 - Workspaces", () => {
     }
   });
 
+  it("should include the current run per workspace when include=current_run is requested", async () => {
+    const { runs, workspaces, configurationVersions } = await import("../../src/db/schema");
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, "k8s-cluster") });
+    expect(workspace).toBeDefined();
+    const configurationVersionId = crypto.randomUUID();
+    await db.insert(configurationVersions).values({
+      id: configurationVersionId,
+      workspaceId: workspace?.id ?? "",
+      status: "uploaded",
+      createdAt: Date.now(),
+    });
+    const olderRunId = `run-${crypto.randomUUID()}`;
+    const newerRunId = `run-${crypto.randomUUID()}`;
+    await db.insert(runs).values([
+      {
+        id: olderRunId,
+        workspaceId: workspace?.id ?? "",
+        status: "applied",
+        message: "Older run",
+        configurationVersionId,
+        createdAt: Date.now() - 1000,
+      },
+      {
+        id: newerRunId,
+        workspaceId: workspace?.id ?? "",
+        status: "planning",
+        message: "Newer run",
+        configurationVersionId,
+        createdAt: Date.now(),
+      },
+    ]);
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/organizations/homelab/workspaces?include=current_run", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const workspaceResource = body.data.find((entry: { id: string }): boolean => entry.id === workspace?.id);
+      expect(workspaceResource.relationships["current-run"]).toEqual({ data: { id: newerRunId, type: "runs" } });
+      const includedRun = body.included.find((entry: { id: string }): boolean => entry.id === newerRunId);
+      expect(includedRun).toBeDefined();
+      expect(includedRun.attributes.status).toBe("planning");
+      expect(includedRun.attributes.message).toBe("Newer run");
+      expect(body.included.some((entry: { id: string }): boolean => entry.id === olderRunId)).toBe(false);
+
+      // Without include, the relationship must stay absent (TFE default shape).
+      const plainResponse = await app.handle(new Request("http://localhost/api/v2/organizations/homelab/workspaces", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }));
+      const plainBody = await plainResponse.json();
+      const plainWorkspace = plainBody.data.find((entry: { id: string }): boolean => entry.id === workspace?.id);
+      expect(plainWorkspace.relationships["current-run"]).toBeUndefined();
+      expect(plainBody.included).toBeUndefined();
+    } finally {
+      await db.delete(runs).where(eq(runs.id, olderRunId));
+      await db.delete(runs).where(eq(runs.id, newerRunId));
+      await db.delete(configurationVersions).where(eq(configurationVersions.id, configurationVersionId));
+    }
+  });
+
   it("should return the dependency graph from the latest finalized state", async () => {
     const { stateVersions, workspaces } = await import("../../src/db/schema");
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, "k8s-cluster") });

@@ -199,6 +199,12 @@ type WorkspaceResourceOptions = Readonly<{
   readonly orgName?: string | null;
   /** Preloaded tags for this workspace; skips the per-workspace tags query. */
   readonly tags?: readonly DeepReadonly<typeof workspaceTags.$inferSelect>[];
+  /**
+   * Latest run for this workspace (10.4). `undefined` omits the
+   * current-run relationship entirely; `null` emits `{ data: null }`
+   * (requested via `include=current_run` but no run exists yet).
+   */
+  readonly currentRun?: Readonly<{ id: string }> | null;
 }>;
 
 export async function workspaceResource(
@@ -299,6 +305,15 @@ export async function workspaceResource(
       "data-retention-policy": {
         links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
       },
+      ...(options?.currentRun === undefined
+        ? {}
+        : {
+            "current-run": {
+              data: options.currentRun === null
+                ? null
+                : { id: options.currentRun.id, type: "runs" },
+            },
+          }),
     },
     links: { self: `/api/v2/workspaces/${workspace.id}` },
   };
