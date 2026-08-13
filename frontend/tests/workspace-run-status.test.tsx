@@ -13,6 +13,19 @@ const json = (data: unknown, status = 200): Response =>
 const urlOf = (input: string | URL | Request): string =>
   typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
+// The workspace list now aggregates the latest run per workspace server-side
+// (include=current_run): the mocks mirror that shape with a current-run
+// relationship plus an included run resource.
+const includedRun = (id: string, status: string, workspaceId: string): Record<string, unknown> => ({
+  id,
+  type: "runs",
+  attributes: { status, "created-at": "2026-08-01T00:00:00.000Z", message: "Manual run" },
+  relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+});
+const currentRunRelationship = (runId: string | null): Record<string, unknown> => ({
+  "current-run": { data: runId === null ? null : { id: runId, type: "runs" } },
+});
+
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
@@ -22,13 +35,17 @@ test("shows the latest run status instead of treating an unlocked workspace as a
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("/workspaces?")) {
-      return json({ data: [{ id: "ws-1", attributes: { name: "production", locked: false }, relationships: { project: { data: null } } }] });
+      return json({
+        data: [{
+          id: "ws-1",
+          attributes: { name: "production", locked: false },
+          relationships: { project: { data: null }, ...currentRunRelationship("run-1") },
+        }],
+        included: [includedRun("run-1", "policy_soft_failed", "ws-1")],
+      });
     }
     if (url.includes("/projects?")) {
       return json({ data: [{ id: "project-1", attributes: { name: "Platform" } }] });
-    }
-    if (url.includes("/runs?")) {
-      return json({ data: [{ id: "run-1", attributes: { status: "policy_soft_failed" }, relationships: { workspace: { data: { id: "ws-1" } } } }] });
     }
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
@@ -81,14 +98,14 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
         data: [{
           id: "ws-1",
           attributes: { name: "production", locked: false },
-          relationships: { project: { data: { id: "project-1", type: "projects" } } },
+          relationships: { project: { data: { id: "project-1", type: "projects" } }, ...currentRunRelationship(null) },
         }],
+        included: [],
       });
     }
     if (url.includes("/projects?")) {
       return json({ errors: [{ title: "Projects unavailable" }] }, 503);
     }
-    if (url.includes("/runs?")) return json({ data: [] });
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
@@ -110,27 +127,28 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {
-      // Server-filtered view: only the applying workspace matches.
-      return json({ data: [{
-        id: "ws-1",
-        attributes: { name: "filtered-only", locked: true },
-        relationships: { project: { data: null } },
-      }] });
+      // Server-filtered view: only the applying workspace matches, and its
+      // latest run arrives as an included resource.
+      return json({
+        data: [{
+          id: "ws-1",
+          attributes: { name: "filtered-only", locked: true },
+          relationships: { project: { data: null }, ...currentRunRelationship("run-1") },
+        }],
+        included: [includedRun("run-1", "post_plan_running", "ws-1")],
+      });
     }
     if (url.includes("/workspaces?")) {
       // Unfiltered: the org-wide set used purely for the KPI cards.
-      return json({ data: [
-        { id: "ws-1", attributes: { name: "filtered-only", locked: true }, relationships: { project: { data: null } } },
-        { id: "ws-2", attributes: { name: "idle-ws", locked: false }, relationships: { project: { data: null } } },
-      ] });
+      return json({
+        data: [
+          { id: "ws-1", attributes: { name: "filtered-only", locked: true }, relationships: { project: { data: null }, ...currentRunRelationship(null) } },
+          { id: "ws-2", attributes: { name: "idle-ws", locked: false }, relationships: { project: { data: null }, ...currentRunRelationship(null) } },
+        ],
+        included: [],
+      });
     }
     if (url.includes("/projects?")) return json({ data: [] });
-    if (url.includes("/runs?")) {
-      return json({ data: [
-        { id: "run-1", attributes: { status: "post_plan_running" }, relationships: { workspace: { data: { id: "ws-1" } } } },
-        { id: "run-2", attributes: { status: "planned" }, relationships: { workspace: { data: { id: "ws-2" } } } },
-      ] });
-    }
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
@@ -161,23 +179,28 @@ test("KPI totals degrade visibly when the org-wide count cannot be loaded", asyn
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {
-      return json({ data: [{
-        id: "ws-1",
-        attributes: { name: "filtered-only", locked: true },
-        relationships: { project: { data: null } },
-      }] });
+      return json({
+        data: [{
+          id: "ws-1",
+          attributes: { name: "filtered-only", locked: true },
+          relationships: { project: { data: null }, ...currentRunRelationship(null) },
+        }],
+        included: [],
+      });
     }
     if (url.includes("/workspaces?")) {
       return failUnfiltered
         ? json({ errors: [{ title: "Count unavailable" }] }, 503)
-        : json({ data: [{
-            id: "ws-1",
-            attributes: { name: "filtered-only", locked: true },
-            relationships: { project: { data: null } },
-          }] });
+        : json({
+            data: [{
+              id: "ws-1",
+              attributes: { name: "filtered-only", locked: true },
+              relationships: { project: { data: null }, ...currentRunRelationship(null) },
+            }],
+            included: [],
+          });
     }
     if (url.includes("/projects?")) return json({ data: [] });
-    if (url.includes("/runs?")) return json({ data: [] });
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }

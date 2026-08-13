@@ -32,6 +32,8 @@ import { AdminScimSettings } from "./views/AdminScimSettings";
 import { ModuleSharing } from "./views/ModuleSharing";
 import { NoCodeProvisioning } from "./views/NoCodeProvisioning";
 import { ChangeCalendar } from "./views/ChangeCalendar";
+import { ChangeRequests } from "./views/ChangeRequests";
+import { ChangeRequestDetail } from "./views/ChangeRequestDetail";
 import { AdminOperationsSettings } from "./views/AdminOperationsSettings";
 import {
   AUTH_CHANGED_EVENT,
@@ -139,6 +141,8 @@ function App(): JSX.Element {
             <Route path=":orgName/registry" element={<Registry />} />
             <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
             <Route path=":orgName/calendar" element={<ChangeCalendar />} />
+            <Route path=":orgName/change-requests" element={<ChangeRequests />} />
+            <Route path=":orgName/change-requests/:changeRequestId" element={<ChangeRequestDetail />} />
             <Route path=":orgName/projects" element={<Projects />} />
             <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
             <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />

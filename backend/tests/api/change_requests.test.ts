@@ -90,12 +90,19 @@ describe("change request API", () => {
       attributes: {
         subject: "Rotate credentials",
         message: "Move this workspace to short-lived credentials.",
+        status: "pending",
         "archived-by": null,
         "archived-at": null,
         "created-at": expect.any(String),
         "updated-at": expect.any(String),
+        "resolved-by": null,
+        "resolved-at": null,
       },
-      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+      relationships: {
+        workspace: { data: { id: workspaceId, type: "workspaces" } },
+        creator: { data: { id: ownerId, type: "users" } },
+        resolver: { data: null },
+      },
     });
 
     const shown = await request(`/api/v2/change-requests/${id}`);
@@ -103,6 +110,43 @@ describe("change request API", () => {
     expect((await shown.json()).data.type).toBe("workspace_change_requests");
     expect((await request(`/api/v2/workspaces/change-requests/${id}`)).status).toBe(200);
     expect((await request(`/api/v2/change-requests/${id}`, "GET", undefined, outsiderToken)).status).toBe(404);
+  });
+
+  it("lists org-wide change requests with status filtering and pagination", async () => {
+    const created = await request(`/api/v2/workspaces/${workspaceId}/change-requests`, "POST", {
+      data: { attributes: { subject: "Inbox request", message: "Visible across the org." } },
+    });
+    const id = (await created.json()).data.id as string;
+    try {
+      const inbox = await request(`/api/v2/organizations/${orgId}/change-requests?page[size]=20`);
+      expect(inbox.status).toBe(200);
+      const body = (await inbox.json()) as {
+        data: {
+          id: string;
+          attributes: { subject: string; status: string; "workspace-name": string | null; "created-by-username": string | null };
+        }[];
+        meta: { pagination: { "total-count": number } };
+      };
+      const row = body.data.find((item): boolean => item.id === id);
+      expect(row).toBeDefined();
+      expect(row?.attributes.status).toBe("pending");
+      expect(row?.attributes["workspace-name"]).toBe(workspaceName);
+      expect(row?.attributes["created-by-username"]).toBe(ownerId);
+
+      const pendingOnly = await request(`/api/v2/organizations/${orgId}/change-requests?filter[status]=pending`);
+      expect(pendingOnly.status).toBe(200);
+      const pendingBody = (await pendingOnly.json()) as { data: { attributes: { status: string } }[] };
+      expect(pendingBody.data.every((item): boolean => item.attributes.status === "pending")).toBe(true);
+
+      const archivedOnly = await request(`/api/v2/organizations/${orgId}/change-requests?filter[status]=archived`);
+      const archivedBody = (await archivedOnly.json()) as { data: { id: string }[] };
+      expect(archivedBody.data.some((item): boolean => item.id === id)).toBe(false);
+
+      expect((await request(`/api/v2/organizations/${orgId}/change-requests?filter[status]=bogus`)).status).toBe(422);
+      expect((await request(`/api/v2/organizations/nonexistent-${suffix}/change-requests`)).status).toBe(404);
+    } finally {
+      await db.delete(changeRequests).where(eq(changeRequests.id, id));
+    }
   });
 
   it("approves and discards pending requests exactly once", async () => {
@@ -201,12 +245,19 @@ describe("change request API", () => {
       attributes: {
         subject: "Archive request",
         message: "This work is complete.",
+        status: "archived",
         "archived-by": ownerId,
         "archived-at": expect.any(String),
         "created-at": expect.any(String),
         "updated-at": expect.any(String),
+        "resolved-by": ownerId,
+        "resolved-at": expect.any(String),
       },
-      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+      relationships: {
+        workspace: { data: { id: workspaceId, type: "workspaces" } },
+        creator: { data: { id: ownerId, type: "users" } },
+        resolver: { data: { id: ownerId, type: "users" } },
+      },
     });
     expect((await db.query.changeRequests.findFirst({ where: eq(changeRequests.id, id) }))?.status).toBe("archived");
     expect((await request(`/api/v2/workspaces/change-requests/${id}`, "PATCH")).status).toBe(409);

@@ -1065,6 +1065,7 @@ export function Layout({
         { label: "Registry", to: `${orgPath}/registry`, icon: Package },
         { label: "No-code modules", to: `${orgPath}/no-code`, icon: PackageOpen },
         { label: "Change calendar", to: `${orgPath}/calendar`, icon: Calendar },
+        { label: "Change requests", to: `${orgPath}/change-requests`, icon: GitPullRequest },
         { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
       ] as const).filter((link): boolean =>
         (link.label !== "Projects" || canReadProjects)

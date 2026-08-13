@@ -31,7 +31,7 @@ test("assigns a workspace to another project via the workspace assignment dialog
         ],
       });
     }
-    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100" && method === "GET") {
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") && method === "GET") {
       return json({
         data: [{
           id: "ws-1",
@@ -88,7 +88,7 @@ test("does not allow workspace assignment without manage-project permission", as
     if (url === "/api/v2/organizations/acme/projects") {
       return json({ data: [{ id: "prj-1", attributes: { name: "Default" } }] });
     }
-    if (url === "/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") {
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) {
       return json({ data: [{ id: "ws-1", attributes: { name: "production" } }] });
     }
     if (url === "/api/v2/organizations/acme") {

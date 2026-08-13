@@ -1,9 +1,16 @@
-import { count, desc, eq } from "drizzle-orm";
+import { count, desc, eq, and, inArray } from "drizzle-orm";
 import { Elysia } from "elysia";
 import { authPlugin } from "../auth";
 import { db } from "../db";
-import { changeRequests, organizations, type users, workspaces } from "../db/schema";
-import { checkOrganizationPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import { changeRequests, organizations, users, workspaces } from "../db/schema";
+import {
+  checkOrganizationPermission,
+  checkOrgPermission,
+  checkWorkspacePermission,
+  pageRequest,
+  pagination,
+  auditLog,
+} from "../lib/utils";
 import { queueChangeRequestNotification } from "../lib/notifications";
 
 type SetObject = Readonly<{
@@ -66,15 +73,24 @@ function resource(changeRequest: ChangeRequest, compatibility = false): Record<s
     attributes: {
       subject: changeRequest.subject,
       message: changeRequest.message,
+      status: changeRequest.status,
       "archived-by": changeRequest.status === "archived" ? changeRequest.resolvedBy : null,
       "archived-at": changeRequest.status === "archived" && changeRequest.resolvedAt !== null
         ? new Date(changeRequest.resolvedAt).toISOString()
         : null,
       "created-at": new Date(changeRequest.createdAt).toISOString(),
       "updated-at": new Date(changeRequest.updatedAt).toISOString(),
+      "resolved-by": changeRequest.resolvedBy,
+      "resolved-at": changeRequest.resolvedAt === null ? null : new Date(changeRequest.resolvedAt).toISOString(),
     },
     relationships: {
       workspace: { data: { id: changeRequest.workspaceId, type: "workspaces" } },
+      creator: {
+        data: changeRequest.createdBy === null ? null : { id: changeRequest.createdBy, type: "users" },
+      },
+      resolver: {
+        data: changeRequest.resolvedBy === null ? null : { id: changeRequest.resolvedBy, type: "users" },
+      },
     },
   };
 }
@@ -181,6 +197,15 @@ async function resolveChangeRequest(
     resolvedAt: now,
     updatedAt: now,
   }).where(eq(changeRequests.id, id));
+  const workspace = await db.query.workspaces.findFirst({
+    columns: { orgId: true },
+    where: eq(workspaces.id, changeRequest.workspaceId),
+  });
+  await auditLog(status, "change-requests", id, userId ?? null, workspace?.orgId ?? null, {
+    workspaceId: changeRequest.workspaceId,
+    fromStatus: changeRequest.status,
+    toStatus: status,
+  });
   const updated = await db.query.changeRequests.findFirst({ where: eq(changeRequests.id, id) });
   if (updated === undefined) return errorResponse(set, 404, "Not Found");
   return { data: resource(updated, compatibility) };
@@ -224,6 +249,10 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     const changeRequest = changeRequestValues(workspace.id, subject, message, user?.id ?? null, Date.now());
     await db.insert(changeRequests).values(changeRequest);
     queueChangeRequestNotification(changeRequest.id);
+    await auditLog("create", "change-requests", changeRequest.id, user?.id ?? null, workspace.orgId, {
+      workspaceId: workspace.id,
+      toStatus: "pending",
+    });
     (set as { status: number }).status = 201;
     return { data: resource(changeRequest, true) };
   })
@@ -278,7 +307,13 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     const records = selectedIds.map((workspaceId): ChangeRequest =>
       changeRequestValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.insert(changeRequests).values(records);
-    for (const record of records) queueChangeRequestNotification(record.id);
+    for (const record of records) {
+      queueChangeRequestNotification(record.id);
+      await auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
+        workspaceId: record.workspaceId,
+        toStatus: "pending",
+      });
+    }
     (set as { status: number }).status = 201;
     return {
       data: {
@@ -291,6 +326,77 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
           created_by: user === null || user === undefined ? null : { id: user.id, type: "users" },
         },
       },
+    };
+  })
+  .get("/api/v2/organizations/:org_name/change-requests", async ({ params, user, orgId, teamId, request, set }: Context): Promise<unknown> => {
+    // Org-wide change request inbox (21.9). Scoped like the calendar: org
+    // membership gates the endpoint, workspace read access gates the rows.
+    const organization = await db.query.organizations.findFirst({
+      where: eq(organizations.name, params.org_name ?? ""),
+    });
+    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
+      return errorResponse(set, 404, "Not Found");
+    }
+    const url = new URL(request.url);
+    const statusFilter = url.searchParams.get("filter[status]");
+    const VALID_STATUSES = ["pending", "approved", "discarded", "archived"];
+    const statuses = statusFilter === null || statusFilter === ""
+      ? null
+      : [...new Set(statusFilter.split(",").map((value: string): string => value.trim()).filter((value: string): boolean => value !== ""))];
+    if (statuses !== null && (statuses.length === 0 || statuses.some((value: string): boolean => !VALID_STATUSES.includes(value)))) {
+      return errorResponse(set, 422, "Unprocessable Entity", "filter[status] must contain pending, approved, discarded, or archived");
+    }
+    const { number, size } = pageRequest(request);
+    const orgWorkspaceRows = await db.query.workspaces.findMany({
+      where: eq(workspaces.orgId, organization.id),
+      columns: { id: true },
+    });
+    const orgWorkspaceIds = orgWorkspaceRows.map((row): string => row.id);
+    const baseWhere = and(
+      inArray(changeRequests.workspaceId, orgWorkspaceIds),
+      ...(statuses === null ? [] : [inArray(changeRequests.status, statuses)]),
+    );
+    const [rows, counts] = await Promise.all([
+      db.query.changeRequests.findMany({
+        where: baseWhere,
+        orderBy: [desc(changeRequests.createdAt), desc(changeRequests.id)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(changeRequests).where(baseWhere),
+    ]);
+    const [namesById, userRows] = await Promise.all([
+      rows.length === 0
+        ? Promise.resolve(new Map<string, string>())
+        : db.query.workspaces.findMany({
+          where: inArray(workspaces.id, [...new Set(rows.map((row): string => row.workspaceId))]),
+          columns: { id: true, name: true },
+        }).then((found): Map<string, string> => new Map(found.map((row): [string, string] => [row.id, row.name]))),
+      rows.length === 0
+        ? Promise.resolve([])
+        : db.query.users.findMany({
+          where: inArray(users.id, [...new Set(rows.flatMap((row): string[] => [
+            ...(row.createdBy === null ? [] : [row.createdBy]),
+            ...(row.resolvedBy === null ? [] : [row.resolvedBy]),
+          ]))]),
+          columns: { id: true, username: true },
+        }),
+    ]);
+    const usernamesById = new Map(userRows.map((row): [string, string] => [row.id, row.username]));
+    return {
+      data: rows.map((row): Record<string, unknown> => {
+        const base = resource(row);
+        return {
+          ...base,
+          attributes: {
+            ...(base.attributes as Record<string, unknown>),
+            "workspace-name": namesById.get(row.workspaceId) ?? null,
+            "created-by-username": row.createdBy === null ? null : usernamesById.get(row.createdBy) ?? null,
+            "resolved-by-username": row.resolvedBy === null ? null : usernamesById.get(row.resolvedBy) ?? null,
+          },
+        };
+      }),
+      ...pagination(request, number, size, counts[0]?.total ?? 0),
     };
   })
   .get("/api/v2/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> => {

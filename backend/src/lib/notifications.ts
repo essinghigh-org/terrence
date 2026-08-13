@@ -669,10 +669,8 @@ async function deliverChangeRequestNotifications(
   const matching = allConfigurations.filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes("team:change_request"));
   const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
-  // No change-request detail route exists in the frontend yet, so link to the
-  // workspace page until a dedicated change-request UI is built (review item 1.4).
   const changeRequestUrl = new URL(
-    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}`,
+    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/change-requests/${encodeURIComponent(changeRequest.id)}`,
     baseUrl,
   ).toString();
 
