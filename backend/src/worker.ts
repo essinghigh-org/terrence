@@ -41,7 +41,8 @@ import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus } from "./lib/run-status";
-import { FINAL_RUN_STATUSES, signedApiURL, validateExternalUrl } from "./lib/utils";
+import { FINAL_RUN_STATUSES, signedApiURL } from "./lib/utils";
+import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
   emptyCostEstimate,
   parseInfracostOutput,
@@ -59,6 +60,7 @@ import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { recoverStaleAgentJobs } from "./lib/agent-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
 import { log } from "./lib/log";
+import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;
@@ -632,12 +634,14 @@ async function extractTarArchive(
   workingDirectory?: string | null,
 ): Promise<boolean> {
   try {
+    await assertArchiveExpandedSize(archivePath);
     const verboseProc = spawn(["tar", "-tvzf", archivePath]);
     const verboseText = await new Response(verboseProc.stdout).text();
     const verboseExitCode = await verboseProc.exited;
     if (verboseExitCode !== 0) return false;
 
     const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
+    assertArchiveMemberCount(verboseLines);
     for (const line of verboseLines) {
       if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
         log.error("Security error: archive contains forbidden link/special member", { member: line });
@@ -655,14 +659,16 @@ async function extractTarArchive(
     if (exitCode !== 0) return false;
 
     const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
+    assertArchiveMemberCount(members);
     for (const m of members) {
       if (tarMemberPathUnsafe(m)) {
         log.error("Security error: archive contains dangerous path", { path: m });
         return false;
       }
     }
+    await assertArchiveLogicalSize(archivePath);
 
-    const extractProc = spawn(["tar", "-xzf", archivePath, "-C", destDir]);
+    const extractProc = spawn(["tar", "-xzf", archivePath, "--no-same-owner", "--no-same-permissions", "-C", destDir]);
     const ok = (await extractProc.exited) === 0;
     if (ok) {
       await unnestArchiveDirectory(destDir, workingDirectory);
@@ -785,16 +791,16 @@ async function executeRunTasks(
     let status = "running";
     let message: string | null = null;
     let resultUrl: string | null = null;
-    const urlError = validateExternalUrl(task.url, process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true");
-    if (urlError !== null) {
+    const destination = await resolveExternalUrl(task.url, process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true");
+    if ("error" in destination) {
       status = "failed";
-      message = urlError;
+      message = destination.error;
     } else try {
-      const response = await fetch(task.url, {
+      const response = await fetchResolvedExternalUrl(destination.target, {
         method: "POST",
         headers,
         body: payload,
-        signal: AbortSignal.timeout(10_000),
+        timeoutMs: 10_000,
       });
       const responseText = await response.text();
       status = response.ok ? "running" : "failed";

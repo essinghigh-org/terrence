@@ -51,7 +51,7 @@
 #endif
 
 /* Version reported by --version. Bump on user-visible runner changes. */
-#define LANDLOCK_RUNNER_VERSION "1.1.0"
+#define LANDLOCK_RUNNER_VERSION "1.2.0"
 
 #ifndef LANDLOCK_CREATE_RULESET_VERSION
 #define LANDLOCK_CREATE_RULESET_VERSION (1U << 0)
@@ -73,30 +73,45 @@
 #define LL_MAKE_SYM  (1ULL << 12)
 #define LL_REFER     (1ULL << 13) /* ABI >= 2 */
 #define LL_TRUNCATE  (1ULL << 14) /* ABI >= 3 */
+#define LL_IOCTL_DEV (1ULL << 15) /* ABI >= 5 */
+#define LL_RESOLVE_UNIX (1ULL << 16) /* ABI >= 9 */
+
+#define LL_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0) /* ABI >= 6 */
+#define LL_SCOPE_SIGNAL (1ULL << 1) /* ABI >= 6 */
 
 #define LL_READ (LL_READ_FILE | LL_READ_DIR)
 #define LL_RW   (LL_READ | LL_WRITE_FILE | LL_REMOVE_DIR | LL_REMOVE_FILE | \
                  LL_MAKE_CHAR | LL_MAKE_DIR | LL_MAKE_REG | LL_MAKE_SOCK | \
-                 LL_MAKE_FIFO | LL_MAKE_BLOCK | LL_MAKE_SYM)
+                 LL_MAKE_FIFO | LL_MAKE_BLOCK | LL_MAKE_SYM | LL_RESOLVE_UNIX)
 #define LL_EXEC  (LL_EXECUTE | LL_READ)
+
+/* Keep building against older libc kernel headers while using newer Landlock
+ * fields when the running kernel supports them. */
+struct ll_ruleset_attr {
+    uint64_t handled_access_fs;
+    uint64_t handled_access_net;
+    uint64_t scoped;
+};
 
 static long landlock_abi(void);
 
 /* Rights the ruleset handles. Masked by ABI at runtime. */
-static uint64_t handled_access(void) {
+static uint64_t handled_access(long abi) {
     uint64_t mask = LL_RW | LL_EXEC;
-    long abi = landlock_abi();
     if (abi >= 2) mask |= LL_REFER;
     if (abi >= 3) mask |= LL_TRUNCATE;
+    if (abi >= 5) mask |= LL_IOCTL_DEV;
+    if (abi < 9) mask &= ~LL_RESOLVE_UNIX;
     return mask;
 }
 
 /* Cap a requested access mask to what this ABI supports. */
-static uint64_t abi_mask(uint64_t access) {
-    /* REFER (ABI 2) and TRUNCATE (ABI 3) must not be requested on older
-     * kernels — unknown bits are rejected by the kernel. */
-    if (landlock_abi() < 3) access &= ~LL_TRUNCATE;
-    if (landlock_abi() < 2) access &= ~LL_REFER;
+static uint64_t abi_mask(uint64_t access, long abi) {
+    /* Unknown bits are rejected by the kernel. */
+    if (abi < 9) access &= ~LL_RESOLVE_UNIX;
+    if (abi < 5) access &= ~LL_IOCTL_DEV;
+    if (abi < 3) access &= ~LL_TRUNCATE;
+    if (abi < 2) access &= ~LL_REFER;
     return access;
 }
 
@@ -221,10 +236,14 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    struct landlock_ruleset_attr rs_attr = {0};
-    rs_attr.handled_access_fs = handled_access();
+    struct ll_ruleset_attr rs_attr = {0};
+    rs_attr.handled_access_fs = handled_access(abi);
+    if (abi >= 6) {
+        rs_attr.scoped = LL_SCOPE_ABSTRACT_UNIX_SOCKET | LL_SCOPE_SIGNAL;
+    }
+    size_t rs_attr_size = abi >= 6 ? sizeof(rs_attr) : sizeof(rs_attr.handled_access_fs);
     int ruleset_fd = (int) syscall(__NR_landlock_create_ruleset, &rs_attr,
-                                   sizeof(rs_attr), 0);
+                                   rs_attr_size, 0);
     if (ruleset_fd < 0) {
         fprintf(stderr, "landlock-runner: create_ruleset: %s\n",
                 strerror(errno));
@@ -232,7 +251,7 @@ int main(int argc, char **argv) {
     }
 
     for (int r = 0; r < n_rules; r++) {
-        if (add_path_rule(ruleset_fd, abi_mask(rules[r].access), rules[r].path) != 0) {
+        if (add_path_rule(ruleset_fd, abi_mask(rules[r].access, abi), rules[r].path) != 0) {
             close(ruleset_fd);
             return 2;
         }

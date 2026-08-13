@@ -117,8 +117,20 @@ export function resetLandlockAbiCache(): void {
  * masks both the ruleset attr and every rule by probed ABI; this pure
  * function pins that truth table in unit tests without a kernel farm.
  */
-export function landlockAccessFlagsForAbi(abi: number): { refer: boolean; truncate: boolean } {
-  return { refer: abi >= 2, truncate: abi >= 3 };
+export function landlockAccessFlagsForAbi(abi: number): {
+  refer: boolean;
+  truncate: boolean;
+  ioctlDevice: boolean;
+  scopedIpc: boolean;
+  resolveUnix: boolean;
+} {
+  return {
+    refer: abi >= 2,
+    truncate: abi >= 3,
+    ioctlDevice: abi >= 5,
+    scopedIpc: abi >= 6,
+    resolveUnix: abi >= 9,
+  };
 }
 
 /** Directories that must be traversable/readable for any dynamically linked

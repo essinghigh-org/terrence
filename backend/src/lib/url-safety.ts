@@ -18,6 +18,11 @@
  * resolution.
  */
 
+import http from "node:http";
+import https from "node:https";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
 const PRIVATE_MSG = "URL points to a private or loopback address";
 
 const V4_OCTET = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -136,6 +141,36 @@ export type HostResolver = (hostname: string) => Promise<readonly string[]>;
 /** Bound on a single external resolution so a stuck resolver cannot hang a request. */
 const RESOLVE_TIMEOUT_MS = 5000;
 
+async function resolveWithTimeout(hostname: string, resolve: HostResolver): Promise<readonly string[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolve(hostname),
+      new Promise<readonly string[]>((_, reject): void => {
+        timer = setTimeout((): void => {
+          reject(new Error("DNS resolution timed out"));
+        }, RESOLVE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function resolvedAddressesError(ips: readonly string[], allowPrivate: boolean): string | null {
+  if (ips.length === 0 || ips.some((ip): boolean => isIP(ip) === 0)) return "URL could not be resolved safely";
+  if (allowPrivate) return null;
+  for (const ip of ips) {
+    if (ip.includes(":")) {
+      if (isPrivateV6(ip)) return PRIVATE_MSG;
+      continue;
+    }
+    const n = v4ToNumber(ip.split("."));
+    if (n !== null && isPrivateV4(n)) return PRIVATE_MSG;
+  }
+  return null;
+}
+
 /**
  * Async URL validation with an injectable resolver: rejects private/loopback
  * literals synchronously (same rules as validateExternalUrl) and additionally
@@ -164,27 +199,123 @@ export async function validateExternalUrlResolved(
   if (!allowPrivate) {
     let ips: readonly string[];
     try {
-      ips = await Promise.race([
-        resolve(parsed.hostname),
-        new Promise<readonly string[]>((_, reject): void => {
-          setTimeout(() => reject(new Error("DNS resolution timed out")), RESOLVE_TIMEOUT_MS);
-        }),
-      ]);
+      ips = await resolveWithTimeout(parsed.hostname.replace(/^\[|\]$/g, ""), resolve);
     } catch {
       return "URL could not be resolved safely";
     }
-    for (const ip of ips) {
-      const ipv6 = ip.includes(":");
-      const reason = ipv6
-        ? isPrivateV6(ip)
-        : (() => {
-            const quad = ip.split(".");
-            if (quad.length !== 4) return false;
-            const n = v4ToNumber(quad);
-            return n !== null && isPrivateV4(n);
-          })();
-      if (reason) return PRIVATE_MSG;
-    }
+    return resolvedAddressesError(ips, false);
   }
   return null;
+}
+
+export type ResolvedExternalUrl = Readonly<{ address: string; url: string }>;
+
+/** Resolve once, validate every answer, then return the address callers must connect to. */
+export async function resolveExternalUrl(
+  url: string,
+  allowPrivate = false,
+  resolve: HostResolver = async (hostname): Promise<readonly string[]> =>
+    (await lookup(hostname, { all: true, verbatim: true })).map((entry): string => entry.address),
+): Promise<{ error: string } | { target: ResolvedExternalUrl }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { error: "Invalid URL" };
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return { error: "Only http and https URLs are allowed" };
+  const literalReason = privateHostReason(parsed.hostname);
+  if (!allowPrivate && literalReason !== null) return { error: literalReason };
+
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  let addresses: readonly string[];
+  try {
+    addresses = isIP(hostname) === 0 ? await resolveWithTimeout(hostname, resolve) : [hostname];
+  } catch {
+    return { error: "URL could not be resolved safely" };
+  }
+  const addressError = resolvedAddressesError(addresses, allowPrivate);
+  if (addressError !== null) return { error: addressError };
+  const address = addresses[0];
+  if (address === undefined) return { error: "URL could not be resolved safely" };
+  return { target: { address, url: parsed.toString() } };
+}
+
+type ExternalRequestInit = Readonly<{
+  method: string;
+  headers?: Readonly<Record<string, string>>;
+  body?: string;
+  timeoutMs: number;
+  maxResponseBytes?: number;
+}>;
+
+/** HTTP(S) request pinned to the validated address. Redirects are not followed. */
+export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init: ExternalRequestInit): Promise<Response> {
+  return new Promise((resolvePromise, rejectPromise): void => {
+    const { address } = target;
+    const url = new URL(target.url);
+    const secure = url.protocol === "https:";
+    const defaultPort = secure ? 443 : 80;
+    const port = url.port === "" ? defaultPort : Number(url.port);
+    const hostname = url.hostname.replace(/^\[|\]$/g, "");
+    const hostHeader = `${hostname.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
+    const headers = new Headers(init.headers);
+    headers.set("Host", hostHeader);
+    headers.set("Accept-Encoding", "identity");
+    if (init.body !== undefined) headers.set("Content-Length", String(Buffer.byteLength(init.body)));
+    const request = (secure ? https : http).request({
+      protocol: url.protocol,
+      hostname: address,
+      port,
+      path: `${url.pathname}${url.search}`,
+      method: init.method,
+      headers: Object.fromEntries(headers),
+      servername: secure && isIP(hostname) === 0 ? hostname : undefined,
+      auth: url.username === "" ? undefined : `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`,
+      signal: AbortSignal.timeout(init.timeoutMs),
+    // Node stream callbacks expose mutable transport objects by design.
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+    }, (response: http.IncomingMessage): void => {
+      const chunks: Readonly<Uint8Array>[] = [];
+      const maxBytes = init.maxResponseBytes ?? 1024 * 1024;
+      let total = 0;
+      let settled = false;
+      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+      response.on("data", (chunk: Uint8Array): void => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          settled = true;
+          response.destroy();
+          request.destroy();
+          rejectPromise(new Error(`Response exceeds ${maxBytes} byte limit`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", (): void => {
+        if (settled) return;
+        settled = true;
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          for (const entry of Array.isArray(value) ? value : [value]) {
+            if (entry !== undefined) responseHeaders.append(name, entry);
+          }
+        }
+        resolvePromise(new Response(Buffer.concat(chunks), {
+          status: response.statusCode ?? 502,
+          headers: responseHeaders,
+        }));
+      });
+      response.on("error", (error: Readonly<Error>): void => {
+        if (settled) return;
+        settled = true;
+        rejectPromise(error);
+      });
+    });
+    request.on("error", (error: Readonly<Error>): void => {
+      rejectPromise(error);
+    });
+    if (init.body !== undefined) request.write(init.body);
+    request.end();
+  });
 }

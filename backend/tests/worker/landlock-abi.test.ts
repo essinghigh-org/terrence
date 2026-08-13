@@ -14,10 +14,10 @@ import {
  * Landlock ABI-version regression coverage (review item 2.10).
  *
  * The kernel rejects unknown access bits in both the ruleset attr and each
- * rule, so landlock-runner.c masks REFER at ABI < 2 and TRUNCATE at ABI < 3.
+ * rule, so landlock-runner.c gates every right/scope at its introducing ABI.
  * We cannot recompile the kernel to test ABI 1/2 vs 6 here, so the suite:
  *
- *   1. pins the ABI 1/2/3+ rights truth table against the TS mirror of the
+   *   1. pins the ABI rights truth table against the TS mirror of the
  *      C `abi_mask` (runs on ANY host — pure function),
  *   2. exercises the REAL runner's --probe/--version contract (skipped on
  *      hosts without the compiled helper — it is built at deploy time),
@@ -44,27 +44,28 @@ afterAll(() => {
 });
 
 describe("landlock ABI rights calculation", () => {
-  it("pins the ABI 1 / 2 / 3+ truth table (REFER >= 2, TRUNCATE >= 3)", (): void => {
+  it("pins the ABI rights and scopes truth table", (): void => {
     // Mirrors landlock-runner.c abi_mask(); unknown bits must never leak into
     // handled_access_fs or a rule's allowed_access.
-    expect(landlockAccessFlagsForAbi(0)).toEqual({ refer: false, truncate: false });
-    expect(landlockAccessFlagsForAbi(1)).toEqual({ refer: false, truncate: false });
-    expect(landlockAccessFlagsForAbi(2)).toEqual({ refer: true, truncate: false });
-    expect(landlockAccessFlagsForAbi(3)).toEqual({ refer: true, truncate: true });
-    expect(landlockAccessFlagsForAbi(4)).toEqual({ refer: true, truncate: true });
-    expect(landlockAccessFlagsForAbi(6)).toEqual({ refer: true, truncate: true });
-    expect(landlockAccessFlagsForAbi(1000)).toEqual({ refer: true, truncate: true });
+    expect(landlockAccessFlagsForAbi(1)).toEqual({ refer: false, truncate: false, ioctlDevice: false, scopedIpc: false, resolveUnix: false });
+    expect(landlockAccessFlagsForAbi(3)).toEqual({ refer: true, truncate: true, ioctlDevice: false, scopedIpc: false, resolveUnix: false });
+    expect(landlockAccessFlagsForAbi(5)).toEqual({ refer: true, truncate: true, ioctlDevice: true, scopedIpc: false, resolveUnix: false });
+    expect(landlockAccessFlagsForAbi(6)).toEqual({ refer: true, truncate: true, ioctlDevice: true, scopedIpc: true, resolveUnix: false });
+    expect(landlockAccessFlagsForAbi(9)).toEqual({ refer: true, truncate: true, ioctlDevice: true, scopedIpc: true, resolveUnix: true });
   });
 
   it("returns no rights for an unavailable (ABI 0) kernel", (): void => {
-    expect(landlockAccessFlagsForAbi(0)).toEqual({ refer: false, truncate: false });
+    expect(landlockAccessFlagsForAbi(0)).toEqual({ refer: false, truncate: false, ioctlDevice: false, scopedIpc: false, resolveUnix: false });
   });
 
-  it("gates REFER exactly at ABI 2 and TRUNCATE exactly at ABI 3", (): void => {
-    for (let abi = 0; abi <= 8; abi += 1) {
+  it("gates each capability at the exact ABI", (): void => {
+    for (let abi = 0; abi <= 10; abi += 1) {
       const flags = landlockAccessFlagsForAbi(abi);
       expect(flags.refer).toBe(abi >= 2);
       expect(flags.truncate).toBe(abi >= 3);
+      expect(flags.ioctlDevice).toBe(abi >= 5);
+      expect(flags.scopedIpc).toBe(abi >= 6);
+      expect(flags.resolveUnix).toBe(abi >= 9);
     }
   });
 });

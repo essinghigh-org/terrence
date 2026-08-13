@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { validateExternalUrl } from "../../src/lib/utils";
-import { validateExternalUrlResolved, type HostResolver } from "../../src/lib/url-safety";
+import { resolveExternalUrl, validateExternalUrlResolved, type HostResolver } from "../../src/lib/url-safety";
 
 /**
  * Fuzz coverage for the outbound URL validators (review item 22.5).
@@ -189,7 +189,7 @@ describe("fuzz: outbound URL validator", () => {
     }
   });
 
-  it("harnesses DNS rebinding with an injectable resolver (documented gap)", async (): Promise<void> => {
+  it("rejects DNS rebinding answers with an injectable resolver", async (): Promise<void> => {
     // Sync validator cannot see through wrapper domains...
     expect(validateExternalUrl("http://127.0.0.1.nip.io/")).toBeNull();
     expect(validateExternalUrl("http://localhost.nip.io/")).toBeNull();
@@ -232,5 +232,25 @@ describe("fuzz: outbound URL validator", () => {
       throw new Error("resolver down");
     };
     expect(await validateExternalUrlResolved("http://example.com/", false, failingResolver)).toContain("resolve");
+  });
+
+  it("returns a validated address that callers can pin without a second DNS lookup", async () => {
+    let resolutions = 0;
+    const result = await resolveExternalUrl("https://example.com/hook", false, async () => {
+      resolutions += 1;
+      return ["93.184.216.34"];
+    });
+    expect(result).toEqual({ target: { address: "93.184.216.34", url: "https://example.com/hook" } });
+    expect(resolutions).toBe(1);
+
+    const literal = await resolveExternalUrl("https://93.184.216.34/hook", false, async () => {
+      resolutions += 1;
+      return [];
+    });
+    expect(literal).toEqual({ target: { address: "93.184.216.34", url: "https://93.184.216.34/hook" } });
+    expect(resolutions).toBe(1);
+
+    const mixed = await resolveExternalUrl("https://example.com/hook", false, async () => ["93.184.216.34", "127.0.0.1"]);
+    expect("error" in mixed ? mixed.error : "").toContain("private");
   });
 });

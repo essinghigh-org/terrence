@@ -204,7 +204,7 @@ describe("landlock run sandbox", () => {
     }
   });
 
-  it("checks kill permission under Landlock (documented: Landlock does not restrict signal(2))", async (): Promise<void> => {
+  it("denies signals to processes outside the sandbox on Landlock ABI 6+", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
     const runsBase = join(tmpdir(), "terrence", "runs");
@@ -218,9 +218,8 @@ describe("landlock run sandbox", () => {
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
       const result = stdout.trim();
-      // Landlock does not restrict signal(2)/kill(2), so this may succeed.
-      // We document the behaviour here; at minimum we verify the probe runs.
-      expect(["SIGNAL_OK", "SIGNAL_DENIED"]).toContain(result);
+      if (abi >= 6) expect(result).toBe("SIGNAL_DENIED");
+      else expect(["SIGNAL_OK", "SIGNAL_DENIED"]).toContain(result);
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }

@@ -60,7 +60,6 @@ ENV NODE_ENV=production \
     STORAGE_DIR=/app/backend/storage \
     DATABASE_URL=file:/app/backend/storage/terrence.db \
     INFRACOST_ENABLED=false \
-    INFRACOST_API_KEY="" \
     INFRACOST_VERSION=0.10.45
 
 # wolfi-base ships busybox (tar/cp/which), glibc, apk and ca-certificates-bundle.

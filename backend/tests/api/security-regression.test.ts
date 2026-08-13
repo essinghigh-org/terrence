@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
-import { app } from "../../src/app";
+import { app, handleAppError } from "../../src/app";
 import { db } from "../../src/db";
 import {
   users, workspaces, configurationVersions, apiTokens, organizations, organizationMemberships,
@@ -276,4 +276,44 @@ describe("Security Regression — CORS Vary: Origin", () => {
     if (previous === undefined) delete process.env.CORS_ORIGIN;
     else process.env.CORS_ORIGIN = previous;
   }
+});
+
+describe("Security Regression — Internal Errors", () => {
+  it("does not disclose internal exception messages", () => {
+    const marker = `database-secret-${crypto.randomUUID()}`;
+    const set = { headers: {} as Record<string, string | number>, status: 200 };
+    const result = handleAppError({
+      code: "UNKNOWN",
+      error: new Error(marker),
+      request: { url: "http://localhost/api/v2/failing-route" },
+      set,
+    });
+    const body = JSON.stringify(result);
+    expect(set.status).toBe(500);
+    expect(set.headers["Content-Type"]).toBe("application/vnd.api+json");
+    expect(body).toContain("An unexpected error occurred");
+    expect(body).not.toContain(marker);
+  });
+
+  it("preserves safe framework client-error statuses", () => {
+    for (const [code, status] of [["PARSE", 400], ["INVALID_COOKIE_SIGNATURE", 400], ["VALIDATION", 422]] as const) {
+      const set = { headers: {} as Record<string, string | number>, status: 200 };
+      const result = handleAppError({ code, error: new Error("unsafe detail"), request: { url: "http://localhost/api/v2/items" }, set });
+      expect(set.status).toBe(status);
+      expect(set.headers["Content-Type"]).toBe("application/vnd.api+json");
+      expect(JSON.stringify(result)).not.toContain("unsafe detail");
+    }
+  });
+
+  it("formats API and non-API not-found responses separately", () => {
+    const apiSet = { headers: {} as Record<string, string | number>, status: 200 };
+    expect(handleAppError({ code: "NOT_FOUND", error: new Error(), request: { url: "http://localhost/api/missing" }, set: apiSet }))
+      .toEqual({ errors: [{ status: "404", title: "Not Found" }] });
+    expect(apiSet.headers["Content-Type"]).toBe("application/vnd.api+json");
+
+    const pageSet = { headers: {} as Record<string, string | number>, status: 200 };
+    expect(handleAppError({ code: "NOT_FOUND", error: new Error(), request: { url: "http://localhost/missing" }, set: pageSet }))
+      .toBe("Not Found");
+    expect(pageSet.headers["Content-Type"]).toBe("text/plain");
+  });
 });

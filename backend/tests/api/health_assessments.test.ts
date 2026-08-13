@@ -105,27 +105,39 @@ test("schedules eligible assessments separately from runs and records drift, che
     const checks = await db.query.assessmentCheckResults.findMany();
 
     const payloads = [];
-    globalThis.fetch = async (_input, init) => {
-      payloads.push(JSON.parse(String(init?.body)));
-      return new Response("", { status: 200 });
-    };
-    await db.insert(notificationConfigurations).values({
-      id: "health-notification",
-      workspaceId: completed[0].workspaceId,
-      name: "health",
-      destinationType: "generic",
-      url: "https://example.test/notifications",
-      triggers: ["assessment:drifted", "assessment:check_failure"],
-      enabled: true,
+    const notificationServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        payloads.push(await request.json());
+        return new Response("", { status: 200 });
+      },
     });
-    // The worker already emitted these logical notifications during queue
-    // polling above (worker.ts queueAssessmentNotification), so clear the
-    // 7.9 dedup state here: this test's explicit calls validate the payload
-    // shape, not duplicate suppression (which notifications_breaker_dedup
-    // covers directly).
-    _dedup(true);
-    await deliverAssessmentNotifications(completed[0].id, "assessment:drifted");
-    await deliverAssessmentNotifications(completed[0].id, "assessment:check_failure");
+    const previousAllowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+    try {
+      process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+      await db.insert(notificationConfigurations).values({
+        id: "health-notification",
+        workspaceId: completed[0].workspaceId,
+        name: "health",
+        destinationType: "generic",
+        url: notificationServer.url.toString(),
+        triggers: ["assessment:drifted", "assessment:check_failure"],
+        enabled: true,
+      });
+      // The worker already emitted these logical notifications during queue
+      // polling above (worker.ts queueAssessmentNotification), so clear the
+      // 7.9 dedup state here: this test's explicit calls validate the payload
+      // shape, not duplicate suppression (which notifications_breaker_dedup
+      // covers directly).
+      _dedup(true);
+      await deliverAssessmentNotifications(completed[0].id, "assessment:drifted");
+      await deliverAssessmentNotifications(completed[0].id, "assessment:check_failure");
+    } finally {
+      if (previousAllowPrivate === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+      else process.env.TERRENCE_ALLOW_PRIVATE_URLS = previousAllowPrivate;
+      await notificationServer.stop(true);
+    }
 
     const dueAgain = await enqueueDueAssessments(now + 86_400_001);
     console.log(JSON.stringify({

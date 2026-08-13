@@ -11,7 +11,8 @@ import {
   users,
   workspaces,
 } from "../db/schema";
-import { validateExternalUrl , type DeepReadonly } from "./utils";
+import type { DeepReadonly } from "./utils";
+import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 
 type NotificationConfiguration = Readonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -156,20 +157,18 @@ async function doPostNotification(
   let lastResponse: Response | undefined;
   let lastError = "";
   const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
-  const urlError = validateExternalUrl(configuration.url, allowPrivate);
-  if (urlError !== null) {
-    return { body: urlError, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
+  const destination = await resolveExternalUrl(configuration.url, allowPrivate);
+  if ("error" in destination) {
+    return { body: destination.error, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
   }
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      lastResponse = await fetch(configuration.url, {
+      lastResponse = await fetchResolvedExternalUrl(destination.target, {
         method: "POST",
         headers,
         body,
-        // redirect:"error" stops a redirect from a checked public host to an
-        // internal endpoint (redirect-based SSRF) — we never follow 3xx.
-        redirect: "error",
-        signal: AbortSignal.timeout(5_000),
+        timeoutMs: 5_000,
+        maxResponseBytes: 16_384,
       });
       const responseBody = await lastResponse.text();
       if (lastResponse.ok || (lastResponse.status < 500 && lastResponse.status !== 429)) {
@@ -426,19 +425,19 @@ export async function verifyDestinationOwnership(
   };
 
   const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
-  const urlError = validateExternalUrl(configuration.url, allowPrivate);
-  if (urlError !== null) {
+  const destination = await resolveExternalUrl(configuration.url, allowPrivate);
+  if ("error" in destination) {
     return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };
   }
 
   let response: Response;
   try {
-    response = await fetch(configuration.url, {
+    response = await fetchResolvedExternalUrl(destination.target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      redirect: "error",
-      signal: AbortSignal.timeout(5_000),
+      timeoutMs: 5_000,
+      maxResponseBytes: 4_096,
     });
   } catch {
     return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };

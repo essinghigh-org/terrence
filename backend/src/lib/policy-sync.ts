@@ -6,6 +6,7 @@ import { db } from "../db";
 import { policies, policySetVersions } from "../db/schema";
 import type { policySets } from "../db/schema";
 import type { DeepReadonly } from "./utils";
+import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./archive";
 
 
 export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket";
@@ -86,13 +87,16 @@ async function processOutput(process: Readonly<{
 }
 
 async function extractArchive(archivePath: string, destination: string): Promise<void> {
+  await assertArchiveExpandedSize(archivePath);
   const verbose = await processOutput(Bun.spawn(
     ["tar", "-tvzf", archivePath],
     { stdout: "pipe", stderr: "pipe" },
   ));
   const verboseError = verbose.stderr.trim();
   if (verbose.code !== 0) throw new Error(`Policy archive is invalid: ${verboseError === "" ? "tar listing failed" : verboseError}`);
-  for (const line of verbose.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean)) {
+  const verboseLines = verbose.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean);
+  assertArchiveMemberCount(verboseLines);
+  for (const line of verboseLines) {
     if (["l", "h", "c", "b", "p", "s"].includes(line.charAt(0)) || line.includes(" -> ") || line.includes(" link to ")) {
       throw new Error("Policy archive contains a link or special file");
     }
@@ -104,12 +108,15 @@ async function extractArchive(archivePath: string, destination: string): Promise
   ));
   const listingError = listing.stderr.trim();
   if (listing.code !== 0) throw new Error(`Policy archive is invalid: ${listingError === "" ? "tar listing failed" : listingError}`);
-  for (const member of listing.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean)) {
+  const members = listing.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean);
+  assertArchiveMemberCount(members);
+  for (const member of members) {
     const normalized = member.replaceAll("\\", "/");
     if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.split("/").includes("..")) {
       throw new Error("Policy archive contains an unsafe path");
     }
   }
+  await assertArchiveLogicalSize(archivePath);
 
   const extraction = await processOutput(Bun.spawn(
     ["tar", "-xzf", archivePath, "--no-same-owner", "--no-same-permissions", "-C", destination],

@@ -105,6 +105,53 @@ type ErrorContext = Readonly<{
   set: SetObject;
 }>;
 
+export function handleAppError({
+  code,
+  error,
+  set,
+  request,
+}: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+  const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
+  const pathname = new URL(request.url).pathname;
+  if (code === "NOT_FOUND") {
+    if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
+      mutableSet.status = 404;
+      mutableSet.headers["Content-Type"] = "text/plain";
+      return "Not Found";
+    }
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    mutableSet.status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
+  }
+  mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  const clientStatus = code === "VALIDATION" ? 422
+    : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
+      : null;
+  if (clientStatus !== null) {
+    mutableSet.status = clientStatus;
+    return {
+      errors: [{
+        status: String(clientStatus),
+        title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
+      }],
+    };
+  }
+  mutableSet.status = 500;
+  log.error("Unhandled request error", {
+    code,
+    path: pathname,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  return {
+    errors: [{
+      status: "500",
+      title: "Internal Server Error",
+      detail: "An unexpected error occurred",
+    }],
+  };
+}
+
 type PasswordGuardContext = Readonly<{
   request: CustomRequest;
   user?: Readonly<{ mustChangePassword?: boolean }> | null;
@@ -505,32 +552,7 @@ export const app = new Elysia()
     (set as { status: number }).status = 204;
     return {};
   })
-  .onError(({ code, error, set, request }: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined => {
-    const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
-    const pathname = new URL(request.url).pathname;
-    if (code === "NOT_FOUND") {
-      if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
-        mutableSet.status = 404;
-        mutableSet.headers["Content-Type"] = "text/plain";
-        return "Not Found";
-      }
-      mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-      mutableSet.status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-    mutableSet.status = 500;
-    const detail = typeof error === "object" && error !== null && "message" in error
-      ? String((error as Record<string, unknown>).message)
-      : "An unexpected error occurred";
-    return {
-      errors: [{
-        status: "500",
-        title: "Internal Server Error",
-        detail,
-      }],
-    };
-  })
+  .onError(handleAppError)
   // Route modules
   .use(healthRoutes)
   .use(operationsRoutes)
