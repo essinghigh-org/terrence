@@ -800,6 +800,13 @@ export const runRoutes = new Elysia({ name: "runs" })
       "scheduled-at": new Date(applyAtMs).toISOString(),
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
+    publish("run.status", {
+      "run-id": runId,
+      "workspace-id": authorized.workspace.id,
+      "org-id": authorized.workspace.orgId,
+      status: "confirmed",
+      at: new Date(applyAtMs).toISOString(),
+    });
     return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": new Date(applyAtMs).toISOString() } } };
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

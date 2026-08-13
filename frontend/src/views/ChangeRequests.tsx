@@ -49,8 +49,12 @@ export function ChangeRequests(): React.JSX.Element {
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
+  // Monotonic request sequence: only the latest response may write state,
+  // so a slow pager response cannot clobber a newer org/page fetch.
+  const loadSequence = useRef(0);
 
   const loadInbox = useCallback(async (page: number, status: string, signal?: Readonly<AbortSignal>): Promise<void> => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     const statusQuery = status === "" ? "" : `&filter%5Bstatus%5D=${encodeURIComponent(status)}`;
@@ -63,15 +67,17 @@ export function ChangeRequests(): React.JSX.Element {
         meta?: { pagination?: { "current-page"?: number; "next-page"?: number | null; "prev-page"?: number | null; "total-pages"?: number; "total-count"?: number } };
       };
       if (signal?.aborted === true) return;
+      if (sequence !== loadSequence.current || activeOrganizationName.current !== orgName) return;
       setEntries(response.data);
       setTotalCount(response.meta?.pagination?.["total-count"] ?? response.data.length);
       setCurrentPage(response.meta?.pagination?.["current-page"] ?? page);
       setTotalPages(response.meta?.pagination?.["total-pages"] ?? Math.ceil(response.data.length / 20));
     } catch (caught: unknown) {
       if (signal?.aborted === true) return;
+      if (sequence !== loadSequence.current || activeOrganizationName.current !== orgName) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      if (signal?.aborted !== true) setLoading(false);
+      if (signal?.aborted !== true && sequence === loadSequence.current && activeOrganizationName.current === orgName) setLoading(false);
     }
   }, [orgName]);
 

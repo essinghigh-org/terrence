@@ -27,13 +27,27 @@ function lazyView(
   importer: () => Promise<Record<string, unknown>>,
   name: string,
 ): ComponentType<Record<string, unknown>> {
-  return lazy(async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
+  const load = async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
     const module = await importer();
     const component = module[name];
     if (typeof component !== "function") {
       throw new Error(`View ${name} is missing from its chunk`);
     }
     return { default: component as ComponentType<Record<string, unknown>> };
+  };
+  return lazy(async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
+    try {
+      return await load();
+    } catch (firstError: unknown) {
+      // A failed chunk fetch is often a stale deployment mid-swap: retry
+      // once, then reload so the new asset manifest is fetched.
+      try {
+        return await load();
+      } catch {
+        window.location.reload();
+        throw firstError;
+      }
+    }
   });
 }
 

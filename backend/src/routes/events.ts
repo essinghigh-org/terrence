@@ -31,16 +31,16 @@ function sseFrame(event: string, data: unknown): Uint8Array {
  */
 export const eventsRoutes = new Elysia({ name: "events" })
   .use(authPlugin)
-  .get("/api/v2/events", async ({ user, orgId, request, set }: ParamCtx): Promise<Response> => {
+  .get("/api/v2/events", async ({ user, orgId, request }: ParamCtx): Promise<Response> => {
     if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
       return new Response(JSON.stringify({ errors: [{ status: "401", title: "Unauthorized" }] }), {
+        status: 401,
         headers: { "Content-Type": "application/json" },
       });
     }
     if (activeConnections >= MAX_CONNECTIONS) {
-      (set as { status: number }).status = 503;
       return new Response(JSON.stringify({ errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams" }] }), {
+        status: 503,
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -60,28 +60,55 @@ export const eventsRoutes = new Elysia({ name: "events" })
       allowedOrgIds = new Set(memberships.map((row): string => row.orgId));
     }
 
+    // Shared across start()/cancel(): the stream's lifecycle must release
+    // the subscription and the connection slot exactly once from either the
+    // request abort signal or a client-side reader cancel.
+    let unsubscribe: () => void = (): void => {};
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let cleanup: () => void = (): void => {};
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
         activeConnections += 1;
+        let cleanedUp = false;
+        cleanup = (): void => {
+          if (cleanedUp) return;
+          cleanedUp = true;
+          unsubscribe();
+          if (heartbeat !== undefined) clearInterval(heartbeat);
+          activeConnections = Math.max(0, activeConnections - 1);
+        };
         controller.enqueue(sseFrame("connected", { heartbeatMs: HEARTBEAT_MS }));
 
-        const unsubscribe = subscribe("run.status", (payload: Readonly<Record<string, unknown>>): void => {
+        unsubscribe = subscribe("run.status", (payload: Readonly<Record<string, unknown>>): void => {
           const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
           if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
-          controller.enqueue(sseFrame("run.status", payload));
+          try {
+            controller.enqueue(sseFrame("run.status", payload));
+          } catch {
+            // The stream closed under us; stop relaying.
+            cleanup();
+          }
         });
 
-        const heartbeat = setInterval((): void => {
-          controller.enqueue(sseFrame("ping", { at: new Date().toISOString() }));
+        heartbeat = setInterval((): void => {
+          try {
+            controller.enqueue(sseFrame("ping", { at: new Date().toISOString() }));
+          } catch {
+            cleanup();
+          }
         }, HEARTBEAT_MS);
 
         const abort = (): void => {
-          unsubscribe();
-          clearInterval(heartbeat);
-          activeConnections = Math.max(0, activeConnections - 1);
+          cleanup();
         };
         request.signal.addEventListener("abort", abort, { once: true });
         if (request.signal.aborted) abort();
+      },
+      cancel(): void {
+        // Client disconnected (reader canceled): release the subscription
+        // and the connection slot without waiting for an abort event.
+        cleanup();
       },
     });
 

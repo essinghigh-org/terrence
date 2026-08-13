@@ -185,6 +185,13 @@ function adoptLegacyStoredToken(): string | null {
     // The token was already read; the session still works for this page load.
   }
   const expiry = legacyExpiry === null ? null : Number(legacyExpiry);
+  // An expired non-refreshable legacy token is dead: adopting it would
+  // immediately fail every request. Expired refreshable sessions are still
+  // adopted so the refresh path can rotate through the cookie.
+  if (Number.isFinite(expiry) && expiry !== null && expiry <= Date.now() && !legacyRefreshable) {
+    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    return null;
+  }
   setAuthToken(legacyToken, Number.isFinite(expiry) ? expiry : null, legacyRefreshable);
   return legacyToken;
 }

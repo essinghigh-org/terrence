@@ -16,9 +16,15 @@ export function subscribe(topic: string, listener: Listener): () => void {
     topics.set(topic, listeners);
   }
   listeners.add(listener);
+  let disposed = false;
   return (): void => {
-    listeners?.delete(listener);
-    if (listeners?.size === 0) topics.delete(topic);
+    // Idempotent: repeated disposal must never delete a replacement
+    // listener set that reuses the same topic key.
+    if (disposed) return;
+    disposed = true;
+    if (topics.get(topic) !== listeners) return;
+    listeners.delete(listener);
+    if (listeners.size === 0) topics.delete(topic);
   };
 }
 

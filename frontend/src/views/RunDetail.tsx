@@ -859,23 +859,26 @@ export function RunDetail({
     void refresh();
 
     // Authenticated SSE replaces the fast poll (10.20): status transitions
-    // for this run trigger an immediate (rate-limited) refresh, while the
-    // timer above degrades to a slow safety net for streams that fail.
-    let lastSseRefresh = 0;
+    // for this run trigger a trailing-debounced refresh (the final
+    // transition of a burst wins), while the timer above degrades to a slow
+    // safety net for streams that fail.
+    let debounceTimer: number | undefined;
     const stream = subscribeEvents((event: SseEvent): void => {
       if (event.name !== "run.status") return;
       const data = event.data;
       if (data["run-id"] !== runId) return;
-      const now = Date.now();
-      if (now - lastSseRefresh < 1000) return;
-      lastSseRefresh = now;
-      void refresh();
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout((): void => {
+        debounceTimer = undefined;
+        if (!stopped && !controller.signal.aborted) void refresh();
+      }, 500);
     }, controller.signal);
 
     return (): void => {
       stopped = true;
       controller.abort();
       stream.close();
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== undefined) window.clearTimeout(timer);
     };

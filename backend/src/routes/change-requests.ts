@@ -10,6 +10,7 @@ import {
   pageRequest,
   pagination,
   auditLog,
+  workspaceIdsForPermission,
 } from "../lib/utils";
 import { queueChangeRequestNotification } from "../lib/notifications";
 
@@ -173,6 +174,27 @@ async function authorizedChangeRequest(
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, changeRequest.workspaceId) });
   if (workspace === undefined || !(await checkWorkspacePermission(workspace, userId, tokenOrgId, tokenTeamId, required))) return undefined;
   return changeRequest;
+}
+
+/** Detail/inbox resource enriched with creator and resolver usernames. */
+async function enrichedResource(changeRequest: ChangeRequest): Promise<Record<string, unknown>> {
+  const base = resource(changeRequest);
+  const ids = [...new Set([
+    ...(changeRequest.createdBy === null ? [] : [changeRequest.createdBy]),
+    ...(changeRequest.resolvedBy === null ? [] : [changeRequest.resolvedBy]),
+  ])];
+  const userRows = ids.length === 0
+    ? []
+    : await db.query.users.findMany({ where: inArray(users.id, ids), columns: { id: true, username: true } });
+  const usernamesById = new Map(userRows.map((row): [string, string] => [row.id, row.username]));
+  return {
+    ...base,
+    attributes: {
+      ...(base.attributes as Record<string, unknown>),
+      "created-by-username": changeRequest.createdBy === null ? null : usernamesById.get(changeRequest.createdBy) ?? null,
+      "resolved-by-username": changeRequest.resolvedBy === null ? null : usernamesById.get(changeRequest.resolvedBy) ?? null,
+    },
+  };
 }
 
 async function resolveChangeRequest(
@@ -347,11 +369,16 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
       return errorResponse(set, 422, "Unprocessable Entity", "filter[status] must contain pending, approved, discarded, or archived");
     }
     const { number, size } = pageRequest(request);
-    const orgWorkspaceRows = await db.query.workspaces.findMany({
-      where: eq(workspaces.orgId, organization.id),
-      columns: { id: true },
-    });
-    const orgWorkspaceIds = orgWorkspaceRows.map((row): string => row.id);
+    // Scope rows by readable workspaces, matching the calendar and the
+    // per-workspace list: a member must not see change requests for
+    // workspaces they cannot read.
+    const readable = await workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "read");
+    const orgWorkspaceIds = readable === null
+      ? (await db.query.workspaces.findMany({
+          where: eq(workspaces.orgId, organization.id),
+          columns: { id: true },
+        })).map((row): string => row.id)
+      : [...readable];
     const baseWhere = and(
       inArray(changeRequests.workspaceId, orgWorkspaceIds),
       ...(statuses === null ? [] : [inArray(changeRequests.status, statuses)]),
@@ -401,11 +428,15 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
   })
   .get("/api/v2/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> => {
     const changeRequest = await authorizedChangeRequest(params.change_request_id ?? "", user?.id, orgId ?? null, teamId ?? null);
-    return changeRequest === undefined ? errorResponse(set, 404, "Not Found") : { data: resource(changeRequest) };
+    return changeRequest === undefined
+      ? errorResponse(set, 404, "Not Found")
+      : { data: await enrichedResource(changeRequest) };
   })
   .get("/api/v2/workspaces/change-requests/:change_request_id", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> => {
     const changeRequest = await authorizedChangeRequest(params.change_request_id ?? "", user?.id, orgId ?? null, teamId ?? null);
-    return changeRequest === undefined ? errorResponse(set, 404, "Not Found") : { data: resource(changeRequest) };
+    return changeRequest === undefined
+      ? errorResponse(set, 404, "Not Found")
+      : { data: await enrichedResource(changeRequest) };
   })
   .post("/api/v2/change-requests/:change_request_id/actions/approve", async ({ params, user, orgId, teamId, set }: Context): Promise<unknown> =>
     resolveChangeRequest(params.change_request_id ?? "", "approved", user?.id, orgId ?? null, teamId ?? null, set))

@@ -85,6 +85,7 @@ type TagBinding = Readonly<{
 }>;
 
 type RunSummary = Readonly<{
+  id: string;
   type: "runs";
   attributes: Readonly<{
     "created-at"?: string;
@@ -164,7 +165,6 @@ export function Workspaces(): React.JSX.Element {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectDataError, setProjectDataError] = useState(false);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
-  const [runStatusError, setRunStatusError] = useState(false);
   const [canManageWorkspaces, setCanManageWorkspaces] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -234,15 +234,18 @@ export function Workspaces(): React.JSX.Element {
       setProjectDataError(projectResult.failed);
       setCanManageWorkspaces(canManage);
       // The server aggregates the latest run per workspace (include=current_run,
-      // review 10.1); the org-wide runs fetch is gone. Runs whose workspace
-      // left the page are dropped, which is correct for a paginated table.
+      // review 10.1); the org-wide runs fetch is gone. Resolve each workspace
+      // through its own current-run relationship so an included run without
+      // a workspace relationship can never crash the mapping.
+      const runsById = new Map(workspaceResult.runs.map((run): [string, RunSummary] => [run.id, run]));
       const byWorkspace = new Map<string, RunSummary>();
-      for (const run of workspaceResult.runs) {
-        const workspaceId = run.relationships.workspace.data.id;
-        if (!byWorkspace.has(workspaceId)) byWorkspace.set(workspaceId, run);
+      for (const workspace of workspaceResult.workspaces) {
+        const currentRun = workspace.relationships?.["current-run"]?.data;
+        if (currentRun === null || currentRun === undefined) continue;
+        const run = runsById.get(currentRun.id);
+        if (run !== undefined) byWorkspace.set(workspace.id, run);
       }
       setLatestRuns(byWorkspace);
-      setRunStatusError(false);
     } catch (error: unknown) {
       if (signal?.aborted === true) return;
       setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
@@ -621,11 +624,6 @@ export function Workspaces(): React.JSX.Element {
         </div>
       </section>
 
-      {runStatusError && (
-        <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          Run statuses could not be refreshed. Workspace results and filters are still available.
-        </p>
-      )}
       {projectDataError && (
         <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           Projects could not be refreshed. Workspace results are still available.

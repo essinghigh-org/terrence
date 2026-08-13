@@ -1,7 +1,7 @@
 import { createElement, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { Globe2, Package, SearchX, ServerCrash } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { getAuthToken } from "../lib/api";
+import { prepareAuthToken } from "../lib/api";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -85,7 +85,7 @@ async function registryApi<T>(
 ): Promise<T> {
   const base = "/api/v2";
   const headers: Record<string, string> = { "Content-Type": "application/vnd.api+json" };
-  const token = getAuthToken();
+  const token = await prepareAuthToken();
   if (token !== null && token !== "") {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -259,7 +259,7 @@ export function Registry(): JSX.Element {
         0x00, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00,
       ]);
-      const token = getAuthToken();
+      const token = await prepareAuthToken();
       const uploadHeaders: Record<string, string> = { "Content-Type": "application/octet-stream" };
       if (token !== null && token !== "") {
         uploadHeaders["Authorization"] = `Bearer ${token}`;

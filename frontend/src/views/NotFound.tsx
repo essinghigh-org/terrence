@@ -27,12 +27,14 @@ export function NotFound(): React.JSX.Element {
         >
           {insideApp ? "Go to dashboard" : "Go home"}
         </Link>
-        <Link
-          to="/app"
-          className={cn(buttonVariants({ variant: "outline", size: "default" }))}
-        >
-          Open the app
-        </Link>
+        {!insideApp && (
+          <Link
+            to="/app"
+            className={cn(buttonVariants({ variant: "outline", size: "default" }))}
+          >
+            Open the app
+          </Link>
+        )}
       </div>
     </div>
   );

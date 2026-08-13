@@ -80,6 +80,9 @@ export function ChangeCalendar(): React.JSX.Element {
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
+  // Monotonic request sequence: only the latest response may write state,
+  // so a slow pager response cannot clobber a newer org/page fetch.
+  const loadSequence = useRef(0);
 
   useEffect((): (() => void) | undefined => {
     setEntries([]);
@@ -113,20 +116,25 @@ export function ChangeCalendar(): React.JSX.Element {
 
   const loadPage = async (page: number): Promise<void> => {
     if (page < 1 || page > totalPages) return;
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgName)}/change-calendar?page%5Bsize%5D=20&page%5Bnumber%5D=${page}`,
       ) as CalendarPage;
+      // A slow pager response must not write state after the organization
+      // changed or a newer request superseded it.
+      if (sequence !== loadSequence.current || activeOrganizationName.current !== orgName) return;
       setEntries(response.data);
       setTotalCount(response.meta?.pagination?.["total-count"] ?? response.data.length);
       setCurrentPage(response.meta?.pagination?.["current-page"] ?? page);
       setTotalPages(response.meta?.pagination?.["total-pages"] ?? totalPages);
     } catch (caught: unknown) {
+      if (sequence !== loadSequence.current || activeOrganizationName.current !== orgName) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current && activeOrganizationName.current === orgName) setLoading(false);
     }
   };
 

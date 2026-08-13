@@ -564,9 +564,10 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       workspaceId: string;
       status: string;
       message: string | null;
-      isDestroy: boolean;
+      // SQLite returns raw 0/1 integers for boolean columns via db.all.
+      isDestroy: number;
       createdAt: number;
-      autoApply: boolean;
+      autoApply: number;
     }>;
     const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
       ? db.all<LatestRunRow>(sql`
@@ -620,8 +621,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
             status: run.status,
             message: run.message,
             "created-at": new Date(run.createdAt).toISOString(),
-            "is-destroy": run.isDestroy,
-            "auto-apply": run.autoApply,
+            // Normalize the raw SQLite 0/1 integers to booleans.
+            "is-destroy": run.isDestroy === 1,
+            "auto-apply": run.autoApply === 1,
           },
           relationships: {
             workspace: { data: { id: run.workspaceId, type: "workspaces" } },

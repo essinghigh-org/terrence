@@ -24,6 +24,8 @@ type ChangeRequest = Readonly<{
     "updated-at": string;
     "resolved-by"?: string | null;
     "resolved-at"?: string | null;
+    "created-by-username"?: string | null;
+    "resolved-by-username"?: string | null;
   }>;
   relationships?: Readonly<{
     workspace?: Readonly<{ data: Readonly<{ id: string }> | null }>;
@@ -225,9 +227,12 @@ export function ChangeRequestDetail(): React.JSX.Element {
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-muted-foreground">Created by</dt>
                   <dd className="text-foreground">
-                    {changeRequest.relationships?.creator?.data !== null && changeRequest.relationships?.creator?.data !== undefined
-                      ? changeRequest.relationships.creator.data.id
-                      : "System"}
+                    {changeRequest.attributes["created-by-username"] !== null
+                      && changeRequest.attributes["created-by-username"] !== undefined
+                      ? changeRequest.attributes["created-by-username"]
+                      : changeRequest.relationships?.creator?.data !== null && changeRequest.relationships?.creator?.data !== undefined
+                        ? changeRequest.relationships.creator.data.id
+                        : "System"}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">

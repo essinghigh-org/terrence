@@ -2457,52 +2457,90 @@ export async function pollWorkerQueue(): Promise<string[]> {
  * 21.4). The schedule-apply endpoint only stamps `scheduledAt`; this poller
  * is the single execution path, so a restart never loses a schedule. The
  * interactive apply action and the approval webhook stay independent.
- * Gate semantics mirror the auto-apply path: a blocked apply stays
+ * Each run is claimed atomically (conditional status update) so overlapping
+ * polls or a future multi-worker deployment can never dispatch the same run
+ * twice; per-run failures are isolated so one bad apply cannot abort the
+ * batch. Gate semantics mirror the auto-apply path: a blocked apply stays
  * confirmed and is retried on the next poll.
  */
 export async function applyDueScheduledRuns(): Promise<string[]> {
   const now = Date.now();
   const dueRuns = await db.query.runs.findMany({
-    columns: { id: true, workspaceId: true, planOnly: true, savePlan: true },
+    columns: { id: true, workspaceId: true, planOnly: true, savePlan: true, statusTimestamps: true },
     where: and(
       eq(runs.status, "confirmed"),
       isNotNull(runs.scheduledAt),
       sql`${runs.scheduledAt} <= ${now}`,
     ),
+    limit: 50,
   });
   const applied: string[] = [];
   for (const run of dueRuns) {
     if (run.planOnly === true || run.savePlan === true) continue;
-    const workspace = await db.query.workspaces.findFirst({
-      columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
-      where: eq(workspaces.id, run.workspaceId),
-    });
-    if (workspace === undefined || workspace.locked === true) continue;
-    const gateBlockReason = await applyGateBlockReason(new Date());
-    if (gateBlockReason !== null) {
-      await writeLog(run.id, "apply", `[terrence] Scheduled apply blocked: ${gateBlockReason}`);
-      continue;
-    }
-    if (workspace.executionMode === "agent") {
-      const pool = workspace.agentPoolId === null
-        ? undefined
-        : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
-      if (
-        pool?.orgId !== workspace.orgId
-        || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
-      ) {
-        await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+    try {
+      const workspace = await db.query.workspaces.findFirst({
+        columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
+        where: eq(workspaces.id, run.workspaceId),
+      });
+      if (workspace === undefined || workspace.locked === true) continue;
+      const gateBlockReason = await applyGateBlockReason(new Date());
+      if (gateBlockReason !== null) {
+        // Log the deferral only when the block reason changes so a closed
+        // maintenance window cannot spam the run log on every poll.
+        const key = `scheduled:${run.id}`;
+        if (scheduledBlockReasons.get(key) !== gateBlockReason) {
+          scheduledBlockReasons.set(key, gateBlockReason);
+          await writeLog(run.id, "apply", `[terrence] Scheduled apply blocked: ${gateBlockReason}`);
+        }
         continue;
       }
-      const job = await enqueueAgentApplyJob(run.id, pool.id);
-      if (job !== undefined) applied.push(run.id);
-      continue;
+      scheduledBlockReasons.delete(`scheduled:${run.id}`);
+      // Atomic claim: only the poll that flips confirmed -> apply_queued
+      // may dispatch; concurrent polls see zero rows and skip.
+      const claimed = await db.update(runs).set({
+        status: "apply_queued",
+        statusTimestamps: {
+          ...(run.statusTimestamps ?? {}),
+          "apply-queued-at": new Date().toISOString(),
+        },
+      }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+      if (claimed.length === 0) continue;
+      if (workspace.executionMode === "agent") {
+        const pool = workspace.agentPoolId === null
+          ? undefined
+          : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+        if (
+          pool?.orgId !== workspace.orgId
+          || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
+        ) {
+          await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+          // Restore the confirmed state so the next poll retries once the
+          // pool is reachable, mirroring the manual-apply path.
+          await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id));
+          continue;
+        }
+        const job = await enqueueAgentApplyJob(run.id, pool.id);
+        if (job === undefined) {
+          // The agent job queue rejected the claim; restore for retry.
+          await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id));
+          continue;
+        }
+        applied.push(run.id);
+        continue;
+      }
+      await executeApply(run.id);
+      applied.push(run.id);
+    } catch (error: unknown) {
+      log.error("Scheduled apply failed", { runId: run.id, error });
+      // Keep the run confirmed so a transient failure retries next poll.
+      await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id)).catch((): void => {});
     }
-    await executeApply(run.id);
-    applied.push(run.id);
   }
   return applied;
 }
+
+/** Latest gate-block reason per scheduled run (avoids per-poll log spam). */
+const scheduledBlockReasons = new Map<string, string>();
 
 /**
  * Worker queue poll interval. The queue loop (startWorkerQueue) claims

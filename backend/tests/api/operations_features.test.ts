@@ -208,6 +208,7 @@ afterAll(async () => {
   await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer"]));
   invalidateSettingsCache();
   await deletePlanJsonArtifact(explainerRunId).catch((): void => {});
+  await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, calendarUserId));
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(apiTokens).where(eq(apiTokens.token, adminToken));
@@ -383,6 +384,10 @@ describe("change calendar (21.4)", () => {
   it("filters by date range and exposes future-scheduled applies", async () => {
     const scheduledRunId = `ops-calendar-scheduled-${suffix}`;
     const scheduledAt = Date.now() + 3_600_000;
+    // confirmed-at sits INSIDE the past-only window so the exclusion below
+    // can only come from the future scheduled_at branch of the range
+    // predicate, not from the confirmation timestamp.
+    const confirmedAt = Date.now() - 30_000;
     await db.insert(runs).values({
       id: scheduledRunId,
       workspaceId,
@@ -390,15 +395,15 @@ describe("change calendar (21.4)", () => {
       createdAt: Date.now() - 120_000,
       scheduledAt,
       statusTimestamps: {
-        "confirmed-at": new Date(Date.now() - 120_000).toISOString(),
+        "confirmed-at": new Date(confirmedAt).toISOString(),
         "scheduled-at": new Date(scheduledAt).toISOString(),
       },
     });
     try {
       // Range excluding the scheduled time: the scheduled run must vanish
-      // even though its confirmation happened long ago.
+      // even though its confirmation happened inside the window.
       const pastOnly = await request(
-        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(Date.now() - 60_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(Date.now() - 1).toISOString())}`,
+        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(confirmedAt - 30_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(confirmedAt + 30_000).toISOString())}`,
         "GET",
         undefined,
         { Authorization: `Bearer ${calendarToken}` },

@@ -172,6 +172,10 @@ describe("TFE API v2 - Workspaces", () => {
       expect(includedRun).toBeDefined();
       expect(includedRun.attributes.status).toBe("planning");
       expect(includedRun.attributes.message).toBe("Newer run");
+      // SQLite 0/1 integers must be normalized to real booleans in the
+      // included run resource.
+      expect(includedRun.attributes["is-destroy"]).toBe(false);
+      expect(includedRun.attributes["auto-apply"]).toBe(false);
       expect(body.included.some((entry: { id: string }): boolean => entry.id === olderRunId)).toBe(false);
 
       // Without include, the relationship must stay absent (TFE default shape).

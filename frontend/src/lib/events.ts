@@ -30,7 +30,21 @@ export function subscribeEvents(
   let retryMs = 1000;
   let timer: number | undefined;
 
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    signal?.removeEventListener("abort", outerAbort);
+    if (timer !== undefined) window.clearTimeout(timer);
+    controller.abort();
+  };
+
   const outerAbort = (): void => { close(); };
+  if (signal?.aborted === true) {
+    // The caller's signal was already aborted: never open or reconnect.
+    closed = true;
+    controller.abort();
+    return { close };
+  }
   signal?.addEventListener("abort", outerAbort, { once: true });
 
   const open = async (): Promise<void> => {
@@ -48,6 +62,12 @@ export function subscribeEvents(
         signal: controller.signal,
       });
       if (closed) return;
+      if (response.status === 401 || response.status === 403) {
+        // Authentication failures are terminal: retrying cannot help and
+        // would only spin against a revoked session.
+        close();
+        return;
+      }
       if (!response.ok) throw new ApiError(response.status, `Event stream failed (${response.status})`);
       // A successful connect resets the backoff; drops after this point
       // reconnect quickly.
@@ -60,7 +80,8 @@ export function subscribeEvents(
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split("\n\n");
+        // Split on both LF and CRLF frame separators.
+        const frames = buffer.split(/\r?\n\r?\n/);
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
           if (frame.trim() === "") continue;
@@ -75,14 +96,6 @@ export function subscribeEvents(
       timer = window.setTimeout((): void => { void open(); }, retryMs);
       retryMs = Math.min(retryMs * 2, 30_000);
     }
-  };
-
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    signal?.removeEventListener("abort", outerAbort);
-    if (timer !== undefined) window.clearTimeout(timer);
-    controller.abort();
   };
 
   void open();
