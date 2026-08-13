@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { cp, mkdtemp, rm } from "fs/promises";
 import { readdirSync, readFileSync } from "fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -146,7 +147,7 @@ test("migration history applies cleanly to a fresh DB", async () => {
   try {
     await cp(DRIZZLE_DIR, folder, { recursive: true });
     const { journalCount, tables } = await applyBaseline(folder);
-    expect(journalCount).toBe(2);
+    expect(journalCount).toBe(3);
     // The baseline must be substantial (it replaces 60 migrations), not a stub.
     expect(tables.length).toBeGreaterThan(90);
   } finally {
@@ -162,14 +163,23 @@ test("repairs run_explanations on a database with the baseline already applied",
     try {
       const db = drizzle(raw);
       migrate(db, { migrationsFolder: folder });
+      // Recreate the pre-repair database shape: only the squashed baseline
+      // was applied (no run_explanations, no scheduled_at column). Drizzle
+      // stores sha256(migration sql) as the journal hash; delete the two
+      // post-baseline entries and revert their effects.
       raw.run("DROP TABLE run_explanations");
-      const latest = raw.query("SELECT hash FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1").get() as { hash: string };
-      raw.run("DELETE FROM __drizzle_migrations WHERE hash = ?", [latest.hash]);
+      raw.run("ALTER TABLE runs DROP COLUMN scheduled_at");
+      for (const tag of ["0001_repair_run_explanations", "0002_add_runs_scheduled_at"]) {
+        const migrationSql = readFileSync(join(folder, `${tag}.sql`), "utf8");
+        const hash = createHash("sha256").update(migrationSql).digest("hex");
+        raw.run("DELETE FROM __drizzle_migrations WHERE hash = ?", [hash]);
+      }
       migrate(db, { migrationsFolder: folder });
       expect(pragmaTables(raw)).toContain("run_explanations");
       expect(pragmaColumns(raw, "run_explanations")).toEqual([
         "id", "run_id", "kind", "model", "content", "thinking", "input_hash", "created_at",
       ]);
+      expect(pragmaColumns(raw, "runs")).toContain("scheduled_at");
     } finally {
       raw.close();
     }
@@ -207,7 +217,7 @@ test("re-running the migrator on an already-migrated DB is a no-op", async () =>
       const second = pragmaTables(raw);
       const count = (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c;
       expect(second).toEqual(first);
-      expect(count).toBe(2);
+      expect(count).toBe(3);
     } finally {
       raw.close();
     }
