@@ -280,6 +280,27 @@ function scimMappingPath(request: CustomRequest): string | undefined {
   return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
 }
 
+/**
+ * Paths that represent real server endpoints for the purpose of the global
+ * rate limiter. Everything else (SPA shell routes, /assets/*, favicon) is
+ * static content served by the static plugin and must never consume the API
+ * bucket: a single page load fetches 30-40 hashed chunks in parallel.
+ * /oauth/* and /users/* carry credentials or SSO challenge state, so they
+ * stay inside the global bucket alongside the /api/* endpoints.
+ */
+function serverEndpointPath(request: CustomRequest): string | undefined {
+  const path = new URL(request.url).pathname;
+  if (
+    path.startsWith("/api/")
+    || path.startsWith("/oauth/")
+    || path.startsWith("/users/")
+    || path.startsWith("/admin/")
+  ) {
+    return path;
+  }
+  return undefined;
+}
+
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
@@ -351,6 +372,11 @@ export const app = new Elysia()
     generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }> | null): string => {
       return principalRateLimitKey(request, server);
     },
+    // Static content (SPA shell, hashed /assets/* chunks, favicon) is exempt:
+    // a page load fetches 30-40 chunks in parallel and would trip the bucket
+    // on every cold cache. Only server endpoints are counted; login and other
+    // credential-bearing paths get their own tighter limiters below.
+    skip: (request: CustomRequest): boolean => serverEndpointPath(request) === undefined,
   }))
   .use(rateLimit({
     context: fixedWindowContext(),
