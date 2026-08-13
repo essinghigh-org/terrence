@@ -204,15 +204,20 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // Same run-read permission filter as confirmed runs / change requests:
       // auto-destroy schedules are only visible for workspaces the user can
       // read, so a scoped user cannot enumerate other workspaces' schedules.
+      // Without an explicit range the default is future-only (matching the
+      // original endpoint); an explicit filter[start] can reach past ones.
+      const nowIso = new Date().toISOString();
       const autoDestroys = await db.query.workspaces.findMany({
         columns: { id: true, name: true, autoDestroyAt: true },
         where: and(
           eq(workspaces.orgId, organization.id),
           inArray(workspaces.id, allowedWorkspaceIds),
-          ...(start === undefined && end === undefined ? [] : [
-            ...(start === undefined ? [] : [gte(workspaces.autoDestroyAt, start.iso)]),
-            ...(end === undefined ? [] : [lte(workspaces.autoDestroyAt, end.iso)]),
-          ]),
+          ...(start === undefined && end === undefined
+            ? [gte(workspaces.autoDestroyAt, nowIso)]
+            : [
+                ...(start === undefined ? [] : [gte(workspaces.autoDestroyAt, start.iso)]),
+                ...(end === undefined ? [] : [lte(workspaces.autoDestroyAt, end.iso)]),
+              ]),
         ),
         orderBy: [asc(workspaces.autoDestroyAt), asc(workspaces.id)],
       });
