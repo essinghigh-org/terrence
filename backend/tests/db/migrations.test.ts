@@ -133,16 +133,6 @@ test("repairs the scheduled_at column when a legacy journal skips the column mig
   // production, and only the boot guard can repair it.
   const databasePath = join(testDir, "terrence.db");
   const migrationFolder = join(import.meta.dir, "../../drizzle");
-  const raw = new Database(databasePath);
-  migrate(drizzle(raw), { migrationsFolder: migrationFolder });
-  raw.run("ALTER TABLE runs DROP COLUMN scheduled_at");
-  raw.run("DELETE FROM __drizzle_migrations");
-  raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
-    "fabricated-legacy-row",
-    1787064000000,
-  ]);
-  raw.close();
-
   const dbModule = pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href;
   const script = `
     const { db } = await import(${JSON.stringify(dbModule)});
@@ -152,6 +142,26 @@ test("repairs the scheduled_at column when a legacy journal skips the column mig
     console.log(JSON.stringify({ hasScheduledAt: columns.some(row => row.name === "scheduled_at"), journal }));
   `;
   try {
+    // Start from a fully migrated database, then reproduce production's
+    // state: the scheduled_at column is missing and the journal holds
+    // fabricated rows whose timestamps are newer than every journaled
+    // migration in the repo. Drizzle then skips 0002_add_runs_scheduled_at
+    // exactly as it does on production, and only the boot guard can repair
+    // it. The raw connection is closed before the child process boots the
+    // app module against the same file.
+    const raw = new Database(databasePath);
+    try {
+      migrate(drizzle(raw), { migrationsFolder: migrationFolder });
+      raw.run("ALTER TABLE runs DROP COLUMN scheduled_at");
+      raw.run("DELETE FROM __drizzle_migrations");
+      raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
+        "fabricated-legacy-row",
+        1787064000000,
+      ]);
+    } finally {
+      raw.close();
+    }
+
     const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
       cwd: join(import.meta.dir, "../.."),
       env: {

@@ -189,7 +189,17 @@ client.run(`
   const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
     .map((column): string => column.name);
   if (!runsColumns.includes("scheduled_at")) {
-    client.run("ALTER TABLE runs ADD COLUMN scheduled_at integer");
+    try {
+      client.run("ALTER TABLE runs ADD COLUMN scheduled_at integer");
+    } catch (error: unknown) {
+      // Another process may have added the column between the check and the
+      // ALTER. Only swallow the failure when the column now exists; any
+      // genuine ALTER failure must surface at boot.
+      const updatedColumns = client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>;
+      if (!updatedColumns.some((column): boolean => column.name === "scheduled_at")) {
+        throw error;
+      }
+    }
   }
 }
 
