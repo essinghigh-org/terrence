@@ -4,7 +4,7 @@ import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
-import { currentTokenScopes } from "../lib/request-scope";
+import { currentSiteAdmin, currentTokenScopes } from "../lib/request-scope";
 import {
   collectLegacyMetrics,
   collectScopedMetrics,
@@ -13,6 +13,8 @@ import {
 } from "../lib/metrics";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { eq } from "drizzle-orm";
+import { refreshSessions } from "../db/schema";
 
 // Single source of truth for the reported application version:
 // BUILD_VERSION env wins, otherwise the root package.json version,
@@ -197,26 +199,30 @@ function prometheusLines(collection: MetricsCollection): string[] {
     `terrence_agent_pools_total ${collection.agentPoolsTotal}`,
     "# HELP terrence_agents_total Agents by pool and status.",
     "# TYPE terrence_agents_total gauge",
+    // Per-pool families: emit HELP/TYPE exactly once (Prometheus text format
+    // requires a single metadata line per family), then one sample line per
+    // pool. The pool label set is identical for every family so grouping the
+    // samples by family keeps the output deterministic.
+    "# HELP terrence_agents_stale_total Agents with a heartbeat older than the configured timeout.",
+    "# TYPE terrence_agents_stale_total gauge",
+    "# HELP terrence_agent_jobs_queued_total Agent jobs waiting for a worker (queue depth).",
+    "# TYPE terrence_agent_jobs_queued_total gauge",
+    "# HELP terrence_agent_jobs_claimed_total Agent jobs currently claimed by a worker.",
+    "# TYPE terrence_agent_jobs_claimed_total gauge",
+    "# HELP terrence_agent_jobs_errored_total Agent jobs that ended in error.",
+    "# TYPE terrence_agent_jobs_errored_total gauge",
+    "# HELP terrence_agent_queue_oldest_wait_seconds Age of the oldest job still waiting for a worker.",
+    "# TYPE terrence_agent_queue_oldest_wait_seconds gauge",
   );
   for (const pool of collection.agentPools) {
     for (const [status, value] of Object.entries(pool.agentsByStatus)) {
       lines.push(`terrence_agents_total{${poolLabels(pool)},status="${prometheusLabel(status)}"} ${value}`);
     }
     lines.push(
-      "# HELP terrence_agents_stale_total Agents with a heartbeat older than the configured timeout.",
-      "# TYPE terrence_agents_stale_total gauge",
       `terrence_agents_stale_total{${poolLabels(pool)}} ${pool.staleAgents}`,
-      "# HELP terrence_agent_jobs_queued_total Agent jobs waiting for a worker (queue depth).",
-      "# TYPE terrence_agent_jobs_queued_total gauge",
       `terrence_agent_jobs_queued_total{${poolLabels(pool)}} ${pool.jobsQueued}`,
-      "# HELP terrence_agent_jobs_claimed_total Agent jobs currently claimed by a worker.",
-      "# TYPE terrence_agent_jobs_claimed_total gauge",
       `terrence_agent_jobs_claimed_total{${poolLabels(pool)}} ${pool.jobsClaimed}`,
-      "# HELP terrence_agent_jobs_errored_total Agent jobs that ended in error.",
-      "# TYPE terrence_agent_jobs_errored_total gauge",
       `terrence_agent_jobs_errored_total{${poolLabels(pool)}} ${pool.jobsErrored}`,
-      "# HELP terrence_agent_queue_oldest_wait_seconds Age of the oldest job still waiting for a worker.",
-      "# TYPE terrence_agent_queue_oldest_wait_seconds gauge",
       `terrence_agent_queue_oldest_wait_seconds{${poolLabels(pool)}} ${pool.oldestQueuedWaitSeconds}`,
     );
   }
@@ -323,14 +329,37 @@ export const healthRoutes = new Elysia({ name: "health" })
     };
   })
   .get("/healthz", (): string => "ok")
-  .get("/metrics", async ({ request, set, user, orgId, teamId }: MetricsCtx): Promise<unknown> => {
+  .get("/metrics", async ({ request, set, user, token, orgId, teamId }: MetricsCtx): Promise<unknown> => {
     // Token-authenticated. Legacy tokens (scopes null) get instance-wide
     // metrics; fine-grained tokens get only the org/workspace/agent data
     // their scope is eligible for (enforced inside the collectors).
+    //
+    // Instance-wide metrics are reserved for verified legacy API tokens and
+    // site admins. A browser-session access token (issued by login, tracked
+    // in refresh_sessions) must not fall through to the legacy collector even
+    // though it carries no scopes: that would leak instance-wide counters to
+    // any logged-in UI user. Fail closed with 403 for session principals that
+    // are not site admins.
     const scopes = currentTokenScopes();
-    const collection = scopes === null
-      ? await collectLegacyMetrics()
-      : await collectScopedMetrics(scopes, user?.id, orgId, teamId);
+    const isSiteAdmin = currentSiteAdmin(user?.id ?? null) === true;
+    const isSessionToken = token !== null && token !== undefined
+      ? (await db.query.refreshSessions.findFirst({
+          where: eq(refreshSessions.accessTokenId, token.id),
+          columns: { id: true },
+        })) !== undefined
+      : false;
+    const allowInstanceMetrics = scopes === null && (isSiteAdmin || !isSessionToken);
+
+    const collection = scopes !== null
+      ? await collectScopedMetrics(scopes, user?.id, orgId, teamId)
+      : allowInstanceMetrics
+        ? await collectLegacyMetrics()
+        : null;
+
+    if (collection === null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Metrics require a bearer token with sufficient scope" }] };
+    }
 
     const format = new URL(request.url).searchParams.get("format");
     if (format !== "prometheus") {

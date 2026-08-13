@@ -9,6 +9,7 @@ import {
   organizationMemberships,
   organizations,
   projects,
+  refreshSessions,
   runs,
   users,
   workspaces,
@@ -24,8 +25,11 @@ describe("instance metrics", () => {
   let workspaceRestrictedToken: string;
   let noAgentGrantToken: string;
   let otherOrgToken: string;
+  let sessionToken: string;
 
   const suffix = crypto.randomUUID();
+  const sessionTokenId = `metrics-tok-session-${suffix}`;
+  const sessionRefreshId = `metrics-refresh-session-${suffix}`;
   const userId = `metrics-user-${suffix}`;
   const otherUserId = `metrics-other-${suffix}`;
   const orgA = `metrics-org-a-${suffix}`;
@@ -42,9 +46,15 @@ describe("instance metrics", () => {
   const agentA2 = `metrics-agent-a2-${suffix}`;
   const agentB1 = `metrics-agent-b1-${suffix}`;
 
+  // The stale-agent assertion depends on the heartbeat timeout being below the
+  // 120s heartbeat age seeded for agent-a2; pin it so the test is deterministic
+  // regardless of operator env overrides.
+  const previousHeartbeatTimeout = process.env.AGENT_HEARTBEAT_TIMEOUT_MS;
+
   const auth = (token: string): Record<string, string> => ({ Authorization: `Bearer ${token}` });
 
   beforeAll(async () => {
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS = "60000";
     await db.insert(users).values([
       { id: userId, username: `metrics-${suffix}@test`, passwordHash: "hash" },
       { id: otherUserId, username: `metrics-other-${suffix}@test`, passwordHash: "hash" },
@@ -94,9 +104,13 @@ describe("instance metrics", () => {
     workspaceRestrictedToken = `metrics-ws-scoped-${suffix}`;
     noAgentGrantToken = `metrics-noagent-${suffix}`;
     otherOrgToken = `metrics-other-${suffix}`;
+    sessionToken = `metrics-session-${suffix}`;
     await db.insert(apiTokens).values([
       // Legacy: no scopes = full permissions.
       { id: `metrics-tok-legacy-${suffix}`, token: legacyToken, userId },
+      // Browser session access token: no scopes, but tracked in
+      // refresh_sessions. Must NOT see instance-wide metrics.
+      { id: sessionTokenId, token: sessionToken, userId, description: "Browser session access token" },
       // Fine-grained: full org A coverage, both grants.
       {
         id: `metrics-tok-scoped-${suffix}`,
@@ -143,11 +157,29 @@ describe("instance metrics", () => {
         }),
       },
     ]);
+    // The session token's refresh-session tracking row (what distinguishes a
+    // browser session access token from a user-created legacy API token).
+    await db.insert(refreshSessions).values({
+      id: sessionRefreshId,
+      familyId: `metrics-family-${suffix}`,
+      tokenHash: `metrics-refresh-hash-${suffix}`,
+      userId,
+      accessTokenId: sessionTokenId,
+      expiresAt: Date.now() + 60_000,
+      createdAt: Date.now(),
+    });
   });
 
   afterAll(async () => {
+    if (previousHeartbeatTimeout === undefined) {
+      delete process.env.AGENT_HEARTBEAT_TIMEOUT_MS;
+    } else {
+      process.env.AGENT_HEARTBEAT_TIMEOUT_MS = previousHeartbeatTimeout;
+    }
+    await db.delete(refreshSessions).where(inArray(refreshSessions.id, [sessionRefreshId]));
     await db.delete(apiTokens).where(inArray(apiTokens.id, [
       `metrics-tok-legacy-${suffix}`,
+      sessionTokenId,
       `metrics-tok-scoped-${suffix}`,
       `metrics-tok-ws-${suffix}`,
       `metrics-tok-noagent-${suffix}`,
@@ -181,6 +213,15 @@ describe("instance metrics", () => {
     expect(res.status).toBe(401);
   });
 
+  test("rejects a browser session access token (no instance metrics)", async () => {
+    const res = await app.handle(
+      new Request("http://localhost/metrics", { headers: auth(sessionToken) }),
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json() as { errors: { status: string }[] };
+    expect(body.errors[0]?.status).toBe("403");
+  });
+
   test("legacy token sees instance-wide metrics plus agent queue depth", async () => {
     const res = await app.handle(
       new Request("http://localhost/metrics", { headers: auth(legacyToken) }),
@@ -194,7 +235,9 @@ describe("instance metrics", () => {
     expect(metrics.terrence_runs_total).toBeGreaterThanOrEqual(3);
     expect(metrics.tfe_run_current_count).toMatchObject({ applied: expect.any(Number), pending: expect.any(Number) });
     expect(metrics.terrence_database_size_bytes).toEqual(expect.any(Number));
-    expect(metrics.terrence_database_wal_size_bytes).toEqual(expect.any(Number));
+    // WAL size can be null when the WAL has been folded into the main DB file
+    // (graceful shutdown checkpoints it); both shapes are valid.
+    expect(metrics.terrence_database_wal_size_bytes === null || typeof metrics.terrence_database_wal_size_bytes === "number").toBe(true);
     expect(metrics.terrence_database_page_count).toEqual(expect.any(Number));
     expect(metrics.terrence_agent_pools_total).toBeGreaterThanOrEqual(2);
 
@@ -277,6 +320,13 @@ describe("instance metrics", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     const body = await res.text();
+    // Each metric family must have exactly one HELP/TYPE pair (Prometheus text
+    // format); a per-pool family repeated once per pool would duplicate them.
+    const helpNames = body
+      .split("\n")
+      .filter((line): boolean => line.startsWith("# HELP "))
+      .map((line): string => line.split(" ")[2]!);
+    expect(new Set(helpNames).size).toBe(helpNames.length);
     expect(body).toContain("# TYPE terrence_runs_total gauge");
     expect(body).toMatch(/terrence_runs_total \d+/);
     expect(body).toContain("# TYPE terrence_agent_jobs_queued_total gauge");

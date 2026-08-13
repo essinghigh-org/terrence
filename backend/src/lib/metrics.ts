@@ -219,7 +219,10 @@ export async function collectScopedMetrics(
   const orgs: OrgMetrics[] = [];
   const pools: Readonly<{ id: string; name: string; orgId: string }>[] = [];
 
-  for (const orgId of scope.orgs) {
+  // A scope may list the same org more than once (org + workspace/tag
+  // selectors can overlap); dedupe so each org is collected exactly once and
+  // its pools are not counted twice.
+  for (const orgId of new Set(scope.orgs)) {
     // read-workspaces eligibility: scope org coverage + grant + principal access.
     const canReadWorkspaces = await checkOrganizationPermission(
       orgId, userId, orgTokenId, teamTokenId, "read-workspaces",
