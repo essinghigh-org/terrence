@@ -56,7 +56,7 @@ const AGENT_PING_WRITE_INTERVAL_MS = 15_000;
 // interval to something pathological (sub-second DB writes).
 const MIN_PING_WRITE_INTERVAL_MS = 3_000;
 
-function configuredHeartbeatTimeoutMs(): number {
+export function configuredHeartbeatTimeoutMs(): number {
   const configured = Number(
     process.env.AGENT_HEARTBEAT_TIMEOUT_MS ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
   );

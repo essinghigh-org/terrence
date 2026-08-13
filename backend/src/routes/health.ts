@@ -1,11 +1,16 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, runs, users, workspaces } from "../db/schema";
-import { count } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
+import { currentTokenScopes } from "../lib/request-scope";
+import {
+  collectLegacyMetrics,
+  collectScopedMetrics,
+  type AgentPoolMetrics,
+  type MetricsCollection,
+} from "../lib/metrics";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
@@ -38,7 +43,11 @@ type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Read
 type UserSetCtx = Readonly<{ user: unknown; set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }> }>;
 type MetricsCtx = Readonly<{
   request: Readonly<{ url: string }>;
-  set: Readonly<{ headers: Readonly<Record<string, string | number>> }>;
+  set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+  user: Readonly<{ id: string }> | null;
+  token: Readonly<{ id: string }> | null;
+  orgId: string | null;
+  teamId: string | null;
 }>;
 
 const PING_SSO_CACHE_TTL_MS = 1_000;
@@ -89,12 +98,129 @@ async function pingSsoSnapshot(): Promise<PingSsoSnapshot> {
   }
 }
 
-function metricValue(rows: readonly Readonly<{ value: number }>[] | undefined): number {
-  return rows?.[0]?.value ?? 0;
-}
-
 function prometheusLabel(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n");
+}
+
+function poolLabels(pool: AgentPoolMetrics): string {
+  return `pool_id="${prometheusLabel(pool.id)}",pool="${prometheusLabel(pool.name)}",org="${prometheusLabel(pool.orgId)}"`;
+}
+
+/** JSON representation: instance counters (legacy) or org breakdown (scoped). */
+function collectionToJson(collection: MetricsCollection): Record<string, unknown> {
+  const metrics: Record<string, unknown> = {};
+  if (collection.instance !== null) {
+    metrics.terrence_users_total = collection.instance.users;
+    metrics.terrence_organizations_total = collection.instance.organizations;
+    metrics.terrence_workspaces_total = collection.instance.workspaces;
+    metrics.terrence_runs_total = collection.instance.runs;
+    metrics.tfe_run_current_count = collection.instance.runsByStatus;
+    metrics.terrence_database_size_bytes = collection.instance.database.sizeBytes;
+    metrics.terrence_database_wal_size_bytes = collection.instance.database.walSizeBytes;
+    metrics.terrence_database_page_count = collection.instance.database.pageCount;
+  }
+  if (collection.orgs !== null) {
+    metrics.organizations = collection.orgs.map((org): Record<string, unknown> => ({
+      org_id: org.orgId,
+      workspaces: org.workspaces,
+      runs_by_status: org.runsByStatus,
+    }));
+  }
+  metrics.terrence_agent_pools_total = collection.agentPoolsTotal;
+  metrics.agent_pools = collection.agentPools.map((pool): Record<string, unknown> => ({
+    id: pool.id,
+    name: pool.name,
+    org_id: pool.orgId,
+    agents_by_status: pool.agentsByStatus,
+    agents_stale: pool.staleAgents,
+    jobs_queued: pool.jobsQueued,
+    jobs_claimed: pool.jobsClaimed,
+    jobs_errored: pool.jobsErrored,
+    oldest_queued_wait_seconds: pool.oldestQueuedWaitSeconds,
+  }));
+  return metrics;
+}
+
+/** Prometheus text format; agent queue-depth gauges are per-pool. */
+function prometheusLines(collection: MetricsCollection): string[] {
+  const lines: string[] = [];
+  const instance = collection.instance;
+  if (instance !== null) {
+    lines.push(
+      "# HELP terrence_users_total Registered users.",
+      "# TYPE terrence_users_total gauge",
+      `terrence_users_total ${instance.users}`,
+      "# HELP terrence_organizations_total Organizations.",
+      "# TYPE terrence_organizations_total gauge",
+      `terrence_organizations_total ${instance.organizations}`,
+      "# HELP terrence_workspaces_total Workspaces.",
+      "# TYPE terrence_workspaces_total gauge",
+      `terrence_workspaces_total ${instance.workspaces}`,
+      "# HELP terrence_runs_total Runs.",
+      "# TYPE terrence_runs_total gauge",
+      `terrence_runs_total ${instance.runs}`,
+      "# HELP tfe_run_current_count Current runs by status.",
+      "# TYPE tfe_run_current_count gauge",
+      ...Object.entries(instance.runsByStatus).map(([status, value]): string =>
+        `tfe_run_current_count{status="${prometheusLabel(status)}"} ${value}`,
+      ),
+      "# HELP terrence_database_size_bytes Database file size on disk.",
+      "# TYPE terrence_database_size_bytes gauge",
+      `terrence_database_size_bytes ${instance.database.sizeBytes}`,
+      "# HELP terrence_database_wal_size_bytes Database WAL sidecar size on disk.",
+      "# TYPE terrence_database_wal_size_bytes gauge",
+      `terrence_database_wal_size_bytes ${instance.database.walSizeBytes ?? 0}`,
+      "# HELP terrence_database_page_count Database pages.",
+      "# TYPE terrence_database_page_count gauge",
+      `terrence_database_page_count ${instance.database.pageCount}`,
+    );
+  }
+  if (collection.orgs !== null) {
+    lines.push(
+      "# HELP terrence_org_workspaces_total Workspaces visible to the caller per org.",
+      "# TYPE terrence_org_workspaces_total gauge",
+      ...collection.orgs.map((org): string =>
+        `terrence_org_workspaces_total{org="${prometheusLabel(org.orgId)}"} ${org.workspaces}`,
+      ),
+      "# HELP tfe_run_current_count Current runs visible to the caller by org and status.",
+      "# TYPE tfe_run_current_count gauge",
+      ...collection.orgs.flatMap((org): string[] =>
+        Object.entries(org.runsByStatus).map(([status, value]): string =>
+          `tfe_run_current_count{org="${prometheusLabel(org.orgId)}",status="${prometheusLabel(status)}"} ${value}`,
+        ),
+      ),
+    );
+  }
+  lines.push(
+    "# HELP terrence_agent_pools_total Agent pools visible to the caller.",
+    "# TYPE terrence_agent_pools_total gauge",
+    `terrence_agent_pools_total ${collection.agentPoolsTotal}`,
+    "# HELP terrence_agents_total Agents by pool and status.",
+    "# TYPE terrence_agents_total gauge",
+  );
+  for (const pool of collection.agentPools) {
+    for (const [status, value] of Object.entries(pool.agentsByStatus)) {
+      lines.push(`terrence_agents_total{${poolLabels(pool)},status="${prometheusLabel(status)}"} ${value}`);
+    }
+    lines.push(
+      "# HELP terrence_agents_stale_total Agents with a heartbeat older than the configured timeout.",
+      "# TYPE terrence_agents_stale_total gauge",
+      `terrence_agents_stale_total{${poolLabels(pool)}} ${pool.staleAgents}`,
+      "# HELP terrence_agent_jobs_queued_total Agent jobs waiting for a worker (queue depth).",
+      "# TYPE terrence_agent_jobs_queued_total gauge",
+      `terrence_agent_jobs_queued_total{${poolLabels(pool)}} ${pool.jobsQueued}`,
+      "# HELP terrence_agent_jobs_claimed_total Agent jobs currently claimed by a worker.",
+      "# TYPE terrence_agent_jobs_claimed_total gauge",
+      `terrence_agent_jobs_claimed_total{${poolLabels(pool)}} ${pool.jobsClaimed}`,
+      "# HELP terrence_agent_jobs_errored_total Agent jobs that ended in error.",
+      "# TYPE terrence_agent_jobs_errored_total gauge",
+      `terrence_agent_jobs_errored_total{${poolLabels(pool)}} ${pool.jobsErrored}`,
+      "# HELP terrence_agent_queue_oldest_wait_seconds Age of the oldest job still waiting for a worker.",
+      "# TYPE terrence_agent_queue_oldest_wait_seconds gauge",
+      `terrence_agent_queue_oldest_wait_seconds{${poolLabels(pool)}} ${pool.oldestQueuedWaitSeconds}`,
+    );
+  }
+  return lines;
 }
 
 async function readinessResponse(set: SetCtx["set"]): Promise<unknown> {
@@ -197,46 +323,24 @@ export const healthRoutes = new Elysia({ name: "health" })
     };
   })
   .get("/healthz", (): string => "ok")
-  .get("/metrics", async ({ request, set }: MetricsCtx): Promise<unknown> => {
-    const [userCount, organizationCount, workspaceCount, runCount, runsByStatus] = await Promise.all([
-      db.select({ value: count() }).from(users),
-      db.select({ value: count() }).from(organizations),
-      db.select({ value: count() }).from(workspaces),
-      db.select({ value: count() }).from(runs),
-      db.select({ status: runs.status, value: count() }).from(runs).groupBy(runs.status),
-    ]);
-    const metrics = {
-      terrence_users_total: metricValue(userCount),
-      terrence_organizations_total: metricValue(organizationCount),
-      terrence_workspaces_total: metricValue(workspaceCount),
-      terrence_runs_total: metricValue(runCount),
-      tfe_run_current_count: Object.fromEntries(runsByStatus.map((row): [string, number] => [row.status, row.value])),
-    };
-    if (new URL(request.url).searchParams.get("format") !== "prometheus") return { metrics };
+  .get("/metrics", async ({ request, set, user, orgId, teamId }: MetricsCtx): Promise<unknown> => {
+    // Token-authenticated. Legacy tokens (scopes null) get instance-wide
+    // metrics; fine-grained tokens get only the org/workspace/agent data
+    // their scope is eligible for (enforced inside the collectors).
+    const scopes = currentTokenScopes();
+    const collection = scopes === null
+      ? await collectLegacyMetrics()
+      : await collectScopedMetrics(scopes, user?.id, orgId, teamId);
+
+    const format = new URL(request.url).searchParams.get("format");
+    if (format !== "prometheus") {
+      return { metrics: collectionToJson(collection) };
+    }
 
     const headers = set.headers as Record<string, string | number>;
     headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8";
-    const lines = [
-      "# HELP terrence_users_total Registered users.",
-      "# TYPE terrence_users_total gauge",
-      `terrence_users_total ${metrics.terrence_users_total}`,
-      "# HELP terrence_organizations_total Organizations.",
-      "# TYPE terrence_organizations_total gauge",
-      `terrence_organizations_total ${metrics.terrence_organizations_total}`,
-      "# HELP terrence_workspaces_total Workspaces.",
-      "# TYPE terrence_workspaces_total gauge",
-      `terrence_workspaces_total ${metrics.terrence_workspaces_total}`,
-      "# HELP terrence_runs_total Runs.",
-      "# TYPE terrence_runs_total gauge",
-      `terrence_runs_total ${metrics.terrence_runs_total}`,
-      "# HELP tfe_run_current_count Current runs by status.",
-      "# TYPE tfe_run_current_count gauge",
-      ...runsByStatus.map((row): string =>
-        `tfe_run_current_count{status="${prometheusLabel(row.status)}"} ${row.value}`,
-      ),
-    ];
-    return `${lines.join("\n")}\n`;
-  })
+    return `${prometheusLines(collection).join("\n")}\n`;
+  }, { isAuth: true })
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
       await db.query.users.findFirst();
