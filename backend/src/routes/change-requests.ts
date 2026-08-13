@@ -32,6 +32,8 @@ type Context = Readonly<{
 type ChangeRequest = Readonly<typeof changeRequests.$inferSelect>;
 type Workspace = Readonly<typeof workspaces.$inferSelect>;
 
+const VALID_STATUSES = ["pending", "approved", "discarded", "archived"] as const;
+
 function errorResponse(set: SetObject, status: number, title: string, detail?: string): Record<string, unknown> {
   (set as { status: number }).status = status;
   return {
@@ -329,13 +331,14 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     const records = selectedIds.map((workspaceId): ChangeRequest =>
       changeRequestValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.insert(changeRequests).values(records);
-    for (const record of records) {
-      queueChangeRequestNotification(record.id);
-      await auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
+    for (const record of records) queueChangeRequestNotification(record.id);
+    // Audit writes are independent of the notifications; run them
+    // concurrently instead of serializing the bulk path.
+    await Promise.all(records.map((record): Promise<void> =>
+      auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
         workspaceId: record.workspaceId,
         toStatus: "pending",
-      });
-    }
+      })));
     (set as { status: number }).status = 201;
     return {
       data: {
@@ -361,11 +364,10 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     }
     const url = new URL(request.url);
     const statusFilter = url.searchParams.get("filter[status]");
-    const VALID_STATUSES = ["pending", "approved", "discarded", "archived"];
     const statuses = statusFilter === null || statusFilter === ""
       ? null
       : [...new Set(statusFilter.split(",").map((value: string): string => value.trim()).filter((value: string): boolean => value !== ""))];
-    if (statuses !== null && (statuses.length === 0 || statuses.some((value: string): boolean => !VALID_STATUSES.includes(value)))) {
+    if (statuses !== null && (statuses.length === 0 || statuses.some((value: string): boolean => !VALID_STATUSES.includes(value as typeof VALID_STATUSES[number])))) {
       return errorResponse(set, 422, "Unprocessable Entity", "filter[status] must contain pending, approved, discarded, or archived");
     }
     const { number, size } = pageRequest(request);
@@ -379,6 +381,11 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
           columns: { id: true },
         })).map((row): string => row.id)
       : [...readable];
+    if (orgWorkspaceIds.length === 0) {
+      // No readable workspaces: nothing to list, but pagination metadata
+      // must still be well-formed.
+      return { data: [], ...pagination(request, number, size, 0) };
+    }
     const baseWhere = and(
       inArray(changeRequests.workspaceId, orgWorkspaceIds),
       ...(statuses === null ? [] : [inArray(changeRequests.status, statuses)]),

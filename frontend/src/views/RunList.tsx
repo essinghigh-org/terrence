@@ -231,14 +231,24 @@ export function RunList({
 
     // Authenticated SSE: any run status transition in this workspace
     // reloads the list (debounced so bursts coalesce into one fetch).
+    // An in-flight guard prevents a slow timer refresh from racing an
+    // SSE-triggered load and writing stale results last.
+    let inFlight = false;
     let debounceTimer: number | undefined;
+    const reload = (): void => {
+      if (inFlight || stopped || controller.signal.aborted) return;
+      inFlight = true;
+      void loadRuns(controller.signal).finally((): void => {
+        inFlight = false;
+      });
+    };
     const stream = subscribeEvents((event: SseEvent): void => {
       if (event.name !== "run.status") return;
       if (event.data["workspace-id"] !== workspaceId) return;
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout((): void => {
         debounceTimer = undefined;
-        if (!stopped && !controller.signal.aborted) void loadRuns(controller.signal);
+        reload();
       }, 500);
     }, controller.signal);
 

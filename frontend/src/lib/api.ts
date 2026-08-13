@@ -21,6 +21,31 @@ function clearAuthMemory(): void {
   refreshableSession = false;
 }
 
+/** localStorage access can throw (privacy modes, disabled storage). */
+function storageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Best-effort: the session marker is cosmetic.
+  }
+}
+
+function storageRemove(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Best-effort: nothing to clean up anyway when storage is unavailable.
+  }
+}
+
 type ReadonlyResponse = Readonly<{
   readonly status: number;
   readonly headers: Readonly<Headers>;
@@ -86,7 +111,7 @@ export function getAuthToken(): string | null {
   const expiresAt = accessTokenExpiry;
   if (expiresAt !== null && expiresAt <= Date.now() && !refreshableSession) {
     clearAuthMemory();
-    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    storageSet(SESSION_EXPIRED_KEY, "true");
     return null;
   }
   return accessToken;
@@ -111,20 +136,20 @@ export function setAuthToken(
     ? normalizedExpiry
     : null;
   refreshableSession = refreshable;
-  localStorage.removeItem(SESSION_EXPIRED_KEY);
+  storageRemove(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }
 
 export function expireAuthSession(): void {
-  const alreadyExpired = localStorage.getItem(SESSION_EXPIRED_KEY) === "true";
+  const alreadyExpired = storageGet(SESSION_EXPIRED_KEY) === "true";
   clearAuthMemory();
-  localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+  storageSet(SESSION_EXPIRED_KEY, "true");
   if (!alreadyExpired) window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
 }
 
 export function consumeAuthExpiry(): boolean {
-  const expired = localStorage.getItem(SESSION_EXPIRED_KEY) === "true";
-  localStorage.removeItem(SESSION_EXPIRED_KEY);
+  const expired = storageGet(SESSION_EXPIRED_KEY) === "true";
+  storageRemove(SESSION_EXPIRED_KEY);
   return expired;
 }
 
@@ -170,17 +195,17 @@ function adoptLegacyStoredToken(): string | null {
   let legacyExpiry: string | null = null;
   let legacyRefreshable = false;
   try {
-    legacyToken = localStorage.getItem("tfe_token");
-    legacyExpiry = localStorage.getItem("tfe_token_expires_at");
-    legacyRefreshable = localStorage.getItem("tfe_refreshable_session") === "true";
+    legacyToken = storageGet("tfe_token");
+    legacyExpiry = storageGet("tfe_token_expires_at");
+    legacyRefreshable = storageGet("tfe_refreshable_session") === "true";
   } catch {
     return null;
   }
   if (legacyToken === null || legacyToken === "") return null;
   try {
-    localStorage.removeItem("tfe_token");
-    localStorage.removeItem("tfe_token_expires_at");
-    localStorage.removeItem("tfe_refreshable_session");
+    storageRemove("tfe_token");
+    storageRemove("tfe_token_expires_at");
+    storageRemove("tfe_refreshable_session");
   } catch {
     // The token was already read; the session still works for this page load.
   }
@@ -189,7 +214,7 @@ function adoptLegacyStoredToken(): string | null {
   // immediately fail every request. Expired refreshable sessions are still
   // adopted so the refresh path can rotate through the cookie.
   if (Number.isFinite(expiry) && expiry !== null && expiry <= Date.now() && !legacyRefreshable) {
-    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    storageSet(SESSION_EXPIRED_KEY, "true");
     return null;
   }
   setAuthToken(legacyToken, Number.isFinite(expiry) ? expiry : null, legacyRefreshable);
@@ -535,7 +560,7 @@ export async function prepareAuthToken(): Promise<string | null> {
 
 function removeAuthToken(): void {
   clearAuthMemory();
-  localStorage.removeItem(SESSION_EXPIRED_KEY);
+  storageRemove(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }
 

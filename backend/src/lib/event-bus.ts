@@ -34,8 +34,10 @@ export function publish(topic: string, payload: Readonly<Record<string, unknown>
   for (const listener of [...listeners]) {
     try {
       listener(payload);
-    } catch {
-      // A misbehaving listener must never break the publisher.
+    } catch (error: unknown) {
+      // A misbehaving listener must never break the publisher, but its
+      // failure should be visible in diagnostics.
+      console.warn(`[terrence] Event listener for ${topic} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

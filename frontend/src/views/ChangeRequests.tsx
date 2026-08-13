@@ -87,7 +87,10 @@ export function ChangeRequests(): React.JSX.Element {
     setTotalCount(0);
     setCurrentPage(1);
     setTotalPages(0);
-    if (orgName === "") return;
+    if (orgName === "") {
+      setLoading(false);
+      return;
+    }
     void loadInbox(1, statusFilter, controller.signal);
     return (): void => { controller.abort(); };
   }, [orgName, statusFilter, loadInbox]);

@@ -39,11 +39,17 @@ function lazyView(
     try {
       return await load();
     } catch (firstError: unknown) {
-      // A failed chunk fetch is often a stale deployment mid-swap: retry
-      // once, then reload so the new asset manifest is fetched.
+      // A failed chunk fetch is often a stale deployment mid-swap: wait
+      // briefly, retry once, then reload so the new asset manifest is
+      // fetched. The reload fires at most once per browser session.
+      if (sessionStorage.getItem("terrence:chunk-reload") === "1") {
+        throw firstError;
+      }
+      await new Promise((resolve): void => { setTimeout(resolve, 500); });
       try {
         return await load();
       } catch {
+        sessionStorage.setItem("terrence:chunk-reload", "1");
         window.location.reload();
         throw firstError;
       }

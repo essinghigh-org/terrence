@@ -77,7 +77,10 @@ export function ChangeRequestDetail(): React.JSX.Element {
     setAuditAvailable(false);
     setError("");
     const id = changeRequestId ?? "";
-    if (id === "") return;
+    if (id === "") {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     const load = async (): Promise<void> => {
       setLoading(true);

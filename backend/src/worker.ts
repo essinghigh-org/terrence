@@ -2471,9 +2471,18 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       eq(runs.status, "confirmed"),
       isNotNull(runs.scheduledAt),
       sql`${runs.scheduledAt} <= ${now}`,
+      eq(runs.planOnly, false),
+      eq(runs.savePlan, false),
     ),
     limit: 50,
   });
+  // Prune block-reason bookkeeping for runs that left the due set (applied,
+  // canceled, or rescheduled).
+  const dueIds = new Set(dueRuns.map((run): string => run.id));
+  for (const key of scheduledBlockReasons.keys()) {
+    const runId = key.startsWith("scheduled:") ? key.slice("scheduled:".length) : "";
+    if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
+  }
   const applied: string[] = [];
   for (const run of dueRuns) {
     if (run.planOnly === true || run.savePlan === true) continue;
@@ -2528,7 +2537,12 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
         applied.push(run.id);
         continue;
       }
-      await executeApply(run.id);
+      // Fire-and-forget like the manual-apply dispatch: the poll cycle must
+      // keep moving; executeApply owns its own lifecycle and errors are
+      // logged, with the claim already taken so nothing re-dispatches.
+      void executeApply(run.id).catch((error: unknown): void => {
+        log.error("Scheduled executeApply failed", { runId: run.id, error });
+      });
       applied.push(run.id);
     } catch (error: unknown) {
       log.error("Scheduled apply failed", { runId: run.id, error });

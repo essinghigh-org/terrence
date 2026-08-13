@@ -122,15 +122,20 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
       return notFound(set);
     }
-    const start = parseCalendarBound(new URL(request.url).searchParams.get("filter[start]"));
+    const searchParams = new URL(request.url).searchParams;
+    const start = parseCalendarBound(searchParams.get("filter[start]"));
     if (start === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[start] must be an ISO-8601 date or epoch milliseconds" }] };
     }
-    const end = parseCalendarBound(new URL(request.url).searchParams.get("filter[end]"));
+    const end = parseCalendarBound(searchParams.get("filter[end]"));
     if (end === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[end] must be an ISO-8601 date or epoch milliseconds" }] };
+    }
+    if (start !== undefined && end !== undefined && start.ms > end.ms) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[start] must not be later than filter[end]" }] };
     }
     const { number, size } = pageRequest(request);
     const wsIds = await workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "run-read");

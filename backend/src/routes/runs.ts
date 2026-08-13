@@ -800,6 +800,10 @@ export const runRoutes = new Elysia({ name: "runs" })
       "scheduled-at": new Date(applyAtMs).toISOString(),
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
+    // Match the manual apply action: an optional comment is persisted with
+    // the confirmation.
+    const commentStr = actionComment(body);
+    if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
     publish("run.status", {
       "run-id": runId,
       "workspace-id": authorized.workspace.id,

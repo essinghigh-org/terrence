@@ -44,66 +44,104 @@ export const eventsRoutes = new Elysia({ name: "events" })
         headers: { "Content-Type": "application/json" },
       });
     }
+    // Reserve the slot BEFORE the async membership lookup so concurrent
+    // connects cannot both pass the cap check; the reservation is released
+    // on abort, stream cancel, or the one-hour lifetime limit.
+    activeConnections += 1;
+    let slotReserved = true;
+    const releaseSlot = (): void => {
+      if (!slotReserved) return;
+      slotReserved = false;
+      activeConnections = Math.max(0, activeConnections - 1);
+    };
 
     // Allowed orgs resolved once: site admins see everything; org tokens see
     // their org; users see their memberships.
     let allowedOrgIds: Set<string> | null = null;
-    if (user.isSiteAdmin === true) {
-      allowedOrgIds = null; // null = all orgs
-    } else if (orgId !== null && orgId !== undefined) {
-      allowedOrgIds = new Set([orgId]);
-    } else {
-      const memberships = await db.query.organizationMemberships.findMany({
-        where: eq(organizationMemberships.userId, user.id),
-        columns: { orgId: true },
+    try {
+      if (user.isSiteAdmin === true) {
+        allowedOrgIds = null; // null = all orgs
+      } else if (orgId !== null && orgId !== undefined) {
+        allowedOrgIds = new Set([orgId]);
+      } else {
+        const memberships = await db.query.organizationMemberships.findMany({
+          where: eq(organizationMemberships.userId, user.id),
+          columns: { orgId: true },
+        });
+        allowedOrgIds = new Set(memberships.map((row): string => row.orgId));
+      }
+    } catch {
+      releaseSlot();
+      return new Response(JSON.stringify({ errors: [{ status: "500", title: "Internal Server Error" }] }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
       });
-      allowedOrgIds = new Set(memberships.map((row): string => row.orgId));
     }
 
     // Shared across start()/cancel(): the stream's lifecycle must release
     // the subscription and the connection slot exactly once from either the
-    // request abort signal or a client-side reader cancel.
+    // request abort signal, a client-side reader cancel, an enqueue failure,
+    // or the one-hour lifetime cap (permissions are re-resolved on
+    // reconnect).
     let unsubscribe: () => void = (): void => {};
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let cleanup: () => void = (): void => {};
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller: ReadableStreamDefaultController<Uint8Array>) {
-        activeConnections += 1;
         let cleanedUp = false;
         cleanup = (): void => {
           if (cleanedUp) return;
           cleanedUp = true;
           unsubscribe();
           if (heartbeat !== undefined) clearInterval(heartbeat);
-          activeConnections = Math.max(0, activeConnections - 1);
+          releaseSlot();
+          try {
+            controller.close();
+          } catch {
+            // Already closed or errored; nothing to do.
+          }
         };
-        controller.enqueue(sseFrame("connected", { heartbeatMs: HEARTBEAT_MS }));
+        const enqueue = (event: string, data: unknown): void => {
+          if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+            // Backpressure: the client stopped reading; end the stream and
+            // let the client reconnect.
+            cleanup();
+            return;
+          }
+          try {
+            controller.enqueue(sseFrame(event, data));
+          } catch {
+            cleanup();
+          }
+        };
+        enqueue("connected", { heartbeatMs: HEARTBEAT_MS });
 
         unsubscribe = subscribe("run.status", (payload: Readonly<Record<string, unknown>>): void => {
           const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
           if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
-          try {
-            controller.enqueue(sseFrame("run.status", payload));
-          } catch {
-            // The stream closed under us; stop relaying.
-            cleanup();
-          }
+          enqueue("run.status", payload);
         });
 
         heartbeat = setInterval((): void => {
-          try {
-            controller.enqueue(sseFrame("ping", { at: new Date().toISOString() }));
-          } catch {
-            cleanup();
-          }
+          enqueue("ping", { at: new Date().toISOString() });
         }, HEARTBEAT_MS);
 
+        // One-hour lifetime: the allowed-org snapshot ages; closing forces
+        // clients to reconnect and re-resolve permissions.
+        const lifetime = setTimeout(cleanup, 60 * 60 * 1000);
         const abort = (): void => {
           cleanup();
         };
         request.signal.addEventListener("abort", abort, { once: true });
         if (request.signal.aborted) abort();
+        cleanup = ((): () => void => {
+          const base = cleanup;
+          return (): void => {
+            clearTimeout(lifetime);
+            base();
+          };
+        })();
       },
       cancel(): void {
         // Client disconnected (reader canceled): release the subscription

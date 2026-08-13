@@ -26,15 +26,16 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, marker
   try {
     for (let i = 0; i < attempts && !all.includes(marker); i += 1) {
       // Race each read against a short timeout so a filtered (silent)
-      // stream cannot hang the test.
+      // stream cannot hang the test; a timeout is NOT a stream end and the
+      // loop keeps polling within its attempt budget.
       const result = await Promise.race([
         reader.read(),
-        new Promise<{ done: true; value: undefined }>((resolve): void => {
-          setTimeout((): void => resolve({ done: true, value: undefined }), 250);
+        new Promise<{ done: false; value: undefined; timedOut: true }>((resolve): void => {
+          setTimeout((): void => resolve({ done: false, value: undefined, timedOut: true }), 250);
         }),
       ]);
       if (result.done) break;
-      all += decoder.decode(result.value, { stream: true });
+      if (result.value !== undefined) all += decoder.decode(result.value, { stream: true });
     }
   } finally {
     await reader.cancel().catch((): void => {});
