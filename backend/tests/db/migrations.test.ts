@@ -122,3 +122,60 @@ test("repairs the explainer table when a legacy journal skips the repair migrati
     await rm(testDir, { recursive: true, force: true });
   }
 });
+
+test("repairs the scheduled_at column when a legacy journal skips the column migration", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-legacy-column-"));
+
+  // Start from a fully migrated database, then reproduce production's state:
+  // the scheduled_at column is missing and the journal holds fabricated rows
+  // whose timestamps are newer than every journaled migration in the repo.
+  // Drizzle then skips 0002_add_runs_scheduled_at exactly as it does on
+  // production, and only the boot guard can repair it.
+  const databasePath = join(testDir, "terrence.db");
+  const migrationFolder = join(import.meta.dir, "../../drizzle");
+  const raw = new Database(databasePath);
+  migrate(drizzle(raw), { migrationsFolder: migrationFolder });
+  raw.run("ALTER TABLE runs DROP COLUMN scheduled_at");
+  raw.run("DELETE FROM __drizzle_migrations");
+  raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
+    "fabricated-legacy-row",
+    1787064000000,
+  ]);
+  raw.close();
+
+  const dbModule = pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href;
+  const script = `
+    const { db } = await import(${JSON.stringify(dbModule)});
+    const { sql } = await import("drizzle-orm");
+    const columns = await db.all(sql.raw("PRAGMA table_info(runs)"));
+    const journal = await db.all(sql.raw("SELECT created_at FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1"));
+    console.log(JSON.stringify({ hasScheduledAt: columns.some(row => row.name === "scheduled_at"), journal }));
+  `;
+  try {
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        DATABASE_URL: `file:${databasePath}`,
+        STORAGE_DIR: join(testDir, "storage"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      hasScheduledAt: true,
+      // The guard must not touch the journal: the fabricated row stays the
+      // newest so future journaled migrations keep skipping on this database.
+      journal: [{ created_at: 1787064000000 }],
+    });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});

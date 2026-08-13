@@ -2589,14 +2589,21 @@ export function startWorkerQueue(): void {
 
   const poll = async (): Promise<void> => {
     try {
-      await Promise.all([
+      // Each poller catches its own failures: one broken poller (schema
+      // drift, transient DB error) must never reject the shared Promise.all
+      // and starve the run queue alongside it.
+      const pollers = [
         pollWorkerQueue(),
         enqueueDueAutoDestroyRuns(),
         enqueueDueAssessments().then(async (): Promise<void> => {
           await pollAssessmentQueue();
         }),
         applyDueScheduledRuns(),
-      ]);
+      ];
+      await Promise.all(pollers.map((poller): Promise<unknown> =>
+        poller.catch((error: unknown): void => {
+          log.error("Queue poller failed", { error });
+        })));
     } catch (err: unknown) {
       log.error("Queue error", { error: err });
     } finally {

@@ -180,6 +180,19 @@ client.run(`
     ON run_explanations (run_id, kind)
 `);
 
+// Column convergence guard (mirrors the run_explanations guard above):
+// databases whose migration journal never applied the scheduled_at column
+// (journal timestamp islands, pre-squash journals, or restored backups)
+// are repaired at boot. Idempotent: a no-op once the column exists, so
+// fresh databases and properly journaled upgrades are unaffected.
+{
+  const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
+    .map((column): string => column.name);
+  if (!runsColumns.includes("scheduled_at")) {
+    client.run("ALTER TABLE runs ADD COLUMN scheduled_at integer");
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Id-format migration: re-key persisted rows that predate the current ID
