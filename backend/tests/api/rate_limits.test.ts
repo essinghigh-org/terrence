@@ -65,6 +65,25 @@ afterAll(async () => {
 });
 
 describe("rate limiting", () => {
+  it("does not count static asset or SPA shell requests against the API bucket", async () => {
+    // A page load fetches 30-40 hashed chunks in parallel; those requests must
+    // never consume the per-IP API bucket or every cold cache trips a 429.
+    // Same client IP for the asset burst and the ping, so the ping would 429
+    // if assets were counted (40 > 30/s sliding window).
+    const client = (path: string): Request => new Request(`http://localhost${path}`, {
+      headers: { "X-Forwarded-For": "192.0.2.77" },
+    });
+    for (let index = 0; index < 40; index += 1) {
+      const response = await app.handle(client(`/assets/chunk-${String(index)}.js`));
+      // 404 when frontend/dist is absent from the unit env, 200 in prod;
+      // the assertion that matters is that the burst is never throttled.
+      expect(response.status).not.toBe(429);
+    }
+    // ping requires auth (401 when unauthenticated); the property under test
+    // is that the asset burst never throttles it.
+    expect((await app.handle(client("/api/v1/ping"))).status).not.toBe(429);
+  });
+
   it("shares the 30 requests/second bucket across a user's tokens", async () => {
     const user = seededUsers[0];
     expect(user).toBeDefined();
