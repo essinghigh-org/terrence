@@ -8,6 +8,7 @@ import { join, resolve } from 'path';
 import * as schema from './schema';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
+import { BootConfigError, bootConfigPath, resolveDatabaseConfig } from '../lib/boot-config';
 
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
 // Deliberately synchronous: a top-level await here made this module a TLA
@@ -19,7 +20,16 @@ mkdirSync(storageDir, { recursive: true });
 // bun:sqlite is built into Bun and keeps a single stable native connection; the
 // @libsql/client driver leaked native memory per query and churned a fresh native
 // connection for every transaction (the source of terrence's multi-GB RSS growth).
-const dbUrl = process.env.DATABASE_URL ?? `file:${join(storageDir, 'terrence.db')}`;
+// The active backend comes from the boot configuration file (storage/terrence.json)
+// with DATABASE_URL taking precedence; see lib/boot-config.ts for the precedence
+// rules and the in-app migration wizard's write path.
+const resolvedDatabase = resolveDatabaseConfig(process.env, storageDir);
+if (resolvedDatabase.driver === "postgres") {
+  throw new BootConfigError(
+    `PostgreSQL backend is not available in this build yet (configured via ${bootConfigPath(storageDir)} or DATABASE_URL)`,
+  );
+}
+const dbUrl = resolvedDatabase.url;
 const dbPath = dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, '');
 const client = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
 client.run('PRAGMA journal_mode = WAL;');
