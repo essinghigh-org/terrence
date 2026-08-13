@@ -247,7 +247,9 @@ async function refreshAccessToken(force = false): Promise<string | null> {
 }
 
 export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<unknown> {
-  const url = endpoint === API_BASE_URL || endpoint.startsWith(`${API_BASE_URL}/`)
+  // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
+  // are used verbatim; everything else is relative to the v2 API base.
+  const url = endpoint.startsWith("/api/")
     ? endpoint
     : `${API_BASE_URL}${endpoint}`;
   const send = async (accessToken: string | null): Promise<Response> => {
