@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   ApiError,
+  bootstrapAuth,
   consumeAuthExpiry,
+  expireAuthSession,
   extractFieldErrors,
   fetchAllApiPages,
   fetchApi,
@@ -192,6 +194,100 @@ test("logs out browser sessions server-side without treating API tokens as refre
     await logoutAuthSession();
     expect(calls).toEqual(["/api/v2/users/logout"]);
     expect(getAuthToken()).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bootstrapAuth recovers a browser session through the refresh cookie", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    calls.push(url);
+    if (url.endsWith("/users/refresh")) {
+      return Response.json({
+        data: {
+          attributes: {
+            token: "bootstrapped-access",
+            "expired-at": new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    expireAuthSession();
+    expect(await bootstrapAuth()).toBe("bootstrapped-access");
+    expect(calls).toEqual(["/api/v2/users/refresh"]);
+    expect(getAuthToken()).toBe("bootstrapped-access");
+    expect(isRefreshableSession()).toBe(true);
+    // A second bootstrap reuses the in-memory token without another refresh.
+    expect(await bootstrapAuth()).toBe("bootstrapped-access");
+    expect(calls).toHaveLength(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    expireAuthSession();
+  }
+});
+
+test("bootstrapAuth adopts and deletes a legacy localStorage token exactly once", async () => {
+  const originalFetch = globalThis.fetch;
+  let refreshed = 0;
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url.endsWith("/users/refresh")) {
+      refreshed += 1;
+      return Response.json(
+        { errors: [{ status: "401", title: "Unauthorized" }] },
+        { status: 401 },
+      );
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    expireAuthSession();
+    localStorage.setItem("tfe_token", "legacy-token");
+    localStorage.setItem("tfe_refreshable_session", "true");
+    expect(await bootstrapAuth()).toBe("legacy-token");
+    expect(getAuthToken()).toBe("legacy-token");
+    // The sensitive value is gone from storage after adoption.
+    expect(localStorage.getItem("tfe_token")).toBeNull();
+    expect(localStorage.getItem("tfe_refreshable_session")).toBeNull();
+    // A second bootstrap sees no token in storage and reuses memory.
+    expect(await bootstrapAuth()).toBe("legacy-token");
+    expect(refreshed).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    expireAuthSession();
+    localStorage.removeItem("tfe_token");
+    localStorage.removeItem("tfe_refreshable_session");
+  }
+});
+
+test("bootstrapAuth returns null when no refresh session exists", async () => {
+  const originalFetch = globalThis.fetch;
+  let refreshed = 0;
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url.endsWith("/users/refresh")) {
+      refreshed += 1;
+      return Response.json(
+        { errors: [{ status: "401", title: "Unauthorized" }] },
+        { status: 401 },
+      );
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    expireAuthSession();
+    expect(await bootstrapAuth()).toBeNull();
+    expect(getAuthToken()).toBeNull();
+    expect(refreshed).toBe(1);
   } finally {
     globalThis.fetch = originalFetch;
   }

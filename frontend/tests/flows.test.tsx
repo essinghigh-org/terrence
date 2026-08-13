@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-libra
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { Toaster } from "../src/components/ui/toast";
+import { expireAuthSession, getAuthToken, isRefreshableSession } from "../src/lib/api";
 import { Login } from "../src/views/Login";
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
@@ -20,6 +21,9 @@ const json = (data: unknown): Response =>
 
 afterEach((): void => {
   cleanup();
+  // Reset the in-memory auth state (access tokens are no longer persisted)
+  // before the localStorage cleanup so no test inherits a session.
+  expireAuthSession();
   if (typeof localStorage !== "undefined") localStorage.clear();
   globalThis.fetch = originalFetch;
   globalThis.confirm = originalConfirm;
@@ -50,10 +54,13 @@ const changeInput = (element: HTMLElement, value: string): void => {
 };
 
 
-test("logs in, stores the token, and navigates home", async () => {
-  const fetchMock = mock(async (): Promise<Response> =>
-    json({ data: { attributes: { token: "user-token" } } }),
-  );
+test("logs in without persisting the access token and navigates home", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/ping") return json({});
+    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    throw new Error(`Unexpected request: ${url}`);
+  });
   globalThis.fetch = fetchMock as typeof fetch;
 
   const view = render(
@@ -73,13 +80,18 @@ test("logs in, stores the token, and navigates home", async () => {
   });
 
   await waitFor((): void => { expect(view.getByText("Home")).toBeTruthy(); });
-  expect(localStorage.getItem("tfe_token")).toBe("user-token");
-  const [loginUrl, loginOptions] = fetchMock.mock.calls[0]!;
-  expect(getUrlString(loginUrl)).toBe("/api/v2/users/login");
-  expect(JSON.parse((loginOptions as RequestInit).body as string)).toEqual({
+  // The access token stays in memory; nothing sensitive reaches localStorage.
+  expect(localStorage.getItem("tfe_token")).toBeNull();
+  expect(localStorage.getItem("tfe_refreshable_session")).toBeNull();
+  expect(isRefreshableSession()).toBe(true);
+  expect(getAuthToken()).toBe("user-token");
+  const loginCall = fetchMock.mock.calls.find(([input]: [string | URL | Request]): boolean =>
+    getUrlString(input) === "/api/v2/users/login");
+  expect(loginCall).toBeDefined();
+  const loginOptions = loginCall![1] as RequestInit;
+  expect(JSON.parse(loginOptions.body as string)).toEqual({
     data: { attributes: { username: "alice", password: "correct horse", "browser-session": true } },
   });
-  expect(localStorage.getItem("tfe_refreshable_session")).toBe("true");
 });
 
 test("creates a workspace from the modal", async () => {

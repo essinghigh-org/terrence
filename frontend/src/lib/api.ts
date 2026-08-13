@@ -2,10 +2,24 @@ const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
 export const AUTH_EXPIRED_EVENT = "terrence:auth-expired";
 
-const TOKEN_KEY = "tfe_token";
-const TOKEN_EXPIRY_KEY = "tfe_token_expires_at";
-const REFRESHABLE_KEY = "tfe_refreshable_session";
+// Legacy localStorage keys (tfe_token / tfe_token_expires_at /
+// tfe_refreshable_session) are intentionally no longer written or read.
 const SESSION_EXPIRED_KEY = "tfe_session_expired";
+
+// Access tokens live in memory only (P2: keep access tokens out of
+// localStorage). Browser sessions bootstrap through the HttpOnly refresh
+// cookie on every page load; the legacy localStorage keys above are never
+// written and only SESSION_EXPIRED_KEY remains there (non-secret toast
+// marker that survives reloads).
+let accessToken: string | null = null;
+let accessTokenExpiry: number | null = null;
+let refreshableSession = false;
+
+function clearAuthMemory(): void {
+  accessToken = null;
+  accessTokenExpiry = null;
+  refreshableSession = false;
+}
 
 type ReadonlyResponse = Readonly<{
   readonly status: number;
@@ -68,27 +82,22 @@ export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, u
 
 
 export function getAuthToken(): string | null {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token === null) return null;
-  const expiresAt = getAuthTokenExpiry();
-  if (expiresAt !== null && expiresAt <= Date.now() && !isRefreshableSession()) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(TOKEN_EXPIRY_KEY);
+  if (accessToken === null) return null;
+  const expiresAt = accessTokenExpiry;
+  if (expiresAt !== null && expiresAt <= Date.now() && !refreshableSession) {
+    clearAuthMemory();
     localStorage.setItem(SESSION_EXPIRED_KEY, "true");
     return null;
   }
-  return token;
+  return accessToken;
 }
 
 export function getAuthTokenExpiry(): number | null {
-  const value = localStorage.getItem(TOKEN_EXPIRY_KEY);
-  if (value === null) return null;
-  const expiresAt = Number(value);
-  return Number.isFinite(expiresAt) ? expiresAt : null;
+  return accessTokenExpiry;
 }
 
 export function isRefreshableSession(): boolean {
-  return localStorage.getItem(REFRESHABLE_KEY) === "true";
+  return refreshableSession;
 }
 
 export function setAuthToken(
@@ -96,27 +105,19 @@ export function setAuthToken(
   expiresAt?: string | number | null,
   refreshable = false,
 ): void {
-  localStorage.setItem(TOKEN_KEY, token);
+  accessToken = token;
   const normalizedExpiry = typeof expiresAt === "string" ? Date.parse(expiresAt) : expiresAt;
-  if (typeof normalizedExpiry === "number" && Number.isFinite(normalizedExpiry)) {
-    localStorage.setItem(TOKEN_EXPIRY_KEY, String(normalizedExpiry));
-  } else {
-    localStorage.removeItem(TOKEN_EXPIRY_KEY);
-  }
-  if (refreshable) {
-    localStorage.setItem(REFRESHABLE_KEY, "true");
-  } else {
-    localStorage.removeItem(REFRESHABLE_KEY);
-  }
+  accessTokenExpiry = typeof normalizedExpiry === "number" && Number.isFinite(normalizedExpiry)
+    ? normalizedExpiry
+    : null;
+  refreshableSession = refreshable;
   localStorage.removeItem(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }
 
 export function expireAuthSession(): void {
   const alreadyExpired = localStorage.getItem(SESSION_EXPIRED_KEY) === "true";
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_EXPIRY_KEY);
-  localStorage.removeItem(REFRESHABLE_KEY);
+  clearAuthMemory();
   localStorage.setItem(SESSION_EXPIRED_KEY, "true");
   if (!alreadyExpired) window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
 }
@@ -147,8 +148,49 @@ type AccessTokenDocument = Readonly<{
 
 let refreshRequest: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
-  if (!isRefreshableSession()) return null;
+/**
+ * Bootstrap the access token for a fresh page load. Browser sessions have
+ * no token in memory yet; their only credential is the HttpOnly refresh
+ * cookie, so the first refresh is attempted unconditionally (`force`).
+ * Sessions stored by pre-memory builds (legacy localStorage tokens) are
+ * adopted exactly once and deleted, so no sensitive value persists after
+ * this page load. Returns null when there is no session, which leaves the
+ * app at the login screen.
+ */
+export async function bootstrapAuth(): Promise<string | null> {
+  if (accessToken !== null) return accessToken;
+  const legacy = adoptLegacyStoredToken();
+  if (legacy !== null) return legacy;
+  return refreshAccessToken(true).catch((): null => null);
+}
+
+/** Read a pre-memory-build token from localStorage once, then delete it. */
+function adoptLegacyStoredToken(): string | null {
+  let legacyToken: string | null = null;
+  let legacyExpiry: string | null = null;
+  let legacyRefreshable = false;
+  try {
+    legacyToken = localStorage.getItem("tfe_token");
+    legacyExpiry = localStorage.getItem("tfe_token_expires_at");
+    legacyRefreshable = localStorage.getItem("tfe_refreshable_session") === "true";
+  } catch {
+    return null;
+  }
+  if (legacyToken === null || legacyToken === "") return null;
+  try {
+    localStorage.removeItem("tfe_token");
+    localStorage.removeItem("tfe_token_expires_at");
+    localStorage.removeItem("tfe_refreshable_session");
+  } catch {
+    // The token was already read; the session still works for this page load.
+  }
+  const expiry = legacyExpiry === null ? null : Number(legacyExpiry);
+  setAuthToken(legacyToken, Number.isFinite(expiry) ? expiry : null, legacyRefreshable);
+  return legacyToken;
+}
+
+async function refreshAccessToken(force = false): Promise<string | null> {
+  if (!force && !refreshableSession) return null;
   refreshRequest ??= (async (): Promise<string | null> => {
     const response = await fetch(`${API_BASE_URL}/users/refresh`, {
       method: "POST",
@@ -485,9 +527,7 @@ async function prepareAuthToken(): Promise<string | null> {
 }
 
 function removeAuthToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_EXPIRY_KEY);
-  localStorage.removeItem(REFRESHABLE_KEY);
+  clearAuthMemory();
   localStorage.removeItem(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }
