@@ -57,7 +57,8 @@ import {
 } from "./lib/plan-json";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
-import { recoverStaleAgentJobs } from "./lib/agent-jobs";
+import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
+import { applyGateBlockReason } from "./lib/operations";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
@@ -2432,6 +2433,58 @@ export async function pollWorkerQueue(): Promise<string[]> {
 }
 
 /**
+ * Apply confirmed runs whose scheduled-at time has arrived (change-calendar
+ * 21.4). The schedule-apply endpoint only stamps `scheduledAt`; this poller
+ * is the single execution path, so a restart never loses a schedule. The
+ * interactive apply action and the approval webhook stay independent.
+ * Gate semantics mirror the auto-apply path: a blocked apply stays
+ * confirmed and is retried on the next poll.
+ */
+export async function applyDueScheduledRuns(): Promise<string[]> {
+  const now = Date.now();
+  const dueRuns = await db.query.runs.findMany({
+    columns: { id: true, workspaceId: true, planOnly: true, savePlan: true },
+    where: and(
+      eq(runs.status, "confirmed"),
+      isNotNull(runs.scheduledAt),
+      sql`${runs.scheduledAt} <= ${now}`,
+    ),
+  });
+  const applied: string[] = [];
+  for (const run of dueRuns) {
+    if (run.planOnly === true || run.savePlan === true) continue;
+    const workspace = await db.query.workspaces.findFirst({
+      columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
+      where: eq(workspaces.id, run.workspaceId),
+    });
+    if (workspace === undefined || workspace.locked === true) continue;
+    const gateBlockReason = await applyGateBlockReason(new Date());
+    if (gateBlockReason !== null) {
+      await writeLog(run.id, "apply", `[terrence] Scheduled apply blocked: ${gateBlockReason}`);
+      continue;
+    }
+    if (workspace.executionMode === "agent") {
+      const pool = workspace.agentPoolId === null
+        ? undefined
+        : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+      if (
+        pool?.orgId !== workspace.orgId
+        || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
+      ) {
+        await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+        continue;
+      }
+      const job = await enqueueAgentApplyJob(run.id, pool.id);
+      if (job !== undefined) applied.push(run.id);
+      continue;
+    }
+    await executeApply(run.id);
+    applied.push(run.id);
+  }
+  return applied;
+}
+
+/**
  * Worker queue poll interval. The queue loop (startWorkerQueue) claims
  * pending runs and drains assessment/auto-destroy queues on this cadence.
  * Configurable for low-power homelab installs that want a gentler query
@@ -2461,6 +2514,7 @@ export function startWorkerQueue(): void {
         enqueueDueAssessments().then(async (): Promise<void> => {
           await pollAssessmentQueue();
         }),
+        applyDueScheduledRuns(),
       ]);
     } catch (err: unknown) {
       log.error("Queue error", { error: err });

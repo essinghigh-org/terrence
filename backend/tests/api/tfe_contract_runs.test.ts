@@ -161,6 +161,49 @@ describe("TFE runs contract", () => {
     expectCollection(await response.json(), "comments");
   });
 
+  it("schedules a future apply and rejects invalid times (21.4)", async () => {
+    const scheduledRunId = `run-${crypto.randomUUID()}`;
+    await db.insert(runs).values({
+      id: scheduledRunId,
+      workspaceId,
+      status: "planned",
+      createdAt: Date.now(),
+    });
+    try {
+      // A past time is rejected while the run is still planned.
+      const past = await request(`/api/v2/runs/${scheduledRunId}/actions/schedule-apply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ data: { type: "runs", attributes: { "apply-at": new Date(Date.now() - 60_000).toISOString() } } }),
+      });
+      expect(past.status).toBe(422);
+
+      const future = new Date(Date.now() + 7_200_000).toISOString();
+      const scheduled = await request(`/api/v2/runs/${scheduledRunId}/actions/schedule-apply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ data: { type: "runs", attributes: { "apply-at": future } } }),
+      });
+      expect(scheduled.status).toBe(200);
+      const body = (await scheduled.json()) as { data: { attributes: { status: string; "scheduled-at"?: string } } };
+      expect(body.data.attributes.status).toBe("confirmed");
+      expect(body.data.attributes["scheduled-at"]).toBe(future);
+      const row = await db.query.runs.findFirst({ where: eq(runs.id, scheduledRunId) });
+      expect(row?.scheduledAt).toBe(Date.parse(future));
+      expect(row?.status).toBe("confirmed");
+
+      // Scheduling an already-confirmed run is rejected (needs a saved plan).
+      const again = await request(`/api/v2/runs/${scheduledRunId}/actions/schedule-apply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ data: { type: "runs", attributes: { "apply-at": new Date(Date.now() + 3_600_000).toISOString() } } }),
+      });
+      expect(again.status).toBe(409);
+    } finally {
+      await db.delete(runs).where(eq(runs.id, scheduledRunId));
+    }
+  });
+
   it("discards and then destroys a run", async () => {
     const discard = await request(`/api/v2/runs/${runId}/actions/discard`, {
       method: "POST",

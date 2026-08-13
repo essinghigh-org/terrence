@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `scheduled_at` integer;

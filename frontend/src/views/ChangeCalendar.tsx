@@ -4,8 +4,9 @@ import { fetchApi } from "../lib/api";
 import { formatDate } from "../lib/utils";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner";
-import { CalendarClock, CheckCircle2, Clock3, GitPullRequest, Trash2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, Clock3, GitPullRequest, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 
 type CalendarEntry = {
@@ -14,6 +15,8 @@ type CalendarEntry = {
   attributes: {
     kind: "apply" | "change-request" | "auto-destroy";
     at: string;
+    scheduled?: boolean;
+    "scheduled-at"?: string | null;
     runId?: string;
     changeRequestId?: string;
     workspaceId: string;
@@ -21,6 +24,19 @@ type CalendarEntry = {
     subject?: string | null;
   };
 };
+
+type CalendarPage = Readonly<{
+  data: CalendarEntry[];
+  meta?: {
+    pagination?: {
+      "current-page"?: number;
+      "next-page"?: number | null;
+      "prev-page"?: number | null;
+      "total-pages"?: number;
+      "total-count"?: number;
+    };
+  };
+}>;
 
 const KIND_LABEL: Record<CalendarEntry["attributes"]["kind"], string> = {
   apply: "Confirmed apply",
@@ -47,6 +63,9 @@ function occurrenceLabel(entry: CalendarEntry): string {
       ? attributes.subject
       : "Change request";
   }
+  // True future-scheduled applies are distinct from historical confirmation
+  // activity (scheduled_at semantics, 21.4).
+  if (attributes.kind === "apply" && attributes.scheduled === true) return "Scheduled apply";
   return KIND_LABEL[attributes.kind];
 }
 
@@ -55,6 +74,8 @@ export function ChangeCalendar(): React.JSX.Element {
   const orgName = rawOrgName ?? "";
   const [entries, setEntries] = useState<CalendarEntry[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const activeOrganizationName = useRef(orgName);
@@ -63,6 +84,8 @@ export function ChangeCalendar(): React.JSX.Element {
   useEffect((): (() => void) | undefined => {
     setEntries([]);
     setTotalCount(0);
+    setCurrentPage(1);
+    setTotalPages(0);
     setError("");
     if (orgName === "") return;
     let cancelled = false;
@@ -70,11 +93,13 @@ export function ChangeCalendar(): React.JSX.Element {
       setLoading(true);
       try {
         const response = await fetchApi(
-          `/organizations/${encodeURIComponent(orgName)}/change-calendar`,
-        ) as { data: CalendarEntry[]; meta?: { "total-count"?: number } };
+          `/organizations/${encodeURIComponent(orgName)}/change-calendar?page%5Bsize%5D=20`,
+        ) as CalendarPage;
         if (cancelled || activeOrganizationName.current !== orgName) return;
         setEntries(response.data);
-        setTotalCount(response.meta?.["total-count"] ?? response.data.length);
+        setTotalCount(response.meta?.pagination?.["total-count"] ?? response.data.length);
+        setCurrentPage(response.meta?.pagination?.["current-page"] ?? 1);
+        setTotalPages(response.meta?.pagination?.["total-pages"] ?? Math.ceil(response.data.length / 20));
       } catch (caught: unknown) {
         if (cancelled || activeOrganizationName.current !== orgName) return;
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -85,6 +110,25 @@ export function ChangeCalendar(): React.JSX.Element {
     void loadCalendar();
     return (): void => { cancelled = true; };
   }, [orgName]);
+
+  const loadPage = async (page: number): Promise<void> => {
+    if (page < 1 || page > totalPages) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetchApi(
+        `/organizations/${encodeURIComponent(orgName)}/change-calendar?page%5Bsize%5D=20&page%5Bnumber%5D=${page}`,
+      ) as CalendarPage;
+      setEntries(response.data);
+      setTotalCount(response.meta?.pagination?.["total-count"] ?? response.data.length);
+      setCurrentPage(response.meta?.pagination?.["current-page"] ?? page);
+      setTotalPages(response.meta?.pagination?.["total-pages"] ?? totalPages);
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Workspace routes are name-based (matching TFE): links resolve through
   // attributes.workspaceName, never the internal id. The run link is only
@@ -137,7 +181,9 @@ export function ChangeCalendar(): React.JSX.Element {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-foreground">{occurrenceLabel(entry)}</span>
                           <Badge variant={KIND_VARIANT[entry.attributes.kind]}>
-                            {KIND_LABEL[entry.attributes.kind]}
+                            {entry.attributes.kind === "apply" && entry.attributes.scheduled === true
+                              ? "Scheduled"
+                              : KIND_LABEL[entry.attributes.kind]}
                           </Badge>
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
@@ -177,6 +223,33 @@ export function ChangeCalendar(): React.JSX.Element {
             );
           })}
         </ul>
+      )}
+      {!loading && error === "" && totalPages > 1 && (
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Page {currentPage} of {totalPages} · {totalCount} total
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={(): void => { void loadPage(currentPage - 1); }}
+            >
+              <ChevronLeft className="size-4" aria-hidden="true" />
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={(): void => { void loadPage(currentPage + 1); }}
+            >
+              Next
+              <ChevronRight className="size-4" aria-hidden="true" />
+            </Button>
+          </div>
+        </div>
       )}
     </PageShell>
   );

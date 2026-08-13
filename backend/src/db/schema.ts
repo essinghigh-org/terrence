@@ -393,6 +393,7 @@ export const runs = sqliteTable("runs", {
   applyResourceImports: integer("apply_resource_imports"),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   appliedAt: integer("applied_at"),
+  scheduledAt: integer("scheduled_at"),
   softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull(),
 });

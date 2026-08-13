@@ -399,7 +399,7 @@ export async function createRun(
   });
   queueRunNotification(id, "run:created", "pending");
   (set as { status: number }).status = 201;
-  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
+  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
 }
 
 /**
@@ -712,6 +712,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     const confirmed = await db.update(runs).set({
       status: "confirmed",
+      // A manual confirm overrides any previously scheduled apply time.
+      scheduledAt: null,
       statusTimestamps: {
         ...(before.statusTimestamps ?? {}),
         "confirmed-at": new Date().toISOString(),
@@ -737,6 +739,60 @@ export const runRoutes = new Elysia({ name: "runs" })
     const { executeApply } = await import("../worker");
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     return { data: { id: authorized.run.id, type: "runs", attributes: { status: "applying" } } };
+  })
+  .post("/api/v2/runs/:run_id/actions/schedule-apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    // Schedule a confirmed apply for a future time (change-calendar 21.4).
+    // The worker applies the run when scheduled-at arrives; the manual apply
+    // action clears the schedule and applies immediately.
+    const runId = params.run_id ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "apply"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (authorized.workspace.locked === true) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(authorized.workspace.lockedReason) }] };
+    }
+    const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
+    if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const attributes = payload.data !== null && typeof payload.data === "object"
+      && (payload.data as Record<string, unknown>).attributes !== null
+      && typeof (payload.data as Record<string, unknown>).attributes === "object"
+      ? (payload.data as Record<string, unknown>).attributes as Record<string, unknown>
+      : {};
+    const applyAtRaw = attributes["apply-at"];
+    if (typeof applyAtRaw !== "string" || applyAtRaw === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at is required" }] };
+    }
+    const applyAtMs = Date.parse(applyAtRaw);
+    if (!Number.isFinite(applyAtMs)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be a valid date" }] };
+    }
+    if (applyAtMs <= Date.now()) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "apply-at must be in the future" }] };
+    }
+    const confirmed = await db.update(runs).set({
+      status: "confirmed",
+      scheduledAt: applyAtMs,
+      statusTimestamps: {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+        "scheduled-at": new Date(applyAtMs).toISOString(),
+      },
+    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+    if (confirmed.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] }; }
+    await auditLog("schedule-apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+      workspaceId: authorized.workspace.id,
+      fromStatus: before.status,
+      toStatus: "confirmed",
+      "scheduled-at": new Date(applyAtMs).toISOString(),
+      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    });
+    return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": new Date(applyAtMs).toISOString() } } };
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

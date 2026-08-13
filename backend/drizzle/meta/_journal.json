@@ -15,6 +15,13 @@
       "when": 1786546588198,
       "tag": "0001_repair_run_explanations",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786627258431,
+      "tag": "0002_add_runs_scheduled_at",
+      "breakpoints": true
     }
   ]
 }

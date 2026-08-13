@@ -7,6 +7,7 @@ import {
   apiTokens,
   changeRequests,
   logs,
+  organizationMemberships,
   organizations,
   runExplanations,
   runs,
@@ -74,6 +75,12 @@ const userId = `ops-user-${suffix}`;
 const token = `ops-token-${suffix}`;
 const adminUserId = `ops-admin-${suffix}`;
 const adminToken = `ops-admin-token-${suffix}`;
+// Dedicated principal for the calendar tests: the per-user rate limiter
+// (30 req/1000ms) makes this request-heavy file flake at its tail, so the
+// calendar assertions get their own token bucket instead of stealing from
+// the main user's (see tests/setup.ts rate-limit notes).
+const calendarUserId = `ops-calendar-user-${suffix}`;
+const calendarToken = `ops-calendar-token-${suffix}`;
 const orgName = `ops-org-${suffix}`;
 const workspaceName = `ops-workspace-${suffix}`;
 const calendarRunId = `ops-calendar-run-${suffix}`;
@@ -125,12 +132,33 @@ beforeAll(async () => {
     { id: `ops-token-id-${suffix}`, token, userId },
     { id: `ops-admin-token-id-${suffix}`, token: adminToken, userId: adminUserId },
   ]);
+  // Dedicated principal for the calendar tests (own rate-limit bucket; see
+  // the calendarToken declaration comment above).
+  await db.insert(users).values({
+    id: calendarUserId,
+    username: `ops-calendar-user-${suffix}`,
+    email: `ops-calendar-user-${suffix}@example.com`,
+    passwordHash: "unused",
+  });
+  await db.insert(apiTokens).values({
+    id: `ops-calendar-token-id-${suffix}`,
+    token: calendarToken,
+    userId: calendarUserId,
+  });
 
   const orgResponse = await request("/api/v2/organizations", "POST", {
     data: { type: "organizations", attributes: { name: orgName } },
   });
   expect(orgResponse.status).toBe(201);
   orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
+  await db.insert(organizationMemberships).values({
+    id: `ops-calendar-membership-${suffix}`,
+    userId: calendarUserId,
+    orgId,
+    // Owner role: the calendar tests exercise org-wide run-read scoping,
+    // so the fixture principal needs org-wide workspace access.
+    role: "owner",
+  });
 
   const workspaceResponse = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
     data: { type: "workspaces", attributes: { name: workspaceName } },
@@ -183,8 +211,10 @@ afterAll(async () => {
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(apiTokens).where(eq(apiTokens.token, adminToken));
+  await db.delete(apiTokens).where(eq(apiTokens.token, calendarToken));
   await db.delete(users).where(eq(users.id, userId));
   await db.delete(users).where(eq(users.id, adminUserId));
+  await db.delete(users).where(eq(users.id, calendarUserId));
 });
 
 describe("maintenance windows (21.6)", () => {
@@ -318,21 +348,84 @@ describe("change calendar (21.4)", () => {
     const futureAutoDestroy = new Date(Date.now() + 86_400_000).toISOString();
     await db.update(workspaces).set({ autoDestroyAt: futureAutoDestroy }).where(eq(workspaces.id, workspaceId));
 
-    const response = await request(`/api/v2/organizations/${orgName}/change-calendar`);
+    const response = await request(`/api/v2/organizations/${orgName}/change-calendar`, "GET", undefined, { Authorization: `Bearer ${calendarToken}` });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      data: { type: string; attributes: { kind: string; at?: string; workspaceId?: string; workspaceName?: string } }[];
-      meta?: { "total-count"?: number };
+      data: { type: string; attributes: { kind: string; at?: string; workspaceId?: string; workspaceName?: string; scheduled?: boolean } }[];
+      meta?: { "total-count"?: number; pagination?: { "total-count"?: number; "next-page"?: number | null } };
     };
     const kinds = body.data.map((entry): string => entry.attributes.kind);
     expect(kinds).toContain("apply");
     expect(kinds).toContain("auto-destroy");
     expect(kinds).toContain("change-request");
-    expect(body.meta?.["total-count"]).toBe(body.data.length);
+    expect(body.meta?.pagination?.["total-count"]).toBe(body.data.length);
     const applyEntry = body.data.find((entry): boolean => entry.attributes.kind === "apply");
     expect(applyEntry?.attributes.workspaceName).toBe(workspaceName);
+    // A confirmed run without a schedule is historical activity, not a
+    // future-scheduled action: it must be flagged as such.
+    expect(applyEntry?.attributes.scheduled).toBe(false);
     const atValues = body.data.map((entry): string => String(entry.attributes.at ?? ""));
     expect([...atValues].sort()).toEqual(atValues);
+
+    // Real pagination: a size-1 page returns exactly one entry and reports
+    // the same total as the full listing.
+    const pageOne = await request(`/api/v2/organizations/${orgName}/change-calendar?page%5Bnumber%5D=1&page%5Bsize%5D=1`, "GET", undefined, { Authorization: `Bearer ${calendarToken}` });
+    expect(pageOne.status).toBe(200);
+    const pageOneBody = (await pageOne.json()) as {
+      data: { attributes: { kind: string } }[];
+      meta: { pagination: { "total-count": number; "next-page": number | null } };
+    };
+    expect(pageOneBody.data.length).toBe(1);
+    expect(pageOneBody.meta.pagination["total-count"]).toBe(body.meta?.pagination?.["total-count"] ?? 0);
+    expect(pageOneBody.meta.pagination["next-page"]).toBe(body.data.length > 1 ? 2 : null);
+  });
+
+  it("filters by date range and exposes future-scheduled applies", async () => {
+    const scheduledRunId = `ops-calendar-scheduled-${suffix}`;
+    const scheduledAt = Date.now() + 3_600_000;
+    await db.insert(runs).values({
+      id: scheduledRunId,
+      workspaceId,
+      status: "confirmed",
+      createdAt: Date.now() - 120_000,
+      scheduledAt,
+      statusTimestamps: {
+        "confirmed-at": new Date(Date.now() - 120_000).toISOString(),
+        "scheduled-at": new Date(scheduledAt).toISOString(),
+      },
+    });
+    try {
+      // Range excluding the scheduled time: the scheduled run must vanish
+      // even though its confirmation happened long ago.
+      const pastOnly = await request(
+        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(Date.now() - 60_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(Date.now() - 1).toISOString())}`,
+        "GET",
+        undefined,
+        { Authorization: `Bearer ${calendarToken}` },
+      );
+      expect(pastOnly.status).toBe(200);
+      const pastBody = (await pastOnly.json()) as { data: { attributes: { kind: string; runId?: string } }[] };
+      expect(pastBody.data.some((entry): boolean => entry.attributes.runId === scheduledRunId)).toBe(false);
+
+      // Range covering the scheduled time: the entry is flagged as
+      // scheduled and carries the scheduled-at attribute.
+      const upcoming = await request(
+        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(scheduledAt - 60_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(scheduledAt + 60_000).toISOString())}`,
+        "GET",
+        undefined,
+        { Authorization: `Bearer ${calendarToken}` },
+      );
+      expect(upcoming.status).toBe(200);
+      const upcomingBody = (await upcoming.json()) as {
+        data: { attributes: { kind: string; runId?: string; scheduled?: boolean; "scheduled-at"?: string | null } }[];
+      };
+      const scheduledEntry = upcomingBody.data.find((entry): boolean => entry.attributes.runId === scheduledRunId);
+      expect(scheduledEntry).toBeDefined();
+      expect(scheduledEntry?.attributes.scheduled).toBe(true);
+      expect(scheduledEntry?.attributes["scheduled-at"]).toBe(new Date(scheduledAt).toISOString());
+    } finally {
+      await db.delete(runs).where(eq(runs.id, scheduledRunId));
+    }
   });
 
   it("hides the calendar from users without org access", async () => {
