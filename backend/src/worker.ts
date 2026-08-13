@@ -59,6 +59,7 @@ import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks"
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
 import { applyGateBlockReason } from "./lib/operations";
+import { publish } from "./lib/event-bus";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
@@ -168,11 +169,13 @@ type RunStatusExtra = Readonly<Partial<Pick<
 async function updateRunStatus(runId: string, status: string, extra?: RunStatusExtra): Promise<void> {
   const now = new Date().toISOString();
   const statusKey = status.replace(/_/g, "-") + "-at";
+  let workspaceId: string | null = null;
   try {
     const existing = await db.query.runs.findFirst({
       where: eq(runs.id, runId),
-      columns: { statusTimestamps: true, status: true },
+      columns: { statusTimestamps: true, status: true, workspaceId: true },
     });
+    workspaceId = existing?.workspaceId ?? null;
     const existingTimestamps = typeof existing?.statusTimestamps === "object" && existing.statusTimestamps !== null
       ? existing.statusTimestamps
       : {};
@@ -202,6 +205,23 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
             : undefined;
   if (trigger !== undefined) queueRunNotification(runId, trigger, status);
   void reportRunVcsStatus(runId, status);
+  // Publish the transition on the in-process bus so authenticated SSE
+  // clients (10.20) can refresh without polling. The org lookup is one
+  // cheap indexed read per transition; the event is dropped for clients
+  // that are not members of the run's organization.
+  if (workspaceId !== null) {
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { orgId: true },
+    });
+    publish("run.status", {
+      "run-id": runId,
+      "workspace-id": workspaceId,
+      "org-id": workspace?.orgId ?? null,
+      status,
+      at: now,
+    });
+  }
 }
 
 /** Parse Terraform/OpenTofu plan and apply summaries into persisted resource counts. */

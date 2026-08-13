@@ -52,6 +52,7 @@ import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
 import { assessmentRoutes } from "./routes/assessments";
 import { changeRequestRoutes } from "./routes/change-requests";
+import { eventsRoutes } from "./routes/events";
 import { policyEvaluationRoutes } from "./routes/policy-evaluations";
 import { workspaceTransferRoutes } from "./routes/workspace-transfers";
 import { planExportRoutes } from "./routes/plan-exports";
@@ -591,6 +592,7 @@ export const app = new Elysia()
   .use(miscRoutes)
   .use(assessmentRoutes)
   .use(changeRequestRoutes)
+  .use(eventsRoutes)
   .use(workspaceTransferRoutes)
   .use(planExportRoutes)
   .use(cidrRangeRoutes)

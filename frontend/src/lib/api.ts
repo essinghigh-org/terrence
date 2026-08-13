@@ -511,7 +511,7 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
 }
 
 /** Resolve the bearer token, refreshing it first when it is about to expire. */
-async function prepareAuthToken(): Promise<string | null> {
+export async function prepareAuthToken(): Promise<string | null> {
   let token = getAuthToken();
   const expiresAt = getAuthTokenExpiry();
   if (

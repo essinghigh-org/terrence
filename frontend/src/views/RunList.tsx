@@ -24,6 +24,7 @@ import { Input } from "../components/ui/input";
 import { StatusBadge } from "../components/ui/status-badge";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
+import { subscribeEvents, type SseEvent } from "../lib/events";
 
 type RunItem = {
   id: string;
@@ -221,17 +222,34 @@ export function RunList({
     const refresh = async (): Promise<void> => {
       await loadRuns(controller.signal);
       if (!stopped && !controller.signal.aborted) {
-        timer = window.setTimeout((): void => { void refresh(); }, 5000);
+        // Fast updates arrive over the SSE stream; this timer is a slow
+        // safety net for streams that fail (10.20).
+        timer = window.setTimeout((): void => { void refresh(); }, 30000);
       }
     };
     void refresh();
 
+    // Authenticated SSE: any run status transition in this workspace
+    // reloads the list (debounced so bursts coalesce into one fetch).
+    let debounceTimer: number | undefined;
+    const stream = subscribeEvents((event: SseEvent): void => {
+      if (event.name !== "run.status") return;
+      if (event.data["workspace-id"] !== workspaceId) return;
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout((): void => {
+        debounceTimer = undefined;
+        if (!stopped && !controller.signal.aborted) void loadRuns(controller.signal);
+      }, 500);
+    }, controller.signal);
+
     return (): void => {
       stopped = true;
       controller.abort();
+      stream.close();
       if (timer !== undefined) window.clearTimeout(timer);
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };
-  }, [loadRuns, refreshVersion]);
+  }, [loadRuns, refreshVersion, workspaceId]);
 
   useEffect((): void => {
     if (canStartRun && searchParams.get("new-run") === "true") {

@@ -43,6 +43,7 @@ import {
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
 import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
+import { subscribeEvents, type SseEvent } from "../lib/events";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 
@@ -832,7 +833,7 @@ export function RunDetail({
           && (status === null || !TERMINAL_STATUSES.has(status))) {
           // Pause polling while the tab is hidden; visibilitychange resumes it.
           if (document.hidden) return;
-          timer = window.setTimeout((): void => { void refresh(); }, 3000);
+          timer = window.setTimeout((): void => { void refresh(); }, 30000);
         }
       } finally {
         refreshing = false;
@@ -857,13 +858,28 @@ export function RunDetail({
     document.addEventListener("visibilitychange", onVisibilityChange);
     void refresh();
 
+    // Authenticated SSE replaces the fast poll (10.20): status transitions
+    // for this run trigger an immediate (rate-limited) refresh, while the
+    // timer above degrades to a slow safety net for streams that fail.
+    let lastSseRefresh = 0;
+    const stream = subscribeEvents((event: SseEvent): void => {
+      if (event.name !== "run.status") return;
+      const data = event.data;
+      if (data["run-id"] !== runId) return;
+      const now = Date.now();
+      if (now - lastSseRefresh < 1000) return;
+      lastSseRefresh = now;
+      void refresh();
+    }, controller.signal);
+
     return (): void => {
       stopped = true;
       controller.abort();
+      stream.close();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loadRun, refreshVersion]);
+  }, [loadRun, refreshVersion, runId]);
 
   async function performRunAction(
     action: "apply" | "cancel" | "discard" | "force-cancel" | "override-policy",

@@ -13,6 +13,7 @@ import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
+import { publish } from "../lib/event-bus";
 import { AvatarService } from "../lib/avatars";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -399,6 +400,13 @@ export async function createRun(
   });
   queueRunNotification(id, "run:created", "pending");
   (set as { status: number }).status = 201;
+  publish("run.status", {
+    "run-id": id,
+    "workspace-id": workspaceId,
+    "org-id": workspace.orgId,
+    status: "pending",
+    at: nowIso,
+  });
   return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", isDestroy, autoApply, planOnly, refresh, refreshOnly, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
 }
 
