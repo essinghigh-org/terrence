@@ -58,6 +58,7 @@ import {
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
+import { ensureInternalApiToken } from "./lib/internal-token";
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
@@ -1116,7 +1117,7 @@ export async function executeRun(runId: string): Promise<void> {
       proposedWorkspaceVariables,
     );
 
-    const envVars = buildSanitizedEnv(vars);
+    const envVars = { ...(await terraformTokenEnv()), ...buildSanitizedEnv(vars) };
     if (run.debuggingMode) envVars.TF_LOG = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -1460,7 +1461,7 @@ export async function executeApply(runId: string): Promise<void> {
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      const envVars = buildSanitizedEnv(vars);
+      const envVars = { ...(await terraformTokenEnv()), ...buildSanitizedEnv(vars) };
       if (run.debuggingMode) envVars.TF_LOG = "TRACE";
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
@@ -2599,6 +2600,25 @@ const WORKER_POLL_INTERVAL_MS = ((): number => {
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 100 ? parsed : 1500;
 })();
+
+/**
+ * Terraform credentials env for run processes: runs execute with a local
+ * backend, so the CLI never sees the user's credentials file. The internal
+ * API token lets init resolve modules from the registry.
+ */
+async function terraformTokenEnv(): Promise<Record<string, string>> {
+  let hostname = "terraform.essinghigh.dev";
+  const configured = process.env.PUBLIC_URL;
+  if (typeof configured === "string" && configured !== "") {
+    try {
+      hostname = new URL(configured).hostname;
+    } catch {
+      // keep the default
+    }
+  }
+  const key = `TF_TOKEN_${hostname.replace(/\./g, "_")}`;
+  return { [key]: await ensureInternalApiToken() };
+}
 
 export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
