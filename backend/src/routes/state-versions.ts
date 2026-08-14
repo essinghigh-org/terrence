@@ -428,9 +428,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (serial === undefined) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
     }
-    if (ws.locked === true && !intermediate) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is locked" }] };
-    }
+    // No locked-workspace rejection here: TFE allows state uploads on locked
+    // workspaces. The CLI holds the workspace lock for the whole
+    // import/apply operation and uploads the state while still locked;
+    // rejecting it breaks `terraform import`. Concurrent-writer protection
+    // comes from the run-level lock and state serial numbers, not from
+    // blocking the lock holder.
     if (intermediate && ws.locked !== true) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] };
     }
