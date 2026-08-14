@@ -1146,9 +1146,16 @@ export const registryRoutes = new Elysia({ name: "registry" })
       if (githubMatch !== null) {
         const owner = githubMatch[1] ?? "";
         const repo = (githubMatch[2] ?? "").replace(/\.git$/i, "");
+        // Private module repos need an authenticated GitHub call; the
+        // container can provide the token via GITHUB_TOKEN (same variable
+        // the github provider uses).
+        const githubToken = process.env.GITHUB_TOKEN;
+        const authHeaders = typeof githubToken === "string" && githubToken !== ""
+          ? { Authorization: `Bearer ${githubToken}` }
+          : {};
         for (const tag of [ver.version, `v${ver.version}`]) {
           try {
-            const refResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/tags/${encodeURIComponent(tag)}`);
+            const refResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/tags/${encodeURIComponent(tag)}`, { headers: authHeaders });
             if (refResponse.ok) {
               const refBody = (await refResponse.json()) as { object?: { sha?: string } };
               const sha = refBody.object?.sha;
@@ -1187,7 +1194,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
       }
       let archiveResponse: Response;
       try {
-        archiveResponse = await fetch(tarballUrl);
+        const githubToken = process.env.GITHUB_TOKEN;
+        const authHeaders = typeof githubToken === "string" && githubToken !== ""
+          ? { Authorization: `Bearer ${githubToken}` }
+          : {};
+        archiveResponse = await fetch(tarballUrl, { headers: authHeaders });
       } catch {
         (set as { status: number }).status = 502;
         return { errors: [{ status: "502", title: "Bad Gateway", detail: `Could not fetch module archive from ${base}` }] };
