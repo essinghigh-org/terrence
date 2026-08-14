@@ -942,6 +942,22 @@ export async function checkWorkspacePermission(
   return ids === null || ids.includes(workspace.id);
 }
 
+/** Run-principal scopes (TFE run-token model). A run token can read registry
+ * modules produced by ITS OWN organization, and nothing else. */
+export type RunPrincipal = Readonly<{
+  runId: string;
+  workspaceId: string;
+  organizationId: string;
+}>;
+
+export function checkRunRegistryRead(run: RunPrincipal | null | undefined, producerOrgId: string): boolean {
+  return run !== null && run !== undefined && run.organizationId === producerOrgId;
+}
+
+export function checkRunStateAccess(run: RunPrincipal | null | undefined, workspaceId: string): boolean {
+  return run !== null && run !== undefined && run.workspaceId === workspaceId;
+}
+
 export async function checkRegistryReadPermission(
   userId: string | undefined,
   producerOrgId: string,

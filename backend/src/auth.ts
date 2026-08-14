@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "./db";
-import { apiTokens, users, teams } from "./db/schema";
+import { apiTokens, runTokens, users, teams } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { setRequestSiteAdmin } from "./lib/request-scope";
@@ -47,11 +47,12 @@ export const authPlugin = new Elysia({ name: "auth" })
     orgId: string | null;
     teamId: string | null;
     tokenError: string | null;
+    run: { runId: string; workspaceId: string; organizationId: string } | null;
   }> => {
     rateLimitPrincipals.delete(request);
     const authHeader = request.headers.get("authorization");
     if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) {
-      return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
     const tokenString = authHeader.substring(7);
@@ -87,13 +88,40 @@ export const authPlugin = new Elysia({ name: "auth" })
       }
     }
 
+    // Run tokens: ephemeral worker credentials (TFE run-token model). They do
+    // not map to a user/team/org token row; the run row carries the scope.
     if (token === undefined) {
-      return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" };
+      const runRows = await db.select().from(runTokens)
+        .where(eq(runTokens.tokenHash, tokenHash))
+        .limit(1);
+      const runToken = runRows[0];
+      if (runToken !== undefined) {
+        const now = Date.now();
+        if (runToken.revokedAt !== null) {
+          return { user: null, token: null, orgId: null, teamId: null, tokenError: "revoked", run: null };
+        }
+        if (runToken.expiresAt <= now) {
+          return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired", run: null };
+        }
+        rateLimitPrincipals.set(request, `run:${runToken.runId}`);
+        return {
+          user: null,
+          token: null,
+          orgId: null,
+          teamId: null,
+          tokenError: null,
+          run: { runId: runToken.runId, workspaceId: runToken.workspaceId, organizationId: runToken.organizationId },
+        };
+      }
+    }
+
+    if (token === undefined) {
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
     }
 
     const now = Date.now();
     if (token.expiresAt !== null && token.expiresAt <= now) {
-      return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired" };
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: "expired" , run: null };
     }
 
     if (token.lastUsedAt === null || now - token.lastUsedAt > 60000) {
@@ -109,26 +137,26 @@ export const authPlugin = new Elysia({ name: "auth" })
       // tokens found via the plaintext legacy fallback re-query (rare).
       const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
       if (resolvedUser?.isSuspended === true) {
-        return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" };
+        return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" , run: null };
       }
       if (resolvedUser !== undefined) {
         setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
       }
-      return { user: resolvedUser ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null };
+      return { user: resolvedUser ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
     if (token.teamId !== null) {
       const team = await db.query.teams.findFirst({
         where: eq(teams.id, token.teamId),
       });
-      return { user: null, token: usedToken, orgId: null, teamId: team?.id ?? null, tokenError: team === undefined ? "invalid" : null };
+      return { user: null, token: usedToken, orgId: null, teamId: team?.id ?? null, tokenError: team === undefined ? "invalid" : null , run: null };
     }
 
     if (token.orgId !== null) {
-      return { user: null, token: usedToken, orgId: token.orgId, teamId: null, tokenError: null };
+      return { user: null, token: usedToken, orgId: token.orgId, teamId: null, tokenError: null , run: null };
     }
 
-    return { user: null, token: null, orgId: null, teamId: null, tokenError: null };
+    return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
   })
   .macro({
     isAuth(value: boolean): Record<string, unknown> {

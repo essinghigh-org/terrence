@@ -28,6 +28,7 @@ import {
   checkOrganizationPermission,
   checkOrgPermission,
   checkRegistryReadPermission,
+  checkRunRegistryRead,
   validateVersion,
   type DeepReadonly,
 } from "../lib/utils";
@@ -73,11 +74,13 @@ async function findRegistryModule(
   provider: string,
   userId: string | undefined,
   tokenOrgId: string | null | undefined,
+  run: { runId: string; workspaceId: string; organizationId: string } | null | undefined,
 ): Promise<ModItem | undefined> {
   const mod = await db.query.registryModules.findFirst({
     where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
   });
-  if (mod === undefined || !(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId))) return undefined;
+  if (mod === undefined) return undefined;
+  if (!(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId)) && !checkRunRegistryRead(run, mod.orgId)) return undefined;
   return mod;
 }
 
@@ -88,6 +91,7 @@ type ParamCtx = Readonly<{
   readonly user?: DeepReadonly<typeof users.$inferSelect> | null;
   readonly orgId?: string | null;
   readonly teamId?: string | null;
+  readonly run?: { runId: string; workspaceId: string; organizationId: string } | null;
   readonly request: Readonly<{ readonly url: string; readonly arrayBuffer: () => Promise<ArrayBuffer> }>;
   readonly set: SetObj;
 }>;
@@ -1088,32 +1092,32 @@ function workspaceUpgradeResource(
 export const registryRoutes = new Elysia({ name: "registry" })
   .use(authPlugin)
   // --- Module Registry Protocol ---
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/versions", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/versions", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
     return { modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }] };
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1126,7 +1130,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
@@ -1135,7 +1139,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     // Terraform fetches the archive without an Authorization header; a valid
     // signed URL (issued by the download endpoint) authorizes the fetch.
     const signedOk = validSignedApiURL(request, archivePath, "GET");
-    let mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    let mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined && signedOk) {
       mod = await db.query.registryModules.findFirst({
         where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
@@ -1295,11 +1299,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (mods.length === 0) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { modules: mods.map((m: ModItem): Record<string, unknown> => ({ id: `${namespace}/${name}/${m.provider}`, owner: namespace, namespace, name, provider: m.provider, versions: [] })) };
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id), orderBy: [desc(registryModuleVersions.createdAt)] });
     const latestVersion = verList[0]?.version ?? "0.0.0";

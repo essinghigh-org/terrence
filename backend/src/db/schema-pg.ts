@@ -873,6 +873,17 @@ export const runTasks = pgTable("run_tasks", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runTasks.createdAt.defaultFn!()),
 });
 
+export const runTokens = pgTable("run_tokens", {
+    id: text("id").notNull().primaryKey(),
+    tokenHash: text("token_hash").notNull().unique(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    revokedAt: bigint("revoked_at", { mode: "number" }),
+});
+
 export const runTriggers = pgTable("run_triggers", {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

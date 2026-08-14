@@ -7,14 +7,14 @@
 import * as sqliteSchema from "./schema-sqlite";
 import { buildPgSchema } from "./pg-convert";
 import { resolveDatabaseConfig } from "../lib/boot-config";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
-// import.meta.dir is undefined under drizzle-kit's CJS loader; fall back to
-// import.meta.url so `drizzle-kit generate` can load the selector module.
-const moduleDir = typeof import.meta.dir === "string" && import.meta.dir !== ""
+// import.meta is undefined under drizzle-kit's CJS loader; fall back to
+// process.cwd() so `drizzle-kit generate` can load the selector. The path
+// only feeds the STORAGE_DIR default and driver detection, so cwd is fine.
+const moduleDir = typeof import.meta?.dir === "string" && import.meta.dir !== ""
   ? import.meta.dir
-  : dirname(fileURLToPath(import.meta.url));
+  : process.cwd();
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(moduleDir, "../../storage"));
 const activeDriver = resolveDatabaseConfig(process.env, storageDir).driver;
 // Built lazily: constructing the pg mirror walks every sqlite table object,
@@ -320,6 +320,10 @@ export const runTaskResults: typeof sqliteSchema.runTaskResults = pgTables === n
 export const runTasks: typeof sqliteSchema.runTasks = pgTables === null
   ? sqliteSchema.runTasks
   : (pgTables[dbNameOf(sqliteSchema.runTasks)] as unknown as typeof sqliteSchema.runTasks);
+
+export const runTokens: typeof sqliteSchema.runTokens = pgTables === null
+  ? sqliteSchema.runTokens
+  : (pgTables[dbNameOf(sqliteSchema.runTokens)] as unknown as typeof sqliteSchema.runTokens);
 
 export const runTriggers: typeof sqliteSchema.runTriggers = pgTables === null
   ? sqliteSchema.runTriggers

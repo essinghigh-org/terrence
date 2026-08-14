@@ -40,7 +40,7 @@ import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
-import { canTransitionRunStatus } from "./lib/run-status";
+import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
 import { FINAL_RUN_STATUSES, signedApiURL } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
@@ -58,7 +58,7 @@ import {
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
-import { ensureInternalApiToken } from "./lib/internal-token";
+import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-token";
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
@@ -223,6 +223,11 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       status,
       at: now,
     });
+  }
+  // Terminal states close the run credential (TFE run-token model): the token
+  // is revoked immediately and the CLI config file is unlinked.
+  if (isTerminalRunStatus(status)) {
+    void cleanupRunToken(runId);
   }
 }
 
@@ -1117,7 +1122,7 @@ export async function executeRun(runId: string): Promise<void> {
       proposedWorkspaceVariables,
     );
 
-    const envVars = { ...(await terraformTokenEnv()), ...buildSanitizedEnv(vars) };
+    const envVars = { ...(await runTerraformEnv(run.id, workspace)), ...buildSanitizedEnv(vars) };
     if (run.debuggingMode) envVars.TF_LOG = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -1461,7 +1466,7 @@ export async function executeApply(runId: string): Promise<void> {
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      const envVars = { ...(await terraformTokenEnv()), ...buildSanitizedEnv(vars) };
+      const envVars = { ...(await runTerraformEnv(run.id, workspace)), ...buildSanitizedEnv(vars) };
       if (run.debuggingMode) envVars.TF_LOG = "TRACE";
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
@@ -2602,11 +2607,15 @@ const WORKER_POLL_INTERVAL_MS = ((): number => {
 })();
 
 /**
- * Terraform credentials env for run processes: runs execute with a local
- * backend, so the CLI never sees the user's credentials file. The internal
- * API token lets init resolve modules from the registry.
+ * Ephemeral per-run credentials (TFE run-token model). Runs execute with a
+ * local backend, so the CLI never sees the user's credentials file; the run
+ * token is delivered through a private CLI config file instead. One token is
+ * minted per run and reused across plan and apply; it is revoked when the run
+ * reaches a terminal state and expires at most 24h after minting.
  */
-async function terraformTokenEnv(): Promise<Record<string, string>> {
+const runTokenCache = new Map<string, { token: string; tfrcPath: string }>();
+
+function registryHostname(): string {
   let hostname = "terraform.essinghigh.dev";
   const configured = process.env.PUBLIC_URL;
   if (typeof configured === "string" && configured !== "") {
@@ -2616,8 +2625,33 @@ async function terraformTokenEnv(): Promise<Record<string, string>> {
       // keep the default
     }
   }
-  const key = `TF_TOKEN_${hostname.replace(/\./g, "_")}`;
-  return { [key]: await ensureInternalApiToken() };
+  return hostname;
+}
+
+async function runTerraformEnv(runId: string, workspace: { id: string; orgId: string }): Promise<Record<string, string>> {
+  const cached = runTokenCache.get(runId);
+  if (cached !== undefined) return { TF_CLI_CONFIG_FILE: cached.tfrcPath };
+  const token = await mintRunToken(runId, workspace.id, workspace.orgId);
+  const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), token);
+  runTokenCache.set(runId, { token, tfrcPath });
+  return { TF_CLI_CONFIG_FILE: tfrcPath };
+}
+
+async function cleanupRunToken(runId: string): Promise<void> {
+  const cached = runTokenCache.get(runId);
+  runTokenCache.delete(runId);
+  try {
+    await revokeRunTokens(runId);
+  } catch (err: unknown) {
+    log.error(`Failed to revoke run tokens for ${runId}`, { error: err instanceof Error ? err.message : String(err) });
+  }
+  if (cached !== undefined) {
+    try {
+      await rm(cached.tfrcPath, { force: true });
+    } catch {
+      // best-effort: the run dir is removed anyway
+    }
+  }
 }
 
 export function startWorkerQueue(): void {

@@ -398,6 +398,21 @@ export const runs = sqliteTable("runs", {
   createdAt: integer("created_at").notNull(),
 });
 
+// Ephemeral per-run credentials (TFE run-token model). Minted when the worker
+// executes a run, stored hashed, revoked on terminal state. Grants ONLY
+// registry reads for the run's organization and state access for the run's
+// workspace.
+export const runTokens = sqliteTable("run_tokens", {
+  id: text("id").primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  revokedAt: integer("revoked_at"),
+});
+
 export const assessmentResults = sqliteTable("assessment_results", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
