@@ -151,6 +151,7 @@ async function withDownloadedArchive<T>(
   const file = await open(path, "wx", 0o600);
   const reader = response.body.getReader();
   let total = 0;
+  let fileClosed = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -160,10 +161,27 @@ async function withDownloadedArchive<T>(
       await file.write(value);
     }
     await file.close();
+    fileClosed = true;
     return await use(path);
   } finally {
-    reader.releaseLock();
-    await file.close().catch((): void => { return; });
+    // Bun may detach releaseLock/close from the reader/handle once the
+    // stream or file completes; guard both so a cleanup path can never
+    // mask the real result with "undefined is not a function".
+    if (typeof reader.releaseLock === "function") {
+      try {
+        reader.releaseLock();
+      } catch {
+        // Cleanup best effort: never mask the original outcome.
+      }
+    }
+    if (!fileClosed) {
+      // Bun's FileHandle.close() returns undefined once the handle is
+      // already closed, so never assume the result is a thenable here.
+      const closeResult: unknown = file.close();
+      if (closeResult !== undefined && typeof (closeResult as { catch?: unknown }).catch === "function") {
+        await (closeResult as Promise<void>).catch((): void => { return; });
+      }
+    }
     await rm(staging, { recursive: true, force: true });
   }
 }
