@@ -697,7 +697,7 @@ async function extractTarArchive(
     }
     await assertArchiveLogicalSize(archivePath);
 
-    const extractProc = spawn(["tar", "-xzf", archivePath, "--no-same-owner", "--no-same-permissions", "-C", destDir]);
+    const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir]);
     const ok = (await extractProc.exited) === 0;
     if (ok) {
       await unnestArchiveDirectory(destDir, workingDirectory);

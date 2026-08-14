@@ -60,7 +60,7 @@ export async function validateModuleArchive(path: string): Promise<void> {
     throw new Error("Module archive contains an unsafe path");
   }
 
-  const details = (await tarOutput(["--numeric-owner", "--full-time", "-tvzf", path]))
+  const details = (await tarOutput(["--numeric-owner", "-tvzf", path]))
     .split("\n")
     .filter((line): boolean => line !== "");
   if (details.length !== names.length) throw new Error("Module archive contains an unsupported file name");
@@ -68,7 +68,9 @@ export async function validateModuleArchive(path: string): Promise<void> {
     if (!line.startsWith("-") && !line.startsWith("d")) {
       throw new Error("Module archive may contain only regular files and directories");
     }
-    const match = /^\S+\s+\d+\/\d+\s+(\d+)\s+\S+\s+\S+\s/.exec(line);
+    // GNU tar lists the owner as 0/0 (--numeric-owner); BusyBox tar lists
+    // names (root/root). Accept both.
+    const match = /^\S+\s+\S+\/\S+\s+(\d+)\s+\S+\s+\S+\s/.exec(line);
     if (match === null) throw new Error("Module archive listing could not be validated");
     if (Number(match[1]) > MAX_MODULE_FILE_BYTES) {
       throw new Error(`Module archive contains a file larger than ${MAX_MODULE_FILE_BYTES} bytes`);
@@ -80,10 +82,10 @@ export async function extractValidatedModuleArchive(path: string, destination: s
   await validateModuleArchive(path);
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await tarOutput([
-    "--no-same-owner",
-    "--no-same-permissions",
-    "--delay-directory-restore",
-    "-xzf",
+    "-x",
+    "-o",
+    "-z",
+    "-f",
     path,
     "-C",
     destination,

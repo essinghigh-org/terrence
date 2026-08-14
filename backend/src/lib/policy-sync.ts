@@ -119,7 +119,7 @@ async function extractArchive(archivePath: string, destination: string): Promise
   await assertArchiveLogicalSize(archivePath);
 
   const extraction = await processOutput(Bun.spawn(
-    ["tar", "-xzf", archivePath, "--no-same-owner", "--no-same-permissions", "-C", destination],
+    ["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destination],
     { stdout: "pipe", stderr: "pipe" },
   ));
   const extractionError = extraction.stderr.trim();
