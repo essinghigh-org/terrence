@@ -184,12 +184,16 @@ export async function runDbExport(
     }
 
     target = createSqliteTarget(filePath);
+    // Keep the source snapshot open through verification so the row counts,
+    // invariants and sample hashes are checked against the same point-in-time
+    // view the copy came from; endSnapshot() releases it afterwards.
     const transfer = await transferDatabase(
       source,
       target,
-      onProgress === undefined ? {} : { onProgress: (progress) => onProgress(progress) },
+      { keepSnapshotOpen: true, ...(onProgress === undefined ? {} : { onProgress: (progress) => onProgress(progress) }) },
     );
     const verification = await verifyTransfer(source, target);
+    await source.endSnapshot();
     await target.finishAndClose();
     target = null;
 
@@ -212,6 +216,11 @@ export async function runDbExport(
       if (target !== null) await target.finishAndClose();
     } catch {
       // best-effort close of the failed target
+    }
+    try {
+      await source.endSnapshot();
+    } catch {
+      // best-effort release of the source connection
     }
     try {
       rmSync(filePath, { force: true });

@@ -375,7 +375,8 @@ export class SqliteTransferTarget implements TransferTarget {
     client.run("PRAGMA foreign_keys = OFF;");
     if (options.createSchema !== false) {
       const drizzleDb = drizzle(client, { schema });
-      migrate(drizzleDb, { migrationsFolder: join(import.meta.dir, "../drizzle") });
+      // src/lib → ../../drizzle (the sqlite migration set shared with the app).
+      migrate(drizzleDb, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
     }
     return new SqliteTransferTarget(client, path);
   }
@@ -641,7 +642,11 @@ export interface BunSqlConnection {
   end(options?: { timeout?: number }): Promise<void>;
 }
 
-const SqlClient = (Bun as unknown as { SQL: new (url: string) => BunSqlConnection }).SQL;
+interface BunSqlClientConstructor {
+  new (options: { url: string; max?: number }): BunSqlConnection;
+}
+
+const SqlClient = (Bun as unknown as { SQL: BunSqlClientConstructor }).SQL;
 
 export class PgTransferSource implements TransferSource {
   readonly #connection: BunSqlConnection;
@@ -649,7 +654,9 @@ export class PgTransferSource implements TransferSource {
 
   constructor(url: string) {
     this.#url = url;
-    this.#connection = new SqlClient(url);
+    // max: 1 so the read-only snapshot (BEGIN ... READ ONLY) is legal: Bun's
+    // sql client only permits manual transaction control on a single connection.
+    this.#connection = new SqlClient({ url, max: 1 });
   }
 
   get url(): string {
@@ -674,8 +681,13 @@ export class PgTransferSource implements TransferSource {
   }
 
   async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
+    // Bun's sql client does not support `?` placeholders (it rejects them with
+    // a server-side syntax error); rewrite them to $1..$n positionally. The
+    // condition itself comes from callers written against the sqlite dialect.
+    let index = 0;
+    const pgCondition = condition.replace(/\?/g, (): string => { index += 1; return `$${index}`; });
     const rows = await this.#connection.unsafe<{ n: string | number }>(
-      `SELECT COUNT(*) AS n FROM "${name}" WHERE ${condition}`,
+      `SELECT COUNT(*) AS n FROM "${name}" WHERE ${pgCondition}`,
       [...params],
     );
     return Number(rows[0]?.n ?? 0);
@@ -701,12 +713,19 @@ export class PgTransferSource implements TransferSource {
       let last: unknown = null;
       let started = false;
       for (;;) {
-        const rows = await this.#connection.unsafe<Record<string, unknown>>(
-          started
-            ? `SELECT ${quotedCols} FROM "${name}" WHERE "${primaryKey[0]}" > $1 ORDER BY "${primaryKey[0]}" LIMIT $2`
-            : `SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryKey[0]}" LIMIT $1`,
-          started ? [last, batchSize] : [batchSize],
-        );
+        const sql = started
+          ? `SELECT ${quotedCols} FROM "${name}" WHERE "${primaryKey[0]}" > $1 ORDER BY "${primaryKey[0]}" LIMIT $2`
+          : `SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryKey[0]}" LIMIT $1`;
+        let rows: readonly Record<string, unknown>[];
+        try {
+          rows = await this.#connection.unsafe<Record<string, unknown>>(
+            sql,
+            started ? [last, batchSize] : [batchSize],
+          );
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`PgTransferSource.streamRows failed on table "${name}" (${sql}): ${message}`);
+        }
         if (rows.length === 0) return;
         await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
         started = true;
@@ -782,6 +801,12 @@ export interface TransferReport {
 export interface TransferOptions {
   readonly batchSize?: number;
   readonly onProgress?: (progress: TransferProgress) => void;
+  /**
+   * Keep the source snapshot open after the copy so the caller can still read
+   * the source (e.g. verification against the same snapshot). The caller is
+   * then responsible for calling source.endSnapshot().
+   */
+  readonly keepSnapshotOpen?: boolean;
 }
 
 /** Copy every schema table from source to target, parents before children. */
@@ -831,7 +856,9 @@ export async function transferDatabase(
       totalRows += copied;
     }
   } finally {
-    await source.endSnapshot();
+    if (options.keepSnapshotOpen !== true) {
+      await source.endSnapshot();
+    }
   }
   return { tables: report, totalRows };
 }
