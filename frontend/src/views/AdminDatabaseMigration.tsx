@@ -71,9 +71,9 @@ type WizardState = {
 };
 
 type StatusBody = {
-  wizard: WizardState;
+  wizard: WizardState | null;
   running: boolean;
-  "source-database": { path: string; memory: boolean };
+  "source-database": { path: string; memory: boolean } | null;
   "restart-disabled": boolean;
   "environment-database-url": string | null;
 };
@@ -181,8 +181,9 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     // Poll adaptively: while a job is running, refresh every 2 seconds;
     // otherwise settle down to 15 seconds. The timeout is rescheduled on
     // every status change and cleared on unmount.
+    // The backend reports wizard: null when no migration state exists yet.
     if (pollTimer.current !== null) clearTimeout(pollTimer.current);
-    const active = status !== null && (status.running || ACTIVE_PHASES.has(status.wizard.phase));
+    const active = status !== null && (status.running || (status.wizard !== null && ACTIVE_PHASES.has(status.wizard.phase)));
     pollTimer.current = setTimeout((): void => { void load(); }, active ? 2_000 : 15_000);
     return (): void => { if (pollTimer.current !== null) clearTimeout(pollTimer.current); };
   }, [status, error, load]);
@@ -241,7 +242,10 @@ export function AdminDatabaseMigration(): React.JSX.Element {
               Migration status
             </CardTitle>
             <CardDescription>
-              Source database: <span className="font-mono text-xs">{status["source-database"].path}</span>
+              Source database:{" "}
+              <span className="font-mono text-xs">
+                {status["source-database"] === null ? "none (PostgreSQL backend)" : status["source-database"].path}
+              </span>
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
