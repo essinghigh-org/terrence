@@ -91,7 +91,9 @@ describe("Private Module & Provider Registries API contract", () => {
     const dlRes = await request(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/download`);
     expect(dlRes.status).toBe(204);
     // The download header now carries the signed archive URL (module archives).
-    expect(dlRes.headers.get("X-Terraform-Get")).toContain(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive`);
+    const archiveUrl = dlRes.headers.get("X-Terraform-Get");
+    expect(archiveUrl).not.toBeNull();
+    expect(new URL(archiveUrl!, "http://terrence.test").pathname).toBe(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive.tar.gz`);
 
     // Clean up
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, verId));

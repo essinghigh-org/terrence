@@ -58,8 +58,11 @@ export async function writeRunCliConfig(
   const secretsDir = join(workDir, "secrets");
   await mkdir(secretsDir, { recursive: true, mode: 0o700 });
   const configPath = join(secretsDir, "terraform.tfrc");
-  const content = `credentials "${hostname}" {
-  token = "${token}"
+  // HCL double-quoted strings use JSON-compatible escapes, so JSON.stringify
+  // (with JSON_HEX_TAG etc.) is the correct escaping for both fields.
+  const hclValue = (value: string): string => JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+  const content = `credentials ${hclValue(hostname)} {
+  token = ${hclValue(token)}
 }
 `;
   await writeFile(configPath, content, { mode: 0o600 });

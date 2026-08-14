@@ -411,7 +411,9 @@ export const runTokens = sqliteTable("run_tokens", {
   createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
   revokedAt: integer("revoked_at"),
-});
+}, (table) => [
+  index("run_tokens_run_id_idx").on(table.runId),
+]);
 
 export const assessmentResults = sqliteTable("assessment_results", {
   id: text("id").primaryKey(),

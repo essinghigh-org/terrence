@@ -882,7 +882,9 @@ export const runTokens = pgTable("run_tokens", {
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     revokedAt: bigint("revoked_at", { mode: "number" }),
-});
+}, (table) => [
+    index("run_tokens_run_id_idx").on(table.runId),
+  ]);
 
 export const runTriggers = pgTable("run_triggers", {
     id: text("id").notNull().primaryKey(),

@@ -1,0 +1,1 @@
+CREATE INDEX `run_tokens_run_id_idx` ON `run_tokens` (`run_id`);

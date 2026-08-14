@@ -167,9 +167,9 @@ describe("run token authorization", () => {
   test("cannot call user-facing API endpoints", async () => {
     const token = await mintRunToken(runA, wsA, orgA);
     const res = await app.handle(request("/api/v2/account/details", "GET", token));
-    expect(res.status).not.toBe(200);
+    expect(res.status).toBeGreaterThanOrEqual(400);
     const orgsRes = await app.handle(request("/api/v2/organizations", "GET", token));
-    expect(orgsRes.status).not.toBe(200);
+    expect(orgsRes.status).toBeGreaterThanOrEqual(400);
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
   });
 

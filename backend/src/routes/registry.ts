@@ -80,7 +80,7 @@ async function findRegistryModule(
     where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
   });
   if (mod === undefined) return undefined;
-  if (!(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId)) && !checkRunRegistryRead(run, mod.orgId)) return undefined;
+  if (!checkRunRegistryRead(run, mod.orgId) && !(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId))) return undefined;
   return mod;
 }
 

@@ -225,9 +225,10 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     });
   }
   // Terminal states close the run credential (TFE run-token model): the token
-  // is revoked immediately and the CLI config file is unlinked.
+  // is revoked before the status update returns, so the credential is dead the
+  // moment callers observe the terminal state.
   if (isTerminalRunStatus(status)) {
-    void cleanupRunToken(runId);
+    await cleanupRunToken(runId);
   }
 }
 
