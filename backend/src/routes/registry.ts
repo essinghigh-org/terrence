@@ -2385,6 +2385,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
       }
       updates.keyId = keyId;
     }
+    if (attributes.source !== undefined) {
+      const rawSource = attributes.source;
+      if (rawSource !== null && (typeof rawSource !== "string" || rawSource.trim() === "")) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be a repository URL or null" }] };
+      }
+      updates.source = typeof rawSource === "string" && rawSource.trim() !== "" ? rawSource.trim() : null;
+    }
     if (Object.keys(updates).length > 0) await db.update(registryModuleVersions).set(updates).where(eq(registryModuleVersions.id, versionId));
     const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
