@@ -1144,13 +1144,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
         `${base}/archive/refs/tags/v${encodeURIComponent(ver.version)}.tar.gz`,
       ];
       let response: Response | null = null;
-      let tarballUrl = "";
       try {
         for (const candidate of candidates) {
           const probe = await fetch(candidate);
           if (probe.ok) {
             response = probe;
-            tarballUrl = candidate;
             break;
           }
         }
