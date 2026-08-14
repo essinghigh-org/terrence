@@ -1119,17 +1119,19 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Terraform fetches the archive WITHOUT an Authorization header, so the
     // archive URL is signed (TFE model).
-    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    // The URL ends in .tar.gz so go-getter detects the archive format from
+    // the extension (a bare /archive path falls back to XML sniffing).
+    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
     (set.headers as Record<string, string | number>)["X-Terraform-Get"] = signedApiURL(request, archivePath, "GET");
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
     // Terraform fetches the archive without an Authorization header; a valid
     // signed URL (issued by the download endpoint) authorizes the fetch.
     const signedOk = validSignedApiURL(request, archivePath, "GET");
