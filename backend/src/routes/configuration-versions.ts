@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray } from "drizzle-orm";
-import { apiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
+import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { authPlugin } from "../auth";
@@ -36,7 +36,9 @@ function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
 }
 
 function configurationVersionResource(cv: DeepReadonly<ConfigurationVersion>, request: Readonly<{ url: string }>): Record<string, unknown> {
-  const uploadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/upload`);
+  // The upload URL is signed (PUT) because the Terraform CLI uploads config
+  // archives WITHOUT an Authorization header, exactly like state versions.
+  const uploadUrl = signedApiURL(request, `/api/v2/configuration-versions/${cv.id}/upload`, "PUT");
   const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
   return {
     id: cv.id,
@@ -138,9 +140,14 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
   .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params.cv_id ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    const path = `/api/v2/configuration-versions/${cvId}/upload`;
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "plan");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    // The Terraform CLI uploads WITHOUT an Authorization header, using the
+    // signed upload URL from the configuration-version response instead.
+    if (ws === undefined && !validSignedApiURL(request, path, "PUT")) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     if (cv.status !== "pending" || cv.archivePath !== null) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }
@@ -175,7 +182,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     }).where(eq(configurationVersions.id, cvId));
     (set as { status: number }).status = 200;
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
-  }, { isAuth: true })
+  })
   .get("/api/v2/configuration-versions/:cv_id/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const cvId = params.cv_id ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
