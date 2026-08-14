@@ -193,7 +193,7 @@ export function restartDisabled(): boolean {
 export function environmentDatabaseUrlWarning(): string | null {
   const envUrl = process.env.DATABASE_URL;
   if (envUrl === undefined || envUrl === "") return null;
-  return "DATABASE_URL is set in the environment and overrides the boot configuration file at startup. The switch step will refuse to run until it is removed.";
+  return "DATABASE_URL is set in the environment (image ENV or compose) and overrides the boot configuration file at startup. The switch step will refuse to run until it is removed or set to an empty value.";
 }
 
 function parseWizardState(raw: unknown): WizardState | null {

@@ -58,7 +58,6 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     STORAGE_DIR=/app/backend/storage \
-    DATABASE_URL=file:/app/backend/storage/terrence.db \
     INFRACOST_ENABLED=false \
     INFRACOST_VERSION=0.10.45
 
