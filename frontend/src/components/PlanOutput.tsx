@@ -61,6 +61,13 @@ type PlanJson = {
 
 type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
 
+const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read"];
+// Reads are data-source refreshes, not real changes; everything else is
+// selected by default.
+const DEFAULT_SELECTED_OPS: ReadonlySet<Operation> = new Set(
+  OPERATION_OPTIONS.filter((op): boolean => op !== "read"),
+);
+
 type DiffRow = Readonly<{
   path: string;
   before: unknown;
@@ -932,15 +939,10 @@ export function planSummaryMarkdown(counts: Readonly<{
 
 function resourceMatches(
   resource: ResourceChange,
-  operation: Operation | "all",
+  selectedOps: ReadonlySet<Operation>,
   query: string,
 ): boolean {
-  if (operation !== "all"
-    && (operation === "import"
-      ? resource.change.importing === undefined
-      : operation === "move"
-        ? resource.previous_address === undefined
-        : operationForResource(resource) !== operation)) return false;
+  if (!selectedOps.has(operationForResource(resource))) return false;
   if (query === "") return true;
   return [
     resource.address,
@@ -989,7 +991,7 @@ export function PlanOutput({
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [retry, setRetry] = useState(0);
   const [search, setSearch] = useState("");
-  const [operation, setOperation] = useState<Operation | "all">("all");
+  const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_SELECTED_OPS));
   const [summaryCopied, setSummaryCopied] = useState(false);
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
@@ -1005,7 +1007,7 @@ export function PlanOutput({
       readyRunId.current = null;
       setLoadState({ kind: "loading" });
       setSearch("");
-      setOperation("all");
+      setSelectedOps(new Set(DEFAULT_SELECTED_OPS));
     }
 
     const load = async (): Promise<void> => {
@@ -1119,9 +1121,9 @@ export function PlanOutput({
   const counts = summaryCounts(changedResources);
   const query = search.trim().toLocaleLowerCase();
   const filteredResources = changedResources
-    .filter((resource): boolean => resourceMatches(resource, operation, query));
+    .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
   const filteredDrift = driftResources
-    .filter((resource): boolean => resourceMatches(resource, operation, query));
+    .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
   const importCount = changedResources
     .filter((resource): boolean => resource.change.importing !== undefined).length;
   const moveCount = changedResources
@@ -1240,27 +1242,34 @@ export function PlanOutput({
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
-          <select
-            id="plan-operation-filter"
-            name="operation"
-            value={operation}
+          <div
+            role="group"
             aria-label="Filter by operation"
-            className="h-8 rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
-            onChange={(event): void => {
-              const val = ((event.currentTarget || event.target)).value as Operation | "all";
-              setOperation(val);
-            }}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-muted-foreground"
           >
-              <option value="all">All operations ({changedResources.length})</option>
-              <option value="create">Create ({opCounts.create})</option>
-              <option value="update">Change ({opCounts.update})</option>
-              <option value="delete">Destroy ({opCounts.delete})</option>
-              <option value="replace">Replace ({opCounts.replace})</option>
-              <option value="move">Move ({opCounts.move})</option>
-              <option value="import">Import ({opCounts.import})</option>
-              <option value="remove">Remove from state ({opCounts.remove})</option>
-              <option value="read">Read ({opCounts.read})</option>
-            </select>
+            {OPERATION_OPTIONS.map((op): React.JSX.Element => {
+              const count = op === "import" ? importCount : op === "move" ? moveCount : opCounts[op as keyof typeof opCounts];
+              const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
+              return (
+                <label key={op} className="flex cursor-pointer items-center gap-1.5 select-none hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={selectedOps.has(op)}
+                    onChange={(event): void => {
+                      const next = new Set(selectedOps);
+                      if (event.currentTarget.checked) next.add(op);
+                      else next.delete(op);
+                      setSelectedOps(next);
+                    }}
+                  />
+                  <span>
+                    {label} ({count})
+                  </span>
+                </label>
+              );
+            })}
+          </div>
           </div>
         <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}
