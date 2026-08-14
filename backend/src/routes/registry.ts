@@ -1138,15 +1138,27 @@ export const registryRoutes = new Elysia({ name: "registry" })
     // TFE's "tag the module repo, consume from the registry" flow.
     if (typeof ver.source === "string" && ver.source !== "") {
       const base = ver.source.replace(/\/+$/, "");
-      const tarballUrl = `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`;
-      let response: Response;
+      // Accept both "0.1.0" and "v0.1.0" git tag conventions.
+      const candidates = [
+        `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`,
+        `${base}/archive/refs/tags/v${encodeURIComponent(ver.version)}.tar.gz`,
+      ];
+      let response: Response | null = null;
+      let tarballUrl = "";
       try {
-        response = await fetch(tarballUrl);
+        for (const candidate of candidates) {
+          const probe = await fetch(candidate);
+          if (probe.ok) {
+            response = probe;
+            tarballUrl = candidate;
+            break;
+          }
+        }
       } catch {
         (set as { status: number }).status = 502;
         return { errors: [{ status: "502", title: "Bad Gateway", detail: `Could not fetch module archive from ${base}` }] };
       }
-      if (!response.ok) {
+      if (response === null) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
       }
