@@ -90,6 +90,7 @@ const ChangeCalendar = lazyView(() => import("./views/ChangeCalendar"), "ChangeC
 const ChangeRequests = lazyView(() => import("./views/ChangeRequests"), "ChangeRequests");
 const ChangeRequestDetail = lazyView(() => import("./views/ChangeRequestDetail"), "ChangeRequestDetail");
 const AdminOperationsSettings = lazyView(() => import("./views/AdminOperationsSettings"), "AdminOperationsSettings");
+const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
 const NotFound = lazyView(() => import("./views/NotFound"), "NotFound");
 
 function RouteFallback(): JSX.Element {
@@ -186,6 +187,7 @@ function App(): JSX.Element {
               <Route path="admin/smtp" element={<AdminSmtpSettings />} />
               <Route path="admin/scim" element={<AdminScimSettings />} />
               <Route path="admin/operations" element={<AdminOperationsSettings />} />
+              <Route path="admin/database" element={<AdminDatabaseMigration />} />
               <Route path="account" element={<AccountSettings />} />
               <Route path=":orgName" element={<Workspaces />} />
               <Route path=":orgName/workspaces" element={<Workspaces />} />

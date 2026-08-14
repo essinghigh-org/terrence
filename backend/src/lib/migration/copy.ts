@@ -12,9 +12,10 @@
 //   - Coerces values per column mode (boolean/json from the Drizzle schema,
 //     everything else from the declared SQLite type).
 import { createHash } from "node:crypto";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 export type SqliteQueryable = Readonly<{
-  query: (sql: string, ...params: unknown[]) => { all: () => unknown[]; get: () => unknown };
+  query: (sql: string) => { all: (...params: SQLQueryBindings[]) => unknown[]; get: (...params: SQLQueryBindings[]) => unknown };
 }>;
 
 export type PostgresQueryable = {
@@ -100,12 +101,23 @@ export async function copyTable(
   const insertPrefix = `INSERT INTO ${quoted(table.name)} (${columnList}) VALUES `;
 
   let total = 0;
-  let cursor: unknown = 0;
+  // rowid values are always integers (SQLite rowid / _rowid_ columns).
+  let cursor: number = 0;
   for (;;) {
     if (options.isCancelled?.() === true) break;
-    const rows = rowid === null
-      ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`, batchSize, total).all()
-      : source.query(`SELECT * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`, cursor, batchSize).all();
+    let rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    try {
+      rows = (rowid === null
+        ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`).all(batchSize, total)
+        : source.query(`SELECT * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
+        ReadonlyArray<Readonly<Record<string, unknown>>>;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      const sql = rowid === null
+        ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
+        : `SELECT * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
+      throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
+    }
     if (rows.length === 0) break;
 
     const params: unknown[] = [];
@@ -118,7 +130,10 @@ export async function copyTable(
       params.push(...values);
       valueGroups.push(`(${values.map((_, index): string => `$${params.length - values.length + index + 1}`).join(", ")})`);
     }
-    await target.unsafe(`${insertPrefix}${valueGroups.join(", ")} ON CONFLICT DO NOTHING`, params);
+    await target.unsafe(`${insertPrefix}${valueGroups.join(", ")} ON CONFLICT DO NOTHING`, params).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Copy failed on table "${table.name}" (batch of ${String(rows.length)} rows): ${message}`);
+    });
     total += rows.length;
     if (rowid !== null) {
       const lastRow = rows[rows.length - 1] as Readonly<Record<string, unknown>>;

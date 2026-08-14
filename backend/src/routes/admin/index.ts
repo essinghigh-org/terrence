@@ -10,6 +10,7 @@ import { operationsRoutes } from "./operations";
 import { settingsmoreRoutes } from "./settings-more";
 import { systemRoutes } from "./system";
 import { dbExportRoutes } from "./db-export";
+import { dbMigrationRoutes } from "./db-migration";
 
 // Admin API split into domain modules (24.3).
 export const adminRoutes = new Elysia({ name: "admin" })
@@ -24,3 +25,4 @@ export const adminRoutes = new Elysia({ name: "admin" })
   .use(settingsmoreRoutes)
   .use(systemRoutes)
   .use(dbExportRoutes)
+  .use(dbMigrationRoutes)

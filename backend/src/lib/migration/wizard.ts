@@ -261,9 +261,12 @@ export function freshSteps(): WizardStep[] {
   ];
 }
 
-/** Open a Bun.sql connection to the target PostgreSQL database. */
+/** Open a Bun.sql connection to the target PostgreSQL database.
+ * max: 1 — the migration is a single-operator, sequential maintenance
+ * operation, and Bun.SQL only permits manual transaction control (BEGIN /
+ * ROLLBACK, used by the schema-writable probe) on single-connection pools. */
 export async function openPostgres(url: string): Promise<Bun.SQL> {
-  return new Bun.SQL({ url, max: 4 });
+  return new Bun.SQL({ url, max: 1 });
 }
 
 /** Test a PostgreSQL connection and report server/database/latency. */
@@ -351,6 +354,20 @@ export async function checkCompatibility(url: string): Promise<CompatibilityResu
         name: "schema-writable",
         ok: false,
         detail: `Cannot create tables in this database: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    try {
+      // The copy disables FK enforcement with session_replication_role, which
+      // requires superuser (or the SET privilege); the check mirrors the copy
+      // so the operator learns about it before the migration starts.
+      await sql.unsafe("SET session_replication_role = replica");
+      await sql.unsafe("SET session_replication_role = origin");
+      checks.push({ name: "replica-role", ok: true, detail: "FK enforcement can be suspended during the copy" });
+    } catch (error: unknown) {
+      checks.push({
+        name: "replica-role",
+        ok: false,
+        detail: `Cannot suspend FK enforcement: ${error instanceof Error ? error.message : String(error)}. The target role needs superuser or SET privileges.`,
       });
     }
     return {
@@ -590,12 +607,10 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       cachedIndexes = schema.indexes;
       plans = planTables(schema);
       const ordered = orderTablesForCopy(schema.tables);
-      if (ordered.cycle.length > 0) {
-        throw new WizardError(
-          `The source schema has foreign-key cycles involving: ${ordered.cycle.join(", ")}. ` +
-          "The wizard cannot order the copy safely; the source was not modified.",
-        );
-      }
+      // FK cycles are fine: constraints are added NOT VALID in a second pass
+      // after all tables exist, and the copy runs with FK enforcement off
+      // (session_replication_role = replica), so insertion order is free.
+      // VALIDATE CONSTRAINT in the verify step is the integrity gate.
       report = {
         triggersSkipped: schema.triggers.length,
         defaultsDropped: schema.tables.flatMap((table): string[] =>
@@ -606,8 +621,17 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         fkViolations: [],
         journalMatch: false,
       };
-      for (const plan of plans) {
+      // Every table is created (ordered + cycle members); the NOT VALID FK
+      // statements are added in a SECOND pass once all tables exist. The
+      // schema has genuine FK cycles (e.g. users <-> teams), so the strict
+      // order only matters for the two-pass separation, not within a pass.
+      const orderedPlans = [...ordered.ordered, ...ordered.cycle]
+        .map((name): TablePlan | undefined => plans.find((plan): boolean => plan.def.name === name))
+        .filter((plan): plan is TablePlan => plan !== undefined);
+      for (const plan of orderedPlans) {
         await target.unsafe(generateCreateTableSql(plan.def, modesFor(plan.def)));
+      }
+      for (const plan of orderedPlans) {
         const fkStatements = generateForeignKeySql(plan.def);
         if (fkStatements.length > 0) await target.unsafe(fkStatements.join("\n"));
       }
@@ -616,41 +640,73 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
     });
     await run("copy", async (ctx): Promise<void> => {
       const ordered = orderTablesForCopy(plans.map((plan): TableDef => plan.def));
-      let done = 0;
-      for (const tableName of ordered.ordered) {
-        const plan = plans.find((p): boolean => p.def.name === tableName);
-        if (plan === undefined) continue;
-        const startedAt = Date.now();
-        await copyTable(source, target, plan.copy, {
-          isCancelled: (): boolean => cancelRequested,
-          onBatch: (batch): void => {
-            const now = Date.now();
-            if (now - lastProgressPersist >= 2_000) {
-              lastProgressPersist = now;
-              ctx.setState({
-                ...ctx.state,
-                copyProgress: { table: tableName, rows: batch.rowsCopied, totalTables: plans.length, doneTables: done },
-              });
-            }
-          },
-        });
-        done += 1;
-        ctx.setState({
-          ...ctx.state,
-          copyProgress: { table: tableName, rows: 0, totalTables: plans.length, doneTables: done },
-          steps: ctx.state.steps.map((step): WizardStep =>
-            step.key === "copy" ? { ...step, detail: `Copied ${done}/${plans.length} tables (${Math.round((Date.now() - startedAt) / 1000)}s on ${tableName})` } : step),
-        });
+      // Cyclic tables are appended: with FK enforcement off during the copy
+      // (replica role), insertion order is irrelevant.
+      const copyOrder = [...ordered.ordered, ...ordered.cycle];
+      // FK checks (and other triggers) are disabled for the duration of the
+      // copy; NOT VALID constraints otherwise reject inserts that reference
+      // rows copied later in the cycle. Requires superuser or SET privilege.
+      await target.unsafe("SET session_replication_role = replica");
+      try {
+        let done = 0;
+        for (const tableName of copyOrder) {
+          const plan = plans.find((p): boolean => p.def.name === tableName);
+          if (plan === undefined) continue;
+          const startedAt = Date.now();
+          try {
+            await copyTable(source, target, plan.copy, {
+              isCancelled: (): boolean => cancelRequested,
+              onBatch: (batch): void => {
+                const now = Date.now();
+                if (now - lastProgressPersist >= 2_000) {
+                  lastProgressPersist = now;
+                  ctx.setState({
+                    ...ctx.state,
+                    copyProgress: { table: tableName, rows: batch.rowsCopied, totalTables: plans.length, doneTables: done },
+                  });
+                }
+              },
+            });
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Copy of table "${tableName}" failed: ${message}`);
+          }
+          done += 1;
+          ctx.setState({
+            ...ctx.state,
+            copyProgress: { table: tableName, rows: 0, totalTables: plans.length, doneTables: done },
+            steps: ctx.state.steps.map((step): WizardStep =>
+              step.key === "copy" ? { ...step, detail: `Copied ${done}/${plans.length} tables (${Math.round((Date.now() - startedAt) / 1000)}s on ${tableName})` } : step),
+          });
+        }
+      } finally {
+        await target.unsafe("SET session_replication_role = origin");
       }
-      await syncIdentitySequences(target, plans.map((plan): CopyTable => plan.copy));
+      await syncIdentitySequences(target, plans.map((plan): CopyTable => plan.copy)).catch((error: unknown): never => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Identity sequence sync failed: ${message}`);
+      });
       const skippedIndexes: string[] = [];
+      // Boolean columns (drizzle `boolean` mode) store 0/1 in SQLite; the
+      // partial-index WHERE clauses need those literals rewritten for PG.
+      const booleanColumns = new Set<string>();
+      for (const plan of plans) {
+        const modes = modesFor(plan.def);
+        for (const column of plan.def.columns) {
+          if (modes.get(column.name) === "boolean") booleanColumns.add(column.name);
+        }
+      }
       for (const index of cachedIndexes) {
         if (index.skipped !== null) {
           skippedIndexes.push(index.name);
           continue;
         }
         if (index.table === "" || !plans.some((plan): boolean => plan.def.name === index.table)) continue;
-        await target.unsafe(generateCreateIndexSql(index));
+        const indexSql = generateCreateIndexSql(index, booleanColumns);
+        await target.unsafe(indexSql).catch((error: unknown): never => {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`Index "${index.name}" on "${index.table}" failed (${indexSql}): ${message}`);
+        });
       }
       report = { ...report, indexesSkipped: skippedIndexes };
       ctx.setState({ ...ctx.state, report });
@@ -693,6 +749,14 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           "The source database was not modified; the target can be wiped and the migration resumed.",
         );
       }
+      // Durable migration manifest (per the wizard spec): one JSON file per
+      // completed migration with per-table row counts, so an operator can
+      // audit what moved without opening the databases. The source SQLite
+      // database is never modified and remains the rollback image.
+      writeMigrationManifest(ctx.state, verification);
+      // The copy is done and verified; normal operation can resume on the
+      // source until the operator decides to switch.
+      exitMaintenance();
       ctx.setState({
         ...ctx.state,
         phase: "ready_to_switch",
@@ -851,6 +915,21 @@ function emptyReport(): MigrationReport {
     fkViolations: [],
     journalMatch: false,
   };
+}
+
+/** Write the durable migration manifest: migration-<yyyy-mm-dd>.json. */
+function writeMigrationManifest(state: WizardState, verification: readonly TableVerifyResult[]): void {
+  const manifest = {
+    source: "sqlite",
+    destination: "postgres",
+    started_at: state.createdAt,
+    completed_at: new Date().toISOString(),
+    tables: Object.fromEntries(verification.map((row): [string, number] => [row.table, row.sourceCount])),
+  };
+  const name = `migration-${new Date().toISOString().slice(0, 10)}.json`;
+  const path = join(storageDir, name);
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  console.log(`[terrence] Migration manifest written to ${path}`);
 }
 
 /** Abort a running or stalled migration; maintenance turns off immediately. */

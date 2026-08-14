@@ -563,6 +563,12 @@ export function Layout({
           label: "Operations",
           to: "/app/admin/operations",
         },
+        {
+          active: isActivePath(location.pathname, "/app/admin/database"),
+          icon: Database,
+          label: "Database",
+          to: "/app/admin/database",
+        },
       ] as const;
 
       return (

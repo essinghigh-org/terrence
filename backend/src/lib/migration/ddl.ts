@@ -211,6 +211,7 @@ export function translateDefault(raw: string): { sql: string | null; dropped: bo
 
 function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; end: number } | null {
   let pos = start;
+  while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
   const match = /^REFERENCES\s+/i.exec(sql.slice(pos));
   if (match === null) return null;
   pos += match[0].length;
@@ -221,7 +222,14 @@ function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; 
   if ((sql[pos] ?? "") !== "(") return null;
   const close = scanBalanced(sql, pos);
   if (close < 0) return null;
-  const cols = sql.slice(pos + 1, close).split(",").map((c): string => c.trim()).filter((c): boolean => c !== "");
+  const cols: string[] = [];
+  for (const raw of sql.slice(pos + 1, close).split(",")) {
+    const trimmed = raw.trim();
+    if (trimmed === "") continue;
+    const parsed = parseIdentifier(trimmed, 0);
+    if (parsed === null || parsed.end !== trimmed.length) return null;
+    cols.push(parsed.name);
+  }
   const refColumns: string[] = [];
   for (const col of cols) {
     const parsed = parseIdentifier(col, 0);
@@ -403,13 +411,25 @@ function parseConstraintTail(sql: string, start: number): {
 }
 
 function parseTableLevelConstraint(segment: string): { kind: "pk" | "unique" | "fk" | "check" | "skip"; data: unknown } {
+  // sqlite_master DDL uses backtick identifiers; every column list here must
+  // be unquoted through parseIdentifier before it reaches the generators.
+  const parseColumnList = (body: string): string[] | null => {
+    const cols: string[] = [];
+    for (const raw of body.split(",")) {
+      const trimmed = raw.trim();
+      if (trimmed === "") continue;
+      const parsed = parseIdentifier(trimmed, 0);
+      if (parsed === null || parsed.end !== trimmed.length) return null;
+      cols.push(parsed.name);
+    }
+    return cols;
+  };
   const primary = /^PRIMARY\s+KEY\s*\(/i.exec(segment);
   if (primary !== null) {
     const close = scanBalanced(segment, primary[0].length - 1);
     if (close >= 0) {
-      const cols = segment.slice(primary[0].length, close).split(",")
-        .map((c): string => c.trim()).filter((c): boolean => c !== "");
-      return { kind: "pk", data: cols };
+      const cols = parseColumnList(segment.slice(primary[0].length, close));
+      if (cols !== null) return { kind: "pk", data: cols };
     }
     return { kind: "skip", data: null };
   }
@@ -417,18 +437,25 @@ function parseTableLevelConstraint(segment: string): { kind: "pk" | "unique" | "
   if (unique !== null) {
     const close = scanBalanced(segment, unique[0].length - 1);
     if (close >= 0) {
-      const cols = segment.slice(unique[0].length, close).split(",")
-        .map((c): string => c.trim()).filter((c): boolean => c !== "");
-      return { kind: "unique", data: cols };
+      const cols = parseColumnList(segment.slice(unique[0].length, close));
+      if (cols !== null) return { kind: "unique", data: cols };
     }
     return { kind: "skip", data: null };
   }
-  const foreign = /^FOREIGN\s+KEY\s*\(/i.exec(segment);
+  // drizzle-generated sqlite DDL wraps table-level FKs in a named
+  // CONSTRAINT clause; match both bare and named forms.
+  const foreign = /^(?:CONSTRAINT\s+(?:"[^"]*"|\S+)\s+)?FOREIGN\s+KEY\s*\(/i.exec(segment);
   if (foreign !== null) {
     const close = scanBalanced(segment, foreign[0].length - 1);
     if (close < 0) return { kind: "skip", data: null };
-    const cols = segment.slice(foreign[0].length, close).split(",")
-      .map((c): string => c.trim()).filter((c): boolean => c !== "");
+    const cols: string[] = [];
+    for (const raw of segment.slice(foreign[0].length, close).split(",")) {
+      const trimmed = raw.trim();
+      if (trimmed === "") continue;
+      const parsed = parseIdentifier(trimmed, 0);
+      if (parsed === null || parsed.end !== trimmed.length) return { kind: "skip", data: null };
+      cols.push(parsed.name);
+    }
     const ref = parseReferenceClause(segment, close + 1);
     if (ref === null) return { kind: "skip", data: null };
     return { kind: "fk", data: { ...ref.fk, columns: cols } as ForeignKeyDef };
@@ -442,8 +469,14 @@ function parseColumnSegment(segment: string): ColumnDef | null {
   if (ident === null) return null;
   let pos = ident.end;
   while (pos < segment.length && /\s/.test(segment[pos] ?? "")) pos += 1;
-  // Declared type: one or two words (e.g. "DOUBLE PRECISION", "UNSIGNED BIG INT").
-  const typeMatch = /^[A-Za-z]+(?:\s+[A-Za-z]+){0,2}(?:\(\d+(?:,\s*\d+)?\))?/.exec(segment.slice(pos));
+  // Declared type: one or two words (e.g. "DOUBLE PRECISION", "UNSIGNED BIG
+  // INT") but never constraint keywords — a greedy multi-word match would
+  // swallow "PRIMARY KEY" / "NOT NULL" into the type and lose the
+  // constraints (the sqlite affinity fallback then silently erases them).
+  const CONSTRAINT_LOOKAHEAD = "(?:PRIMARY|NOT|UNIQUE|DEFAULT|REFERENCES|COLLATE|CHECK|CONSTRAINT|AUTOINCREMENT|GENERATED|ON|DEFERRABLE|MATCH)\\b";
+  const typeMatch = new RegExp(
+    `^[A-Za-z]+(?:\\s+(?!${CONSTRAINT_LOOKAHEAD})[A-Za-z]+){0,2}(?:\\(\\d+(?:,\\s*\\d+)?\\))?`,
+  ).exec(segment.slice(pos));
   const declaredRaw = typeMatch?.[0] ?? "";
   if (declaredRaw === "") return null;
   const declaredType = normalizeType(declaredRaw);
@@ -557,7 +590,15 @@ export function generateCreateTableSql(table: TableDef, modes: ReadonlyMap<strin
     if (column.primaryKey && table.compositePk === null) parts.push("PRIMARY KEY");
     if (column.notNull) parts.push("NOT NULL");
     if (column.unique && !column.primaryKey) parts.push("UNIQUE");
-    if (column.defaultExpr !== null && !pg.identity) parts.push(`DEFAULT ${column.defaultExpr}`);
+    if (column.defaultExpr !== null && !pg.identity) {
+      // SQLite stores booleans as 1/0 even when the drizzle mode says
+      // boolean; PostgreSQL needs true/false literals.
+      let defaultSql = column.defaultExpr;
+      if (pg.mode === "boolean" && (defaultSql === "1" || defaultSql === "0")) {
+        defaultSql = defaultSql === "1" ? "true" : "false";
+      }
+      parts.push(`DEFAULT ${defaultSql}`);
+    }
     columnLines.push(parts.join(" "));
   }
   if (table.compositePk !== null && table.compositePk.length > 0) {
@@ -590,26 +631,29 @@ export function generateForeignKeySql(table: TableDef): string[] {
 
 /** Parse a CREATE INDEX statement from sqlite_master. */
 export function parseCreateIndexSql(sql: string): IndexDef {
-  const match = /^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(sql);
+  // sqlite_master DDL uses backtick identifiers; normalize to double quotes so
+  // the quoted-identifier patterns below (and the emitted PG DDL) see one form.
+  const normalized = sql.replace(/`/g, "\"");
+  const match = /^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(normalized);
   if (match === null) {
     return { name: "", table: "", unique: false, columns: [], where: null, skipped: "unparseable index statement" };
   }
   const unique = match[1] !== undefined;
   let pos = match[0].length;
-  const name = parseIdentifier(sql, pos);
+  const name = parseIdentifier(normalized, pos);
   if (name === null) return { name: "", table: "", unique, columns: [], where: null, skipped: "unparseable index name" };
   pos = name.end;
-  const on = /^\s+ON\s+/i.exec(sql.slice(pos));
+  const on = /^\s+ON\s+/i.exec(normalized.slice(pos));
   if (on === null) return { name: name.name, table: "", unique, columns: [], where: null, skipped: "missing ON clause" };
   pos += on[0].length;
-  const table = parseIdentifier(sql, pos);
+  const table = parseIdentifier(normalized, pos);
   if (table === null) return { name: name.name, table: "", unique, columns: [], where: null, skipped: "missing index table" };
   pos = table.end;
-  while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
-  if ((sql[pos] ?? "") !== "(") return { name: name.name, table: table.name, unique, columns: [], where: null, skipped: "missing column list" };
-  const close = scanBalanced(sql, pos);
+  while (pos < normalized.length && /\s/.test(normalized[pos] ?? "")) pos += 1;
+  if ((normalized[pos] ?? "") !== "(") return { name: name.name, table: table.name, unique, columns: [], where: null, skipped: "missing column list" };
+  const close = scanBalanced(normalized, pos);
   if (close < 0) return { name: name.name, table: table.name, unique, columns: [], where: null, skipped: "unbalanced column list" };
-  const rawColumns = sql.slice(pos + 1, close).split(",").map((c): string => c.trim()).filter((c): boolean => c !== "");
+  const rawColumns = normalized.slice(pos + 1, close).split(",").map((c): string => c.trim()).filter((c): boolean => c !== "");
   const columns: string[] = [];
   for (const raw of rawColumns) {
     const colMatch = /^"((?:[^"]|"")*)"(?:\s+COLLATE\s+(\w+))?$/i.exec(raw);
@@ -633,16 +677,40 @@ export function parseCreateIndexSql(sql: string): IndexDef {
     columns.push(raw);
   }
   let where: string | null = null;
-  const whereMatch = /^\s+WHERE\s+(.+)$/is.exec(sql.slice(close + 1));
+  const whereMatch = /^\s+WHERE\s+(.+)$/is.exec(normalized.slice(close + 1));
   if (whereMatch !== null) where = whereMatch[1]?.trim() ?? null;
   return { name: name.name, table: table.name, unique, columns, where, skipped: null };
 }
 
-/** Generate the idempotent CREATE INDEX statement for PostgreSQL. */
-export function generateCreateIndexSql(index: IndexDef): string {
+/**
+ * Generate the idempotent CREATE INDEX statement for PostgreSQL.
+ *
+ * SQLite stores drizzle boolean columns as INTEGER, so partial-index WHERE
+ * clauses written against them use `= 1` / `= 0` literals; PostgreSQL boolean
+ * columns reject those, so the literals are rewritten to true/false for the
+ * boolean columns of the index's table.
+ */
+export function generateCreateIndexSql(index: IndexDef, booleanColumns?: ReadonlySet<string>): string {
   const unique = index.unique ? "UNIQUE " : "";
-  const where = index.where === null ? "" : ` WHERE ${index.where}`;
-  return `CREATE ${unique}INDEX IF NOT EXISTS "${index.name}" ON "${index.table}" (${index.columns.join(", ")})${where}`;
+  let where = index.where ?? "";
+  if (where !== "" && booleanColumns !== undefined) {
+    for (const column of booleanColumns) {
+      const quotedCol = `"${column.replace(/"/g, "\"\"")}"`;
+      // Matches `"col" = 1`, `"t"."col" = 1`, `1 = "col"`, and != / <> forms.
+      // (?!\w) avoids rewriting `= 10` or `= 1x`; the column name is matched
+      // verbatim so qualified references rewrite through their suffix.
+      where = where.replace(
+        new RegExp(`("(?:[^"]|"")*"\\.)?${quotedCol}\\s*(!=|<>|=)\\s*([01])(?!\\w)`, "g"),
+        (_match, _prefix: string, op: string, value: string): string =>
+          `${quotedCol} ${op} ${value === "1" ? "true" : "false"}`,
+      );
+      where = where.replace(
+        new RegExp(`([01])(?!\\w)\\s*(!=|<>|=)\\s*${quotedCol}`, "g"),
+        (_match, value: string, op: string): string => `${value === "1" ? "true" : "false"} ${op} ${quotedCol}`,
+      );
+    }
+  }
+  return `CREATE ${unique}INDEX IF NOT EXISTS "${index.name}" ON "${index.table}" (${index.columns.join(", ")})${where === "" ? "" : ` WHERE ${where}`}`;
 }
 
 /** Read the full schema (tables, indexes, triggers) from a SQLite connection. */
@@ -666,21 +734,28 @@ export function inspectSourceSchema(client: { query: (sql: string) => { all: () 
   return { tables, indexes, triggers };
 }
 
-/** Collect boolean/json column modes from the Drizzle schema definitions. */
+/** Collect boolean/json column modes from the Drizzle schema definitions.
+ * Keyed by DATABASE names (table and column): the DDL path works with
+ * sqlite_master names, which never match the camelCase export/property
+ * names of the schema module. */
 export function collectDrizzleModes(
   schemaModule: Readonly<Record<string, unknown>>,
 ): Map<string, Map<string, DrizzleColumnMode>> {
   const result = new Map<string, Map<string, DrizzleColumnMode>>();
   const columnsSymbol = Symbol.for("drizzle:Columns");
-  for (const [tableName, value] of Object.entries(schemaModule)) {
+  const nameSymbol = Symbol.for("drizzle:Name");
+  for (const [exportName, value] of Object.entries(schemaModule)) {
     const columns = (value as Record<PropertyKey, unknown> | null | undefined)?.[columnsSymbol];
     if (columns === null || columns === undefined || typeof columns !== "object") continue;
+    const tableDbName = String((value as Record<PropertyKey, unknown>)[nameSymbol] ?? exportName);
     const modes = new Map<string, DrizzleColumnMode>();
-    for (const [columnName, column] of Object.entries(columns as Record<string, unknown>)) {
-      const mode = (column as { mode?: unknown } | null | undefined)?.mode;
-      if (mode === "boolean" || mode === "json") modes.set(columnName, mode);
+    for (const column of Object.values(columns as Record<string, { name?: string; mode?: unknown }>)) {
+      const mode = column.mode;
+      if ((mode === "boolean" || mode === "json") && typeof column.name === "string") {
+        modes.set(column.name, mode);
+      }
     }
-    if (modes.size > 0) result.set(tableName, modes);
+    if (modes.size > 0) result.set(tableDbName, modes);
   }
   return result;
 }
