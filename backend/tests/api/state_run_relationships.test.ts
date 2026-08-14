@@ -214,7 +214,9 @@ describe("TFE API v2 - State-Run Relationships & Locking", () => {
       })
     );
 
-    expect(res.status).toBe(409);
+    // TFE semantics: state uploads are allowed on locked workspaces (the
+    // lock guards runs, not the lock holder's own state writes).
+    expect(res.status).toBe(201);
 
     // Unlock workspace
     await app.handle(

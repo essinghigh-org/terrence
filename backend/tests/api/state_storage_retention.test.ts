@@ -96,8 +96,8 @@ describe("State storage and retention", () => {
       `http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`,
       { method: "POST", headers: authHeaders },
     ))).status).toBe(200);
-    expect((await createState(2)).status).toBe(409);
-
+    // Non-intermediate uploads are allowed while locked (TFE semantics);
+    // the intermediate snapshot is still the one that gets promoted.
     const snapshotResponse = await createState(2, true);
     expect(snapshotResponse.status).toBe(201);
     expect((await snapshotResponse.json()).data.attributes.intermediate).toBe(true);
