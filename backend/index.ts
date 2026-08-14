@@ -1,6 +1,7 @@
 import { app } from "./src/app";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
+import { applyPgMigrations, isPostgres } from "./src/db";
 
 const rawPort = process.env.PORT;
 const port = rawPort !== undefined && rawPort !== "" ? Number(rawPort) : 3000;
@@ -14,6 +15,12 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 // one startup location.
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
+// PostgreSQL schema migrations are async (the sqlite migrator runs
+// synchronously at module load inside src/db). Fresh postgres databases
+// must be migrated before the server accepts traffic.
+if (isPostgres) {
+  await applyPgMigrations();
+}
 
 app
   .listen({

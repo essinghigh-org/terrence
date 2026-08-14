@@ -10,6 +10,7 @@ import {
   pagination,
 } from "../lib/utils";
 import { getSettings, resolvePlanExplainerSettings } from "../lib/settings";
+import { jsonExtract } from "../lib/db-json";
 import {
   EXPLAIN_KINDS,
   buildExplainSource,
@@ -85,11 +86,11 @@ function confirmedRunRangeCondition(
   const confirmedConds: SQL[] = [];
   if (start !== null) {
     scheduledConds.push(sql`${runs.scheduledAt} >= ${start.ms}`);
-    confirmedConds.push(sql`json_extract(${runs.statusTimestamps}, '$."confirmed-at"') >= ${start.iso}`);
+    confirmedConds.push(sql`${jsonExtract(runs.statusTimestamps, '$."confirmed-at"')} >= ${start.iso}`);
   }
   if (end !== null) {
     scheduledConds.push(sql`${runs.scheduledAt} <= ${end.ms}`);
-    confirmedConds.push(sql`json_extract(${runs.statusTimestamps}, '$."confirmed-at"') <= ${end.iso}`);
+    confirmedConds.push(sql`${jsonExtract(runs.statusTimestamps, '$."confirmed-at"')} <= ${end.iso}`);
   }
   return sql`((${runs.scheduledAt} IS NOT NULL AND ${and(...scheduledConds)}) OR (${runs.scheduledAt} IS NULL AND ${and(...confirmedConds)}))`;
 }

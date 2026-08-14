@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { db } from "../db";
+import { db, rawQueryAll } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, like, notInArray, sql } from "drizzle-orm";
 import {
@@ -503,8 +503,8 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       // Latest run per workspace selected IN SQL (ROW_NUMBER window), scoped
       // to this org's workspaces, so a deep org run history never transfers
       // every run to the app (the runs(workspace_id, created_at) index from
-      // migration 0059 serves the partition). rowid ASC tie-break preserves
-      // the previous in-memory first-seen ordering for equal created_at.
+      // migration 0059 serves the partition). id ASC tie-break is
+      // deterministic on both backends (rowid is sqlite-only).
       // When the access set is explicit we reuse it instead of re-reading the
       // same workspace ids via a separate org-scoped query.
       const orgWorkspaceIdRows = allowedWorkspaceIds === null
@@ -515,12 +515,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         : [...allowedWorkspaceIds].map((id: string): Readonly<{ id: string }> => ({ id }));
       const latestRunRows = orgWorkspaceIdRows.length === 0
         ? []
-        : db.all<{ workspaceId: string; status: string }>(sql`
-          SELECT workspace_id AS workspaceId, status
+        : await rawQueryAll<{ workspaceId: string; status: string }>(sql`
+          SELECT workspace_id AS "workspaceId", status
           FROM (
             SELECT workspace_id, status,
               ROW_NUMBER() OVER (
-                PARTITION BY workspace_id ORDER BY created_at DESC, rowid ASC
+                PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
               ) AS rn
             FROM runs
             WHERE ${inArray(runs.workspaceId, orgWorkspaceIdRows.map((row): string => row.id))}
@@ -564,21 +564,22 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       workspaceId: string;
       status: string;
       message: string | null;
-      // SQLite returns raw 0/1 integers for boolean columns via db.all.
-      isDestroy: number;
-      createdAt: number;
-      autoApply: number;
+      // SQLite returns raw 0/1 integers; postgres.js returns bigint columns
+      // as strings. Normalize with Number() at the consumption site.
+      isDestroy: number | string;
+      createdAt: number | string;
+      autoApply: number | string;
     }>;
     const latestRunRows: LatestRunRow[] = includeCurrentRun && wsList.length > 0
-      ? db.all<LatestRunRow>(sql`
-          SELECT id, workspace_id AS workspaceId, status, message,
-                 is_destroy AS isDestroy, created_at AS createdAt,
-                 auto_apply AS autoApply
+      ? await rawQueryAll<LatestRunRow>(sql`
+          SELECT id, workspace_id AS "workspaceId", status, message,
+                 is_destroy AS "isDestroy", created_at AS "createdAt",
+                 auto_apply AS "autoApply"
           FROM (
             SELECT id, workspace_id, status, message, is_destroy, created_at,
                    auto_apply,
                    ROW_NUMBER() OVER (
-                     PARTITION BY workspace_id ORDER BY created_at DESC, rowid ASC
+                     PARTITION BY workspace_id ORDER BY created_at DESC, id ASC
                    ) AS rn
             FROM runs
             WHERE ${inArray(runs.workspaceId, wsList.map((w: WsItem): string => w.id))}
@@ -620,10 +621,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
           attributes: {
             status: run.status,
             message: run.message,
-            "created-at": new Date(run.createdAt).toISOString(),
-            // Normalize the raw SQLite 0/1 integers to booleans.
-            "is-destroy": run.isDestroy === 1,
-            "auto-apply": run.autoApply === 1,
+            "created-at": new Date(Number(run.createdAt)).toISOString(),
+            // Normalize the raw SQLite 0/1 integers (and postgres.js bigint
+            // strings) to booleans.
+            "is-destroy": Number(run.isDestroy) === 1,
+            "auto-apply": Number(run.autoApply) === 1,
           },
           relationships: {
             workspace: { data: { id: run.workspaceId, type: "workspaces" } },

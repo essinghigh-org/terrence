@@ -39,7 +39,7 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
   })
   .get("/api/v2/admin/database-metrics", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: databaseMetrics() };
+    return { data: await databaseMetrics() };
   })
   .get("/api/v2/admin/runs/:run_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

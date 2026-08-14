@@ -43,7 +43,13 @@ describe("admin database metrics (kanban 4.18)", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { data: { sizeBytes: number; walSizeBytes: number | null; journalMode: string; pageSize: number; pageCount: number } };
     expect(body.data.sizeBytes).toBeGreaterThan(0);
-    expect(typeof body.data.walSizeBytes).toBe("number");
+    // PostgreSQL has no WAL sidecar to fold (WAL is server-side), so
+    // walSizeBytes is null there by design; SQLite reports the -wal size.
+    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) {
+      expect(body.data.walSizeBytes).toBeNull();
+    } else {
+      expect(typeof body.data.walSizeBytes).toBe("number");
+    }
     expect(body.data.journalMode).toBe("wal");
     expect(body.data.pageSize).toBeGreaterThanOrEqual(512);
     expect(body.data.pageCount).toBeGreaterThan(0);

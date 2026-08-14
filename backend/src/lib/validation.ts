@@ -51,7 +51,9 @@ export function isUniqueConstraintError(error: unknown): boolean {
   return items.some((item: unknown): boolean => {
     const i = item as Record<string, unknown> | undefined;
     return i?.code === "SQLITE_CONSTRAINT_UNIQUE"
-      || (typeof i?.message === "string" && i.message.includes("UNIQUE constraint failed"));
+      || i?.code === "23505" // PostgreSQL unique_violation
+      || (typeof i?.message === "string" && i.message.includes("UNIQUE constraint failed"))
+      || (typeof i?.message === "string" && i.message.includes("duplicate key value violates unique constraint"));
   });
 }
 

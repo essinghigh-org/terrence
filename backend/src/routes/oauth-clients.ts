@@ -1,13 +1,13 @@
 import { Elysia } from "elysia";
 import { createHmac, createSign } from "node:crypto";
-import { db } from "../db";
+import { db, isPostgres } from "../db";
 import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { encryptSecret } from "../lib/secrets";
 import { organizationName } from "../lib/response";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
-import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
+import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -643,18 +643,32 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id });
-    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+    // Serialize against concurrent references: on PostgreSQL the usage check
+    // and delete run inside one transaction with a row lock on the parent, so
+    // a concurrent workspace insert cannot slip between them (both committing
+    // would leave a dangling reference; sqlite serializes natively).
+    const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
+      if (isPostgres) {
+        // Row lock on the parent row: a concurrent workspace insert's FK
+        // check blocks on it, so it cannot slip between the usage check and
+        // the delete. The sqlite transaction type has no execute(); the pg
+        // runtime instance does (the db interface is sqlite-typed by design).
+        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
+          .execute(sql`SELECT id FROM oauth_clients WHERE id = ${ocId} FOR UPDATE`);
+      }
+      const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
+      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
+      try {
+        await tx.delete(oauthClients).where(eq(oauthClients.id, ocId));
+      } catch (error: unknown) {
+        if (!isVcsIntegrationReferenceConflict(error)) throw error;
+        return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
+      }
+      return null;
+    });
+    if (conflict !== null) {
       (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
-    }
-    try {
-      await db.delete(oauthClients).where(eq(oauthClients.id, ocId));
-    } catch (error: unknown) {
-      if (!isVcsIntegrationReferenceConflict(error)) throw error;
-      const currentUsage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
     }
     (set as { status: number }).status = 204;
     return {};
@@ -846,18 +860,26 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id });
-    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+    // Same serialization as the oauth-client delete: row lock on the token
+    // so a concurrent workspace insert cannot commit a dangling reference.
+    const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
+      if (isPostgres) {
+        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
+          .execute(sql`SELECT id FROM oauth_tokens WHERE id = ${otId} FOR UPDATE`);
+      }
+      const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
+      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
+      try {
+        await tx.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+      } catch (error: unknown) {
+        if (!isVcsIntegrationReferenceConflict(error)) throw error;
+        return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
+      }
+      return null;
+    });
+    if (conflict !== null) {
       (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
-    }
-    try {
-      await db.delete(oauthTokens).where(eq(oauthTokens.id, otId));
-    } catch (error: unknown) {
-      if (!isVcsIntegrationReferenceConflict(error)) throw error;
-      const currentUsage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
     }
     (set as { status: number }).status = 204;
     return {};

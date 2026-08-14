@@ -1,59 +1,91 @@
 import { Database } from 'bun:sqlite';
-import { drizzle, SQLiteBunTransaction } from 'drizzle-orm/bun-sqlite';
+import { drizzle as sqliteDrizzle, SQLiteBunTransaction, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { drizzle as pgDrizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { type SQL } from 'drizzle-orm';
 import { mkdirSync, renameSync, statSync } from 'node:fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import * as schema from './schema';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
-import { BootConfigError, bootConfigPath, resolveDatabaseConfig } from '../lib/boot-config';
+import { databaseDriver, databaseUrl, isPostgres, storageDir } from './driver';
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, '../../storage'));
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
 // still pending (ReferenceError: Cannot access 'db' before initialization
 // in every bun test worker). mkdirSync is behavior-identical.
 mkdirSync(storageDir, { recursive: true });
 
-// bun:sqlite is built into Bun and keeps a single stable native connection; the
-// @libsql/client driver leaked native memory per query and churned a fresh native
-// connection for every transaction (the source of terrence's multi-GB RSS growth).
-// The active backend comes from the boot configuration file (storage/terrence.json)
-// with DATABASE_URL taking precedence; see lib/boot-config.ts for the precedence
-// rules and the in-app migration wizard's write path.
-const resolvedDatabase = resolveDatabaseConfig(process.env, storageDir);
-if (resolvedDatabase.driver === "postgres") {
-  throw new BootConfigError(
-    `PostgreSQL backend is not available in this build yet (configured via ${bootConfigPath(storageDir)} or DATABASE_URL)`,
-  );
-}
-const dbUrl = resolvedDatabase.url;
-const dbPath = dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, '');
-const client = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
-client.run('PRAGMA journal_mode = WAL;');
-client.run('PRAGMA busy_timeout = 5000;');
-// bun:sqlite defaults foreign_keys to OFF per-connection; enable enforcement
-// explicitly so referential integrity holds (drizzle's migrate() does not set it).
-client.run('PRAGMA foreign_keys = ON;');
-
 // Opt-in SQL query instrumentation for the benchmark suite
-// (TERRENCE_QUERY_COUNT=1). Drizzle routes every statement through
-// client.prepare(), so counting prepares counts queries. Zero overhead when
-// the env var is unset (the wrapper is never installed). Set
-// TERRENCE_QUERY_LOG=1 alongside it to also capture the SQL text.
+// (TERRENCE_QUERY_COUNT=1). On sqlite, drizzle routes every statement
+// through client.prepare(), so counting prepares counts queries. On postgres
+// every statement lands in client.unsafe(). Zero overhead when the env var
+// is unset (the wrappers are never installed). Set TERRENCE_QUERY_LOG=1
+// alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
 let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
-if (process.env.TERRENCE_QUERY_COUNT === "1") {
-  const originalPrepare = client.prepare.bind(client);
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
-  client.prepare = ((sql: string, ...params: unknown[]) => {
-    queryCount += 1;
-    if (queryLogEnabled) queryLog.push(sql);
-    return originalPrepare(sql, ...(params as [never]));
+const installQueryInstrumentation = (enabled: boolean): void => {
+  if (!enabled) return;
+};
+
+// ---------------------------------------------------------------------------
+// SQLite backend (default): bun:sqlite keeps a single stable native
+// connection; the @libsql/client driver leaked native memory per query and
+// churned a fresh native connection for every transaction (the source of
+// terrence's multi-GB RSS growth).
+// ---------------------------------------------------------------------------
+let sqliteClient: Database | null = null;
+if (!isPostgres) {
+  const dbUrl = databaseUrl;
+  sqliteClient = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
+  const client = sqliteClient;
+  client.run('PRAGMA journal_mode = WAL;');
+  client.run('PRAGMA busy_timeout = 5000;');
+  // bun:sqlite defaults foreign_keys to OFF per-connection; enable enforcement
+  // explicitly so referential integrity holds (drizzle's migrate() does not set it).
+  client.run('PRAGMA foreign_keys = ON;');
+
+  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+    const originalPrepare = client.prepare.bind(client);
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
+    client.prepare = ((sqlText: string, ...params: unknown[]) => {
+      queryCount += 1;
+      if (queryLogEnabled) queryLog.push(sqlText);
+      return originalPrepare(sqlText, ...(params as [never]));
+    });
+  }
+  installQueryInstrumentation(process.env.TERRENCE_QUERY_COUNT === "1");
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL backend: postgres.js pooled client. Schema DDL comes from the
+// generated drizzle-pg migrations, applied at boot (backend/index.ts) and in
+// the test harness (tests/setup.ts) — never here, because the migrator is
+// async and this module must stay synchronous for bun's worker threads.
+// ---------------------------------------------------------------------------
+let pgClient: postgres.Sql | null = null;
+if (isPostgres) {
+  pgClient = postgres(databaseUrl, {
+    max: 10,
+    idle_timeout: 20,
+    connect_timeout: 10,
+    // The app surfaces database errors itself; postgres.js NOTICE noise
+    // (e.g. "relation already exists" during idempotent DDL) is suppressed.
+    onnotice: () => {},
   });
+  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+    const originalUnsafe = pgClient.unsafe.bind(pgClient);
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+      queryCount += 1;
+      if (queryLogEnabled) queryLog.push(queryText);
+      return originalUnsafe(queryText, ...(params as [never]));
+    }) as typeof pgClient.unsafe;
+  }
+  installQueryInstrumentation(true);
 }
 
 /** @public Used by the dynamically imported benchmark runner. */
@@ -78,20 +110,221 @@ export function getQueryLog(): readonly string[] {
  * leak into a later breakdown. Zero cost while disabled: the hot path only
  * reads a boolean.
  */
-/** @public Used by the dynamically imported benchmark runner. */
 export function setQueryLogging(enabled: boolean): void {
   queryLogEnabled = enabled;
   if (!enabled) queryLog.length = 0;
 }
 
-export const db = drizzle(client, { schema });
+// The exported db is typed as the sqlite database: every call site compiles
+// against the sqlite shapes (identical names and values on both backends).
+// At runtime the instance matches the active driver. The schema generic is
+// carried explicitly — ReturnType<typeof sqliteDrizzle> would instantiate
+// with the default (empty) schema and type db.query as {}.
+type AppDb = BunSQLiteDatabase<typeof schema>;
+const sqliteDb = sqliteClient === null ? null : sqliteDrizzle(sqliteClient, { schema });
+const pgDb = pgClient === null ? null : pgDrizzle(pgClient, { schema });
+export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
+
+// ---------------------------------------------------------------------------
+// SQLite-only boot maintenance. All of it repairs legacy SQLite databases
+// (pre-squash journal islands, pre-id-format rows) and is a no-op on fresh
+// databases; the postgres backend always boots from the drizzle-pg
+// migrations, so none of it applies there.
+// ---------------------------------------------------------------------------
+if (!isPostgres) {
+  const client = sqliteClient as Database;
+
+  // bun:sqlite's native transaction() rolls back only when its callback throws
+  // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
+  // an async callback that throws would silently COMMIT partial writes. Wrap it with
+  // explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead.
+  const session = (db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> }).session;
+  (session as unknown as { transaction: unknown }).transaction = async function (
+    // The callback signature mirrors drizzle's own session.transaction type.
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+    fn: (tx: SQLiteBunTransaction<Record<string, unknown>, never>) => Promise<unknown>,
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+    config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
+  ): Promise<unknown> {
+    const sess = this as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
+    const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
+      'sync',
+      sess.dialect,
+      this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
+      sess.schema as never,
+    );
+    const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
+    client.run(`BEGIN${behavior}`);
+    try {
+      const result = await fn(tx);
+      client.run('COMMIT');
+      return result;
+    } catch (err) {
+      client.run('ROLLBACK');
+      throw err;
+    }
+  };
+
+  sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
+
+  // Drizzle orders migrations by journal timestamps. Databases created before
+  // the migration squash can have a later legacy timestamp, which makes the
+  // repair migration look applied even when this table is missing. Keep this
+  // narrow guard idempotent so those databases are repaired at boot as well.
+  client.run(`
+    CREATE TABLE IF NOT EXISTS run_explanations (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      model TEXT NOT NULL,
+      content TEXT NOT NULL,
+      thinking TEXT,
+      input_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  client.run(`
+    CREATE INDEX IF NOT EXISTS run_explanations_run_kind_idx
+      ON run_explanations (run_id, kind)
+  `);
+
+  // Column convergence guard (mirrors the run_explanations guard above):
+  // databases whose migration journal never applied the scheduled_at column
+  // (journal timestamp islands, pre-squash journals, or restored backups)
+  // are repaired at boot. Idempotent: a no-op once the column exists, so
+  // fresh databases and properly journaled upgrades are unaffected.
+  {
+    const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (!runsColumns.includes("scheduled_at")) {
+      try {
+        client.run("ALTER TABLE runs ADD COLUMN scheduled_at integer");
+      } catch (error: unknown) {
+        // Another process may have added the column between the check and the
+        // ALTER. Only swallow the failure when the column now exists; any
+        // genuine ALTER failure must surface at boot.
+        const updatedColumns = client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>;
+        if (!updatedColumns.some((column): boolean => column.name === "scheduled_at")) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Id-format migration: re-key persisted rows that predate the current ID
+  // scheme (e.g. workspaces `w-*` -> `ws-*`, users `u-*` -> `usr-*`, orgs `o-*`
+  // -> `org-*`, raw-UUID runs/state refs -> prefixed). Both the primary key and
+  // every column that foreign-keys to it are rewritten so relational integrity
+  // holds after upgrade. Runs additionally have filesystem sidecars keyed by id
+  // (plan-json/{id}.json, run-logs/{id}.json.gz); those are renamed alongside
+  // the row so artifact lookups stay consistent. Idempotent: rows already in
+  // the current shape are left untouched, so this is a no-op once the data is
+  // migrated.
+  // -------------------------------------------------------------------------
+  {
+    // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
+    const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
+      { dir: planJsonDirectory, suffix: ".json" },
+      { dir: runLogsDirectory, suffix: ".json.gz" },
+    ];
+    let sidecarsRenamed = 0;
+    let sidecarRenameFailures = 0;
+    const renameRunSidecars = (map: Map<string, string>): void => {
+      for (const [oldId, newId] of map) {
+        for (const { dir, suffix } of RUN_SIDECAR_DIRS) {
+          try {
+            renameSync(join(dir, `${oldId}${suffix}`), join(dir, `${newId}${suffix}`));
+            sidecarsRenamed += 1;
+          } catch (error: unknown) {
+            if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+            sidecarRenameFailures += 1;
+            console.warn(`[terrence] Failed to rename run sidecar ${oldId}${suffix}: ${String(error)}`);
+          }
+        }
+      }
+    };
+
+    const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
+      { table: "organizations", prefix: "org-", fullUuidSuffix: true },
+      { table: "users", prefix: "usr-", fullUuidSuffix: true },
+      { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
+      { table: "projects", prefix: "prj-", fullUuidSuffix: false },
+      { table: "runs", prefix: "run-", fullUuidSuffix: false },
+    ];
+
+    const isNewId = (id: string, prefix: string, fullUuidSuffix: boolean): boolean => {
+      if (!id.startsWith(prefix)) return false;
+      const suffix = id.slice(prefix.length);
+      if (fullUuidSuffix) {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suffix);
+      }
+      return /^[0-9a-f]{16}$/.test(suffix);
+    };
+
+    // 1. Compute old -> new id maps per entity.
+    const rekeyMaps = new Map<string, Map<string, string>>();
+    for (const fmt of ID_FORMATS) {
+      const rows = client.prepare(`SELECT id FROM "${fmt.table}"`).all() as { id: string }[];
+      const map = new Map<string, string>();
+      for (const { id } of rows) {
+        if (isNewId(id, fmt.prefix, fmt.fullUuidSuffix)) continue;
+        const suffix = fmt.fullUuidSuffix
+          ? crypto.randomUUID()
+          : crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+        map.set(id, `${fmt.prefix}${suffix}`);
+      }
+      if (map.size > 0) rekeyMaps.set(fmt.table, map);
+    }
+    if (rekeyMaps.size > 0) {
+      // Build a table -> [{column, ref}] for every column that references each
+      // entity, discovered from the live foreign_key metadata.
+      const refs = new Map<string, Array<{ table: string; column: string }>>();
+      const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+      for (const { name } of allTables) {
+        const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
+        for (const fk of fks) {
+          if (rekeyMaps.has(fk.table)) {
+            if (!refs.has(fk.table)) refs.set(fk.table, []);
+            refs.get(fk.table)?.push({ table: name, column: fk.from });
+          }
+        }
+      }
+
+      client.run("PRAGMA foreign_keys = OFF");
+      try {
+        for (const [parent, map] of rekeyMaps) {
+          for (const { table, column } of refs.get(parent) ?? []) {
+            const stmt = client.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`);
+            for (const [old, next] of map) stmt.run(next, old);
+          }
+          const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
+          for (const [old, next] of map) pkStmt.run(next, old);
+          if (parent === "runs") renameRunSidecars(map);
+        }
+      } finally {
+        client.run("PRAGMA foreign_keys = ON");
+      }
+      const entityNames = [...rekeyMaps.keys()].join(", ");
+      const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
+      const sidecarSummary = sidecarsRenamed > 0 || sidecarRenameFailures > 0
+        ? `; renamed ${sidecarsRenamed} run sidecar files${sidecarRenameFailures > 0 ? `, ${sidecarRenameFailures} failed` : ""}`
+        : "";
+      console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarSummary}.`);
+    }
+  }
+}
 
 /**
  * Fold the WAL back into the main database file. Called on graceful
  * shutdown so backups and migrations see a single self-contained file
- * instead of a live -wal sidecar (kanban 4.17).
+ * instead of a live -wal sidecar (kanban 4.17). Postgres runs WAL
+ * continuously server-side; there is no sidecar to fold, so this is a
+ * deliberate no-op there.
  */
 export function checkpointWal(): void {
+  if (isPostgres) return;
+  const client = sqliteClient as Database;
   // wal_checkpoint(TRUNCATE) reports { busy, log, checkpointed }; a nonzero
   // busy count means frames could not be flushed (a concurrent writer or a
   // read transaction still holding the WAL), so the main DB file is not yet
@@ -105,17 +338,44 @@ export function checkpointWal(): void {
 
 /**
  * Live disk-pressure numbers for the admin dashboard: on-disk DB size, WAL
- * sidecar size, journal mode, and page geometry. Two cheap pragmas plus one
- * stat() call — safe to invoke per request (kanban 4.18).
+ * sidecar size, journal mode, and page geometry (kanban 4.18). Postgres
+ * reports the same shape from pg_database_size + block_size settings.
  */
-export function databaseMetrics(): Readonly<{
+export async function databaseMetrics(): Promise<Readonly<{
   sizeBytes: number;
   walSizeBytes: number | null;
   journalMode: string;
   pageSize: number;
   pageCount: number;
   path: string;
-}> {
+}>> {
+  if (isPostgres) {
+    const client = pgClient as postgres.Sql;
+    const rows = await client.unsafe(
+      "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
+    ) as unknown as ReadonlyArray<{ size: number | bigint; blockSize: number }>;
+    const sizeBytes = Number(rows[0]?.size ?? 0);
+    const pageSize = Number(rows[0]?.blockSize ?? 8192);
+    // The URL may embed credentials; surface only host + database name.
+    let path = "postgres";
+    try {
+      const parsed = new URL(databaseUrl);
+      path = `postgres://${parsed.hostname}${parsed.pathname}`;
+    } catch {
+      // Unparseable URL: keep the bare label.
+    }
+    return {
+      sizeBytes,
+      walSizeBytes: null,
+      // Postgres always journals via WAL; there is no mode switch.
+      journalMode: "wal",
+      pageSize,
+      pageCount: pageSize > 0 ? Math.floor(sizeBytes / pageSize) : 0,
+      path,
+    };
+  }
+  const client = sqliteClient as Database;
+  const dbPath = databaseUrl === ':memory:' ? ':memory:' : databaseUrl.replace(/^file:/, '');
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
   const journalMode = (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
@@ -136,183 +396,39 @@ export function databaseMetrics(): Readonly<{
   return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath };
 }
 
-// bun:sqlite's native transaction() rolls back only when its callback throws
-// synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
-// an async callback that throws would silently COMMIT partial writes. Wrap it with
-// explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead.
-const session = (db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> }).session;
-(session as unknown as { transaction: unknown }).transaction = async function (
-  // The callback signature mirrors drizzle's own session.transaction type.
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-  fn: (tx: SQLiteBunTransaction<Record<string, unknown>, never>) => Promise<unknown>,
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-  config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
-): Promise<unknown> {
-  const sess = this as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
-  const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
-    'sync',
-    sess.dialect,
-    this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
-    sess.schema as never,
-  );
-  const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
-  client.run(`BEGIN${behavior}`);
-  try {
-    const result = await fn(tx);
-    client.run('COMMIT');
-    return result;
-  } catch (err) {
-    client.run('ROLLBACK');
-    throw err;
+/**
+ * Execute a raw SQL fragment and return all rows, portably across backends.
+ * sqlite returns rows synchronously; postgres returns a promise — `await`
+ * handles both.
+ */
+export function rawQueryAll<T>(fragment: SQL): Promise<T[]> | T[] {
+  if (isPostgres) {
+    const dbInstance = pgDb;
+    if (dbInstance === null) throw new Error("postgres backend not initialized");
+    return dbInstance.execute(fragment).then((result): T[] => Array.from(result) as T[]);
   }
-};
-
-migrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
-
-// Drizzle orders migrations by journal timestamps. Databases created before
-// the migration squash can have a later legacy timestamp, which makes the
-// repair migration look applied even when this table is missing. Keep this
-// narrow guard idempotent so those databases are repaired at boot as well.
-client.run(`
-  CREATE TABLE IF NOT EXISTS run_explanations (
-    id TEXT PRIMARY KEY NOT NULL,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    model TEXT NOT NULL,
-    content TEXT NOT NULL,
-    thinking TEXT,
-    input_hash TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )
-`);
-client.run(`
-  CREATE INDEX IF NOT EXISTS run_explanations_run_kind_idx
-    ON run_explanations (run_id, kind)
-`);
-
-// Column convergence guard (mirrors the run_explanations guard above):
-// databases whose migration journal never applied the scheduled_at column
-// (journal timestamp islands, pre-squash journals, or restored backups)
-// are repaired at boot. Idempotent: a no-op once the column exists, so
-// fresh databases and properly journaled upgrades are unaffected.
-{
-  const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
-    .map((column): string => column.name);
-  if (!runsColumns.includes("scheduled_at")) {
-    try {
-      client.run("ALTER TABLE runs ADD COLUMN scheduled_at integer");
-    } catch (error: unknown) {
-      // Another process may have added the column between the check and the
-      // ALTER. Only swallow the failure when the column now exists; any
-      // genuine ALTER failure must surface at boot.
-      const updatedColumns = client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>;
-      if (!updatedColumns.some((column): boolean => column.name === "scheduled_at")) {
-        throw error;
-      }
-    }
-  }
+  return db.all<T>(fragment);
 }
 
+// Re-export the active driver so consumers can branch on backend behavior
+// (e.g. raw-SQL dialect shims) with a single import.
+export { databaseDriver, isPostgres };
 
-// ---------------------------------------------------------------------------
-// Id-format migration: re-key persisted rows that predate the current ID
-// scheme (e.g. workspaces `w-*` -> `ws-*`, users `u-*` -> `usr-*`, orgs `o-*`
-// -> `org-*`, raw-UUID runs/state refs -> prefixed). Both the primary key and
-// every column that foreign-keys to it are rewritten so relational integrity
-// holds after upgrade. Runs additionally have filesystem sidecars keyed by id
-// (plan-json/{id}.json, run-logs/{id}.json.gz); those are renamed alongside
-// the row so artifact lookups stay consistent. Idempotent: rows already in
-// the current shape are left untouched, so this is a no-op once the data is
-// migrated.
-// ---------------------------------------------------------------------------
-{
-  // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-  const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
-    { dir: planJsonDirectory, suffix: ".json" },
-    { dir: runLogsDirectory, suffix: ".json.gz" },
-  ];
-  let sidecarsRenamed = 0;
-  let sidecarRenameFailures = 0;
-  const renameRunSidecars = (map: Map<string, string>): void => {
-    for (const [oldId, newId] of map) {
-      for (const { dir, suffix } of RUN_SIDECAR_DIRS) {
-        try {
-          renameSync(join(dir, `${oldId}${suffix}`), join(dir, `${newId}${suffix}`));
-          sidecarsRenamed += 1;
-        } catch (error: unknown) {
-          if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
-          sidecarRenameFailures += 1;
-          console.warn(`[terrence] Failed to rename run sidecar ${oldId}${suffix}: ${String(error)}`);
-        }
-      }
-    }
-  };
-
-  const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
-    { table: "organizations", prefix: "org-", fullUuidSuffix: true },
-    { table: "users", prefix: "usr-", fullUuidSuffix: true },
-    { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
-    { table: "projects", prefix: "prj-", fullUuidSuffix: false },
-    { table: "runs", prefix: "run-", fullUuidSuffix: false },
-  ];
-
-  const isNewId = (id: string, prefix: string, fullUuidSuffix: boolean): boolean => {
-    if (!id.startsWith(prefix)) return false;
-    const suffix = id.slice(prefix.length);
-    if (fullUuidSuffix) {
-      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suffix);
-    }
-    return /^[0-9a-f]{16}$/.test(suffix);
-  };
-
-  // 1. Compute old -> new id maps per entity.
-  const rekeyMaps = new Map<string, Map<string, string>>();
-  for (const fmt of ID_FORMATS) {
-    const rows = client.prepare(`SELECT id FROM "${fmt.table}"`).all() as { id: string }[];
-    const map = new Map<string, string>();
-    for (const { id } of rows) {
-      if (isNewId(id, fmt.prefix, fmt.fullUuidSuffix)) continue;
-      const suffix = fmt.fullUuidSuffix
-        ? crypto.randomUUID()
-        : crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-      map.set(id, `${fmt.prefix}${suffix}`);
-    }
-    if (map.size > 0) rekeyMaps.set(fmt.table, map);
-  }
-  if (rekeyMaps.size > 0) {
-    // Build a table -> [{column, ref}] for every column that references each
-    // entity, discovered from the live foreign_key metadata.
-    const refs = new Map<string, Array<{ table: string; column: string }>>();
-    const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
-    for (const { name } of allTables) {
-      const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
-      for (const fk of fks) {
-        if (rekeyMaps.has(fk.table)) {
-          if (!refs.has(fk.table)) refs.set(fk.table, []);
-          refs.get(fk.table)?.push({ table: name, column: fk.from });
-        }
-      }
-    }
-
-    client.run("PRAGMA foreign_keys = OFF");
-    try {
-      for (const [parent, map] of rekeyMaps) {
-        for (const { table, column } of refs.get(parent) ?? []) {
-          const stmt = client.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`);
-          for (const [old, next] of map) stmt.run(next, old);
-        }
-        const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
-        for (const [old, next] of map) pkStmt.run(next, old);
-        if (parent === "runs") renameRunSidecars(map);
-      }
-    } finally {
-      client.run("PRAGMA foreign_keys = ON");
-    }
-    const entityNames = [...rekeyMaps.keys()].join(", ");
-    const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
-    const sidecarSummary = sidecarsRenamed > 0 || sidecarRenameFailures > 0
-      ? `; renamed ${sidecarsRenamed} run sidecar files${sidecarRenameFailures > 0 ? `, ${sidecarRenameFailures} failed` : ""}`
-      : "";
-    console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarSummary}.`);
-  }
+/**
+ * Apply the PostgreSQL schema migrations (drizzle/pg). The sqlite migrator
+ * runs synchronously at module load; the postgres migrator is async, so it
+ * is invoked explicitly from the boot path (backend/index.ts) and the test
+ * harness (tests/setup.ts). Memoized: safe to call from both.
+ */
+let pgMigrationsPromise: Promise<void> | null = null;
+export function applyPgMigrations(): Promise<void> {
+  if (!isPostgres) return Promise.resolve();
+  if (pgMigrationsPromise !== null) return pgMigrationsPromise;
+  pgMigrationsPromise = (async (): Promise<void> => {
+    const { migrate } = await import("drizzle-orm/postgres-js/migrator");
+    const instance = pgDb;
+    if (instance === null) throw new Error("postgres backend not initialized");
+    await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+  })();
+  return pgMigrationsPromise;
 }

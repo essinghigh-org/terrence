@@ -59,6 +59,7 @@ import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks"
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
 import { applyGateBlockReason } from "./lib/operations";
+import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
 import { log } from "./lib/log";
@@ -1872,6 +1873,7 @@ function autoDestroyDurationMs(value: string | null): number | undefined {
 }
 
 export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<string[]> {
+  if (isMaintenanceActive()) return [];
   const [allWorkspaces, allRuns, finalizedStates, configurations] = await Promise.all([
     db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
     db.query.runs.findMany({ orderBy: [desc(runs.createdAt)] }),
@@ -1942,6 +1944,7 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
 }
 
 export async function enqueueDueAssessments(now = Date.now()): Promise<string[]> {
+  if (isMaintenanceActive()) return [];
   // ponytail: a per-workspace scan is sufficient for a homelab scheduler; use one ranked SQL query if scale demands it.
   const [allWorkspaces, allOrganizations] = await Promise.all([
     db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
@@ -2284,6 +2287,7 @@ function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise<T>): 
 
 export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
+  if (isMaintenanceActive()) return [];
   const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
@@ -2320,6 +2324,7 @@ let isWorkerLoopRunning = false;
 
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
+  if (isMaintenanceActive()) return [];
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
   const pendingRuns = await db.query.runs.findMany({
@@ -2464,6 +2469,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
  * confirmed and is retried on the next poll.
  */
 export async function applyDueScheduledRuns(): Promise<string[]> {
+  if (isMaintenanceActive()) return [];
   const now = Date.now();
   const dueRuns = await db.query.runs.findMany({
     columns: { id: true, workspaceId: true, planOnly: true, savePlan: true, statusTimestamps: true },

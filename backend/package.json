@@ -27,6 +27,7 @@
     "elysia-rate-limit": "3.0.0",
     "jsonwebtoken": "^9.0.3",
     "ldapts": "^9.0.0",
+    "postgres": "^3",
     "xml-crypto": "^6.1.2"
   }
 }

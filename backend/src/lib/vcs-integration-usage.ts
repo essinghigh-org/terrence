@@ -2,6 +2,9 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { oauthTokens, policySets, workspaces } from "../db/schema";
 
+/** Relational query surface shared by the global db and transaction objects. */
+type Queryable = Pick<typeof db, "query">;
+
 export type VcsIntegrationReference = Readonly<{
   kind: "github-app" | "oauth-client" | "oauth-token";
   id: string;
@@ -25,18 +28,19 @@ function referencesIntegration(
 export async function findVcsIntegrationUsage(
   orgId: string,
   reference: VcsIntegrationReference,
+  queryable: Queryable = db,
 ): Promise<VcsIntegrationUsage> {
   const [workspaceRows, policySetRows, tokenRows] = await Promise.all([
-    db.query.workspaces.findMany({
+    queryable.query.workspaces.findMany({
       where: eq(workspaces.orgId, orgId),
       columns: { id: true, name: true, vcsRepo: true },
     }),
-    db.query.policySets.findMany({
+    queryable.query.policySets.findMany({
       where: eq(policySets.orgId, orgId),
       columns: { id: true, name: true, vcsRepo: true },
     }),
     reference.kind === "oauth-client"
-      ? db.query.oauthTokens.findMany({
+      ? queryable.query.oauthTokens.findMany({
           where: eq(oauthTokens.oauthClientId, reference.id),
           columns: { id: true },
         })

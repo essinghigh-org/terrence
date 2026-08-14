@@ -46,7 +46,7 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         "started-at": new Date(Date.now() - process.uptime() * 1000).toISOString(),
         platform: { os: os.platform(), arch: os.arch(), release: os.release() },
         storage,
-        database: databaseMetrics(),
+        database: await databaseMetrics(),
         worker: {
           enabled: process.env.TERRENCE_DISABLE_WORKER !== "1",
           "drain-mode": process.env.TERRENCE_DISABLE_WORKER === "1",

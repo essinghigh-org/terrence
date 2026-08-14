@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import jwt from "jsonwebtoken";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
+import { jsonExtract, jsonSet } from "./db-json";
 import {
   configurationVersions,
   githubAppInstallations,
@@ -612,7 +613,7 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
         const relatedWorkspaces = (await db.query.workspaces.findMany({
           where: and(
             eq(workspaces.orgId, workspace.orgId),
-            sql`json_extract(${workspaces.vcsRepo}, '$.identifier') = ${repoFullName}`,
+            sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${repoFullName}`,
           ),
         })).filter((candidate): boolean => {
           const candidateVcs = candidate.vcsRepo;
@@ -943,7 +944,7 @@ async function handleOAuthProviderWebhook(
   details: DeepReadonly<WebhookDetails>,
 ): Promise<boolean> {
   const candidates = await db.query.workspaces.findMany({
-    where: sql`json_extract(${workspaces.vcsRepo}, '$.identifier') = ${details.repoFullName}`,
+    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
   const matchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
@@ -1040,7 +1041,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   if (details === undefined) return;
 
   const candidates = await db.query.workspaces.findMany({
-    where: sql`json_extract(${workspaces.vcsRepo}, '$.identifier') = ${details.repoFullName}`,
+    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
   const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
@@ -1269,7 +1270,7 @@ async function synchronizeVcsPolicySets(
 ): Promise<void> {
   if (kind !== "push") return;
   const candidates = await db.query.policySets.findMany({
-    where: sql`json_extract(${policySets.vcsRepo}, '$.identifier') = ${details.repoFullName}`,
+    where: sql`${jsonExtract(policySets.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
   const matched = candidates.filter((policySet: DeepReadonly<typeof policySets.$inferSelect>): boolean =>
     matchesPolicySetWebhook(policySet, details));
@@ -1352,7 +1353,7 @@ async function markConfigurationVersionsErrored(configurationVersionIds: readonl
     await db.update(runs)
       .set({
         status: "errored",
-        statusTimestamps: sql`json_patch(coalesce(${runs.statusTimestamps}, '{}'), json_object('errored-at', ${erroredAt}))`,
+        statusTimestamps: jsonSet(runs.statusTimestamps, 'errored-at', sql`${erroredAt}`),
       })
       .where(inArray(runs.id, affectedRuns.map((run): string => run.id)));
     for (const run of affectedRuns) {

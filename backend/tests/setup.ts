@@ -44,3 +44,39 @@ afterAll(() => {
 // test backends inherit this via process.env, so they cache-hit instead of
 // re-downloading into their own fresh storage dirs too.
 process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage", "binaries");
+
+// PostgreSQL test databases need the drizzle/pg schema before any query, and
+// each test FILE gets its own database (mirroring the per-file sqlite temp
+// dir): the shared pool would otherwise leak rows between files and across
+// runs (duplicate-key failures). The preload creates a uniquely named
+// database, rewrites DATABASE_URL, migrates it, and drops it after the
+// file's tests complete. Orphaned databases (crashed workers) can be listed
+// with `SELECT datname FROM pg_database WHERE datname LIKE 'terrence_test_%'`.
+const testDbUrl = process.env.DATABASE_URL ?? "";
+if (testDbUrl.startsWith("postgres")) {
+  const { randomUUID } = await import("node:crypto");
+  const postgres = (await import("postgres")).default;
+  const dbName = `terrence_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  const admin = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+  try {
+    await admin`CREATE DATABASE ${admin(dbName)}`;
+  } finally {
+    await admin.end();
+  }
+  const fileUrl = new URL(testDbUrl);
+  fileUrl.pathname = `/${dbName}`;
+  process.env.DATABASE_URL = fileUrl.toString();
+  const { applyPgMigrations } = await import("../src/db");
+  await applyPgMigrations();
+  afterAll(async (): Promise<void> => {
+    const cleanup = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+    try {
+      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbName} AND pid <> pg_backend_pid()`;
+      await cleanup`DROP DATABASE ${cleanup(dbName)}`;
+    } catch {
+      // Best-effort cleanup: a failed drop must never mask test results.
+    } finally {
+      await cleanup.end();
+    }
+  });
+}

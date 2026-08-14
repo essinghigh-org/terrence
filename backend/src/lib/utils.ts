@@ -11,6 +11,7 @@ import {
 import { and, desc, eq, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
+import { jsonExtract } from "./db-json";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
 import { privateHostReason } from "./url-safety";
@@ -1292,7 +1293,7 @@ export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: s
       inArray(runs.id,
         db.select({ id: runs.id }).from(runs)
           .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
-          .where(sql`COALESCE(json_extract(${configurationVersions.ingressAttributes}, '$.commitSha'), '') LIKE ${`%${commitSearch}%`}`)
+          .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`)
       )
     );
   }

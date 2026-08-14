@@ -58,16 +58,19 @@ export const authPlugin = new Elysia({ name: "auth" })
     const tokenHash = hashToken(tokenString);
 
     // Lookup by hash. The user row is JOINed in so the common user-token path
-    // costs ONE query instead of two (api_tokens + users).
-    const lookup = (): { token: AuthToken | undefined; user: (typeof users.$inferSelect) | null } => {
-      const row = db.select({ token: apiTokens, user: users })
+    // costs ONE query instead of two (api_tokens + users). Portable across
+    // backends: .get() is sqlite-only, so use limit(1) + await (drizzle query
+    // builders are thenable on both dialects).
+    const lookup = async (): Promise<{ token: AuthToken | undefined; user: (typeof users.$inferSelect) | null }> => {
+      const rows = await db.select({ token: apiTokens, user: users })
         .from(apiTokens)
         .leftJoin(users, eq(users.id, apiTokens.userId))
         .where(eq(apiTokens.token, tokenHash))
-        .get();
+        .limit(1);
+      const row = rows[0];
       return { token: row?.token, user: row?.user ?? null };
     };
-    let { token, user } = lookup();
+    let { token, user } = await lookup();
 
 
     // Legacy fallback: re-hash plaintext token on successful use
