@@ -19,7 +19,7 @@ type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
-  request: Readonly<{ url: string; arrayBuffer: () => Promise<ArrayBuffer> }>;
+  request: Request;
   set: SetObj;
 }>;
 
@@ -101,7 +101,13 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const id = crypto.randomUUID();
     const speculative = typeof attributes.speculative === "boolean" ? attributes.speculative : false;
     const provisional = typeof attributes.provisional === "boolean" ? attributes.provisional : false;
-    const source = typeof attributes.source === "string" ? attributes.source : "tfe-api";
+    // The Terraform/OpenTofu CLI does not send a source attribute; detect it
+    // from the User-Agent so CLI-driven runs show "Triggered via CLI" like TFE.
+    let source = typeof attributes.source === "string" ? attributes.source : "";
+    if (source === "") {
+      const agent = request.headers.get("user-agent") ?? "";
+      source = /^(?:terraform|tofu|terragrunt)\//i.test(agent.trim()) ? "tfe-cli" : "tfe-api";
+    }
     const rawAutoQueueRuns = attributes["auto-queue-runs"];
     if (rawAutoQueueRuns !== undefined && typeof rawAutoQueueRuns !== "boolean") {
       (set as { status: number }).status = 400;

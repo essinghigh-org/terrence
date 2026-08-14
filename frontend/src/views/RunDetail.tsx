@@ -271,7 +271,9 @@ function sourceLabel(source: string | undefined): string {
     github: "GitHub",
     gitlab: "GitLab",
     "tfe-api": "TFE API",
+    "tfe-cli": "CLI",
     "tfe-no-code": "No-code provisioning",
+    "tfe-ui": "UI",
   };
   return labels[source] ?? statusLabel(source);
 }
@@ -1321,7 +1323,7 @@ export function RunDetail({
             {attributes.message ?? "Manual run"}
           </h2>
           <p className="mt-2 text-[13px] text-muted-foreground">
-            {statusLabel(attributes["trigger-reason"] ?? "manual")} · {attributes["trigger-reason"] === "manual" ? "UI" : sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
+            {sourceLabel(attributes.source)} · {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

@@ -498,15 +498,19 @@ export function RunList({
                 const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
                 const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
                 const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
-                const sourceLabel = run.attributes["trigger-reason"] === "manual"
-                  ? "UI"
-                  : run.attributes.source === "github"
-                    ? "GitHub"
-                    : run.attributes.source === "gitlab"
-                      ? "GitLab"
-                      : run.attributes.source === "bitbucket"
-                        ? "Bitbucket"
-                        : "UI";
+                const sourceLabel = run.attributes.source === "github"
+                  ? "GitHub"
+                  : run.attributes.source === "gitlab"
+                    ? "GitLab"
+                    : run.attributes.source === "bitbucket"
+                      ? "Bitbucket"
+                      : run.attributes.source === "tfe-cli"
+                        ? "CLI"
+                        : run.attributes.source === "tfe-ui" || run.attributes["trigger-reason"] === "manual"
+                          ? "UI"
+                          : run.attributes.source === "tfe-api" || run.attributes.source === undefined
+                            ? "TFE API"
+                            : "UI";
                 const externalSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source);
                 return (
                   <article
