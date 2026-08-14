@@ -1251,7 +1251,33 @@ export const registryRoutes = new Elysia({ name: "registry" })
       const bytes = new Uint8Array(await archiveResponse.arrayBuffer());
       await mkdir(MODULE_STORAGE_DIR, { recursive: true });
       const archivePath = join(MODULE_STORAGE_DIR, `${ver.id}-${ver.version}.tar.gz`);
-      await writeFile(archivePath, bytes, { mode: 0o600 });
+      // Re-pack the fetched tarball with the module files at the archive
+      // root: go-getter keeps the GitHub top-level folder otherwise, which
+      // makes terraform see an empty module. The existing extract +
+      // source-directory helpers double as the security gate (no symlinks,
+      // no traversal).
+      const staging = await mkdtemp(join(tmpdir(), "terrence-module-archive-"));
+      try {
+        const rawPath = join(staging, "raw.tar.gz");
+        await writeFile(rawPath, bytes, { mode: 0o600 });
+        const extractDir = join(staging, "extract");
+        await mkdir(extractDir, { recursive: true });
+        if (!(await extractModuleArchive(rawPath, extractDir))) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Module archive is invalid" }] };
+        }
+        const sourceRel = await moduleSourceDirectory(extractDir);
+        const sourceDir = sourceRel === undefined
+          ? extractDir
+          : join(extractDir, sourceRel.replace(/^\.\/module\/?/, "").replace(/^\.\//, ""));
+        const repack = Bun.spawn(["tar", "-czf", archivePath, "-C", sourceDir, "."]);
+        if ((await repack.exited) !== 0) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Module archive could not be prepared" }] };
+        }
+      } finally {
+        await rm(staging, { recursive: true, force: true });
+      }
       await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, ver.id));
       (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
       return Bun.file(archivePath);
