@@ -13,6 +13,8 @@ import {
 } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
+import { getSettings } from "./settings";
+import { sendEmail } from "./smtp";
 
 type NotificationConfiguration = Readonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -145,6 +147,10 @@ async function doPostNotification(
   configuration: NotificationConfiguration,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
+  if (configuration.destinationType === "email") {
+    return deliverEmailNotification(configuration, payload);
+  }
+
   const render = renderPayloadForDestination(configuration, payload);
   const body = render.body;
   const headers: Record<string, string> = { "Content-Type": render.contentType };
@@ -203,6 +209,102 @@ async function doPostNotification(
     url: configuration.url,
     attempts: 3,
   };
+}
+
+/**
+ * Build a human-readable subject/body for email notifications from the
+ * generic payload shape shared by run and assessment notifications.
+ */
+function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ subject: string; text: string }> {
+  const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
+  const first = (notifications[0] ?? {}) as Readonly<Record<string, unknown>>;
+  const message = typeof first.message === "string" && first.message !== "" ? first.message : "Terrence notification";
+  const workspace = typeof payload.workspace_name === "string" ? payload.workspace_name : undefined;
+  const subject = workspace === undefined ? message : `${message} - ${workspace}`;
+
+  const lines: string[] = [];
+  if (workspace !== undefined) lines.push(`Workspace: ${workspace}`);
+  if (typeof payload.organization_name === "string") lines.push(`Organization: ${payload.organization_name}`);
+  if (typeof payload.run_id === "string") lines.push(`Run: ${payload.run_id}`);
+  if (typeof first.trigger === "string") lines.push(`Trigger: ${first.trigger}`);
+  if (typeof first.run_status === "string") lines.push(`Status: ${first.run_status}`);
+  if (typeof payload.run_message === "string" && payload.run_message !== "") lines.push(`Message: ${payload.run_message}`);
+  if (typeof payload.run_url === "string") lines.push(`Details: ${payload.run_url}`);
+  return { subject, text: lines.join("\n") };
+}
+
+/**
+ * Deliver an email notification through the organization's SMTP settings.
+ * Without configured SMTP the delivery is recorded as unsuccessful, so
+ * admins see the failure instead of silently losing notifications.
+ */
+async function deliverEmailNotification(
+  configuration: NotificationConfiguration,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<NotificationDelivery> {
+  const smtp = await getSettings("smtp");
+  const enabled = smtp.enabled === true;
+  const host = typeof smtp.host === "string" && smtp.host !== "" ? smtp.host : null;
+  const senderEmail = typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
+  const recipients = configuration.emailAddresses ?? [];
+  const now = new Date().toISOString();
+
+  const missing = !enabled
+    ? "SMTP is disabled"
+    : host === null
+      ? "SMTP host is not configured"
+      : senderEmail === null
+        ? "SMTP sender email is not configured"
+        : recipients.length === 0
+          ? "no email recipients"
+          : null;
+  if (missing !== null) {
+    return {
+      body: `Email delivery skipped: ${missing}`,
+      code: "0",
+      headers: {},
+      sentAt: now,
+      successful: false,
+      url: "",
+      attempts: 0,
+    };
+  }
+
+  const { subject, text } = emailContent(payload);
+  try {
+    await sendEmail(
+      {
+        host: host as string,
+        port: typeof smtp.port === "number" ? smtp.port : 25,
+        username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
+        password: typeof smtp.password === "string" ? smtp.password : null,
+        senderEmail: senderEmail as string,
+      },
+      { to: recipients, subject, text },
+    );
+    recordBreakerSuccess(configuration.id);
+    return {
+      body: `Sent to ${recipients.join(", ")}`,
+      code: "250",
+      headers: {},
+      sentAt: new Date().toISOString(),
+      successful: true,
+      url: "",
+      attempts: 1,
+    };
+  } catch (error: unknown) {
+    recordBreakerFailure(configuration.id);
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      body: message.slice(0, 16_384),
+      code: "0",
+      headers: {},
+      sentAt: new Date().toISOString(),
+      successful: false,
+      url: "",
+      attempts: 1,
+    };
+  }
 }
 
 function runNotificationMessage(trigger: string, status: string): string {

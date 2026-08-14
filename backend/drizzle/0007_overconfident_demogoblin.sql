@@ -1,0 +1,1 @@
+ALTER TABLE `notification_configurations` ADD `email_addresses` text;

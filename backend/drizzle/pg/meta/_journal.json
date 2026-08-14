@@ -29,6 +29,13 @@
       "when": 1786739424532,
       "tag": "0003_registry-module-publishing",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786751720792,
+      "tag": "0004_nostalgic_jack_power",
+      "breakpoints": true
     }
   ]
 }

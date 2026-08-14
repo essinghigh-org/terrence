@@ -12,7 +12,7 @@ export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 export const PROVIDER_MODES = ["tofu", "terraform"] as const;
 export type ProviderMode = (typeof PROVIDER_MODES)[number];
 
-export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams"] as const;
+export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];
 
 export const RUN_NOTIFICATION_TRIGGERS = [

@@ -324,8 +324,9 @@ export const notificationConfigurations = sqliteTable("notification_configuratio
   teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
   projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams'
+  destinationType: text("destination_type").notNull(), // 'generic', 'slack', 'microsoft-teams', 'email'
   url: text("url").notNull(),
+  emailAddresses: text("email_addresses", { mode: "json" }).$type<string[]>(),
   triggers: text("triggers", { mode: "json" }).$type<string[]>().notNull(),
   enabled: integer("enabled", { mode: "boolean" }).default(true),
   token: text("token"),
