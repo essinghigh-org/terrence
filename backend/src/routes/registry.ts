@@ -37,6 +37,7 @@ import { tmpdir } from "os";
 import { isDeepStrictEqual } from "util";
 import { authPlugin } from "../auth";
 import { workspaceResource } from "../lib/response";
+import { signedApiURL, validSignedApiURL } from "../lib/utils";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
 import {
   scanTerraformModuleVariables,
@@ -1107,7 +1108,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
@@ -1116,16 +1117,28 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    (set.headers as Record<string, string | number>)["X-Terraform-Get"] = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    // Terraform fetches the archive WITHOUT an Authorization header, so the
+    // archive URL is signed (TFE model).
+    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    (set.headers as Record<string, string | number>)["X-Terraform-Get"] = signedApiURL(request, archivePath, "GET");
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
     const name = params.name ?? "";
     const provider = params.provider ?? "";
     const version = params.version ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
+    // Terraform fetches the archive without an Authorization header; a valid
+    // signed URL (issued by the download endpoint) authorizes the fetch.
+    const signedOk = validSignedApiURL(request, archivePath, "GET");
+    let mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined && signedOk) {
+      mod = await db.query.registryModules.findFirst({
+        where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+      });
+    }
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
