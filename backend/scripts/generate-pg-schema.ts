@@ -33,6 +33,7 @@ type Column = {
   columnType: string;
   notNull: boolean;
   primary: boolean;
+  isUnique?: boolean;
   hasDefault?: boolean;
   default?: unknown;
   defaultFn?: (() => unknown) | null;
@@ -95,6 +96,7 @@ function columnBuilder(
   const parts: string[] = [];
   if (column.notNull) parts.push(".notNull()");
   if (column.primary) parts.push(".primaryKey()");
+  if (column.isUnique === true) parts.push(".unique()");
   if (column.hasDefault && column.default !== undefined) {
     parts.push(`.default(${JSON.stringify(column.default)})`);
   }

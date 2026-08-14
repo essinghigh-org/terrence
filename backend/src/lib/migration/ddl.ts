@@ -774,10 +774,16 @@ export function orderTablesForCopy(tables: readonly TableDef[]): { ordered: read
     }
     edges.set(table.name, targets);
   }
+  // indegree[name] = number of DISTINCT parent tables `name` references.
+  // Self-references are excluded so they neither block ordering nor count as
+  // cycles (a table referencing itself is ordered with the acyclic tables).
   const indegree = new Map<string, number>();
-  for (const name of names) indegree.set(name, 0);
-  for (const targets of edges.values()) {
-    for (const target of targets) indegree.set(target, (indegree.get(target) ?? 0) + 1);
+  for (const [name, targets] of edges) {
+    let degree = 0;
+    for (const target of targets) {
+      if (target !== name) degree += 1;
+    }
+    indegree.set(name, degree);
   }
   const queue = [...names].filter((name): boolean => (indegree.get(name) ?? 0) === 0).sort();
   const ordered: string[] = [];
@@ -787,6 +793,7 @@ export function orderTablesForCopy(tables: readonly TableDef[]): { ordered: read
     for (const dependent of [...edges.entries()]
       .filter(([, targets]): boolean => targets.has(name))
       .map(([dependentName]): string => dependentName)) {
+      if (dependent === name) continue;
       indegree.set(dependent, (indegree.get(dependent) ?? 0) - 1);
       if ((indegree.get(dependent) ?? 0) === 0) queue.push(dependent);
     }

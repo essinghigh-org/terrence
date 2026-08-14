@@ -31,7 +31,7 @@ export const adminGeneralSettings = pgTable("admin_general_settings", {
 
 export const adminOpaVersions = pgTable("admin_opa_versions", {
     id: text("id").notNull().primaryKey(),
-    version: text("version").notNull(),
+    version: text("version").notNull().unique(),
     url: text("url"),
     sha: text("sha"),
     deprecated: boolean("deprecated").default(false),
@@ -42,7 +42,7 @@ export const adminOpaVersions = pgTable("admin_opa_versions", {
 
 export const adminSentinelVersions = pgTable("admin_sentinel_versions", {
     id: text("id").notNull().primaryKey(),
-    version: text("version").notNull(),
+    version: text("version").notNull().unique(),
     url: text("url"),
     sha: text("sha"),
     deprecated: boolean("deprecated").default(false),
@@ -59,7 +59,7 @@ export const adminSettings = pgTable("admin_settings", {
 
 export const adminTerraformVersions = pgTable("admin_terraform_versions", {
     id: text("id").notNull().primaryKey(),
-    version: text("version").notNull(),
+    version: text("version").notNull().unique(),
     url: text("url"),
     sha: text("sha"),
     deprecated: boolean("deprecated").default(false),
@@ -112,7 +112,7 @@ export const agentPoolExcludedWorkspaces = pgTable("agent_pool_excluded_workspac
 export const agentPoolTokens = pgTable("agent_pool_tokens", {
     id: text("id").notNull().primaryKey(),
     agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-    token: text("token").notNull(),
+    token: text("token").notNull().unique(),
     description: text("description"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentPoolTokens.createdAt.defaultFn!()),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
@@ -140,7 +140,7 @@ export const agents = pgTable("agents", {
 
 export const apiTokens = pgTable("api_tokens", {
     id: text("id").notNull().primaryKey(),
-    token: text("token").notNull(),
+    token: text("token").notNull().unique(),
     userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
     orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
     teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
@@ -254,7 +254,7 @@ export const configurationVersions = pgTable("configuration_versions", {
 
 export const dataRetentionPolicies = pgTable("data_retention_policies", {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull().unique().references(() => workspaces.id, { onDelete: "cascade" }),
     stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
     deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
     autoDestroyAt: text("auto_destroy_at"),
@@ -413,7 +413,7 @@ export const oauthClients = pgTable("oauth_clients", {
 
 export const oauthDeviceCodes = pgTable("oauth_device_codes", {
     deviceCode: text("device_code").notNull().primaryKey(),
-    userCode: text("user_code").notNull(),
+    userCode: text("user_code").notNull().unique(),
     userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("pending"),
     token: text("token"),
@@ -452,7 +452,7 @@ export const orgTokenTTLPolicies = pgTable("org_token_ttl_policies", {
 
 export const organizationDataRetentionPolicies = pgTable("organization_data_retention_policies", {
     id: text("id").notNull().primaryKey(),
-    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }),
     stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
     deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationDataRetentionPolicies.createdAt.defaultFn!()),
@@ -489,7 +489,7 @@ export const organizationRoles = pgTable("organization_roles", {
 
 export const organizations = pgTable("organizations", {
     id: text("id").notNull().primaryKey(),
-    name: text("name").notNull(),
+    name: text("name").notNull().unique(),
     email: text("email"),
     defaultIacBinary: text("default_iac_binary").default("tofu"),
     defaultTerraformVersion: text("default_terraform_version").default("latest"),
@@ -705,7 +705,7 @@ export const queryRuns = pgTable("query_runs", {
 export const refreshSessions = pgTable("refresh_sessions", {
     id: text("id").notNull().primaryKey(),
     familyId: text("family_id").notNull(),
-    tokenHash: text("token_hash").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     accessTokenId: text("access_token_id").notNull(),
     ipAddress: text("ip_address"),
@@ -966,7 +966,7 @@ export const scimSettings = pgTable("scim_settings", {
 
 export const scimTokens = pgTable("scim_tokens", {
     id: text("id").notNull().primaryKey(),
-    tokenHash: text("token_hash").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
     description: text("description"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimTokens.createdAt.defaultFn!()),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
@@ -1153,8 +1153,8 @@ export const user2FA = pgTable("user_2fa", {
 
 export const users = pgTable("users", {
     id: text("id").notNull().primaryKey(),
-    username: text("username").notNull(),
-    email: text("email"),
+    username: text("username").notNull().unique(),
+    email: text("email").unique(),
     passwordHash: text("password_hash").notNull(),
     isSiteAdmin: boolean("is_site_admin").default(false),
     isSiteAuditor: boolean("is_site_auditor").default(false),

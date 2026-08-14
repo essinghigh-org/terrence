@@ -12,7 +12,7 @@ const NAME = Symbol.for("drizzle:Name");
 const COLUMNS = Symbol.for("drizzle:Columns");
 const EXTRA = Symbol.for("drizzle:ExtraConfigBuilder");
 
-type Col = { name: string; columnType: string; notNull: boolean; primary: boolean };
+type Col = { name: string; columnType: string; notNull: boolean; primary: boolean; isUnique?: boolean };
 type ExtraRow = { config?: { name?: string; unique?: boolean; columns?: Col[] } };
 
 function dbName(table: object): string {
@@ -27,6 +27,7 @@ function columnFingerprint(table: object): Readonly<Record<string, Col>> {
       columnType: column.columnType,
       notNull: column.notNull,
       primary: column.primary,
+      ...(column.isUnique === true ? { isUnique: true } : {}),
     };
   }
   return out;

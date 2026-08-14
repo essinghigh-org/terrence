@@ -462,7 +462,7 @@ export class SqliteTransferTarget implements TransferTarget {
     batchSize: number,
     onBatch: (rows: readonly (readonly unknown[])[]) => Promise<void> | void,
   ): Promise<void> {
-    streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
+    await streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
   }
 
   async readSampleRows(
@@ -499,23 +499,27 @@ export class SqliteTransferTarget implements TransferTarget {
   async finishAndClose(): Promise<void> {
     if (this.#finished) return;
     this.#finished = true;
-    // Fold the WAL into the main file so the delivered .db is self-contained
-    // (no -wal/-shm sidecars), then restore production FK enforcement and
-    // assert the boot invariant from kanban 4.4.
-    const checkpoint = this.#client.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
-      busy: number;
-      log: number;
-      checkpointed: number;
-    } | null;
-    if (checkpoint !== null && checkpoint !== undefined && checkpoint.busy > 0) {
-      throw new Error(`WAL checkpoint left ${checkpoint.busy} frame(s) busy; exported database may be incomplete`);
+    try {
+      // Fold the WAL into the main file so the delivered .db is self-contained
+      // (no -wal/-shm sidecars), then restore production FK enforcement and
+      // assert the boot invariant from kanban 4.4.
+      const checkpoint = this.#client.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+        busy: number;
+        log: number;
+        checkpointed: number;
+      } | null;
+      if (checkpoint !== null && checkpoint !== undefined && checkpoint.busy > 0) {
+        throw new Error(`WAL checkpoint left ${checkpoint.busy} frame(s) busy; exported database may be incomplete`);
+      }
+      this.#client.run("PRAGMA foreign_keys = ON;");
+      const fk = this.#client.query("PRAGMA foreign_keys").get() as { foreign_keys: number } | null;
+      if (fk?.foreign_keys !== 1) {
+        throw new Error("Failed to re-enable foreign key enforcement on the exported database");
+      }
+    } finally {
+      // The handle is always released, even when checkpoint/FK validation fails.
+      this.#client.close();
     }
-    this.#client.run("PRAGMA foreign_keys = ON;");
-    const fk = this.#client.query("PRAGMA foreign_keys").get() as { foreign_keys: number } | null;
-    if (fk?.foreign_keys !== 1) {
-      throw new Error("Failed to re-enable foreign key enforcement on the exported database");
-    }
-    this.#client.close();
   }
 }
 
@@ -524,13 +528,13 @@ export class SqliteTransferTarget implements TransferTarget {
 // ---------------------------------------------------------------------------
 
 /** Stream rows from a bun:sqlite connection with keyset/offset pagination. */
-function streamSqliteRows(
+async function streamSqliteRows(
   client: Database,
   name: string,
   columns: readonly TransferColumn[],
   batchSize: number,
   onBatch: (rows: readonly (readonly unknown[])[]) => Promise<void> | void,
-): void {
+): Promise<void> {
   const quotedCols = columns.map((c) => `"${c.name}"`).join(",");
   const primaryKey = columns.filter((c) => c.primary).map((c) => c.name);
   if (primaryKey.length === 1) {
@@ -544,7 +548,7 @@ function streamSqliteRows(
         : client.query(`SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryKey[0]}" LIMIT ${batchSize}`))
         .all(...(started ? [last as string | number | bigint | null] : [])) as Record<string, unknown>[];
       if (rows.length === 0) return;
-      onBatch(rows.map((row) => columns.map((c) => row[c.name])));
+      await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
       started = true;
       last = rows[rows.length - 1]?.[primaryKey[0] as string] ?? null;
     }
@@ -556,7 +560,7 @@ function streamSqliteRows(
       `SELECT ${quotedCols} FROM "${name}" LIMIT ${batchSize} OFFSET ${offset}`,
     ).all() as Record<string, unknown>[];
     if (rows.length === 0) return;
-    onBatch(rows.map((row) => columns.map((c) => row[c.name])));
+    await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
     offset += rows.length;
   }
 }
@@ -605,7 +609,7 @@ export class SqliteTransferSource implements TransferSource {
     batchSize: number,
     onBatch: (rows: readonly (readonly unknown[])[]) => Promise<void> | void,
   ): Promise<void> {
-    streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
+    await streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
   }
 
   async readSampleRows(
@@ -970,8 +974,11 @@ export async function verifyTransfer(
 
   const foreignKeyViolations = await target.runForeignKeysCheck();
   const foreignKeysEnabled = await target.foreignKeysEnabled();
+  // foreign_key_check works regardless of enforcement and is the integrity
+  // gate here. `foreignKeysEnabled` is reported for context but is NOT part
+  // of allPassed: the SQLite target deliberately copies with enforcement OFF
+  // (it is restored and validated by finishAndClose, which throws on failure).
   const allPassed = foreignKeyViolations.length === 0
-    && foreignKeysEnabled
     && perTable.every((t) => t.countMatch
       && t.uniqueChecks.every((u) => u.match)
       && t.sampleHash.match);

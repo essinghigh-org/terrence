@@ -173,21 +173,19 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     }
   }, []);
 
-  useEffect(() => {
+  useEffect((): void => {
     void load();
-    const timer = setInterval((): void => {
-      void load();
-    }, 2_000);
-    return (): void => { clearInterval(timer); };
   }, [load]);
 
-  useEffect(() => {
-    // While a job is running, poll more aggressively; otherwise settle down.
+  useEffect((): (() => void) => {
+    // Poll adaptively: while a job is running, refresh every 2 seconds;
+    // otherwise settle down to 15 seconds. The timeout is rescheduled on
+    // every status change and cleared on unmount.
     if (pollTimer.current !== null) clearTimeout(pollTimer.current);
     const active = status !== null && (status.running || ACTIVE_PHASES.has(status.wizard.phase));
     pollTimer.current = setTimeout((): void => { void load(); }, active ? 2_000 : 15_000);
     return (): void => { if (pollTimer.current !== null) clearTimeout(pollTimer.current); };
-  }, [status, load]);
+  }, [status, error, load]);
 
   const act = useCallback(async (path: string, method: string, body?: unknown): Promise<unknown> => {
     setError(null);

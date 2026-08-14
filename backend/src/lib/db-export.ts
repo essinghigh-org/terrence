@@ -194,6 +194,26 @@ export async function runDbExport(
     );
     const verification = await verifyTransfer(source, target);
     await source.endSnapshot();
+    if (!verification.allPassed) {
+      // Integrity gate: a failed verification must not ship as a successful
+      // export. The partial file is removed like any other failed export.
+      const failedTables = verification.tables.filter((table): boolean =>
+        !table.countMatch
+        || table.uniqueChecks.some((check): boolean => !check.match)
+        || !table.sampleHash.match)
+        .map((table): string => {
+          const uniques = table.uniqueChecks.filter((check): boolean => !check.match)
+            .map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
+          return `${table.table}${table.countMatch ? "" : " count"}${!table.sampleHash.match ? " hash" : ""}${uniques === "" ? "" : ` unique[${uniques}]`}`;
+        });
+      await target.finishAndClose();
+      target = null;
+      rmSync(filePath, { force: true });
+      throw new DbExportError(
+        "verification-failed",
+        `Export verification failed (${verification.totalRowsSource} source / ${verification.totalRowsTarget} target rows; ${failedTables.join("; ") || "unknown"}); no file was produced`,
+      );
+    }
     await target.finishAndClose();
     target = null;
 
@@ -224,6 +244,9 @@ export async function runDbExport(
     }
     try {
       rmSync(filePath, { force: true });
+      // The WAL-mode target may leave sidecars behind on a mid-copy failure.
+      rmSync(`${filePath}-wal`, { force: true });
+      rmSync(`${filePath}-shm`, { force: true });
     } catch {
       // best-effort cleanup
     }

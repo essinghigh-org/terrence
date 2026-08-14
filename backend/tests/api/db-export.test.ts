@@ -10,10 +10,10 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizations, runs, users, workspaces } from "../../src/db/schema";
+import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
 
@@ -159,9 +159,8 @@ beforeAll(async (): Promise<void> => {
 });
 
 afterAll(async (): Promise<void> => {
-  await db.delete(runs).where(eq(runs.id, runId));
-  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
-  await db.delete(organizations).where(eq(organizations.id, orgId));
+  // Only the local (sqlite) seeds need cleanup; the PG seed lives in the
+  // source database, which is dropped below.
   await db.delete(apiTokens).where(inArray(apiTokens.id, [adminTokenId]));
   await db.delete(users).where(inArray(users.id, [adminId]));
   if (sourceUrl !== "") {

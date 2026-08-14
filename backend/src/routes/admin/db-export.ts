@@ -18,6 +18,7 @@ import { authPlugin } from "../../auth";
 import { runDbExport, listExportFiles, deleteExportFile, exportFilePath } from "../../lib/db-export";
 import { DbExportError } from "../../lib/db-export";
 import { createPgSource } from "../../lib/db-transfer";
+import { maskPostgresUrl } from "../../lib/migration/wizard";
 import type { DbExportProgress, DbExportResult } from "../../lib/db-export";
 import type { TransferSource } from "../../lib/db-transfer";
 import type { ParamCtx } from "./types";
@@ -110,7 +111,9 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
         return { data: { type: "db-export-connection-tests", id: "current", attributes: { ok: true } } };
       } catch (error) {
         setStatus(set, 422);
-        const message = error instanceof Error ? error.message : String(error);
+        // Driver errors may echo the connection URL back; never expose
+        // credentials. maskPostgresUrl redacts the password portion.
+        const message = error instanceof Error ? maskPostgresUrl(error.message) : "Unknown connection error";
         return errorBody(422, "Connection failed", message);
       }
     })
@@ -126,6 +129,14 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
         ? attrs["output-name"]
         : undefined;
       const force = attrs["force"] === true;
+
+      // Only one export may run at a time: concurrent jobs could both pass the
+      // output-name existence check and write the same file. Completed and
+      // failed jobs stay eligible for the next export.
+      if ([...jobs.values()].some((job): boolean => job.status === "running")) {
+        setStatus(set, 409);
+        return errorBody(409, "Export Conflict", "An export is already running; wait for it to finish");
+      }
 
       const id = crypto.randomUUID();
       const job: ExportJob = { id, status: "running", startedAt: Date.now() };
@@ -210,9 +221,12 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
         setStatus(set, 404);
         return errorBody(404, "Not Found", "No such export file");
       }
+      // The header uses the sanitized bare file name (exportFilePath already
+      // rejected traversal and unsafe characters), never the raw route param.
+      const safeName = full.split("/").pop() ?? name;
       (set as { headers?: Record<string, string | number> }).headers = {
         "Content-Type": "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${name}"`,
+        "Content-Disposition": `attachment; filename="${safeName.replace(/["\r\n]/g, "")}"`,
       };
       return file;
     })

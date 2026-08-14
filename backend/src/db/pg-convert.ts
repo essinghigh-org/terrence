@@ -212,6 +212,7 @@ function buildColumn(column: AnyColumn): unknown {
 function buildExtraConfig(
   table: SqliteTable,
   pg: Record<string, unknown>,
+  tableColumns: Record<string, unknown>,
   columnsByDbName: Record<string, unknown>,
 ): unknown[] {
   const extra = table[EXTRA];
@@ -254,7 +255,7 @@ function buildExtraConfig(
                 `pg-convert: partial index "${cfg.name}" has no pg WHERE override; add one to PARTIAL_INDEX_WHERE`,
               );
             }
-            return override(pg);
+            return override(tableColumns);
           })()
         : undefined;
       const builder = cfg.unique === true ? pgUniqueIndex(cfg.name) : pgIndex(cfg.name);
@@ -387,7 +388,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
       column.references((): unknown => targetColumn, actions);
     }
 
-    const extra: unknown[] = buildExtraConfig(sqliteTable, pg, columnsByDbName);
+    const extra: unknown[] = buildExtraConfig(sqliteTable, pg, columns, columnsByDbName);
     for (const fk of compositeFks) {
       const local = fk.localColumns.map((c): unknown => {
         const column = columnsByDbName[c];

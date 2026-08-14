@@ -583,6 +583,22 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
     };
 
     await run("compatibility", async (ctx): Promise<void> => {
+      // Resume: when an interrupted run already built the target schema for
+      // the SAME target, the target is no longer empty and the empty-target
+      // check would wrongly block resumption. Every other compatibility check
+      // still runs; only the emptiness requirement is lifted.
+      const prior = loadWizardState();
+      const schemaAlreadyPassed = prior !== null
+        && prior.targetUrl === initial.targetUrl
+        && prior.steps.some((step): boolean => step.key === "schema" && step.status === "passed");
+      if (schemaAlreadyPassed) {
+        ctx.setState({
+          ...ctx.state,
+          steps: ctx.state.steps.map((step): WizardStep =>
+            step.key === "compatibility" ? { ...step, status: "passed", detail: "Resuming: target schema already built by the previous attempt" } : step),
+        });
+        return;
+      }
       const compat = await checkCompatibility(initial.targetUrl);
       if (!compat.ok) {
         const failed = compat.checks.filter((check): boolean => !check.ok).map((check): string => `${check.name}: ${check.detail}`);
@@ -689,12 +705,16 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       const skippedIndexes: string[] = [];
       // Boolean columns (drizzle `boolean` mode) store 0/1 in SQLite; the
       // partial-index WHERE clauses need those literals rewritten for PG.
-      const booleanColumns = new Set<string>();
+      // Scoped per table so an identically named non-boolean column in another
+      // table is never rewritten.
+      const booleanColumnsByTable = new Map<string, Set<string>>();
       for (const plan of plans) {
         const modes = modesFor(plan.def);
+        const columns = new Set<string>();
         for (const column of plan.def.columns) {
-          if (modes.get(column.name) === "boolean") booleanColumns.add(column.name);
+          if (modes.get(column.name) === "boolean") columns.add(column.name);
         }
+        if (columns.size > 0) booleanColumnsByTable.set(plan.def.name, columns);
       }
       for (const index of cachedIndexes) {
         if (index.skipped !== null) {
@@ -702,7 +722,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           continue;
         }
         if (index.table === "" || !plans.some((plan): boolean => plan.def.name === index.table)) continue;
-        const indexSql = generateCreateIndexSql(index, booleanColumns);
+        const indexSql = generateCreateIndexSql(index, booleanColumnsByTable.get(index.table));
         await target.unsafe(indexSql).catch((error: unknown): never => {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`Index "${index.name}" on "${index.table}" failed (${indexSql}): ${message}`);
@@ -812,7 +832,11 @@ function closeSourceSnapshot(client: Database): void {
 }
 
 async function checkpointWithRetries(): Promise<void> {
-  const attempts = Number(process.env.MIGRATION_CHECKPOINT_RETRIES ?? 15);
+  const configured = Number(process.env.MIGRATION_CHECKPOINT_RETRIES);
+  // Only a positive finite value is honored; anything else (unset, NaN,
+  // zero, negative) falls back to the default so the loop always runs at
+  // least once.
+  const attempts = Number.isFinite(configured) && configured > 0 ? configured : 15;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       checkpointWal();

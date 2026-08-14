@@ -90,11 +90,19 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
   .get("/api/v2/admin/db-migration/status", ({ user, set }: ParamCtx): unknown => {
     if (!requireAdmin(user, set)) return;
     const state = wizardStatus() ?? loadWizardState();
+    let sourceDatabase: { path: string; memory: boolean } | null;
+    try {
+      sourceDatabase = sourceSqlitePath();
+    } catch {
+      // The wizard only migrates FROM SQLite; a PostgreSQL backend has no
+      // sqlite source and must not turn the status endpoint into a 500.
+      sourceDatabase = null;
+    }
     return {
       data: {
         wizard: state,
         running: wizardJobRunning(),
-        "source-database": sourceSqlitePath(),
+        "source-database": sourceDatabase,
         "restart-disabled": restartDisabled(),
         "environment-database-url": environmentDatabaseUrlWarning(),
       },
@@ -143,8 +151,9 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
   })
   .post("/api/v2/admin/db-migration/restart", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;
-    const result = restartProcess();
-    return { data: result };
+    // restartProcess throws WizardError when the backend has not been
+    // switched; route it through the wrapper so it surfaces as 409, not 500.
+    return runWizardAction((): unknown => restartProcess(), set);
   });
 
 // Re-exported for tests that want to assert URL masking.
