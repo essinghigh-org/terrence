@@ -1138,29 +1138,65 @@ export const registryRoutes = new Elysia({ name: "registry" })
     // TFE's "tag the module repo, consume from the registry" flow.
     if (typeof ver.source === "string" && ver.source !== "") {
       const base = ver.source.replace(/\/+$/, "");
-      // Accept both "0.1.0" and "v0.1.0" git tag conventions.
-      const candidates = [
-        `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`,
-        `${base}/archive/refs/tags/v${encodeURIComponent(ver.version)}.tar.gz`,
-      ];
-      let response: Response | null = null;
-      try {
-        for (const candidate of candidates) {
-          const probe = await fetch(candidate);
-          if (probe.ok) {
-            response = probe;
-            break;
+      // GitHub: the archive endpoints do not reliably resolve tag/branch
+      // names (404 for lightweight tags on some repos), so resolve the tag
+      // to a commit SHA via the refs API and fetch by SHA.
+      const githubMatch = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(base);
+      let tarballUrl = "";
+      if (githubMatch !== null) {
+        const owner = githubMatch[1] ?? "";
+        const repo = (githubMatch[2] ?? "").replace(/\.git$/i, "");
+        for (const tag of [ver.version, `v${ver.version}`]) {
+          try {
+            const refResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/tags/${encodeURIComponent(tag)}`);
+            if (refResponse.ok) {
+              const refBody = (await refResponse.json()) as { object?: { sha?: string } };
+              const sha = refBody.object?.sha;
+              if (typeof sha === "string" && sha !== "") {
+                tarballUrl = `https://api.github.com/repos/${owner}/${repo}/tarball/${sha}`;
+                break;
+              }
+            }
+          } catch {
+            // fall through to the plain URL attempts below
           }
         }
+      }
+      if (tarballUrl === "") {
+        // Non-GitHub source (or resolution failed): try the plain tag
+        // archive URLs directly.
+        const candidates = [
+          `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`,
+          `${base}/archive/refs/tags/v${encodeURIComponent(ver.version)}.tar.gz`,
+        ];
+        for (const candidate of candidates) {
+          try {
+            const probe = await fetch(candidate);
+            if (probe.ok) {
+              tarballUrl = candidate;
+              break;
+            }
+          } catch {
+            // try the next candidate
+          }
+        }
+      }
+      if (tarballUrl === "") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
+      }
+      let archiveResponse: Response;
+      try {
+        archiveResponse = await fetch(tarballUrl);
       } catch {
         (set as { status: number }).status = 502;
         return { errors: [{ status: "502", title: "Bad Gateway", detail: `Could not fetch module archive from ${base}` }] };
       }
-      if (response === null) {
+      if (!archiveResponse.ok) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = new Uint8Array(await archiveResponse.arrayBuffer());
       await mkdir(MODULE_STORAGE_DIR, { recursive: true });
       const archivePath = join(MODULE_STORAGE_DIR, `${ver.id}-${ver.version}.tar.gz`);
       await writeFile(archivePath, bytes, { mode: 0o600 });
@@ -1168,6 +1204,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
       return Bun.file(archivePath);
     }
+
     (set as { status: number }).status = 404;
     return { errors: [{ status: "404", title: "Not Found", detail: "Module version has no archive or git source" }] };
   })
