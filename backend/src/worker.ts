@@ -1471,30 +1471,13 @@ export async function executeApply(runId: string): Promise<void> {
       }
       const applyArgs = [binary, "apply", "-no-color", "-input=false", "tfplan"];
 
-      const applyProc = runSandbox !== null
-        ? runSandbox.spawn(applyArgs, {
-            cwd: executionDir,
-            env: envVars,
-          })
-        : spawn(applyArgs, {
-            cwd: executionDir,
-            env: envVars,
-            stdout: "pipe",
-            stderr: "pipe",
-          });
-
-      const [applyExit] = await Promise.all([
-        applyProc.exited,
-        streamLog(runId, "apply", applyProc.stdout),
-        streamLog(runId, "apply", applyProc.stderr),
-      ]);
-
-      if (applyExit !== 0) {
-        throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
-      }
-
+      // Record the state file produced by the apply. terraform writes the
+      // state on failure too (with the successfully applied resources), and
+      // TFE saves that partial state so a follow-up run does not try to
+      // recreate resources that already exist.
       const stateFilePath = join(executionDir, "terraform.tfstate");
-      if (await exists(stateFilePath)) {
+      const saveStateAfterApply = async (): Promise<void> => {
+        if (!(await exists(stateFilePath))) return;
         const statePayload = await readFile(stateFilePath, "utf-8");
 
         // Derive the JSON state and outputs from the raw payload. The resources
@@ -1531,8 +1514,40 @@ export async function executeApply(runId: string): Promise<void> {
         });
 
         await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
+      };
 
+      const applyProc = runSandbox !== null
+        ? runSandbox.spawn(applyArgs, {
+            cwd: executionDir,
+            env: envVars,
+          })
+        : spawn(applyArgs, {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+
+      const [applyExit] = await Promise.all([
+        applyProc.exited,
+        streamLog(runId, "apply", applyProc.stdout),
+        streamLog(runId, "apply", applyProc.stderr),
+      ]);
+
+      if (applyExit !== 0) {
+        // Failed applies still record partial state (anything that applied
+        // successfully), so a follow-up run does not recreate existing
+        // resources.
+        try {
+          await saveStateAfterApply();
+        } catch (saveError: unknown) {
+          await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+        }
+        throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
+
+      await saveStateAfterApply();
+
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
     } else {
