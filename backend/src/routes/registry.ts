@@ -15,6 +15,7 @@ import {
   moduleTestResults,
   testVariables,
   registryProviders,
+  githubAppInstallations,
   registryProviderPlatforms,
   registryProviderVersions,
   runs,
@@ -36,6 +37,7 @@ import { tmpdir } from "os";
 import { isDeepStrictEqual } from "util";
 import { authPlugin } from "../auth";
 import { workspaceResource } from "../lib/response";
+import { getGitHubAppAccessToken } from "../lib/webhooks";
 import {
   scanTerraformModuleVariables,
   type TerraformVariableMetadata,
@@ -1149,10 +1151,22 @@ export const registryRoutes = new Elysia({ name: "registry" })
         // Private module repos need an authenticated GitHub call; the
         // container can provide the token via GITHUB_TOKEN (same variable
         // the github provider uses).
-        const githubToken = process.env.GITHUB_TOKEN;
-        const authHeaders = typeof githubToken === "string" && githubToken !== ""
-          ? { Authorization: `Bearer ${githubToken}` }
-          : {};
+        // Authenticate with the org's GitHub App installation (TFE's model:
+        // the app can read every repo in the org, including private ones).
+        // Falls back to a GITHUB_TOKEN env var when no installation exists.
+        const installation = await db.query.githubAppInstallations.findFirst({
+          where: eq(githubAppInstallations.orgId, mod.orgId),
+        });
+        let authHeaders: Record<string, string> = {};
+        if (installation !== undefined) {
+          const appToken = await getGitHubAppAccessToken(installation.installationId);
+          if (appToken !== null) authHeaders = { Authorization: `Bearer ${appToken}` };
+        } else {
+          const githubToken = process.env.GITHUB_TOKEN;
+          if (typeof githubToken === "string" && githubToken !== "") {
+            authHeaders = { Authorization: `Bearer ${githubToken}` };
+          }
+        }
         for (const tag of [ver.version, `v${ver.version}`]) {
           try {
             const refResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/tags/${encodeURIComponent(tag)}`, { headers: authHeaders });
@@ -1194,10 +1208,22 @@ export const registryRoutes = new Elysia({ name: "registry" })
       }
       let archiveResponse: Response;
       try {
-        const githubToken = process.env.GITHUB_TOKEN;
-        const authHeaders = typeof githubToken === "string" && githubToken !== ""
-          ? { Authorization: `Bearer ${githubToken}` }
-          : {};
+        // Authenticate with the org's GitHub App installation (TFE's model:
+        // the app can read every repo in the org, including private ones).
+        // Falls back to a GITHUB_TOKEN env var when no installation exists.
+        const installation = await db.query.githubAppInstallations.findFirst({
+          where: eq(githubAppInstallations.orgId, mod.orgId),
+        });
+        let authHeaders: Record<string, string> = {};
+        if (installation !== undefined) {
+          const appToken = await getGitHubAppAccessToken(installation.installationId);
+          if (appToken !== null) authHeaders = { Authorization: `Bearer ${appToken}` };
+        } else {
+          const githubToken = process.env.GITHUB_TOKEN;
+          if (typeof githubToken === "string" && githubToken !== "") {
+            authHeaders = { Authorization: `Bearer ${githubToken}` };
+          }
+        }
         archiveResponse = await fetch(tarballUrl, { headers: authHeaders });
       } catch {
         (set as { status: number }).status = 502;
