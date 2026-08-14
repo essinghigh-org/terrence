@@ -279,6 +279,15 @@ type PolicyRow = Readonly<{
   source: string | null; sourcePath: string | null; createdAt: number;
 }>;
 
+function requestedPolicyEnforcementLevel(attributes: Record<string, unknown>): string | undefined {
+  if (typeof attributes["enforcement-level"] === "string") return attributes["enforcement-level"];
+  const { enforce_mode: enforceMode, enforce } = attributes;
+  if (typeof enforceMode === "string") return enforceMode;
+  if (!Array.isArray(enforce) || enforce.length === 0 || enforce[0] === null || typeof enforce[0] !== "object") return undefined;
+  const { mode } = enforce[0] as Record<string, unknown>;
+  return typeof mode === "string" ? mode : undefined;
+}
+
 async function policyResource(pol: PolicyRow, orgName: string | null): Promise<Record<string, unknown>> {
   return {
     id: pol.id,
@@ -341,7 +350,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       where: eq(policies.orgId, org.id),
       orderBy: [asc(policies.name)],
     })) as unknown as PolicyRow[];
-    return { data: await Promise.all(polList.map((pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))) };
+    return { data: await Promise.all(polList.map(async (pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))) };
   })
   .post("/api/v2/organizations/:org_name/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -358,7 +367,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const kind = typeof attributes.kind === "string" ? attributes.kind : "sentinel";
     if (kind !== "sentinel") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "kind must be sentinel" }] }; }
     const query = typeof attributes.policy === "string" ? attributes.policy : (typeof attributes.query === "string" ? attributes.query : null);
-    const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : (typeof attributes["enforce_mode"] === "string" ? attributes["enforce_mode"] : "soft-mandatory");
+    const enforcementLevel = requestedPolicyEnforcementLevel(attributes) ?? "soft-mandatory";
     if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(enforcementLevel)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
@@ -1078,7 +1087,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `pol-${crypto.randomUUID()}`;
     const description = typeof attributes.description === "string" ? attributes.description : null;
-    const enforcementLevel = typeof attributes["enforcement-level"] === "string" ? attributes["enforcement-level"] : "soft-mandatory";
+    const enforcementLevel = requestedPolicyEnforcementLevel(attributes) ?? "soft-mandatory";
     if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(enforcementLevel)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
@@ -1121,8 +1130,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (attributes.policy !== undefined || attributes.query !== undefined) {
       updates.query = typeof attributes.policy === "string" ? attributes.policy : (typeof attributes.query === "string" ? attributes.query : null);
     }
-    if (typeof attributes["enforcement-level"] === "string") {
-      const lev = attributes["enforcement-level"];
+    const requestedEnforcementLevel = requestedPolicyEnforcementLevel(attributes);
+    if (requestedEnforcementLevel !== undefined) {
+      const lev = requestedEnforcementLevel;
       if (!["advisory", "soft-mandatory", "hard-mandatory"].includes(lev)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-level must be advisory, soft-mandatory, or hard-mandatory" }] };
@@ -1132,7 +1142,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
     const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: await policyResource(updated as unknown as PolicyRow, org.name) };
+    return { data: await policyResource(updated, org.name) };
   })
   .delete("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const policyId = params.policy_id ?? "";
@@ -1217,7 +1227,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const hcl = typeof attrs.hcl === "boolean" ? attrs.hcl : false;
     await db.insert(policySetParameters).values({ id, policySetId, key, value, sensitive, hcl });
     (set as { status: number }).status = 201;
-    return { data: policySetParameterResource({ id, policySetId, key, value, sensitive, hcl } as ParamItem, policySetId) };
+    return { data: policySetParameterResource({ id, policySetId, key, value, sensitive, hcl }, policySetId) };
   })
   .get("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";

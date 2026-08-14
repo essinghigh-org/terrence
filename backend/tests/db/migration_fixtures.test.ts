@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { cp, mkdtemp, rm } from "fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "fs/promises";
 import { readdirSync, readFileSync } from "fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
@@ -142,12 +142,19 @@ function journalOrderViolations(): string[] {
   return violations;
 }
 
+function journalMigrationCount(folder = DRIZZLE_DIR): number {
+  const journal = JSON.parse(readFileSync(join(folder, "meta/_journal.json"), "utf8")) as {
+    entries: readonly unknown[];
+  };
+  return journal.entries.length;
+}
+
 test("migration history applies cleanly to a fresh DB", async () => {
   const folder = await mkdtemp(join(tmpdir(), "terrence-mig-baseline-"));
   try {
     await cp(DRIZZLE_DIR, folder, { recursive: true });
     const { journalCount, tables } = await applyBaseline(folder);
-    expect(journalCount).toBe(3);
+    expect(journalCount).toBe(journalMigrationCount(folder));
     // The baseline must be substantial (it replaces 60 migrations), not a stub.
     expect(tables.length).toBeGreaterThan(90);
   } finally {
@@ -159,6 +166,10 @@ test("repairs run_explanations on a database with the baseline already applied",
   const folder = await mkdtemp(join(tmpdir(), "terrence-mig-repair-"));
   try {
     await cp(DRIZZLE_DIR, folder, { recursive: true });
+    const journalPath = join(folder, "meta/_journal.json");
+    const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: unknown[] };
+    journal.entries = journal.entries.slice(0, 3);
+    await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
     const raw = new Database(":memory:");
     try {
       const db = drizzle(raw);
@@ -217,7 +228,7 @@ test("re-running the migrator on an already-migrated DB is a no-op", async () =>
       const second = pragmaTables(raw);
       const count = (raw.query("SELECT COUNT(*) AS c FROM __drizzle_migrations").get() as { c: number }).c;
       expect(second).toEqual(first);
-      expect(count).toBe(3);
+      expect(count).toBe(journalMigrationCount(folder));
     } finally {
       raw.close();
     }

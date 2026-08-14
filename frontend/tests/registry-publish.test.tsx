@@ -1,300 +1,214 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Registry } from "../src/views/Registry";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown, status = 200): Response =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/vnd.api+json" },
-  });
+const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
+  status,
+  headers: { "Content-Type": "application/vnd.api+json" },
+});
+const urlOf = (input: string | URL | Request): string => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+function changeInput(element: HTMLElement, value: string): void {
+  fireEvent.input(element, { target: { value } });
+  fireEvent.change(element, { target: { value } });
+}
+
+function moduleResource(id: string, name: string, provider: string, mechanism: "vcs" | "manual" = "vcs"): Record<string, unknown> {
+  return {
+    id,
+    type: "registry-modules",
+    attributes: {
+      name,
+      namespace: "acme",
+      provider,
+      status: "setup_complete",
+      "publishing-mechanism": mechanism,
+      "publishing-workflow": mechanism === "vcs" ? "tag" : null,
+      "version-statuses": [{ version: "1.0.0", status: "ok", deprecated: false, revoked: false }],
+      permissions: { "can-delete": true, "can-resync": mechanism === "vcs" },
+    },
+  };
+}
+
+function baseResponse(url: string): Response | null {
+  if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true, "can-manage-providers": false } } } });
+  if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) return json({ data: [], meta: { pagination: { "total-pages": 1 }, providers: [] } });
+  if (url === "/api/v2/organizations/acme/github-app/installations") return json({ data: [{ id: "installation-1", attributes: { name: "Acme GitHub" } }] });
+  if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+  if (url === "/api/v2/organizations/acme/vcs-connections/github-app%3Ainstallation-1/repositories") return json({ data: [
+    { attributes: { identifier: "acme/terraform-network", name: "terraform-network", owner: "acme" } },
+    { attributes: { identifier: "acme/terraform-storage", name: "terraform-storage", owner: "acme" } },
+  ] });
+  return null;
+}
+
+function renderRegistry(): ReturnType<typeof render> {
+  return render(
+    <MemoryRouter initialEntries={["/app/acme/registry"]}>
+      <Routes>
+        <Route path="/app/:orgName/registry" element={<Registry />} />
+        <Route path="/app/:orgName/registry/modules/:namespace/:name/:provider" element={<p>Module detail landing</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+async function openPublish(view: ReturnType<typeof render>): Promise<void> {
+  fireEvent.click(await view.findByRole("button", { name: "Publish module" }));
+  await view.findByRole("heading", { name: "Publish module" });
+}
+
+async function selectRepository(view: ReturnType<typeof render>): Promise<void> {
+  fireEvent.change(await view.findByLabelText("VCS connection"), { target: { value: "github-app:installation-1" } });
+  const repository = await view.findByRole("combobox", { name: "Repository" });
+  fireEvent.focus(repository);
+  await view.findByRole("option", { name: /acme\/terraform-network/ });
+  fireEvent.keyDown(repository, { key: "ArrowDown" });
+  await waitFor((): void => { expect(repository.getAttribute("aria-activedescendant")).not.toBeNull(); });
+  fireEvent.keyDown(repository, { key: "Enter" });
+  expect((repository as HTMLInputElement).value).toBe("acme/terraform-network");
+}
 
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
 });
 
-function urlOf(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-}
-
-test("publishes a new registry module with version and archive upload", async () => {
-  const requests: Readonly<{ method: string | undefined; url: string }>[] = [];
-  const moduleId = "mod-new-vpc";
-  let versionId = "modver-new-vpc-v1";
-
-  globalThis.fetch = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = urlOf(input);
-    const method = init?.method ?? "GET";
-    requests.push({ method, url });
-
-    const moduleListGets = requests.filter(
-      (r): boolean => r.url === "/api/v2/organizations/acme/registry-modules" && r.method === "GET",
-    );
-
-    // GET: refetch after publish — return the new module (check first so it takes priority)
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET" && moduleListGets.length >= 2) {
-      return json({
-        data: [{
-          id: moduleId,
-          type: "registry-modules",
-          attributes: {
-            name: "vpc",
-            namespace: "acme",
-            provider: "aws",
-            "created-at": "2026-07-30T12:00:00.000Z",
-          },
-        }],
-      });
-    }
-
-    // GET: refetch after publish — providers are still empty
-    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET" && moduleListGets.length >= 2) {
-      return json({ data: [] });
-    }
-
-    // GET: initial empty registry-modules list
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET") {
-      return json({ data: [] });
-    }
-    // GET: initial empty registry-providers list
-    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET") {
-      return json({ data: [] });
-    }
-
-    // POST: create module
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "POST") {
-      const body = JSON.parse(init?.body as string);
-      const attrs = body.data?.attributes ?? {};
-      return json({
-        data: {
-          id: moduleId,
-          type: "registry-modules",
-          attributes: {
-            name: attrs.name ?? "vpc",
-            namespace: attrs.namespace ?? "acme",
-            provider: attrs.provider ?? "aws",
-            "created-at": "2026-07-30T12:00:00.000Z",
-          },
-        },
-      }, 201);
-    }
-
-    // POST: create version
-    if (url === `/api/v2/registry-modules/${moduleId}/versions` && method === "POST") {
-      const body = JSON.parse(init?.body as string);
-      const version = body.data?.attributes?.version ?? "1.0.0";
-      versionId = `modver-${moduleId}-${version}`;
-      return json({
-        data: {
-          id: versionId,
-          type: "registry-module-versions",
-          attributes: { version, status: "pending" },
-        },
-      }, 201);
-    }
-
-    // PUT: upload archive
-    if (url === `/api/v2/registry-module-versions/${versionId}/upload` && method === "PUT") {
-      return json({
-        data: {
-          id: versionId,
-          type: "registry-module-versions",
-          attributes: { status: "ok" },
-        },
-      }, 200);
-    }
-
-    throw new Error(`Unexpected request: ${method} ${url}`);
-  }) as typeof fetch;
-
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme/registry"]}>
-      <Routes>
-        <Route path="/app/:orgName/registry" element={<Registry />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-
-  // Wait for initial empty state
-  await view.findByText("No private modules");
-
-  // There should be a publish button
-  const publishButton = view.getByRole("button", { name: /publish/i });
-  expect(publishButton).toBeTruthy();
-
-  // Click publish to open modal
-  fireEvent.click(publishButton);
-
-  // Wait for dialog content to appear — the DialogTitle should be visible
-  await view.findByRole("heading", { name: /publish module/i });
-
-  // Fill in module details using the field's id
-  const nameInput = view.getByRole("textbox", { name: "Name" });
-  fireEvent.input(nameInput, { target: { value: "vpc" } });
-
-  const providerInput = view.getByRole("textbox", { name: "Provider" });
-  fireEvent.input(providerInput, { target: { value: "aws" } });
-
-  // Click "Create module" to proceed
-  const createButton = view.getByRole("button", { name: /create module/i });
-  fireEvent.click(createButton);
-
-  // After creating the module, the dialog should show the version step
-  await view.findByRole("heading", { name: /publish version/i });
-
-  // Fill version
-  const versionInput = view.getByRole("textbox", { name: "Version" });
-  fireEvent.input(versionInput, { target: { value: "1.0.0" } });
-
-  // Click publish version
-  const publishVersionBtn = view.getByRole("button", { name: /publish version$/i });
-  fireEvent.click(publishVersionBtn);
-
-  // Wait for the modal to close and the module list to refresh
-  await waitFor((): void => {
-    expect(view.queryByRole("heading", { name: /publish/i })).toBeNull();
-  });
-
-  // The new module should appear in the list
-  await view.findByText("vpc");
-  expect(view.getByText("acme/vpc/aws")).toBeTruthy();
-});
-
-test("publish button is absent when registry fails to load", async () => {
-  globalThis.fetch = mock(async (): Promise<Response> => {
-    return json({ errors: [{ detail: "Registry unavailable" }] }, 503);
-  }) as typeof fetch;
-
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme/registry"]}>
-      <Routes>
-        <Route path="/app/:orgName/registry" element={<Registry />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-
-  await view.findByText("Modules unavailable");
-  expect(view.queryByRole("button", { name: /publish/i })).toBeNull();
-});
-
-test("publish modal can be cancelled", async () => {
+test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
+  let payload: Record<string, unknown> | null = null;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
-    const method = init?.method ?? "GET";
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET") {
-      return json({ data: [] });
+    const base = baseResponse(url);
+    if (base !== null) return base;
+    if (url === "/api/v2/organizations/acme/registry-modules/vcs" && init?.method === "POST") {
+      payload = JSON.parse(init.body as string) as Record<string, unknown>;
+      return json({ data: moduleResource("mod-vcs", "network", "aws") }, 201);
     }
-    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET") {
-      return json({ data: [] });
-    }
-    throw new Error(`Unexpected request: ${method} ${url}`);
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
   }) as typeof fetch;
 
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme/registry"]}>
-      <Routes>
-        <Route path="/app/:orgName/registry" element={<Registry />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+  const view = renderRegistry();
+  await openPublish(view);
+  await selectRepository(view);
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "aws");
+  changeInput(view.getByLabelText("Source directory"), "modules/network");
+  changeInput(view.getByLabelText("Tag prefix"), "network-v");
+  fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
+  await view.findByText("Module detail landing");
 
-  await view.findByText("No private modules");
-
-  fireEvent.click(view.getByRole("button", { name: /publish/i }));
-  await view.findByRole("heading", { name: /publish module/i });
-
-  fireEvent.click(view.getByRole("button", { name: /cancel/i }));
-  await waitFor((): void => {
-    expect(view.queryByRole("heading", { name: /publish/i })).toBeNull();
+  const attributes = ((payload?.data as Record<string, unknown>).attributes as Record<string, unknown>);
+  expect(attributes["module-name"]).toBe("network");
+  expect(attributes["module-provider"]).toBe("aws");
+  expect(attributes["source-directory"]).toBe("modules/network");
+  expect(attributes["tag-prefix"]).toBe("network-v");
+  expect(attributes["vcs-repo"]).toEqual({
+    identifier: "acme/terraform-network",
+    "display-identifier": "acme/terraform-network",
+    "github-app-installation-id": "installation-1",
   });
 });
 
-test("shows validation errors on empty required fields in publish modal", async () => {
+test("publishes branch configuration with branch and initial version", async () => {
+  let attributes: Record<string, unknown> | null = null;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
-    const method = init?.method ?? "GET";
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET") {
-      return json({ data: [] });
+    const base = baseResponse(url);
+    if (base !== null) return base;
+    if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
+      const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      attributes = body.data.attributes;
+      return json({ data: moduleResource("mod-branch", "network", "azurerm") }, 201);
     }
-    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET") {
-      return json({ data: [] });
-    }
-    throw new Error(`Unexpected request: ${method} ${url}`);
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
   }) as typeof fetch;
 
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme/registry"]}>
-      <Routes>
-        <Route path="/app/:orgName/registry" element={<Registry />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-
-  await view.findByText("No private modules");
-
-  fireEvent.click(view.getByRole("button", { name: /publish/i }));
-  await view.findByRole("heading", { name: /publish module/i });
-
-  // Click create without filling required fields
-  fireEvent.click(view.getByRole("button", { name: /create module/i }));
-
-  // Validation error should appear
-  await view.findByText(/name is required/i);
+  const view = renderRegistry();
+  await openPublish(view);
+  await selectRepository(view);
+  fireEvent.click(view.getByLabelText("Branch-based"));
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "azurerm");
+  changeInput(view.getByLabelText("Source directory"), "terraform/module");
+  changeInput(view.getByLabelText("Branch"), "release");
+  changeInput(view.getByLabelText("Initial version"), "3.2.1");
+  fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
+  await view.findByText("Module detail landing");
+  expect(attributes?.["source-directory"]).toBe("terraform/module");
+  expect(attributes?.version).toBe("3.2.1");
+  expect((attributes?.["vcs-repo"] as Record<string, unknown>)["branch"]).toBe("release");
+  expect(attributes?.["tag-prefix"]).toBe("");
 });
 
-test("shows the API error when publishing a module version fails", async () => {
-  const moduleId = "mod-version-error";
-  let createdModule = false;
+test("manual publication uploads the selected archive bytes and retries without duplicate records", async () => {
+  const archive = new File([new Uint8Array([31, 139, 8, 1, 2, 3, 4])], "network.tar.gz", { type: "application/gzip" });
+  const uploadBodies: BodyInit[] = [];
+  let moduleCreates = 0;
+  let versionCreates = 0;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
-    const method = init?.method ?? "GET";
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "GET") {
-      return json({ data: [] });
+    const base = baseResponse(url);
+    if (base !== null) return base;
+    if (url === "/api/v2/organizations/acme/registry-modules" && init?.method === "POST") {
+      moduleCreates += 1;
+      return json({ data: moduleResource("mod-manual", "network", "aws", "manual") }, 201);
     }
-    if (url === "/api/v2/organizations/acme/registry-providers" && method === "GET") {
-      return json({ data: [] });
+    if (url === "/api/v2/registry-modules/mod-manual/versions" && init?.method === "POST") {
+      versionCreates += 1;
+      return json({ data: { id: "version-manual", attributes: { version: "1.0.0", status: "pending" } } }, 201);
     }
-    if (url === "/api/v2/organizations/acme/registry-modules" && method === "POST") {
-      createdModule = true;
-      return json({
-        data: { id: moduleId, type: "registry-modules", attributes: { name: "vpc", namespace: "acme", provider: "aws", "created-at": "2026-07-30T12:00:00.000Z" } },
-      }, 201);
+    if (url === "/api/v2/registry-module-versions/version-manual/upload" && init?.method === "PUT") {
+      uploadBodies.push(init.body as BodyInit);
+      if (uploadBodies.length === 1) return json({ errors: [{ detail: "Archive traversal detected" }] }, 422);
+      return json({ data: { id: "version-manual", attributes: { status: "ok" } } });
     }
-    if (url === `/api/v2/registry-modules/${moduleId}/versions` && method === "POST") {
-      expect(createdModule).toBeTrue();
-      return json({ errors: [{ status: "422", detail: "Version 1.0.0 already exists" }] }, 422);
-    }
-    throw new Error(`Unexpected request: ${method} ${url}`);
+    if (url === "/api/v2/registry-modules/mod-manual") return json({ data: moduleResource("mod-manual", "network", "aws", "manual") });
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
   }) as typeof fetch;
 
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme/registry"]}>
-      <Routes>
-        <Route path="/app/:orgName/registry" element={<Registry />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+  const view = renderRegistry();
+  await openPublish(view);
+  fireEvent.click(view.getByLabelText(/^Module archive/));
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "aws");
+  changeInput(view.getByLabelText("Version"), "1.0.0");
+  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), { target: { files: [archive] } });
+  fireEvent.click(view.getByRole("button", { name: "Upload module" }));
+  await view.findByText("Archive traversal detected");
+  expect(uploadBodies[0]).toBe(archive);
+  expect([...new Uint8Array(await (uploadBodies[0] as Blob).arrayBuffer())]).toEqual([31, 139, 8, 1, 2, 3, 4]);
 
-  await view.findByText("No private modules");
+  fireEvent.click(view.getByRole("button", { name: "Retry upload" }));
+  await view.findByText("Module detail landing");
+  expect(moduleCreates).toBe(1);
+  expect(versionCreates).toBe(1);
+  expect(uploadBodies).toEqual([archive, archive]);
+});
 
-  fireEvent.click(view.getByRole("button", { name: /publish/i }));
-  await view.findByRole("heading", { name: /publish module/i });
+test("cancelling after a failed manual upload removes the staged module", async () => {
+  let deleted = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    const base = baseResponse(url);
+    if (base !== null) return base;
+    if (url === "/api/v2/organizations/acme/registry-modules" && init?.method === "POST") return json({ data: moduleResource("mod-staged", "network", "aws", "manual") }, 201);
+    if (url === "/api/v2/registry-modules/mod-staged/versions" && init?.method === "POST") return json({ data: { id: "version-staged" } }, 201);
+    if (url === "/api/v2/registry-module-versions/version-staged/upload" && init?.method === "PUT") return json({ errors: [{ detail: "Expanded archive is too large" }] }, 422);
+    if (url === "/api/v2/registry-modules/mod-staged" && init?.method === "DELETE") { deleted = true; return new Response(null, { status: 204 }); }
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  }) as typeof fetch;
 
-  fireEvent.input(view.getByRole("textbox", { name: "Name" }), { target: { value: "vpc" } });
-  fireEvent.input(view.getByRole("textbox", { name: "Provider" }), { target: { value: "aws" } });
-  fireEvent.click(view.getByRole("button", { name: /create module/i }));
-  await view.findByRole("heading", { name: /publish version/i });
-
-  fireEvent.input(view.getByRole("textbox", { name: "Version" }), { target: { value: "1.0.0" } });
-  fireEvent.click(view.getByRole("button", { name: /publish version$/i }));
-
-  // The API failure surfaces the backend detail in the dialog instead of closing it.
-  await view.findByText("Version 1.0.0 already exists");
-  expect(view.queryByRole("heading", { name: /publish/i })).not.toBeNull();
+  const view = renderRegistry();
+  await openPublish(view);
+  fireEvent.click(view.getByLabelText(/^Module archive/));
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "aws");
+  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), { target: { files: [new File(["real"], "network.tar.gz")] } });
+  fireEvent.click(view.getByRole("button", { name: "Upload module" }));
+  await view.findByText("Expanded archive is too large");
+  fireEvent.click(view.getByRole("button", { name: "Cancel" }));
+  await waitFor((): void => { expect(deleted).toBeTrue(); });
 });

@@ -22,6 +22,13 @@
       "when": 1786730723692,
       "tag": "0002_safe_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786739424532,
+      "tag": "0003_registry-module-publishing",
+      "breakpoints": true
     }
   ]
 }

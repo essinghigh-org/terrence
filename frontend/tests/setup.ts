@@ -66,6 +66,7 @@ Object.defineProperty(win, "alert", {
 const elemProto = win.Element.prototype as unknown as Record<string, unknown>;
 elemProto["attachEvent"] = elemProto["attachEvent"] ?? noop;
 elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
+elemProto["scrollIntoView"] = elemProto["scrollIntoView"] ?? noop;
 
 (globalThis as MutableGlobal)["HTMLElement"] = win.HTMLElement;
 (globalThis as MutableGlobal)["Element"] = win.Element;

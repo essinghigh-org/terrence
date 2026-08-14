@@ -21,6 +21,7 @@ export type OrganizationPermissionName =
   | "can-manage-agent-pools"
   | "can-manage-vcs-settings"
   | "can-manage-providers"
+  | "can-manage-modules"
   | "can-manage-auditing"
   | "can-queue-plan"
   | "can-run"

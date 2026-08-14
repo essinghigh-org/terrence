@@ -1,7 +1,7 @@
 // Test setup: redirect database to an isolated temp directory so tests
 // never touch the production database.
 import { afterAll } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,33 @@ process.env.TERRENCE_SETUP_RAN = "yes";
 const testDir = mkdtempSync(join(tmpdir(), "terrence-test-"));
 process.env.DATABASE_URL ??= `file:${join(testDir, "terrence.db")}`;
 process.env.STORAGE_DIR ??= join(testDir, "storage");
+
+// The production image bundles the pinned HashiCorp inspector. Tests use a
+// deterministic stand-in so archive/API coverage remains offline and does not
+// require Go on every developer or CI machine.
+if (process.env.TERRAFORM_CONFIG_INSPECT_PATH === undefined) {
+  const inspector = join(testDir, "terraform-config-inspect");
+  writeFileSync(inspector, `#!/usr/bin/env bun
+const directory = Bun.argv.at(-1) ?? "";
+const subnet = directory.endsWith("/modules/subnet");
+const example = directory.endsWith("/examples/basic");
+const value = subnet ? {
+  variables: { cidr: { type: "string", required: true } },
+  managed_resources: { "aws_subnet.this": { name: "this", type: "aws_subnet" } },
+} : example ? {
+  module_calls: { network: { name: "network", source: "../.." } },
+} : {
+  required_providers: { aws: { name: "aws", source: "hashicorp/aws", version_constraints: ["~> 6.0"] } },
+  module_calls: { labels: { name: "labels", source: "cloudposse/label/null", version: "0.25.0" } },
+  managed_resources: { "aws_vpc.main": { name: "main", type: "aws_vpc" } },
+  data_resources: { "aws_region.current": { name: "current", type: "aws_region" } },
+  outputs: { vpc_id: { description: "Created VPC ID", sensitive: true } },
+};
+process.stdout.write(JSON.stringify(value));
+`);
+  chmodSync(inspector, 0o755);
+  process.env.TERRAFORM_CONFIG_INSPECT_PATH = inspector;
+}
 
 // Each test file's run of this preload creates a fresh tmpfs-backed temp dir
 // under /tmp (mkdtempSync above). tmpfs pages count toward the LXC cgroup's

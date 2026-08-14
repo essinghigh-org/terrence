@@ -8,8 +8,8 @@ import {
   type users,
   type workspaces,
 } from "../db/schema";
-import { eq, and, inArray, or } from "drizzle-orm";
-import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, validSignedApiURL } from "../lib/utils";
+import { eq, and, inArray, or, asc } from "drizzle-orm";
+import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -19,6 +19,7 @@ type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<stri
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   body?: unknown;
+  request: Readonly<{ url: string }>;
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
@@ -136,12 +137,20 @@ const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): 
 // go-tfe's RunTasks service (used by the framework tfe_organization_run_task /
 // tfe_workspace_run_task resources) calls /organizations/:org/tasks and
 // /workspaces/:ws/tasks.
-const listOrgRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const orgName = params.org_name ?? "";
   const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const tasksList = await db.query.runTasks.findMany({ where: eq(runTasks.orgId, org.id) });
-  return { data: await Promise.all(tasksList.map((t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))) };
+  const tasksList = await db.query.runTasks.findMany({
+    where: eq(runTasks.orgId, org.id),
+    orderBy: [asc(runTasks.id)],
+  });
+  const page = pageRequest(request);
+  const pageTasks = tasksList.slice((page.number - 1) * page.size, page.number * page.size);
+  return {
+    data: await Promise.all(pageTasks.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
+    ...pagination(request, page.number, page.size, tasksList.length),
+  };
 };
 
 const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -211,19 +220,24 @@ const deleteRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTea
   return {};
 };
 
-const listWorkspaceRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const workspaceId = params.workspace_id ?? "";
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const bindings = await db.query.workspaceRunTasks.findMany({ where: eq(workspaceRunTasks.workspaceId, workspaceId) });
-  const attachedTasks = bindings.length === 0
+  const bindings = await db.query.workspaceRunTasks.findMany({
+    where: eq(workspaceRunTasks.workspaceId, workspaceId),
+    orderBy: [asc(workspaceRunTasks.id)],
+  });
+  const page = pageRequest(request);
+  const pageBindings = bindings.slice((page.number - 1) * page.size, page.number * page.size);
+  const attachedTasks = pageBindings.length === 0
     ? []
     : await db.query.runTasks.findMany({
-        where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
+        where: inArray(runTasks.id, pageBindings.map((binding: BindingItem): string => binding.runTaskId)),
       });
   const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
   return {
-    data: bindings.map((binding: BindingItem): Record<string, unknown> => {
+    data: pageBindings.map((binding: BindingItem): Record<string, unknown> => {
       const task = tasksById.get(binding.runTaskId);
       return {
         id: binding.id,
@@ -242,6 +256,7 @@ const listWorkspaceRunTasks = async ({ params, user, orgId: tokenOrgId, teamId: 
         },
       };
     }),
+    ...pagination(request, page.number, page.size, bindings.length),
   };
 };
 
@@ -359,8 +374,9 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload.data as Record<string, unknown> | undefined;
   const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-  const runTaskRel = typeof rels["task"] === "object" && rels["task"] !== null
-    ? (rels["task"] as Record<string, unknown>)
+  const { task: taskRelationship } = rels;
+  const runTaskRel = typeof taskRelationship === "object" && taskRelationship !== null
+    ? (taskRelationship as Record<string, unknown>)
     : typeof rels["run-task"] === "object" && rels["run-task"] !== null
       ? (rels["run-task"] as Record<string, unknown>)
       : {};

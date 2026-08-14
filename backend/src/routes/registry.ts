@@ -8,6 +8,9 @@ import {
   noCodeWorkspaceConfigurations,
   organizations,
   projects,
+  githubAppInstallations,
+  oauthClients,
+  oauthTokens,
   registryGpgKeys,
   registryModules,
   registryModuleVersions,
@@ -15,7 +18,6 @@ import {
   moduleTestResults,
   testVariables,
   registryProviders,
-  githubAppInstallations,
   registryProviderPlatforms,
   registryProviderVersions,
   runs,
@@ -23,27 +25,37 @@ import {
   workspaces,
   type users,
 } from "../db/schema";
-import { eq, and, desc, like, or, ne } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
+import { eq, and, asc, count, desc, inArray, isNull, like, or, ne, sql } from "drizzle-orm";
 import {
   checkOrganizationPermission,
   checkOrgPermission,
   checkRegistryReadPermission,
   checkRunRegistryRead,
+  pageRequest,
+  pagination,
   validateVersion,
   type DeepReadonly,
 } from "../lib/utils";
-import { join } from "path";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "fs/promises";
+import { join, relative } from "path";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { isDeepStrictEqual } from "util";
 import { authPlugin } from "../auth";
 import { workspaceResource } from "../lib/response";
 import { signedApiURL, validSignedApiURL } from "../lib/utils";
-import { getGitHubAppAccessToken } from "../lib/webhooks";
 import {
   scanTerraformModuleVariables,
   type TerraformVariableMetadata,
 } from "../lib/terraform-variables";
+import {
+  extractValidatedModuleArchive,
+  ingestModuleArchive,
+  MAX_MODULE_ARCHIVE_BYTES,
+  moduleRootPath,
+} from "../lib/registry-module-archive";
+import { inspectRegistryModule } from "../lib/registry-module-metadata";
+import { synchronizeRegistryModule } from "../lib/registry-module-sync";
 import {
   moduleTestConfiguration,
   moduleTestResource,
@@ -54,9 +66,10 @@ import { ensureDefaultProject } from "./projects";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { isUniqueConstraintError } from "../lib/validation";
 
-const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "cv");
-const MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "modules");
+const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "cv");
+const REGISTRY_MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "modules");
 
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -92,7 +105,11 @@ type ParamCtx = Readonly<{
   readonly orgId?: string | null;
   readonly teamId?: string | null;
   readonly run?: { runId: string; workspaceId: string; organizationId: string } | null;
-  readonly request: Readonly<{ readonly url: string; readonly arrayBuffer: () => Promise<ArrayBuffer> }>;
+  readonly request: Readonly<{
+    readonly url: string;
+    readonly headers: Readonly<{ get: (name: string) => string | null }>;
+    readonly arrayBuffer: () => Promise<ArrayBuffer>;
+  }>;
   readonly set: SetObj;
 }>;
 
@@ -121,10 +138,51 @@ function registryProviderResource(value: ProvItem, orgName: string): Record<stri
 type ProvVerItem = DeepReadonly<typeof registryProviderVersions.$inferSelect>;
 type PlatItem = DeepReadonly<typeof registryProviderPlatforms.$inferSelect>;
 
+function validModuleVersion(value: string): boolean {
+  return /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value);
+}
+
+function registryModuleVersionResource(version: ModVerItem): Record<string, unknown> {
+  return {
+    id: version.id,
+    type: "registry-module-versions",
+    attributes: {
+      version: version.version,
+      status: version.status,
+      source: version.source,
+      deprecated: version.isDeprecated === true,
+      revoked: version.isRevoked === true,
+      "key-id": version.keyId,
+      "commit-sha": version.commitSha,
+      tag: version.vcsTag,
+      branch: version.vcsBranch,
+      "source-directory": version.sourceDirectory,
+      metadata: version.metadata,
+      "ingest-error": version.ingestError,
+      "published-at": version.publishedAt === null ? null : new Date(version.publishedAt).toISOString(),
+      "created-at": new Date(version.createdAt).toISOString(),
+      "updated-at": new Date(version.updatedAt ?? version.createdAt).toISOString(),
+    },
+    relationships: {
+      "registry-module": { data: { id: version.moduleId, type: "registry-modules" } },
+    },
+    links: version.status === "pending" ? { upload: `/api/v2/registry-module-versions/${version.id}/upload` } : {},
+  };
+}
+
 // RegistryModule carry a pointer `organization` relationship plus attributes
 // the provider's model dereferences (status, publishing-mechanism, no-code);
 // omitting any makes the provider nil-deref or return inconsistently.
-function registryModuleResource(m: { id: string; name: string; provider: string; namespace: string; createdAt: number }, orgName: string): Record<string, unknown> {
+async function registryModuleResource(
+  m: ModItem,
+  orgName: string,
+  canManage: boolean,
+  suppliedVersions?: readonly ModVerItem[],
+): Promise<Record<string, unknown>> {
+  const versions = suppliedVersions ?? await db.query.registryModuleVersions.findMany({
+    where: eq(registryModuleVersions.moduleId, m.id),
+    orderBy: [desc(registryModuleVersions.createdAt)],
+  });
   return {
     id: m.id,
     type: "registry-modules",
@@ -134,14 +192,44 @@ function registryModuleResource(m: { id: string; name: string; provider: string;
       namespace: m.namespace,
       "registry-name": "private",
       "no-code": false,
-      "publishing-mechanism": "generic",
-      status: "available",
+      description: m.description,
+      "publishing-mechanism": m.publishingMechanism,
+      "publishing-workflow": m.publishingWorkflow,
+      status: m.status,
+      "version-statuses": versions.map((version) => ({
+        version: version.version,
+        status: version.status,
+        deprecated: version.isDeprecated === true,
+        revoked: version.isRevoked === true,
+      })),
+      "vcs-repo": m.publishingMechanism === "vcs" ? {
+        identifier: m.repositoryIdentifier,
+        "display-identifier": m.repositoryDisplayIdentifier,
+        "repository-url": m.repositoryUrl,
+        branch: m.branch ?? "",
+        "source-directory": m.sourceDirectory,
+        "tag-prefix": m.tagPrefix,
+        ...(m.vcsConnectionType === "github-app" ? { "github-app-installation-id": m.vcsConnectionId } : {}),
+        ...(m.vcsConnectionType === "oauth-token" ? { "oauth-token-id": m.vcsConnectionId } : {}),
+      } : null,
+      "last-successful-sync-at": m.lastSuccessfulSyncAt === null ? null : new Date(m.lastSuccessfulSyncAt).toISOString(),
+      "last-sync-attempt-at": m.lastSyncAttemptAt === null ? null : new Date(m.lastSyncAttemptAt).toISOString(),
+      "last-sync-error": m.lastSyncError,
       "created-at": new Date(m.createdAt).toISOString(),
+      "updated-at": new Date(m.updatedAt ?? m.createdAt).toISOString(),
+      permissions: {
+        "can-delete": canManage,
+        "can-resync": canManage && m.publishingMechanism === "vcs",
+        "can-retry": canManage,
+      },
     },
     relationships: {
       organization: { data: { id: orgName, type: "organizations" } },
       versions: { data: [] },
       tags: { data: [] },
+    },
+    links: {
+      self: `/api/v2/organizations/${encodeURIComponent(orgName)}/registry-modules/private/${encodeURIComponent(m.namespace)}/${encodeURIComponent(m.name)}/${encodeURIComponent(m.provider)}`,
     },
   };
 }
@@ -162,6 +250,30 @@ async function moduleTestTarget(
     ),
   });
   return version === undefined ? undefined : { mod, version };
+}
+
+async function availableModuleVersions(moduleId: string): Promise<ModVerItem[]> {
+  const versions = await db.query.registryModuleVersions.findMany({
+    where: eq(registryModuleVersions.moduleId, moduleId),
+    orderBy: [desc(registryModuleVersions.createdAt)],
+  });
+  const available = await Promise.all(versions.map(async (version): Promise<boolean> =>
+    version.status === "ok"
+    && version.isRevoked !== true
+    && version.archivePath !== null
+    && await Bun.file(version.archivePath).exists()));
+  return versions
+    .filter((_, index): boolean => available[index] === true)
+    .sort((left, right): number => Bun.semver.order(right.version, left.version) || right.version.localeCompare(left.version));
+}
+
+async function deleteRegistryModuleAndArchives(moduleId: string): Promise<void> {
+  const versions = await db.query.registryModuleVersions.findMany({
+    where: eq(registryModuleVersions.moduleId, moduleId),
+  });
+  await db.delete(registryModules).where(eq(registryModules.id, moduleId));
+  await Promise.allSettled(versions.flatMap((version): Promise<void>[] =>
+    version.archivePath === null ? [] : [rm(version.archivePath, { force: true })]));
 }
 
 async function checkRegistryManagementRead(
@@ -188,6 +300,81 @@ async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promi
   if (typeof body === "string") return new TextEncoder().encode(body);
   if (body !== undefined) return new TextEncoder().encode(JSON.stringify(body));
   return new Uint8Array(await request.arrayBuffer());
+}
+
+async function createRegistryModuleVersion(
+  mod: ModItem,
+  attributes: Readonly<Record<string, unknown>>,
+  set: SetObj,
+): Promise<unknown> {
+  const version = typeof attributes.version === "string" ? attributes.version.replace(/^v/, "") : "";
+  if (!validModuleVersion(version)) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version must be a semantic module version" }] };
+  }
+  const duplicate = await db.query.registryModuleVersions.findFirst({
+    where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+  });
+  if (duplicate !== undefined) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Version ${version} already exists` }] };
+  }
+  if (mod.publishingMechanism === "vcs") {
+    if (mod.publishingWorkflow !== "branch") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
+    }
+    try {
+      await synchronizeRegistryModule(mod, version);
+      const created = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+      });
+      if (created === undefined) throw new Error("The branch revision did not produce a module version");
+      (set as { status: number }).status = 201;
+      return { data: registryModuleVersionResource(created) };
+    } catch (error: unknown) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
+    }
+  }
+
+  const rawKeyId = attributes["key-id"];
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
+  }
+  const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
+  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
+  }
+  const commitSha = typeof attributes["commit-sha"] === "string" && attributes["commit-sha"] !== ""
+    ? attributes["commit-sha"]
+    : null;
+  const now = Date.now();
+  const id = `modver-${crypto.randomUUID()}`;
+  const created: typeof registryModuleVersions.$inferInsert = {
+    id,
+    moduleId: mod.id,
+    version,
+    status: "pending",
+    source: "tfe-api",
+    keyId,
+    commitSha,
+    createdAt: now,
+    updatedAt: now,
+  };
+  try {
+    await db.insert(registryModuleVersions).values(created);
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) throw error;
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Version ${version} already exists` }] };
+  }
+  (set as { status: number }).status = 201;
+  const row = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, id) });
+  if (row === undefined) throw new Error("Created registry module version could not be loaded");
+  return { data: registryModuleVersionResource(row) };
 }
 
 async function registrySigningKey(
@@ -823,55 +1010,42 @@ function noCodeWorkspaceUpgradeInput(
     : { variables: parsed.variables, typedInputs: parsed.typedInputs };
 }
 
-async function extractModuleArchive(archivePath: string, destination: string): Promise<boolean> {
-  const verbose = Bun.spawn(["tar", "-tvzf", archivePath], { stdout: "pipe", stderr: "pipe" });
-  const verboseText = await new Response(verbose.stdout).text();
-  if (await verbose.exited !== 0) return false;
-  for (const line of verboseText.split("\n").map((entry): string => entry.trim()).filter(Boolean)) {
-    if (["l", "h", "c", "b", "p", "s"].includes(line.charAt(0)) || line.includes(" -> ") || line.includes(" link to ")) {
-      return false;
-    }
-  }
-  const listing = Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "pipe" });
-  const members = (await new Response(listing.stdout).text()).split("\n").map((entry): string => entry.trim()).filter(Boolean);
-  if (await listing.exited !== 0) return false;
-  if (members.some((member): boolean => {
-    const normalized = member.replaceAll("\\", "/");
-    return normalized.startsWith("/") || normalized.split("/").includes("..");
-  })) return false;
-  const extraction = Bun.spawn(["tar", "-xzf", archivePath, "-C", destination], { stdout: "pipe", stderr: "pipe" });
-  return await extraction.exited === 0;
-}
-
-async function moduleSourceDirectory(moduleDirectory: string): Promise<string | undefined> {
-  const entries = await readdir(moduleDirectory, { withFileTypes: true });
-  if (entries.some((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")))) {
-    return "./module";
-  }
-  const directories = entries.filter((entry): boolean => entry.isDirectory());
-  if (directories.length !== 1 || directories[0] === undefined) return undefined;
-  const childEntries = await readdir(join(moduleDirectory, directories[0].name), { withFileTypes: true });
-  return childEntries.some((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")))
-    ? `./module/${directories[0].name}`
-    : undefined;
-}
-
 async function selectedModuleVariables(
   version: Readonly<typeof registryModuleVersions.$inferSelect>,
 ): Promise<readonly TerraformVariableMetadata[]> {
+  const cachedInputs = version.metadata?.inputs;
+  if (Array.isArray(cachedInputs)) {
+    return cachedInputs.flatMap((raw): TerraformVariableMetadata[] => {
+      if (raw === null || typeof raw !== "object") return [];
+      const input = raw as Record<string, unknown>;
+      if (typeof input.name !== "string") return [];
+      const hasDefault = typeof input.hasDefault === "boolean"
+        ? input.hasDefault
+        : input.required !== true;
+      return [{
+        name: input.name,
+        type: typeof input.type === "string" ? input.type : "any",
+        description: typeof input.description === "string" ? input.description : null,
+        hasDefault,
+        ...(hasDefault && Object.hasOwn(input, "defaultValue") ? { defaultValue: input.defaultValue } : {}),
+        sensitive: input.sensitive === true,
+        nullable: input.nullable !== false,
+      }];
+    });
+  }
   if (version.archivePath === null || !(await Bun.file(version.archivePath).exists())) return [];
   const stagingDirectory = await mkdtemp(join(tmpdir(), "terrence-module-metadata-"));
   const moduleDirectory = join(stagingDirectory, "module");
   try {
     await mkdir(moduleDirectory, { recursive: true, mode: 0o700 });
-    if (!(await extractModuleArchive(version.archivePath, moduleDirectory))) {
-      throw new Error("The selected module archive is invalid");
-    }
-    const sourceDirectory = await moduleSourceDirectory(moduleDirectory);
-    if (sourceDirectory === undefined) {
-      throw new Error("The selected module archive does not contain a Terraform module");
-    }
-    return await scanTerraformModuleVariables(join(stagingDirectory, sourceDirectory));
+    await extractValidatedModuleArchive(version.archivePath, moduleDirectory);
+    const root = await moduleRootPath(moduleDirectory);
+    const inputs = await scanTerraformModuleVariables(root);
+    await db.update(registryModuleVersions).set({
+      metadata: { ...(version.metadata ?? {}), inputs },
+      updatedAt: Date.now(),
+    }).where(eq(registryModuleVersions.id, version.id));
+    return inputs;
   } finally {
     await rm(stagingDirectory, { recursive: true, force: true });
   }
@@ -919,6 +1093,7 @@ function testVariableResource(variable: DeepReadonly<typeof testVariables.$infer
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
 type TestVarsParams = { org_name?: string | undefined; registry_name?: string | undefined; namespace?: string | undefined; module_name?: string | undefined; provider?: string | undefined; variable_id?: string | undefined };
 
 async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
@@ -959,7 +1134,7 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
   const cat = typeof category === "string" ? category : "terraform";
   if (cat !== "terraform" && cat !== "env") return { error: "category must be terraform or env" };
-  const result: Record<string, string | boolean> = {};
+  const result: { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } = {};
   // Only set category when the caller provided it, so a PATCH that omits
   // category preserves the stored one (create defaults to "terraform").
   if (typeof category === "string") result.category = cat;
@@ -968,7 +1143,7 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   if (typeof attrs.sensitive === "boolean") result.sensitive = attrs.sensitive;
   if (typeof attrs.hcl === "boolean") result.hcl = attrs.hcl;
   if (typeof attrs.description === "string") result.description = attrs.description;
-  return result as Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }>;
+  return result;
 }
 
 async function buildNoCodeConfigurationArchive(
@@ -981,9 +1156,8 @@ async function buildNoCodeConfigurationArchive(
   const archivePath = join(CV_STORAGE_DIR, `config-${configurationVersionId}.tar.gz`);
   try {
     await mkdir(moduleDirectory, { recursive: true, mode: 0o700 });
-    if (!(await extractModuleArchive(moduleArchivePath, moduleDirectory))) throw new Error("The selected module archive is invalid");
-    const sourceDirectory = await moduleSourceDirectory(moduleDirectory);
-    if (sourceDirectory === undefined) throw new Error("The selected module archive does not contain a Terraform module");
+    await extractValidatedModuleArchive(moduleArchivePath, moduleDirectory);
+    const sourceDirectory = `./${relative(stagingDirectory, await moduleRootPath(moduleDirectory))}`;
     const terraformVariables = variables.filter((variable): boolean => variable.category === "terraform");
     const moduleArguments = terraformVariables.map((variable): string => `  ${variable.key} = var.${variable.key}`).join("\n");
     const main = `module "provisioned" {\n  source = ${JSON.stringify(sourceDirectory)}${moduleArguments === "" ? "" : `\n${moduleArguments}`}\n}\n`;
@@ -1098,7 +1272,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const provider = params.provider ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
-    const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
+    const verList = await availableModuleVersions(mod.id);
     return { modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }] };
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
@@ -1109,7 +1283,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
     return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
@@ -1120,7 +1294,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
     // Terraform fetches the archive WITHOUT an Authorization header, so the
     // archive URL is signed (TFE model).
     // The URL ends in .tar.gz so go-getter detects the archive format from
@@ -1147,148 +1321,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // Serve the cached archive when present.
-    if (ver.archivePath !== null && ver.archivePath !== "" && await Bun.file(ver.archivePath).exists()) {
-      (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
-      return Bun.file(ver.archivePath);
-    }
-    // On-demand fetch from the version's git source: the semver tag is
-    // downloaded as a tarball (github.com/{owner}/{repo}/archive/refs/tags/
-    // {version}.tar.gz) and cached for subsequent requests. This mirrors
-    // TFE's "tag the module repo, consume from the registry" flow.
-    if (typeof ver.source === "string" && ver.source !== "") {
-      const base = ver.source.replace(/\/+$/, "");
-      // GitHub: the archive endpoints do not reliably resolve tag/branch
-      // names (404 for lightweight tags on some repos), so resolve the tag
-      // to a commit SHA via the refs API and fetch by SHA.
-      const githubMatch = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(base);
-      let tarballUrl = "";
-      if (githubMatch !== null) {
-        const owner = githubMatch[1] ?? "";
-        const repo = (githubMatch[2] ?? "").replace(/\.git$/i, "");
-        // Private module repos need an authenticated GitHub call; the
-        // container can provide the token via GITHUB_TOKEN (same variable
-        // the github provider uses).
-        // Authenticate with the org's GitHub App installation (TFE's model:
-        // the app can read every repo in the org, including private ones).
-        // Falls back to a GITHUB_TOKEN env var when no installation exists.
-        const installation = await db.query.githubAppInstallations.findFirst({
-          where: eq(githubAppInstallations.orgId, mod.orgId),
-        });
-        let authHeaders: Record<string, string> = {};
-        if (installation !== undefined) {
-          const appToken = await getGitHubAppAccessToken(installation.installationId);
-          if (appToken !== null) authHeaders = { Authorization: `Bearer ${appToken}` };
-        } else {
-          const githubToken = process.env.GITHUB_TOKEN;
-          if (typeof githubToken === "string" && githubToken !== "") {
-            authHeaders = { Authorization: `Bearer ${githubToken}` };
-          }
-        }
-        for (const tag of [ver.version, `v${ver.version}`]) {
-          try {
-            const refResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/tags/${encodeURIComponent(tag)}`, { headers: authHeaders });
-            if (refResponse.ok) {
-              const refBody = (await refResponse.json()) as { object?: { sha?: string } };
-              const sha = refBody.object?.sha;
-              if (typeof sha === "string" && sha !== "") {
-                tarballUrl = `https://api.github.com/repos/${owner}/${repo}/tarball/${sha}`;
-                break;
-              }
-            }
-          } catch {
-            // fall through to the plain URL attempts below
-          }
-        }
-      }
-      if (tarballUrl === "") {
-        // Non-GitHub source (or resolution failed): try the plain tag
-        // archive URLs directly.
-        const candidates = [
-          `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`,
-          `${base}/archive/refs/tags/v${encodeURIComponent(ver.version)}.tar.gz`,
-        ];
-        for (const candidate of candidates) {
-          try {
-            const probe = await fetch(candidate);
-            if (probe.ok) {
-              tarballUrl = candidate;
-              break;
-            }
-          } catch {
-            // try the next candidate
-          }
-        }
-      }
-      if (tarballUrl === "") {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
-      }
-      let archiveResponse: Response;
-      try {
-        // Authenticate with the org's GitHub App installation (TFE's model:
-        // the app can read every repo in the org, including private ones).
-        // Falls back to a GITHUB_TOKEN env var when no installation exists.
-        const installation = await db.query.githubAppInstallations.findFirst({
-          where: eq(githubAppInstallations.orgId, mod.orgId),
-        });
-        let authHeaders: Record<string, string> = {};
-        if (installation !== undefined) {
-          const appToken = await getGitHubAppAccessToken(installation.installationId);
-          if (appToken !== null) authHeaders = { Authorization: `Bearer ${appToken}` };
-        } else {
-          const githubToken = process.env.GITHUB_TOKEN;
-          if (typeof githubToken === "string" && githubToken !== "") {
-            authHeaders = { Authorization: `Bearer ${githubToken}` };
-          }
-        }
-        archiveResponse = await fetch(tarballUrl, { headers: authHeaders });
-      } catch {
-        (set as { status: number }).status = 502;
-        return { errors: [{ status: "502", title: "Bad Gateway", detail: `Could not fetch module archive from ${base}` }] };
-      }
-      if (!archiveResponse.ok) {
-        (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
-      }
-      const bytes = new Uint8Array(await archiveResponse.arrayBuffer());
-      await mkdir(MODULE_STORAGE_DIR, { recursive: true });
-      const archivePath = join(MODULE_STORAGE_DIR, `${ver.id}-${ver.version}.tar.gz`);
-      // Re-pack the fetched tarball with the module files at the archive
-      // root: go-getter keeps the GitHub top-level folder otherwise, which
-      // makes terraform see an empty module. The existing extract +
-      // source-directory helpers double as the security gate (no symlinks,
-      // no traversal).
-      const staging = await mkdtemp(join(tmpdir(), "terrence-module-archive-"));
-      try {
-        const rawPath = join(staging, "raw.tar.gz");
-        await writeFile(rawPath, bytes, { mode: 0o600 });
-        const extractDir = join(staging, "extract");
-        await mkdir(extractDir, { recursive: true });
-        if (!(await extractModuleArchive(rawPath, extractDir))) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Module archive is invalid" }] };
-        }
-        const sourceRel = await moduleSourceDirectory(extractDir);
-        const sourceDir = sourceRel === undefined
-          ? extractDir
-          : join(extractDir, sourceRel.replace(/^\.\/module\/?/, "").replace(/^\.\//, ""));
-        const repack = Bun.spawn(["tar", "-czf", archivePath, "-C", sourceDir, "."]);
-        if ((await repack.exited) !== 0) {
-          (set as { status: number }).status = 422;
-          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Module archive could not be prepared" }] };
-        }
-      } finally {
-        await rm(staging, { recursive: true, force: true });
-      }
-      await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, ver.id));
-      (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
-      return Bun.file(archivePath);
-    }
-
-    (set as { status: number }).status = 404;
-    return { errors: [{ status: "404", title: "Not Found", detail: "Module version has no archive or git source" }] };
+    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
+    (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-gzip";
+    return Bun.file(ver.archivePath);
   })
   .get("/api/registry/v1/modules/:namespace/:name", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
@@ -1305,7 +1340,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const provider = params.provider ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
-    const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id), orderBy: [desc(registryModuleVersions.createdAt)] });
+    const verList = await availableModuleVersions(mod.id);
     const latestVersion = verList[0]?.version ?? "0.0.0";
     const status = verList[0]?.status ?? "pending";
     return { id: `${namespace}/${name}/${provider}/${latestVersion}`, owner: namespace, namespace, name, provider, version: latestVersion, status, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
@@ -1316,7 +1351,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const readable = await Promise.all(found.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
     const mods = found.filter((_, index): boolean => readable[index] === true);
     const modules = await Promise.all(mods.map(async (m: ModItem): Promise<Record<string, unknown>> => {
-      const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, m.id), orderBy: [desc(registryModuleVersions.createdAt)] });
+      const verList = await availableModuleVersions(m.id);
       return { id: `${m.namespace}/${m.name}/${m.provider}`, owner: m.namespace, namespace: m.namespace, name: m.name, provider: m.provider, version: verList[0]?.version ?? null, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
     }));
     return { modules };
@@ -1331,7 +1366,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     const readable = await Promise.all(mods.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
     const modules = await Promise.all(mods.filter((_, index): boolean => readable[index] === true).map(async (m: ModItem): Promise<Record<string, unknown>> => {
-      const verList = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, m.id), orderBy: [desc(registryModuleVersions.createdAt)] });
+      const verList = await availableModuleVersions(m.id);
       return { id: `${m.namespace}/${m.name}/${m.provider}`, owner: m.namespace, namespace: m.namespace, name: m.name, provider: m.provider, version: verList[0]?.version ?? null, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
     }));
     return { modules };
@@ -1433,12 +1468,59 @@ export const registryRoutes = new Elysia({ name: "registry" })
     });
   })
   // --- Module Management API (TFE v2) ---
-  .get("/api/v2/organizations/:org_name/registry-modules", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/registry-modules", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const modList = await db.query.registryModules.findMany({ where: eq(registryModules.orgId, org.id) });
-    return { data: modList.map((m: ModItem): Record<string, unknown> => ({ id: m.id, type: "registry-modules", attributes: { name: m.name, provider: m.provider, namespace: m.namespace, "created-at": new Date(m.createdAt).toISOString() } })) };
+    const query = new URL(request.url).searchParams;
+    const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
+    const provider = query.get("filter[provider]");
+    const publishingMechanism = query.get("filter[publishing_mechanism]");
+    const conditions: SQL[] = [eq(registryModules.orgId, org.id)];
+    if (search !== "") {
+      const pattern = `%${search}%`;
+      const searchCondition = or(
+        sql`lower(${registryModules.namespace}) like ${pattern}`,
+        sql`lower(${registryModules.name}) like ${pattern}`,
+        sql`lower(${registryModules.provider}) like ${pattern}`,
+      );
+      if (searchCondition !== undefined) conditions.push(searchCondition);
+    }
+    if (provider !== null && provider !== "") conditions.push(eq(registryModules.provider, provider));
+    if (publishingMechanism !== null && publishingMechanism !== "") {
+      conditions.push(eq(registryModules.publishingMechanism, publishingMechanism));
+    }
+    const where = and(...conditions);
+    const page = pageRequest(request);
+    const start = (page.number - 1) * page.size;
+    const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
+    const [pageModules, countRows, providerRows] = await Promise.all([
+      db.query.registryModules.findMany({
+        where,
+        orderBy: [desc(registryModules.updatedAt), asc(registryModules.id)],
+        limit: page.size,
+        offset: start,
+      }),
+      db.select({ total: count() }).from(registryModules).where(where),
+      db.selectDistinct({ provider: registryModules.provider })
+        .from(registryModules)
+        .where(eq(registryModules.orgId, org.id)),
+    ]);
+    const pageData = pagination(request, page.number, page.size, countRows[0]?.total ?? 0);
+    const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
+      where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
+      orderBy: [desc(registryModuleVersions.createdAt)],
+    });
+    const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
+    return {
+      data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
+        await registryModuleResource(mod, org.name, canManage, versionsByModule.get(mod.id) ?? []))),
+      ...pageData,
+      meta: {
+        ...pageData.meta,
+        providers: providerRows.map(({ provider: name }): string => name).sort(),
+      },
+    };
   })
   .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -1447,14 +1529,176 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name : "";
-    const provider = typeof attributes.provider === "string" ? attributes.provider : "";
-    if (name === "" || provider === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and provider are required" }] }; }
+    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+    const provider = typeof attributes.provider === "string" ? attributes.provider.trim() : "";
+    const namespace = attributes.namespace;
+    const registryName = attributes["registry-name"];
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and provider must follow private module naming rules" }] };
+    }
+    if ((namespace !== undefined && namespace !== org.name) || (registryName !== undefined && registryName !== "private")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Private modules use the organization namespace and private registry" }] };
+    }
     const id = `mod-${crypto.randomUUID()}`;
-    const namespace = typeof attributes.namespace === "string" ? attributes.namespace : org.name;
-    await db.insert(registryModules).values({ id, orgId: org.id, namespace, name, provider, createdAt: Date.now() });
+    const now = Date.now();
+    const created: typeof registryModules.$inferInsert = {
+      id,
+      orgId: org.id,
+      namespace: org.name,
+      name,
+      provider,
+      publishingMechanism: "manual",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await db.insert(registryModules).values(created);
+    } catch (error: unknown) {
+      if (!isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: registryModuleResource({ id, name, provider, namespace, createdAt: Date.now() }, org.name) };
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+    if (mod === undefined) throw new Error("Created registry module could not be loaded");
+    return { data: await registryModuleResource(mod, org.name, true) };
+  })
+  .post("/api/v2/organizations/:org_name/registry-modules/vcs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const org = await cachedOrgByName(params.org_name ?? "");
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
+      ? attributes["vcs-repo"] as Record<string, unknown>
+      : {};
+    const identifier = typeof vcsRepo.identifier === "string" ? vcsRepo.identifier.trim() : "";
+    const repositoryName = identifier.split("/").at(-1) ?? "";
+    const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
+    const rawModuleName = attributes["module-name"] ?? attributes.name;
+    const rawProvider = attributes["module-provider"] ?? attributes.provider;
+    const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
+    const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
+    const githubAppInstallationId = vcsRepo["github-app-installation-id"];
+    const oauthTokenId = vcsRepo["oauth-token-id"];
+    const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
+      + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
+    const branch = typeof vcsRepo.branch === "string" && vcsRepo.branch.trim() !== "" ? vcsRepo.branch.trim() : null;
+    const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
+    const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
+    const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
+    const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
+    const rawInitialVersion = attributes["initial-version"] ?? attributes.version;
+    const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
+    const identifierParts = identifier.split("/");
+    const identifierValid = identifierParts.length === 2
+      && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+    if (data.type !== "registry-modules" || !identifierValid || connectionCount !== 1) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A repository identifier and exactly one VCS connection are required" }] };
+    }
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied" }] };
+    }
+    if ((sourceDirectory !== "" && (sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) || tagPrefix.length > 128) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Source directory or tag prefix is invalid" }] };
+    }
+    if (branch !== null && !validModuleVersion(initialVersion)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Branch-based publication requires a semantic initial-version" }] };
+    }
+    let connectionAvailable = false;
+    let repositoryBaseUrl: string | null = null;
+    if (typeof githubAppInstallationId === "string") {
+      connectionAvailable = await db.query.githubAppInstallations.findFirst({
+        where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, org.id)),
+      }) !== undefined;
+      repositoryBaseUrl = process.env.GITHUB_APP_HTTP_URL ?? "https://github.com";
+    } else {
+      const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
+      const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
+        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, org.id)),
+      });
+      connectionAvailable = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
+      repositoryBaseUrl = client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null);
+    }
+    if (!connectionAvailable) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
+    }
+    const now = Date.now();
+    const id = `mod-${crypto.randomUUID()}`;
+    const rawRepositoryUrl = vcsRepo["repository-url"];
+    let repositoryUrl: string | null = null;
+    if (repositoryBaseUrl !== null) {
+      try {
+        const parsed = new URL(repositoryBaseUrl);
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+          parsed.username = "";
+          parsed.password = "";
+          repositoryUrl = `${parsed.toString().replace(/\/$/, "")}/${identifier}`;
+        }
+      } catch {
+        // An invalid optional connection URL should not fabricate a github.com link.
+      }
+    }
+    if (typeof rawRepositoryUrl === "string") {
+      try {
+        const parsed = new URL(rawRepositoryUrl);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error();
+        parsed.username = "";
+        parsed.password = "";
+        repositoryUrl = parsed.toString();
+      } catch {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "repository-url must be an HTTP or HTTPS URL" }] };
+      }
+    }
+    try {
+      await db.insert(registryModules).values({
+        id,
+        orgId: org.id,
+        namespace: org.name,
+        name,
+        provider,
+        publishingMechanism: "vcs",
+        publishingWorkflow: branch === null ? "tag" : "branch",
+        vcsConnectionType: typeof githubAppInstallationId === "string" ? "github-app" : "oauth-token",
+        vcsConnectionId: typeof githubAppInstallationId === "string" ? githubAppInstallationId : oauthTokenId as string,
+        repositoryIdentifier: identifier,
+        repositoryDisplayIdentifier: typeof vcsRepo["display-identifier"] === "string"
+          ? vcsRepo["display-identifier"]
+          : typeof vcsRepo.display_identifier === "string" ? vcsRepo.display_identifier : identifier,
+        repositoryUrl,
+        sourceDirectory,
+        tagPrefix,
+        branch,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (error: unknown) {
+      if (!isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
+    }
+    try {
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+      if (mod === undefined) throw new Error("Registry module could not be created");
+      await synchronizeRegistryModule(mod, branch === null ? undefined : initialVersion);
+      const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+      if (updated === undefined) throw new Error("Registry module could not be created");
+      (set as { status: number }).status = 201;
+      return { data: await registryModuleResource(updated, org.name, true) };
+    } catch (error: unknown) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Registry module ingestion failed" }] };
+    }
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -1472,14 +1716,74 @@ export const registryRoutes = new Elysia({ name: "registry" })
       ),
     });
     if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org.name) };
+    const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
+    return { data: await registryModuleResource(mod, org.name, canManage) };
   })
   .get("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
-    return { data: registryModuleResource({ id: mod.id, name: mod.name, provider: mod.provider, namespace: mod.namespace, createdAt: mod.createdAt }, org?.name ?? mod.orgId) };
+    const canManage = await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
+    return { data: await registryModuleResource(mod, org?.name ?? mod.orgId, canManage) };
+  })
+  .post("/api/v2/registry-modules/:module_id/actions/resync", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, params.module_id ?? "") });
+    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    if (mod.publishingMechanism !== "vcs" || mod.publishingWorkflow !== "tag") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Resync imports new versions only for tag-based VCS modules; create a version for branch-based modules" }] };
+    }
+    try {
+      const result = await synchronizeRegistryModule(mod);
+      const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
+      if (updated === undefined) return registryNotFound(set);
+      return { data: await registryModuleResource(updated, org?.name ?? mod.orgId, true), meta: result };
+    } catch (error: unknown) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Registry module synchronization failed" }] };
+    }
+  })
+  .patch("/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const org = await cachedOrgByName(params.org_name ?? "");
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const mod = await db.query.registryModules.findFirst({
+      where: and(
+        eq(registryModules.orgId, org.id),
+        eq(registryModules.namespace, params.namespace ?? ""),
+        eq(registryModules.name, params.module_name ?? ""),
+        eq(registryModules.provider, params.provider ?? ""),
+      ),
+    });
+    if (mod === undefined) return registryNotFound(set);
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const sourceDirectory = attributes["source-directory"];
+    const tagPrefix = attributes["tag-prefix"];
+    const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
+    const requestedBranch = vcsRepo.branch;
+    if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-directory must be a safe relative path" }] };
+    }
+    if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "tag-prefix must be at most 128 characters" }] };
+    }
+    if (requestedBranch !== undefined && requestedBranch !== mod.branch) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Switching publishing workflows is not supported; create a new module instead" }] };
+    }
+    await db.update(registryModules).set({
+      ...(typeof sourceDirectory === "string" ? { sourceDirectory } : {}),
+      ...(typeof tagPrefix === "string" ? { tagPrefix } : {}),
+      updatedAt: Date.now(),
+    }).where(eq(registryModules.id, mod.id));
+    const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
+    if (updated === undefined) return registryNotFound(set);
+    return { data: await registryModuleResource(updated, org.name, true) };
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe RegistryModules.ReadVersion — resolves a single published module
@@ -1504,7 +1808,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryModules).where(eq(registryModules.id, moduleId));
+    await deleteRegistryModuleAndArchives(moduleId);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -1524,7 +1828,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       ),
     });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryModules).where(eq(registryModules.id, mod.id));
+    await deleteRegistryModuleAndArchives(mod.id);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2407,12 +2711,33 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   // --- Module Versions ---
+  .post("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const org = await cachedOrgByName(params.org_name ?? "");
+    if (org === undefined || params.registry_name !== "private" || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const mod = await db.query.registryModules.findFirst({
+      where: and(
+        eq(registryModules.orgId, org.id),
+        eq(registryModules.namespace, params.namespace ?? ""),
+        eq(registryModules.name, params.module_name ?? ""),
+        eq(registryModules.provider, params.provider ?? ""),
+      ),
+    });
+    if (mod === undefined) return registryNotFound(set);
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    if (data.type !== undefined && data.type !== "registry-module-versions") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be registry-module-versions" }] };
+    }
+    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    return createRegistryModuleVersion(mod, attributes, set);
+  })
   .get("/api/v2/registry-modules/:module_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const versions = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId), orderBy: [desc(registryModuleVersions.createdAt)] });
-    return { data: versions.map((v: ModVerItem): Record<string, unknown> => ({ id: v.id, type: "registry-module-versions", attributes: { version: v.version, status: v.status, "key-id": v.keyId, "created-at": new Date(v.createdAt).toISOString() } })) };
+    return { data: versions.map(registryModuleVersionResource) };
   })
   .post("/api/v2/registry-modules/:module_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const moduleId = params.module_id ?? "";
@@ -2421,31 +2746,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const version = typeof attributes.version === "string" ? attributes.version : "";
-    if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    // Optional git repository the archive is fetched from on demand (the
-    // version tag is downloaded as a tarball). Example:
-    // https://github.com/essinghigh-org/tf-github-repository
-    const rawSource = attributes.source;
-    if (rawSource !== undefined && (typeof rawSource !== "string" || rawSource.trim() === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be a repository URL" }] };
-    }
-    const source = typeof rawSource === "string" && rawSource.trim() !== "" ? rawSource.trim() : null;
-    const rawKeyId = attributes["key-id"];
-    if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] };
-    }
-    const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-    if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
-    }
-    const id = `modver-${crypto.randomUUID()}`;
-    await db.insert(registryModuleVersions).values({ id, moduleId, version, status: "pending", source, keyId, createdAt: Date.now() });
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-module-versions", attributes: { version, status: "pending", "key-id": keyId, "created-at": new Date().toISOString() } } };
+    return createRegistryModuleVersion(mod, attributes, set);
   })
   .post("/api/v2/registry-modules/:module_id/versions/:version/test", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const target = await moduleTestTarget(params.module_id ?? "", params.version ?? "");
@@ -2489,44 +2790,6 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     return { data: moduleTestResource(result, target.mod.id, target.version.version) };
   })
-  .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const updates: Partial<typeof registryModuleVersions.$inferInsert> = {};
-    if (typeof attributes.status === "string") updates.status = attributes.status;
-    if (typeof attributes.version === "string") updates.version = attributes.version;
-    if (attributes["key-id"] !== undefined) {
-      const rawKeyId = attributes["key-id"];
-      if (rawKeyId !== null && (typeof rawKeyId !== "string" || rawKeyId === "")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key or be null" }] };
-      }
-      const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-      if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
-      }
-      updates.keyId = keyId;
-    }
-    if (attributes.source !== undefined) {
-      const rawSource = attributes.source;
-      if (rawSource !== null && (typeof rawSource !== "string" || rawSource.trim() === "")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be a repository URL or null" }] };
-      }
-      updates.source = typeof rawSource === "string" && rawSource.trim() !== "" ? rawSource.trim() : null;
-    }
-    if (Object.keys(updates).length > 0) await db.update(registryModuleVersions).set(updates).where(eq(registryModuleVersions.id, versionId));
-    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "registry-module-versions", attributes: { version: updated.version, status: updated.status, "key-id": updated.keyId, "created-at": new Date(updated.createdAt).toISOString() } } };
-  })
   .delete("/api/v2/registry-module-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const versionId = params.version_id ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
@@ -2534,6 +2797,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
+    if (ver.archivePath !== null) await rm(ver.archivePath, { force: true });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2544,13 +2808,70 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const archiveName = `registry-module-${versionId}.tar.gz`;
-    const archivePath = join(CV_STORAGE_DIR, archiveName);
-    await mkdir(CV_STORAGE_DIR, { recursive: true });
-    await writeFile(archivePath, await uploadedBytes(body, request));
-    await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, versionId));
-    (set as { status: number }).status = 200;
-    return { data: { id: versionId, type: "registry-module-versions", attributes: { status: "ok" } } };
+    if (mod.publishingMechanism !== "manual") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed module versions are ingested from their configured VCS connection" }] };
+    }
+    if (ver.archivePath !== null) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
+    }
+    const contentLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
+      (set as { status: number }).status = 413;
+      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
+    }
+    const bytes = await uploadedBytes(body, request);
+    if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
+      (set as { status: number }).status = 413;
+      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
+    }
+    const claimed = await db.update(registryModuleVersions)
+      .set({ status: "ingesting", updatedAt: Date.now() })
+      .where(and(
+        eq(registryModuleVersions.id, versionId),
+        isNull(registryModuleVersions.archivePath),
+        ne(registryModuleVersions.status, "ingesting"),
+      ))
+      .returning({ id: registryModuleVersions.id });
+    if (claimed.length !== 1) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
+    }
+    const rawPath = join(CV_STORAGE_DIR, `registry-module-${versionId}.${crypto.randomUUID()}.upload`);
+    const archivePath = join(REGISTRY_MODULE_STORAGE_DIR, `${versionId}.tar.gz`);
+    try {
+      await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
+      await writeFile(rawPath, bytes, { mode: 0o600 });
+      const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
+      const publishedAt = Date.now();
+      await db.transaction(async (tx): Promise<void> => {
+        await tx.update(registryModuleVersions).set({
+          archivePath,
+          status: "ok",
+          metadata,
+          ingestError: null,
+          publishedAt,
+          updatedAt: publishedAt,
+        }).where(eq(registryModuleVersions.id, versionId));
+        await tx.update(registryModules).set({
+          status: "setup_complete",
+          description: metadata.description,
+          updatedAt: publishedAt,
+        }).where(eq(registryModules.id, mod.id));
+      });
+      const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      (set as { status: number }).status = 200;
+      if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
+      return { data: registryModuleVersionResource(updated) };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Module archive ingestion failed";
+      await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
+    } finally {
+      await rm(rawPath, { force: true });
+    }
   })
   .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
@@ -2563,33 +2884,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
 
-    let newStatus = ver.status;
-    if (attributes.deprecated === true) newStatus = "deprecated";
-    if (attributes.deprecated === false && ver.status === "deprecated") newStatus = "ok";
-
-    const updates: Partial<typeof registryModuleVersions.$inferInsert> = { status: newStatus };
-    if (attributes.source !== undefined) {
-      const rawSource = attributes.source;
-      if (rawSource !== null && (typeof rawSource !== "string" || rawSource.trim() === "")) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be a repository URL or null" }] };
-      }
-      updates.source = typeof rawSource === "string" && rawSource.trim() !== "" ? rawSource.trim() : null;
+    if (typeof attributes.deprecated !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecated must be a boolean" }] };
     }
-
-    await db.update(registryModuleVersions).set(updates).where(eq(registryModuleVersions.id, versionId));
-    return {
-      data: {
-        id: versionId,
-        type: "registry-module-versions",
-        attributes: {
-          version: ver.version,
-          status: newStatus,
-          deprecated: newStatus === "deprecated" || newStatus === "revoked",
-          revoked: newStatus === "revoked",
-        },
-      },
-    };
+    await db.update(registryModuleVersions).set({ isDeprecated: attributes.deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    if (updated === undefined) throw new Error("Updated registry module version could not be loaded");
+    return { data: registryModuleVersionResource(updated) };
   })
   .delete("/api/v2/registry-module-versions/:version_id/actions/revert-deprecation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const versionId = params.version_id ?? "";
@@ -2598,7 +2900,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
-    await db.update(registryModuleVersions).set({ status: "ok" }).where(eq(registryModuleVersions.id, versionId));
+    await db.update(registryModuleVersions).set({ isDeprecated: false, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -2683,14 +2985,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
-    await db.update(registryModuleVersions).set({ status: "revoked" }).where(eq(registryModuleVersions.id, versionId));
+    await db.update(registryModuleVersions).set({ isRevoked: true, isDeprecated: true, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
     return {
       data: {
         id: versionId,
         type: "registry-module-versions",
         attributes: {
           version: ver.version,
-          status: "revoked",
+          status: ver.status,
           deprecated: true,
           revoked: true,
         },
@@ -2704,14 +3006,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
-    await db.update(registryModuleVersions).set({ status: "deprecated" }).where(eq(registryModuleVersions.id, versionId));
+    await db.update(registryModuleVersions).set({ isRevoked: false, isDeprecated: true, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
     return {
       data: {
         id: versionId,
         type: "registry-module-versions",
         attributes: {
           version: ver.version,
-          status: "deprecated",
+          status: ver.status,
           deprecated: true,
           revoked: false,
         },
@@ -2755,22 +3057,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
-    const testId = `modtest-${crypto.randomUUID()}`;
-    await db.insert(moduleTestResults).values({
-      id: testId,
-      versionId: ver.id,
-      status: "passed",
-      output: "Module tests completed successfully",
-      createdAt: Date.now(),
+    if (ver.status !== "ok" || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" }] };
+    }
+    const result = await runModuleTest(ver.id, ver.archivePath, {
+      verbose: false,
+      filters: [],
+      testDirectory: "tests",
+      variables: [],
     });
     (set as { status: number }).status = 201;
-    return {
-      data: {
-        id: testId,
-        type: "module-tests",
-        attributes: { status: "passed", output: "Module tests completed successfully" },
-      },
-    };
+    return { data: moduleTestResource(result, mod.id, ver.version) };
   })
   .get("/api/v2/registry-modules/:module_id/versions/:version/tests", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const modId = params.module_id ?? "";
@@ -2782,12 +3080,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
-    const tests = await db.query.moduleTestResults.findMany({ where: eq(moduleTestResults.versionId, ver.id) });
+    const [latest, tests] = await Promise.all([
+      readModuleTestResult(ver.id),
+      db.query.moduleTestResults.findMany({ where: eq(moduleTestResults.versionId, ver.id) }),
+    ]);
     return {
-      data: tests.map((t) => ({
+      data: [
+        ...(latest === undefined ? [] : [moduleTestResource(latest, mod.id, ver.version)]),
+        ...tests.map((t) => ({
         id: t.id,
         type: "module-tests",
         attributes: { status: t.status, output: t.output },
-      })),
+        })),
+      ],
     };
   });

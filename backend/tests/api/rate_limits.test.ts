@@ -95,6 +95,10 @@ describe("rate limiting", () => {
 
     const throttled = await app.handle(authenticatedRequest("/api/v1/ping", user!.tokens[0]!));
     expect(throttled.status).toBe(429);
+
+    const discovery = await app.handle(authenticatedRequest("/api/v2/ping", user!.tokens[0]!));
+    expect(discovery.status).toBe(200);
+    expect(discovery.headers.get("X-TFE-Current-Version")).toBe("2.4.0");
   });
 
   it("applies a lower shared-principal limit to token creation", async () => {

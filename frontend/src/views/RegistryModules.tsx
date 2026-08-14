@@ -36,7 +36,7 @@ export function RegistryModules(): React.JSX.Element {
   const activeOrganizationName = useRef(orgName);
   activeOrganizationName.current = orgName;
   const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
-  const canManage = orgName !== "" && orgPermissions.has("can-manage-providers");
+  const canManage = orgName !== "" && orgPermissions.has("can-manage-modules");
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -60,7 +60,7 @@ export function RegistryModules(): React.JSX.Element {
   const permissionGateFired = useRef(false);
   useEffect((): void => {
     if (!orgPermissions.loaded) return;
-    if (orgPermissions.has("can-manage-providers")) {
+    if (orgPermissions.has("can-manage-modules")) {
       setError("");
       if (!permissionGateFired.current) {
         permissionGateFired.current = true;

@@ -156,7 +156,7 @@ variable "enable_monitoring" {
     ]);
     await db.insert(registryModuleVersions).values([
       { id: versionOneId, moduleId, version: "1.0.0", status: "ok", createdAt: Date.now() - 100 },
-      { id: versionTwoId, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchivePath, createdAt: Date.now() },
+      { id: versionTwoId, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchivePath, metadata: { description: "Preserved metadata" }, createdAt: Date.now() },
       { id: otherVersionId, moduleId: otherModuleId, version: "9.9.9", status: "ok", createdAt: Date.now() },
     ]);
   });
@@ -285,6 +285,14 @@ variable "enable_monitoring" {
       type: "bool",
       required: false,
       default: true,
+    });
+    expect((await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionTwoId) }))?.metadata?.description).toBe("Preserved metadata");
+    const cachedInputs = (await (await request(`/api/v2/no-code-modules/${noCodeId}/input-variables`)).json()).data as readonly {
+      attributes: Readonly<Record<string, unknown>>;
+    }[];
+    expect(cachedInputs.find((input): boolean => input.attributes.name === "region")?.attributes).toMatchObject({
+      required: true,
+      "has-default": false,
     });
   });
 

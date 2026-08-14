@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, teams } from "../../src/db/schema";
+import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 describe("private registry organization permissions", () => {
   const suffix = crypto.randomUUID();
@@ -19,6 +23,8 @@ describe("private registry organization permissions", () => {
     providers: `registry-providers-token-${suffix}`,
     none: `registry-none-token-${suffix}`,
   };
+  let fixtureDirectory = "";
+  let moduleArchive = "";
 
   const request = (path: string, token: string, method = "GET", body?: unknown): Promise<Response> =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -33,17 +39,20 @@ describe("private registry organization permissions", () => {
   const data = async <T>(response: Readonly<Response>): Promise<T> =>
     (await response.json() as Readonly<{ data: T }>).data;
 
-  const upload = (versionId: string, token: string): Promise<Response> =>
+  const upload = async (versionId: string, token: string): Promise<Response> =>
     app.handle(new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/octet-stream",
       },
-      body: "test archive",
+      body: await Bun.file(moduleArchive).arrayBuffer(),
     }));
 
   beforeAll(async () => {
+    fixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-registry-permissions-"));
+    moduleArchive = join(fixtureDirectory, "module.tar.gz");
+    await makeRegistryModuleArchive(moduleArchive);
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(teams).values([
       {
@@ -69,6 +78,7 @@ describe("private registry organization permissions", () => {
 
   afterAll(async () => {
     await db.delete(organizations).where(eq(organizations.id, orgId));
+    await rm(fixtureDirectory, { recursive: true, force: true });
   });
 
   it("separates module and provider management across every mutation tier", async () => {
@@ -96,10 +106,10 @@ describe("private registry organization permissions", () => {
     expect(moduleVersionResponse.status).toBe(201);
     const moduleVersionId = (await data<{ id: string }>(moduleVersionResponse)).id;
     expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.providers, "PATCH", {
-      data: { type: "registry-module-versions", attributes: { status: "ok" } },
+      data: { type: "registry-module-versions", attributes: { deprecated: true } },
     })).status).toBe(404);
     expect((await request(`/api/v2/registry-module-versions/${moduleVersionId}`, tokens.modules, "PATCH", {
-      data: { type: "registry-module-versions", attributes: { status: "ok" } },
+      data: { type: "registry-module-versions", attributes: { deprecated: true } },
     })).status).toBe(200);
     expect((await upload(moduleVersionId, tokens.providers)).status).toBe(404);
     const allowedUpload = await upload(moduleVersionId, tokens.modules);

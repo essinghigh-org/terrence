@@ -15,6 +15,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, runs, runTokens, stateVersions, users, workspaces } from "../../src/db/schema";
 import { hashRunToken, mintRunToken, revokeRunTokens, writeRunCliConfig } from "../../src/lib/run-token";
+import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 let suffix = "";
 let adminToken = "";
@@ -26,6 +27,8 @@ let wsA = "";
 let wsB = "";
 let runA = "";
 let stateVersionId = "";
+let moduleFixtureDirectory = "";
+let moduleArchivePath = "";
 
 function request(path: string, method = "GET", token?: string, body?: unknown): Request {
   const headers: Record<string, string> = {};
@@ -51,12 +54,16 @@ async function seedRegistryModule(orgName: string, name: string): Promise<string
     moduleId: id,
     version: "1.0.0",
     status: "ok",
+    archivePath: moduleArchivePath,
     createdAt: Date.now(),
   });
   return id;
 }
 
 beforeAll(async () => {
+  moduleFixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-run-token-module-"));
+  moduleArchivePath = join(moduleFixtureDirectory, "module.tar.gz");
+  await makeRegistryModuleArchive(moduleArchivePath);
   suffix = crypto.randomUUID().slice(0, 8);
   adminUserId = `rt-admin-${suffix}`;
   adminToken = `rt-admin-tok-${suffix}`;
@@ -110,6 +117,7 @@ afterAll(async () => {
   await db.delete(organizations).where(eq(organizations.id, orgB));
   await db.delete(apiTokens).where(eq(apiTokens.userId, adminUserId));
   await db.delete(users).where(eq(users.id, adminUserId));
+  await rm(moduleFixtureDirectory, { recursive: true, force: true });
 });
 
 describe("run token minting and storage", () => {

@@ -43,6 +43,13 @@
       "when": 1786736549303,
       "tag": "0005_lively_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786739418669,
+      "tag": "0006_registry-module-publishing",
+      "breakpoints": true
     }
   ]
 }

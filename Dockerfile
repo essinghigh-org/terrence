@@ -24,6 +24,12 @@
 # esbuild and add CVEs), then bun install --production --frozen-lockfile from
 # /app/backend. This is what keeps frozen-lockfile succeeding and esbuild out.
 
+# terraform-config-inspect is feature-complete but does not publish release
+# binaries, so build the pinned upstream revision once and keep Go out of the
+# runtime image.
+FROM golang:1.26-bookworm AS config-inspect-builder
+RUN CGO_ENABLED=0 GOBIN=/out go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
+
 # ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
 FROM oven/bun:1 AS builder
 WORKDIR /app
@@ -93,6 +99,7 @@ COPY backend/src ./backend/src
 
 # landlock-runner is compiled to a static glibc binary in the builder stage.
 COPY --from=builder /app/backend/bin/landlock-runner ./backend/bin/landlock-runner
+COPY --from=config-inspect-builder /out/terraform-config-inspect ./backend/bin/terraform-config-inspect
 
 # Install production dependencies for backend, inside the workspace context,
 # exactly as before. Frozen-lockfile resolves because root package.json

@@ -45,7 +45,6 @@ import {
   UserRound,
   Users,
   Variable,
-  Boxes,
   Hourglass,
   Layers,
   Calendar,
@@ -101,6 +100,7 @@ type OrganizationPermissions = Readonly<{
   "can-read-projects"?: boolean;
   "can-manage-policies"?: boolean;
   "can-read-policies"?: boolean;
+  "can-manage-modules"?: boolean;
 }>;
 
 type SidebarNavLinkProps = Readonly<{
@@ -967,18 +967,6 @@ export function Layout({
           to: `${organizationSettingsPath}/oidc`,
         },
         {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/registry-providers`),
-          icon: Boxes,
-          label: "Registry providers",
-          to: `${organizationSettingsPath}/registry-providers`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/registry-modules`),
-          icon: PackageOpen,
-          label: "Registry modules",
-          to: `${organizationSettingsPath}/registry-modules`,
-        },
-        {
           active: isActivePath(location.pathname, `${organizationSettingsPath}/token-ttl`),
           icon: Hourglass,
           label: "Token TTL policies",
@@ -1022,8 +1010,6 @@ export function Layout({
         && (link.label !== "Tag policy sets" || canManagePolicies)
         && (link.label !== "Provider sets" || canManagePolicies)
         && (link.label !== "OIDC" || canManagePolicies)
-        && (link.label !== "Registry providers" || canManagePolicies)
-        && (link.label !== "Registry modules" || canManagePolicies)
         && (link.label !== "Token TTL policies" || canManagePolicies)
         && (link.label !== "Stacks" || canManageWorkspaces)
         && (link.label !== "Agent pool scoping" || canManageAgentPools)

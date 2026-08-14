@@ -32,6 +32,15 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
+function organizationTokenWhere(orgId: string, tokenType: string) {
+  return and(
+    eq(apiTokens.orgId, orgId),
+    eq(apiTokens.tokenType, tokenType),
+    isNull(apiTokens.userId),
+    isNull(apiTokens.teamId),
+  );
+}
+
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
@@ -465,7 +474,7 @@ export const userRoutes = new Elysia({ name: "users" })
     if (orgId !== undefined) {
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
-        await t.delete(apiTokens).where(and(eq(apiTokens.orgId, orgId), eq(apiTokens.tokenType, "")));
+        await t.delete(apiTokens).where(organizationTokenWhere(orgId, ""));
         await t.insert(apiTokens).values(createdToken);
       });
     } else {
@@ -493,7 +502,7 @@ export const userRoutes = new Elysia({ name: "users" })
     // distinctly from the organization token (which sends no query param).
     const tokenType = new URL(request.url).searchParams.get("token") ?? "";
     const token = await db.query.apiTokens.findFirst({
-      where: and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)),
+      where: organizationTokenWhere(org.id, tokenType),
     });
     if (token === undefined) {
       (set as { status: number }).status = 404;
@@ -533,7 +542,7 @@ export const userRoutes = new Elysia({ name: "users" })
     };
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
-      await t.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)));
+      await t.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
       await t.insert(apiTokens).values(createdToken);
     });
     if (strictAuditEnabled()) {
@@ -554,7 +563,7 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const tokenType = new URL(request.url).searchParams.get("token") ?? "";
-    await db.delete(apiTokens).where(and(eq(apiTokens.orgId, org.id), eq(apiTokens.tokenType, tokenType)));
+    await db.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
     (set as { status: number }).status = 204;
     return {};
   });

@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { extractValidatedModuleArchive, moduleRootPath } from "./registry-module-archive";
 
 const MODULE_TEST_DIR = resolve(
   process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
@@ -87,37 +88,6 @@ export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration
   };
 }
 
-async function extractArchive(archivePath: string, destination: string): Promise<boolean> {
-  const listing = Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "pipe" });
-  const members = (await new Response(listing.stdout).text())
-    .split("\n")
-    .map((entry): string => entry.trim())
-    .filter((entry): boolean => entry !== "");
-  if (await listing.exited !== 0 || members.some((member): boolean => !safeRelativePath(member))) return false;
-  const verbose = Bun.spawn(["tar", "-tvzf", archivePath], { stdout: "pipe", stderr: "pipe" });
-  const verboseText = await new Response(verbose.stdout).text();
-  if (await verbose.exited !== 0 || verboseText.split("\n").some((line): boolean =>
-    ["l", "h", "c", "b", "p", "s"].includes(line.charAt(0)) || line.includes(" -> ") || line.includes(" link to "))) {
-    return false;
-  }
-  const extraction = Bun.spawn(["tar", "-xzf", archivePath, "-C", destination], { stdout: "pipe", stderr: "pipe" });
-  return await extraction.exited === 0;
-}
-
-async function moduleRoot(directory: string): Promise<string | undefined> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  if (entries.some((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")))) {
-    return directory;
-  }
-  const directories = entries.filter((entry): boolean => entry.isDirectory());
-  if (directories.length !== 1 || directories[0] === undefined) return undefined;
-  const nested = join(directory, directories[0].name);
-  const nestedEntries = await readdir(nested, { withFileTypes: true });
-  return nestedEntries.some((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")))
-    ? nested
-    : undefined;
-}
-
 function summary(output: string): Readonly<{ passed: number; failed: number; errored: number; skipped: number }> {
   let passed = 0;
   let failed = 0;
@@ -179,9 +149,8 @@ export async function runModuleTest(
   const staging = await mkdtemp(join(tmpdir(), "terrence-module-test-"));
   let result: ModuleTestResult;
   try {
-    if (!(await extractArchive(archivePath, staging))) throw new Error("The module archive is invalid");
-    const root = await moduleRoot(staging);
-    if (root === undefined) throw new Error("The module archive does not contain a Terraform module");
+    await extractValidatedModuleArchive(archivePath, staging);
+    const root = await moduleRootPath(staging);
     const binary = process.env.TERRAFORM_TEST_BINARY_PATH ?? "terraform";
     const args = [
       binary,

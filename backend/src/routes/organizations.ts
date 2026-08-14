@@ -49,7 +49,7 @@ async function organizationResourceForPrincipal(
       userId,
       tokenOrgId,
       tokenTeamId,
-      ["manage-workspaces", "read-projects", "manage-projects", "manage-vcs-settings", "manage-agent-pools", "manage-teams", "manage-membership", "manage-organization-access", "manage-policies", "read-policies", "manage-providers"],
+      ["manage-workspaces", "read-projects", "manage-projects", "manage-vcs-settings", "manage-agent-pools", "manage-teams", "manage-membership", "manage-organization-access", "manage-policies", "read-policies", "manage-providers", "manage-modules"],
     ),
     getSiteCapabilities(),
   ]);
@@ -65,6 +65,7 @@ async function organizationResourceForPrincipal(
     canManagePolicies,
     canReadPolicies,
     canManageProviders,
+    canManageModules,
   ] = orgPermissionFlags;
   const resource = organizationResource(org);
   return {
@@ -86,6 +87,7 @@ async function organizationResourceForPrincipal(
         "can-read-policies": canReadPolicies,
         "can-manage-auditing": canManageOrganization,
         "can-manage-providers": canManageProviders,
+        "can-manage-modules": canManageModules,
         "can-manage-organization-access": canUpdateOrganizationAccess,
       },
       capabilities,

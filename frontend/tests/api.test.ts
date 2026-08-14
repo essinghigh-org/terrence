@@ -104,6 +104,24 @@ test("uses absolute /api/* endpoints verbatim instead of double-prefixing", asyn
   }
 });
 
+test("lets fetch infer content types for binary bodies", async () => {
+  const originalFetch = globalThis.fetch;
+  const contentTypes: (string | null)[] = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    contentTypes.push(new Headers(init?.headers).get("Content-Type"));
+    return Response.json({ data: {} });
+  }) as typeof fetch;
+
+  try {
+    await fetchApi("/binary", { method: "PUT", body: new Blob(["archive"]) });
+    await fetchApi("/json", { method: "POST", body: "{}" });
+    await fetchApi("/custom", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+    expect(contentTypes).toEqual([null, "application/vnd.api+json", "application/json"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("rotates an expired browser session before sending the API request", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; authorization: string | null; credentials?: RequestCredentials }[] = [];

@@ -66,14 +66,14 @@ const AccountSettings = lazyView(() => import("./views/AccountSettings"), "Accou
 const Projects = lazyView(() => import("./views/Projects"), "Projects");
 const ProjectDetail = lazyView(() => import("./views/ProjectDetail"), "ProjectDetail");
 const Registry = lazyView(() => import("./views/Registry"), "Registry");
+const RegistryModuleDetail = lazyView(() => import("./views/RegistryModuleDetail"), "RegistryModuleDetail");
+const RegistryProviderDetail = lazyView(() => import("./views/RegistryProviderDetail"), "RegistryProviderDetail");
 const VcsIntegrations = lazyView(() => import("./views/VcsIntegrations"), "VcsIntegrations");
 const AgentPools = lazyView(() => import("./views/AgentPools"), "AgentPools");
 const PolicySets = lazyView(() => import("./views/PolicySets"), "PolicySets");
 const PolicySetDetail = lazyView(() => import("./views/PolicySetDetail"), "PolicySetDetail");
 const ProviderSets = lazyView(() => import("./views/ProviderSets"), "ProviderSets");
 const OidcConfigurations = lazyView(() => import("./views/OidcConfigurations"), "OidcConfigurations");
-const RegistryProviders = lazyView(() => import("./views/RegistryProviders"), "RegistryProviders");
-const RegistryModules = lazyView(() => import("./views/RegistryModules"), "RegistryModules");
 const TokenTTLPolicies = lazyView(() => import("./views/TokenTTLPolicies"), "TokenTTLPolicies");
 const StackSettings = lazyView(() => import("./views/StackSettings"), "StackSettings");
 const AgentPoolScoping = lazyView(() => import("./views/AgentPoolScoping"), "AgentPoolScoping");
@@ -92,6 +92,10 @@ const ChangeRequestDetail = lazyView(() => import("./views/ChangeRequestDetail")
 const AdminOperationsSettings = lazyView(() => import("./views/AdminOperationsSettings"), "AdminOperationsSettings");
 const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
 const NotFound = lazyView(() => import("./views/NotFound"), "NotFound");
+
+export function RegistrySettingsRedirect({ tab }: Readonly<{ tab: "modules" | "providers" }>): JSX.Element {
+  return <Navigate to={tab === "providers" ? "../../registry?tab=providers" : "../../registry"} relative="path" replace />;
+}
 
 function RouteFallback(): JSX.Element {
   return (
@@ -192,6 +196,8 @@ function App(): JSX.Element {
               <Route path=":orgName" element={<Workspaces />} />
               <Route path=":orgName/workspaces" element={<Workspaces />} />
               <Route path=":orgName/registry" element={<Registry />} />
+              <Route path=":orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
+              <Route path=":orgName/registry/providers/:namespace/:name" element={<RegistryProviderDetail />} />
               <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
               <Route path=":orgName/calendar" element={<ChangeCalendar />} />
               <Route path=":orgName/change-requests" element={<ChangeRequests />} />
@@ -206,8 +212,8 @@ function App(): JSX.Element {
               <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
               <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
               <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
-              <Route path=":orgName/settings/registry-providers" element={<RegistryProviders />} />
-              <Route path=":orgName/settings/registry-modules" element={<RegistryModules />} />
+              <Route path=":orgName/settings/registry-providers" element={<RegistrySettingsRedirect tab="providers" />} />
+              <Route path=":orgName/settings/registry-modules" element={<RegistrySettingsRedirect tab="modules" />} />
               <Route path=":orgName/settings/token-ttl" element={<TokenTTLPolicies />} />
               <Route path=":orgName/settings/stacks-workspaces" element={<StackSettings />} />
               <Route path=":orgName/settings/agent-pool-scoping" element={<AgentPoolScoping />} />

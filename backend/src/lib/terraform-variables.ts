@@ -26,6 +26,11 @@ function literalValue(expression: string): unknown {
   if (trimmed === "false") return false;
   if (trimmed === "null") return null;
   if (/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return Number(trimmed);
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    // HCL expressions that are not JSON-compatible remain displayable source.
+  }
   return quotedValue(trimmed) ?? trimmed;
 }
 

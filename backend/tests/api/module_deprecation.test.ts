@@ -1,19 +1,37 @@
-import { describe, expect, test, beforeAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens, organizations, organizationMemberships, registryModules, registryModuleVersions } from "../../src/db/schema";
+import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 describe("Module Deprecation, Revocation & Tests API", () => {
   let token: string;
   let moduleId: string;
   let versionId: string;
+  let orgId: string;
+  let userId: string;
+  let fixtureDirectory: string;
+  const originalTerraformTestBinary = process.env.TERRAFORM_TEST_BINARY_PATH;
 
   beforeAll(async () => {
-    const userId = `usr-${crypto.randomUUID()}`;
+    userId = `usr-${crypto.randomUUID()}`;
     const tokenVal = `test-token-${crypto.randomUUID()}`;
-    const orgId = `org-${crypto.randomUUID()}`;
+    orgId = `org-${crypto.randomUUID()}`;
     moduleId = `mod-${crypto.randomUUID()}`;
     versionId = `ver-${crypto.randomUUID()}`;
+    fixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-module-lifecycle-"));
+    const archivePath = join(fixtureDirectory, "module.tar.gz");
+    const terraform = join(fixtureDirectory, "terraform");
+    await Promise.all([
+      makeRegistryModuleArchive(archivePath),
+      writeFile(terraform, "#!/bin/sh\nexit 0\n", { mode: 0o755 }),
+    ]);
+    await chmod(terraform, 0o755);
+    process.env.TERRAFORM_TEST_BINARY_PATH = terraform;
 
     await db.insert(users).values({
       id: userId,
@@ -55,10 +73,20 @@ describe("Module Deprecation, Revocation & Tests API", () => {
       moduleId,
       version: "1.0.0",
       status: "ok",
+      archivePath,
       createdAt: Date.now(),
     });
 
     token = tokenVal;
+  });
+
+  afterAll(async () => {
+    await db.delete(organizations).where(eq(organizations.id, orgId));
+    await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+    await rm(fixtureDirectory, { recursive: true, force: true });
+    if (originalTerraformTestBinary === undefined) delete process.env.TERRAFORM_TEST_BINARY_PATH;
+    else process.env.TERRAFORM_TEST_BINARY_PATH = originalTerraformTestBinary;
   });
 
   test("POST /registry-module-versions/:id/actions/revoke revokes module version", async () => {
@@ -71,7 +99,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
 
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data.attributes.status).toBe("revoked");
+    expect(json.data.attributes.status).toBe("ok");
     expect(json.data.attributes.revoked).toBe(true);
   });
 
@@ -85,6 +113,6 @@ describe("Module Deprecation, Revocation & Tests API", () => {
 
     expect(res.status).toBe(201);
     const json = await res.json();
-    expect(json.data.attributes.status).toBe("passed");
+    expect(json.data.attributes.status).toBe("finished");
   });
 });

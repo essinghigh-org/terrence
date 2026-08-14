@@ -252,6 +252,7 @@ describe("granular organization permissions", () => {
       "can-manage-policies": boolean;
       "can-read-policies": boolean;
       "can-manage-auditing": boolean;
+      "can-manage-modules": boolean;
       "can-manage-providers": boolean;
       "can-manage-organization-access": boolean;
     }>;
@@ -278,6 +279,7 @@ describe("granular organization permissions", () => {
       "can-manage-policies": false,
       "can-read-policies": false,
       "can-manage-auditing": false,
+      "can-manage-modules": false,
       "can-manage-providers": false,
       "can-manage-organization-access": false,
     });
@@ -331,6 +333,7 @@ describe("granular organization permissions", () => {
       "can-manage-policies": true,
       "can-read-policies": true,
       "can-manage-auditing": true,
+      "can-manage-modules": true,
       "can-manage-providers": true,
       "can-manage-organization-access": true,
     });

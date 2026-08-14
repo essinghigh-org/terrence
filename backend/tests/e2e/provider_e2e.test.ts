@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const BACKEND_DIR = join(REPO_ROOT, "backend");
@@ -191,13 +192,24 @@ async function api(port: number, method: string, path: string, body?: unknown, t
     init.body = JSON.stringify(body);
   }
   if (token !== undefined) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, init);
+  const res = await fetchWithRateLimitRetry(`http://127.0.0.1:${port}${path}`, init);
   const text = await res.text();
   let json: Record<string, any> = {};
   try {
     json = JSON.parse(text);
   } catch {}
   return { status: res.status, json, text };
+}
+
+async function fetchWithRateLimitRetry(input: string, init: RequestInit): Promise<Response> {
+  let response = await fetch(input, init);
+  for (let attempt = 0; response.status === 429 && attempt < 2; attempt += 1) {
+    await response.body?.cancel();
+    const retryAfter = Number(response.headers.get("retry-after"));
+    await sleep(Number.isFinite(retryAfter) ? Math.max(1_000, retryAfter * 1_000) : 1_100);
+    response = await fetch(input, init);
+  }
+  return response;
 }
 
 async function signupAndToken(port: number): Promise<{ token: string; userId: string; username: string }> {
@@ -966,7 +978,7 @@ output "probe_output" {
   const tarProc = Bun.spawn(["tar", "-czf", join(workDir, "config.tar.gz"), "-C", cfgDir, "."]);
   if ((await tarProc.exited) !== 0) throw new Error("tar failed");
 
-  const upload = await fetch(`http://127.0.0.1:${port}/api/v2/configuration-versions/${cvId}/upload`, {
+  const upload = await fetchWithRateLimitRetry(`http://127.0.0.1:${port}/api/v2/configuration-versions/${cvId}/upload`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/octet-stream",
@@ -1132,7 +1144,7 @@ describe("tfe provider e2e", () => {
           // Fail loudly if the fixture cannot be resolved: silently skipping
           // the data sources would drop provider coverage without failing.
           let hyokDsTf = "";
-          const hyid = o["hyid"]?.value;
+          const hyid = o.hyid?.value;
           expect(typeof hyid, "hyid output must resolve").toBe("string");
           if (typeof hyid === "string") {
             const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
@@ -1304,15 +1316,14 @@ data "tfe_scim_token" "d_stok" {
               }, auth.token);
               const versionId = verRes.json.data?.id as string | undefined;
               if (typeof versionId === "string") {
-                const tarProc = Bun.spawn(["tar", "-czf", join(workDir, "modver.tar.gz"), "--files-from", "/dev/null"]);
-                if ((await tarProc.exited) === 0) {
-                  const upload = await fetch(`http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`, {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
-                    body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
-                  });
-                  if (upload.status === 200) {
-                    noCodeTf = `resource "tfe_no_code_module" "ncm" {
+                await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
+                const upload = await fetch(`http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${auth.token}` },
+                  body: await Bun.file(join(workDir, "modver.tar.gz")).arrayBuffer(),
+                });
+                if (upload.status === 200) {
+                  noCodeTf = `resource "tfe_no_code_module" "ncm" {
   organization    = "pe2e-org-${suffix}"
   registry_module = tfe_registry_module.regmod.id
   version_pin     = "1.0.0"
@@ -1321,7 +1332,6 @@ data "tfe_no_code_module" "d_ncm" {
   id = tfe_no_code_module.ncm.id
 }
 `;
-                  }
                 }
               }
             }
@@ -1353,9 +1363,9 @@ data "tfe_no_code_module" "d_ncm" {
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
-          expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
-          expect(o2["ds_audit2"]?.value).toBe(true);
-          expect(o2["ds_rgs2"]?.value).toBe(true);
+          expect(o2.run_output_value!.value).toBe("probe-value-pe2e");
+          expect(o2.ds_audit2?.value).toBe(true);
+          expect(o2.ds_rgs2?.value).toBe(true);
           if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);

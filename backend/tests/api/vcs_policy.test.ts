@@ -241,7 +241,7 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
         attributes: {
           name: "No Public S3 Buckets",
           description: "Block public access to S3",
-          "enforcement-level": "soft-mandatory",
+          enforce: [{ mode: "soft-mandatory" }],
           query: "data.terraform.s3.deny",
         },
       },

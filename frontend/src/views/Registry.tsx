@@ -1,497 +1,181 @@
-import { createElement, useCallback, useEffect, useRef, useState, type JSX } from "react";
-import { Globe2, Package, SearchX, ServerCrash } from "lucide-react";
+import { AlertTriangle, Globe2, Package, SearchX, ServerCrash } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { prepareAuthToken } from "../lib/api";
-
+import { PageHeader, PageShell } from "../components/PageHeader";
+import { PublishModuleDialog } from "../components/PublishModuleDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../components/ui/dialog";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "../components/ui/empty";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../components/ui/empty";
 import { Input } from "../components/ui/input";
+import { Select, SelectItem } from "../components/ui/select";
 import { Spinner } from "../components/ui/spinner";
-import { PageHeader, PageShell } from "../components/PageHeader";
-import { fetchAllApiPages } from "../lib/api";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
+import { fetchApi } from "../lib/api";
+import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
 import { cn } from "../lib/utils";
-
-type RegistryModule = Readonly<{
-  id: string;
-  attributes: Readonly<{
-    name: string;
-    namespace: string;
-    provider: string;
-    "created-at"?: string;
-  }>;
-}>;
 
 type RegistryProvider = Readonly<{
   id: string;
-  attributes: Readonly<{
-    name: string;
-    namespace: string;
-    "registry-name"?: string;
-    "created-at"?: string;
-  }>;
-}>;
-
-type RegistryCard = Readonly<{
-  id: string;
   name: string;
-  source: string;
-  detail: string;
-  createdAt: string | undefined;
+  namespace: string;
+  registryName: string;
+  createdAt: string;
 }>;
 
-function createdLabel(createdAt: string | undefined): string {
-  if (createdAt === undefined) return "Created date unavailable";
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return "Created date unavailable";
-  return `Added ${date.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  })}`;
-}
-
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : "The registry could not be loaded.";
-}
-
-async function registryApi<T>(
-  url: string,
-  options: Readonly<{ method?: string; body?: string; signal?: AbortSignal }> = {},
-): Promise<T> {
-  const base = "/api/v2";
-  const headers: Record<string, string> = { "Content-Type": "application/vnd.api+json" };
-  const token = await prepareAuthToken();
-  if (token !== null && token !== "") {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const fetchOptions: RequestInit & { headers: Record<string, string> } = {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body ?? null,
+function providerFromResource(resource: unknown): RegistryProvider {
+  const raw = resource !== null && typeof resource === "object" ? resource as Record<string, unknown> : {};
+  const attributes = raw["attributes"] !== null && typeof raw["attributes"] === "object" ? raw["attributes"] as Record<string, unknown> : {};
+  return {
+    id: typeof raw["id"] === "string" ? raw["id"] : "",
+    name: typeof attributes["name"] === "string" ? attributes["name"] : "",
+    namespace: typeof attributes["namespace"] === "string" ? attributes["namespace"] : "",
+    registryName: typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private",
+    createdAt: typeof attributes["created-at"] === "string" ? attributes["created-at"] : "",
   };
-  if (options.signal !== undefined) {
-    fetchOptions.signal = options.signal;
-  }
-  const response = await fetch(`${base}${url}`, fetchOptions);
-  if (!response.ok) {
-    const errorBody: unknown = await response.json().catch((): null => null);
-    const rawErrors = Array.isArray((errorBody as Record<string, unknown> | null)?.["errors"])
-      ? (errorBody as Record<string, unknown>)["errors"] as readonly Record<string, unknown>[]
-      : [];
-    const detail = typeof rawErrors[0]?.["detail"] === "string" ? (rawErrors[0] as Record<string, string>)["detail"] : null;
-    throw new Error(detail ?? `API request failed (${response.status})`);
-  }
-  if (response.status === 204) return null as T;
-  return (await response.json()) as T;
 }
 
-export function Registry(): JSX.Element {
-  const { orgName = "" } = useParams<{ orgName: string }>();
+function dateLabel(value: string): string {
+  if (value === "") return "Not published";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "Unknown date" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+function publishingLabel(module: RegistryModule): string {
+  if (module.publishingMechanism === "manual") return "Manual / API";
+  return module.publishingWorkflow === "branch" ? "Branch-based" : "Tag-based";
+}
+
+export function Registry(): React.JSX.Element {
+  const { orgName = "" } = useParams<{ orgName?: string }>();
   const [searchParams] = useSearchParams();
-  const [modules, setModules] = useState<readonly RegistryModule[]>([]);
-  const [providers, setProviders] = useState<readonly RegistryProvider[]>([]);
-  const [modulesError, setModulesError] = useState<string | null>(null);
-  const [providersError, setProvidersError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [reload, setReload] = useState(0);
-
-  // Publish dialog state
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [step, setStep] = useState<"create-module" | "add-version">("create-module");
-  const [newName, setNewName] = useState("");
-  const [newProvider, setNewProvider] = useState("");
-  const [newNamespace, setNewNamespace] = useState("");
-  const [newVersion, setNewVersion] = useState("");
-  const [publishing, setPublishing] = useState(false);
-  const [publishError, setPublishError] = useState("");
-  const [createdModuleId, setCreatedModuleId] = useState<string | null>(null);
-
-  const fetchCountRef = useRef(0);
-
   const activeTab = searchParams.get("tab") === "providers" ? "providers" : "modules";
+  const [search, setSearch] = useState("");
+  const [moduleSearch, setModuleSearch] = useState("");
+  const [providerFilter, setProviderFilter] = useState("");
+  const [publishingFilter, setPublishingFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [modules, setModules] = useState<RegistryModule[]>([]);
+  const [providers, setProviders] = useState<RegistryProvider[]>([]);
+  const [providerOptions, setProviderOptions] = useState<string[]>([]);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const permissions = useOrganizationPermissions(orgName);
   const registryPath = `/app/${encodeURIComponent(orgName)}/registry`;
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
-    const fetchId = ++fetchCountRef.current;
-    setModules([]);
-    setProviders([]);
-    setModulesError(null);
-    setProvidersError(null);
     setLoading(true);
-
-    void Promise.allSettled([
-      fetchAllApiPages<RegistryModule>(
-        `/organizations/${encodeURIComponent(orgName)}/registry-modules`,
-        controller.signal,
-      ),
-      fetchAllApiPages<RegistryProvider>(
-        `/organizations/${encodeURIComponent(orgName)}/registry-providers`,
-        controller.signal,
-      ),
-    ]).then(([modulesResult, providersResult]): void => {
-      if (controller.signal.aborted || fetchId !== fetchCountRef.current) return;
-
-      if (modulesResult.status === "fulfilled") {
-        setModules(modulesResult.value);
+    setError(null);
+    const load = async (): Promise<void> => {
+      if (activeTab === "modules") {
+        const query = new URLSearchParams({ "page[number]": String(page), "page[size]": "20" });
+        if (moduleSearch.trim() !== "") query.set("q", moduleSearch.trim());
+        if (providerFilter !== "") query.set("filter[provider]", providerFilter);
+        if (publishingFilter !== "") query.set("filter[publishing_mechanism]", publishingFilter);
+        const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules?${query.toString()}`, { signal: controller.signal }) as {
+          data?: unknown[];
+          meta?: { pagination?: { "total-pages"?: number }; providers?: unknown[] };
+        };
+        if (!controller.signal.aborted) {
+          setModules(Array.isArray(response.data) ? response.data.map(registryModuleFromResource) : []);
+          setProviderOptions(Array.isArray(response.meta?.providers) ? response.meta.providers.filter((value): value is string => typeof value === "string") : []);
+          setTotalPages(response.meta?.pagination?.["total-pages"] ?? 1);
+        }
       } else {
-        setModulesError(errorMessage(modulesResult.reason));
+        const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-providers`, { signal: controller.signal }) as { data?: unknown[] };
+        if (!controller.signal.aborted) setProviders(Array.isArray(response.data) ? response.data.map(providerFromResource) : []);
       }
-
-      if (providersResult.status === "fulfilled") {
-        setProviders(providersResult.value);
-      } else {
-        setProvidersError(errorMessage(providersResult.reason));
-      }
-    }).finally((): void => {
-      if (!controller.signal.aborted && fetchId === fetchCountRef.current) setLoading(false);
-    });
-
-    return (): void => {
-      controller.abort();
     };
-  }, [orgName, reload]);
+    void load()
+      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Registry could not be loaded."); })
+      .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
+    return (): void => { controller.abort(); };
+  }, [activeTab, moduleSearch, orgName, page, providerFilter, publishingFilter, reload]);
 
-  const cards: readonly RegistryCard[] = (
-    activeTab === "modules"
-      ? modules.map(({ id, attributes }): RegistryCard => ({
-          id,
-          name: attributes.name,
-          source: `${attributes.namespace}/${attributes.name}/${attributes.provider}`,
-          detail: attributes.provider,
-          createdAt: attributes["created-at"],
-        }))
-      : providers.map(({ id, attributes }): RegistryCard => ({
-          id,
-          name: attributes.name,
-          source: `${attributes["registry-name"] ?? "private"}/${attributes.namespace}/${attributes.name}`,
-          detail: attributes["registry-name"] ?? "private",
-          createdAt: attributes["created-at"],
-        }))
-  ).filter((card): boolean => {
+  useEffect((): void => { setPage(1); }, [activeTab, orgName]);
+  useEffect((): (() => void) | undefined => {
+    if (activeTab !== "modules") return undefined;
+    const timeout = setTimeout((): void => { setPage(1); setModuleSearch(search); }, 250);
+    return (): void => { clearTimeout(timeout); };
+  }, [activeTab, search]);
+
+  const visibleProviders = providers.filter((provider): boolean => {
     const query = search.trim().toLocaleLowerCase();
-    return query === "" || `${card.name} ${card.source} ${card.detail}`.toLocaleLowerCase().includes(query);
-  }).sort((left, right): number => left.name.localeCompare(right.name));
-
-  const tabLabel = activeTab === "modules" ? "Modules" : "Providers";
-  const itemLabel = activeTab === "modules" ? "modules" : "providers";
-  const currentError = activeTab === "modules" ? modulesError : providersError;
-  const showPublish = activeTab === "modules" && currentError === null && !loading;
-
-  const createModule = useCallback(async (): Promise<void> => {
-    const name = newName.trim();
-    const provider = newProvider.trim();
-    if (name === "") { setPublishError("Module name is required."); return; }
-    if (provider === "") { setPublishError("Provider is required."); return; }
-    setPublishing(true);
-    setPublishError("");
-    try {
-      const body = JSON.stringify({
-        data: {
-          type: "registry-modules",
-          attributes: {
-            name,
-            provider,
-            namespace: newNamespace.trim() || orgName,
-          },
-        },
-      });
-      const response = await registryApi<{ data: { id: string } }>(
-        `/organizations/${encodeURIComponent(orgName)}/registry-modules`,
-        { method: "POST", body },
-      );
-      setCreatedModuleId(response.data.id);
-      setStep("add-version");
-    } catch (error: unknown) {
-      setPublishError(error instanceof Error ? error.message : "Failed to create module.");
-    } finally {
-      setPublishing(false);
-    }
-  }, [newName, newProvider, newNamespace, orgName]);
-
-  const publishVersion = useCallback(async (): Promise<void> => {
-    const version = newVersion.trim();
-    if (version === "") { setPublishError("Version is required."); return; }
-    if (createdModuleId === null) { setPublishError("No module created yet."); return; }
-    setPublishing(true);
-    setPublishError("");
-    try {
-      const body = JSON.stringify({
-        data: {
-          type: "registry-module-versions",
-          attributes: { version },
-        },
-      });
-      const versionResponse = await registryApi<{ data: { id: string } }>(
-        `/registry-modules/${encodeURIComponent(createdModuleId)}/versions`,
-        { method: "POST", body },
-      );
-
-      // Upload a minimal placeholder archive so the version is usable
-      const emptyTarGz = new Uint8Array([
-        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-      ]);
-      const token = await prepareAuthToken();
-      const uploadHeaders: Record<string, string> = { "Content-Type": "application/octet-stream" };
-      if (token !== null && token !== "") {
-        uploadHeaders["Authorization"] = `Bearer ${token}`;
-      }
-      await fetch(
-        `/api/v2/registry-module-versions/${versionResponse.data.id}/upload`,
-        {
-          method: "PUT",
-          headers: uploadHeaders,
-          body: emptyTarGz,
-        },
-      );
-
-      setPublishOpen(false);
-      setReload((value): number => value + 1);
-    } catch (error: unknown) {
-      setPublishError(error instanceof Error ? error.message : "Failed to publish version.");
-    } finally {
-      setPublishing(false);
-    }
-  }, [newVersion, createdModuleId, orgName]);
+    return query === "" || `${provider.namespace} ${provider.name}`.toLocaleLowerCase().includes(query);
+  });
+  const items = activeTab === "modules" ? modules : visibleProviders;
+  const filtered = search.trim() !== "" || (activeTab === "modules" && (providerFilter !== "" || publishingFilter !== ""));
+  const canPublish = permissions.loaded && permissions.has("can-manage-modules");
 
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Registry / ${tabLabel}`}
-        title="Registry"
-        description="Browse private modules and providers available to this organization."
-        action={showPublish ? (
-          <Button type="button" onClick={(): void => { setPublishOpen(true); }}>Publish</Button>
-        ) : undefined}
+        title="Private registry"
+        description="Discover and publish trusted Terraform modules and providers."
+        action={activeTab === "modules" && canPublish ? <Button type="button" onClick={(): void => { setPublishOpen(true); }}>Publish module</Button> : undefined}
       />
-        {showPublish && (
-          <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Publish {step === "create-module" ? "module" : "version"}</DialogTitle>
-                <DialogDescription>
-                  {step === "create-module"
-                    ? "Create a new private module in this organization's registry."
-                    : "Add a version to complete the module publication."}
-                </DialogDescription>
-              </DialogHeader>
+      {canPublish && <PublishModuleDialog open={publishOpen} orgName={orgName} onOpenChange={setPublishOpen} />}
 
-              {step === "create-module" ? (
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="publish-name">Name</FieldLabel>
-                    <Input
-                      id="publish-name"
-                      name="module-name"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={newName}
-                      onChange={(e): void => { setNewName(e.target.value); }}
-                      onInput={(e): void => { setNewName(e.currentTarget.value); }}
-                      placeholder="vpc"
-                      required
-                      disabled={publishing}
-                    />
-                    <FieldDescription>A short, descriptive name for the module.</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="publish-provider">Provider</FieldLabel>
-                    <Input
-                      id="publish-provider"
-                      name="module-provider"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={newProvider}
-                      onChange={(e): void => { setNewProvider(e.target.value); }}
-                      onInput={(e): void => { setNewProvider(e.currentTarget.value); }}
-                      placeholder="aws"
-                      required
-                      disabled={publishing}
-                    />
-                    <FieldDescription>The Terraform provider this module targets (e.g., aws, azurerm).</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="publish-namespace">Namespace</FieldLabel>
-                    <Input
-                      id="publish-namespace"
-                      name="module-namespace"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={newNamespace}
-                      onChange={(e): void => { setNewNamespace(e.target.value); }}
-                      onInput={(e): void => { setNewNamespace(e.currentTarget.value); }}
-                      placeholder={orgName}
-                      disabled={publishing}
-                    />
-                    <FieldDescription>Defaults to the organization name.</FieldDescription>
-                  </Field>
-                </FieldGroup>
-              ) : (
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="publish-version">Version</FieldLabel>
-                    <Input
-                      id="publish-version"
-                      name="module-version"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={newVersion}
-                      onChange={(e): void => { setNewVersion(e.target.value); }}
-                      onInput={(e): void => { setNewVersion(e.currentTarget.value); }}
-                      placeholder="1.0.0"
-                      required
-                      disabled={publishing}
-                    />
-                    <FieldDescription>Semantic version for this module release.</FieldDescription>
-                  </Field>
-                </FieldGroup>
-              )}
-
-              {publishError !== "" && <FieldError>{publishError}</FieldError>}
-
-              <DialogFooter>
-                <Button type="button" variant="outline" disabled={publishing} onClick={(): void => { setPublishOpen(false); }}>
-                  Cancel
-                </Button>
-                {step === "create-module" ? (
-                  <Button type="button" disabled={publishing} onClick={createModule}>
-                    {publishing ? "Creating…" : "Create module"}
-                  </Button>
-                ) : (
-                  <Button type="button" disabled={publishing} onClick={publishVersion}>
-                    {publishing ? "Publishing…" : "Publish version"}
-                  </Button>
-                )}
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-      <div className="max-w-4xl space-y-5">
-        <Input
-          id="registry-search"
-          name="registry-search"
-          aria-label="Search registry"
-          autoComplete="off"
-          onInput={(event): void => {
-            setSearch(event.currentTarget.value);
-          }}
-          placeholder="Filter providers and modules…"
-          type="search"
-          value={search}
-        />
-
+      <div className="max-w-5xl space-y-5">
         <nav aria-label="Registry sections" className="flex gap-6 border-b">
-          {([
-            { label: "Modules", to: registryPath, icon: Package, value: "modules" },
-            { label: "Providers", to: `${registryPath}?tab=providers`, icon: Globe2, value: "providers" },
-          ] as const).map((tab): JSX.Element => {
-            const active = activeTab === tab.value;
-            return (
-              <Link
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "-mb-px flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium",
-                  active
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                )}
-                key={tab.value}
-                to={tab.to}
-              >
-                {createElement(tab.icon, { "aria-hidden": true, className: "size-4" })}
-                {tab.label}
-              </Link>
-            );
-          })}
+          <Link aria-current={activeTab === "modules" ? "page" : undefined} className={cn("-mb-px flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium", activeTab === "modules" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} to={registryPath}><Package aria-hidden="true" className="size-4" />Modules</Link>
+          <Link aria-current={activeTab === "providers" ? "page" : undefined} className={cn("-mb-px flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium", activeTab === "providers" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} to={`${registryPath}?tab=providers`}><Globe2 aria-hidden="true" className="size-4" />Providers</Link>
         </nav>
 
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+          <Input aria-label="Search registry" type="search" value={search} onInput={(event): void => { setSearch(event.currentTarget.value); }} placeholder={`Search ${activeTab}…`} />
+          {activeTab === "modules" && (
+            <>
+              <Select aria-label="Filter by provider" value={providerFilter} onValueChange={(value): void => { setPage(1); setProviderFilter(value); }}>
+                <SelectItem value="">All providers</SelectItem>
+                {providerOptions.map((provider) => <SelectItem value={provider} key={provider}>{provider}</SelectItem>)}
+              </Select>
+              <Select aria-label="Filter by publishing type" value={publishingFilter} onValueChange={(value): void => { setPage(1); setPublishingFilter(value); }}>
+                <SelectItem value="">All publishing types</SelectItem>
+                <SelectItem value="vcs">VCS</SelectItem>
+                <SelectItem value="manual">Manual / API</SelectItem>
+              </Select>
+            </>
+          )}
+        </div>
+
         {loading ? (
-          <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status">
-            <Spinner />
-            Loading registry…
+          <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Spinner />Loading registry…</div>
+        ) : error !== null ? (
+          <Empty className="min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><ServerCrash /></EmptyMedia><EmptyTitle>{activeTab === "modules" ? "Modules" : "Providers"} unavailable</EmptyTitle><EmptyDescription>{error}</EmptyDescription></EmptyHeader><EmptyContent><Button type="button" onClick={(): void => { setReload((value): number => value + 1); }}>Try again</Button></EmptyContent></Empty>
+        ) : items.length === 0 ? (
+          <Empty className="min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><SearchX /></EmptyMedia><EmptyTitle>{filtered ? `No ${activeTab} match your filters` : `No private ${activeTab}`}</EmptyTitle><EmptyDescription>{filtered ? "Try a different search or filter." : `This organization has no published private ${activeTab}.`}</EmptyDescription></EmptyHeader></Empty>
+        ) : activeTab === "modules" ? (
+          <div className="grid gap-3">
+            {modules.map((module) => {
+              const latest = module.versions.find((version): boolean => version.status === "ok" && !version.revoked);
+              return (
+                <Link key={module.id} to={registryModulePath(orgName, module)} className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <Card size="sm" className="transition-colors hover:border-primary/50 hover:bg-muted/30">
+                    <CardHeader><CardTitle className="flex items-center gap-2">{module.name}{module.lastSyncError !== null && <AlertTriangle aria-label="Latest sync failed" className="size-4 text-destructive" />}</CardTitle><CardDescription><code className="break-all">{module.namespace}/{module.name}/{module.provider}</code></CardDescription></CardHeader>
+                    <CardContent className="space-y-3"><p className="line-clamp-2 text-sm text-muted-foreground">{module.description ?? "No description provided."}</p><div className="flex flex-wrap gap-2"><Badge variant="outline">Private</Badge><Badge variant="secondary">{module.provider}</Badge><Badge variant="secondary">{publishingLabel(module)}</Badge>{latest !== undefined && <Badge variant="outline">v{latest.version}</Badge>}</div></CardContent>
+                    <CardFooter><span className="text-xs text-muted-foreground">Updated {dateLabel(module.updatedAt)}</span></CardFooter>
+                  </Card>
+                </Link>
+              );
+            })}
           </div>
-        ) : currentError !== null ? (
-          <Empty className="min-h-64 border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon"><ServerCrash /></EmptyMedia>
-              <EmptyTitle>{tabLabel} unavailable</EmptyTitle>
-              <EmptyDescription>{currentError}</EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button
-                onClick={(): void => {
-                  setReload((value): number => value + 1);
-                }}
-                type="button"
-              >
-                Try again
-              </Button>
-            </EmptyContent>
-          </Empty>
-        ) : cards.length === 0 ? (
-          <Empty className="min-h-64 border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon"><SearchX /></EmptyMedia>
-              <EmptyTitle>
-                {search.trim() === ""
-                  ? `No private ${itemLabel}`
-                  : `No ${itemLabel} match your search`}
-              </EmptyTitle>
-              <EmptyDescription>
-                {search.trim() === ""
-                  ? `This organization has no published private ${itemLabel}.`
-                  : "Try a different search."}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
         ) : (
-          <div className="grid gap-4">
-            {cards.map((card): JSX.Element => (
-              <Card key={card.id} size="sm">
-                <CardHeader>
-                  <CardTitle>{card.name}</CardTitle>
-                  <CardDescription>
-                    <code className="break-all">{card.source}</code>
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2">
-                  <Badge variant="outline">Private</Badge>
-                  <Badge variant="secondary">{card.detail}</Badge>
-                </CardContent>
-                <CardFooter>
-                  <span className="text-xs text-muted-foreground">{createdLabel(card.createdAt)}</span>
-                </CardFooter>
-              </Card>
+          <div className="grid gap-3">
+            {visibleProviders.map((provider) => (
+              <Link key={provider.id} to={`${registryPath}/providers/${encodeURIComponent(provider.namespace)}/${encodeURIComponent(provider.name)}`} className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Card size="sm" className="transition-colors hover:border-primary/50 hover:bg-muted/30"><CardHeader><CardTitle>{provider.name}</CardTitle><CardDescription><code>{provider.registryName}/{provider.namespace}/{provider.name}</code></CardDescription></CardHeader><CardContent><Badge variant="outline">{provider.registryName}</Badge></CardContent><CardFooter><span className="text-xs text-muted-foreground">Created {dateLabel(provider.createdAt)}</span></CardFooter></Card>
+              </Link>
             ))}
           </div>
+        )}
+
+        {activeTab === "modules" && !loading && error === null && totalPages > 1 && (
+          <nav aria-label="Registry pagination" className="flex items-center justify-between"><Button type="button" variant="outline" disabled={page <= 1} onClick={(): void => { setPage((value): number => Math.max(1, value - 1)); }}>Previous</Button><span className="text-sm text-muted-foreground">Page {page} of {totalPages}</span><Button type="button" variant="outline" disabled={page >= totalPages} onClick={(): void => { setPage((value): number => value + 1); }}>Next</Button></nav>
         )}
       </div>
     </PageShell>

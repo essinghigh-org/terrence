@@ -162,6 +162,11 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     expect(postTeamTok.status).toBe(201);
     const teamTokBody = await postTeamTok.json();
     expect(teamTokBody.data.attributes.token).toContain("team-tok-");
+    expect((await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/authentication-token`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    )).status).toBe(404);
 
     const postOrgTok = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/authentication-token`, {
@@ -172,6 +177,11 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     expect(postOrgTok.status).toBe(201);
     const orgTokBody = await postOrgTok.json();
     expect(orgTokBody.data.attributes.token).toContain("org-");
+    expect((await app.handle(
+      new Request(`http://localhost/api/v2/teams/${teamId}/authentication-token`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    )).status).toBe(200);
   });
 
   it("manages Run Tasks and Workspace Task Bindings", async () => {

@@ -56,7 +56,7 @@ type ReadonlyResponse = Readonly<{
 type ReadonlyRequestInit = Readonly<{
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>> | readonly (readonly [string, string])[];
-  readonly body?: string | null;
+  readonly body?: BodyInit | null;
 
   readonly mode?: RequestMode;
   readonly credentials?: RequestCredentials;
@@ -254,7 +254,9 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     : `${API_BASE_URL}${endpoint}`;
   const send = async (accessToken: string | null): Promise<Response> => {
     const headers = new Headers(options.headers as HeadersInit | undefined);
-    headers.set("Content-Type", "application/vnd.api+json");
+    if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || typeof options.body === "string")) {
+      headers.set("Content-Type", "application/vnd.api+json");
+    }
     if (accessToken !== null && accessToken !== "") {
       headers.set("Authorization", `Bearer ${accessToken}`);
     }

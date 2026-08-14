@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -13,6 +16,7 @@ import {
   registryProviderVersions,
   users,
 } from "../../src/db/schema";
+import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 describe("Private Module & Provider Registries API contract", () => {
   const suffix = crypto.randomUUID();
@@ -20,6 +24,8 @@ describe("Private Module & Provider Registries API contract", () => {
   const orgId = `org-${suffix}`;
   const orgName = `registry-org-${suffix}`;
   const token = `user-token-${suffix}`;
+  let fixtureDirectory = "";
+  let moduleArchive = "";
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -32,6 +38,9 @@ describe("Private Module & Provider Registries API contract", () => {
     }));
 
   beforeAll(async () => {
+    fixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-registry-api-"));
+    moduleArchive = join(fixtureDirectory, "module.tar.gz");
+    await makeRegistryModuleArchive(moduleArchive);
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
     await db.insert(organizationMemberships).values([
@@ -45,6 +54,7 @@ describe("Private Module & Provider Registries API contract", () => {
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, userId));
+    await rm(fixtureDirectory, { recursive: true, force: true });
   });
 
   it("advertises module and provider registry protocols in service discovery", async () => {
@@ -71,15 +81,24 @@ describe("Private Module & Provider Registries API contract", () => {
     const moduleId = createModBody.data.id;
     expect(createModBody.data.attributes.name).toBe("vpc");
 
-    // 2. Add version to module in DB
-    const verId = `modver-${suffix}`;
-    await db.insert(registryModuleVersions).values({
-      id: verId,
-      moduleId,
-      version: "1.0.0",
-      status: "ok",
-      createdAt: Date.now(),
+    // 2. Publish real source through the management API.
+    const versionRes = await request(`/api/v2/registry-modules/${moduleId}/versions`, "POST", {
+      data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
     });
+    expect(versionRes.status).toBe(201);
+    const versionId = (await versionRes.json()).data.id as string;
+    const archiveBytes = await Bun.file(moduleArchive).arrayBuffer();
+    const upload = (): Promise<Response> => app.handle(new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+      body: archiveBytes.slice(0),
+    }));
+    const uploads = await Promise.all([upload(), upload()]);
+    expect(uploads.map(({ status }): number => status).sort()).toEqual([200, 409]);
+    const uploadRes = uploads.find(({ status }): boolean => status === 200)!;
+    expect(uploadRes.status).toBe(200);
+    expect((await uploadRes.json()).data.attributes.status).toBe("ok");
+    expect((await upload()).status).toBe(409);
 
     // 3. Query module versions via standard registry protocol
     const verRes = await request(`/api/registry/v1/modules/${orgName}/vpc/aws/versions`);
@@ -95,8 +114,63 @@ describe("Private Module & Provider Registries API contract", () => {
     expect(archiveUrl).not.toBeNull();
     expect(new URL(archiveUrl!, "http://terrence.test").pathname).toBe(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive.tar.gz`);
 
-    // Clean up
-    await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, verId));
+    expect((await request(`/api/v2/registry-modules/${moduleId}`, "DELETE")).status).toBe(204);
+  });
+
+  it("rejects duplicate module-version requests", async () => {
+    const created = await request(`/api/v2/organizations/${orgName}/registry-modules`, "POST", {
+      data: { attributes: { name: "duplicate-version", provider: "aws", namespace: orgName } },
+    });
+    const moduleId = (await created.json()).data.id as string;
+    const createVersion = (): Promise<Response> => request(`/api/v2/registry-modules/${moduleId}/versions`, "POST", {
+      data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+    });
+    const responses = await Promise.all([createVersion(), createVersion()]);
+    expect(responses.map((response): number => response.status).sort()).toEqual([201, 422]);
+    await db.delete(registryModules).where(eq(registryModules.id, moduleId));
+  });
+
+  it("searches, filters, and paginates registry modules in the management API", async () => {
+    const manualId = `search-manual-${suffix}`;
+    const vcsId = `search-vcs-${suffix}`;
+    await db.insert(registryModules).values([
+      { id: manualId, orgId, namespace: orgName, name: "search-manual", provider: "aws", publishingMechanism: "manual" },
+      { id: vcsId, orgId, namespace: orgName, name: "search-vcs", provider: "azurerm", publishingMechanism: "vcs" },
+    ]);
+    const response = await request(
+      `/api/v2/organizations/${orgName}/registry-modules?q=SEARCH&filter[provider]=azurerm&filter[publishing_mechanism]=vcs&page[size]=1`,
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.map(({ id }: { id: string }): string => id)).toEqual([vcsId]);
+    expect(body.meta.pagination["total-count"]).toBe(1);
+    expect(body.meta.providers).toEqual(["aws", "azurerm"]);
+    await db.delete(registryModules).where(inArray(registryModules.id, [manualId, vcsId]));
+  });
+
+  it("serves only consumable module lifecycle states", async () => {
+    const created = await request(`/api/v2/organizations/${orgName}/registry-modules`, "POST", {
+      data: { attributes: { name: "lifecycle", provider: "aws", namespace: orgName } },
+    });
+    const moduleId = (await created.json()).data.id as string;
+    const now = Date.now();
+    await db.insert(registryModuleVersions).values([
+      { id: `pending-${suffix}`, moduleId, version: "1.0.0", status: "pending", archivePath: moduleArchive, createdAt: now },
+      { id: `errored-${suffix}`, moduleId, version: "1.1.0", status: "errored", archivePath: moduleArchive, createdAt: now + 1 },
+      { id: `deprecated-${suffix}`, moduleId, version: "1.2.0", status: "ok", archivePath: moduleArchive, isDeprecated: true, createdAt: now + 2 },
+      { id: `revoked-${suffix}`, moduleId, version: "1.3.0", status: "ok", archivePath: moduleArchive, isRevoked: true, createdAt: now + 3 },
+      { id: `healthy-${suffix}`, moduleId, version: "1.4.0", status: "ok", archivePath: moduleArchive, createdAt: now + 4 },
+      { id: `newest-created-${suffix}`, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchive, createdAt: now + 6 },
+      { id: `highest-${suffix}`, moduleId, version: "10.0.0", status: "ok", archivePath: moduleArchive, createdAt: now + 5 },
+    ]);
+
+    const response = await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/versions`);
+    const versions = (await response.json()).modules[0].versions.map((version: { version: string }): string => version.version);
+    expect(versions).toEqual(["10.0.0", "2.0.0", "1.4.0", "1.2.0"]);
+    expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.2.0/download`)).status).toBe(204);
+    expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.0.0/download`)).status).toBe(404);
+    expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.3.0/download`)).status).toBe(404);
+    expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.1.0/download`)).status).toBe(404);
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
   });
 

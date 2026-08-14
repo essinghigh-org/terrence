@@ -290,6 +290,10 @@ function scimMappingPath(request: CustomRequest): string | undefined {
  */
 function serverEndpointPath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
+  // go-tfe reads product/version headers from this one setup request and does
+  // not retry a 429, so throttling it leaves the provider permanently unable
+  // to feature-detect the server for that process.
+  if (path === "/api/v2/ping") return undefined;
   if (
     path.startsWith("/api/")
     || path.startsWith("/oauth/")
@@ -515,8 +519,8 @@ export const app = new Elysia()
     const originHeader = request.headers.get("origin");
     const corsConfigured = (process.env.CORS_ORIGIN ?? "").split(",").some((value: string): boolean => value.trim() !== "");
     if (originHeader !== null || corsConfigured) {
-      const existingVary = headers["Vary"];
-      headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
+      const { Vary: existingVary } = headers;
+      headers.Vary = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
     }
 
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
@@ -560,7 +564,7 @@ export const app = new Elysia()
     if (avatarMatch !== null && avatarMatch[1] !== undefined) {
       return avatarHandler({
         params: { key: avatarMatch[1] },
-        request: request as { headers: Headers },
+        request,
         set: set as { status: number | string; headers: Record<string, string | number> },
       });
     }

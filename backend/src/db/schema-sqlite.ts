@@ -699,7 +699,23 @@ export const registryModules = sqliteTable("registry_modules", {
   namespace: text("namespace").notNull(),
   name: text("name").notNull(),
   provider: text("provider").notNull(),
+  description: text("description"),
+  publishingMechanism: text("publishing_mechanism").notNull().default("manual"), // 'manual', 'vcs'
+  publishingWorkflow: text("publishing_workflow"), // 'tag', 'branch'
+  vcsConnectionType: text("vcs_connection_type"), // 'github-app', 'oauth-token'
+  vcsConnectionId: text("vcs_connection_id"),
+  repositoryIdentifier: text("repository_identifier"),
+  repositoryDisplayIdentifier: text("repository_display_identifier"),
+  repositoryUrl: text("repository_url"),
+  sourceDirectory: text("source_directory").notNull().default(""),
+  tagPrefix: text("tag_prefix").notNull().default(""),
+  branch: text("branch"),
+  status: text("status").notNull().default("pending"), // 'pending', 'setup_complete', 'errored'
+  lastSuccessfulSyncAt: integer("last_successful_sync_at"),
+  lastSyncAttemptAt: integer("last_sync_attempt_at"),
+  lastSyncError: text("last_sync_error"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("registry_modules_ns_name_provider_idx").on(table.namespace, table.name, table.provider),
 ]);
@@ -714,7 +730,15 @@ export const registryModuleVersions = sqliteTable("registry_module_versions", {
   keyId: text("key_id"),
   isDeprecated: integer("is_deprecated", { mode: "boolean" }).default(false),
   isRevoked: integer("is_revoked", { mode: "boolean" }).default(false),
+  commitSha: text("commit_sha"),
+  vcsTag: text("vcs_tag"),
+  vcsBranch: text("vcs_branch"),
+  sourceDirectory: text("source_directory"),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  ingestError: text("ingest_error"),
+  publishedAt: integer("published_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version),
 ]);
