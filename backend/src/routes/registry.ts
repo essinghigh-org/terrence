@@ -52,6 +52,7 @@ import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
 const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "cv");
+const MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"), "modules");
 
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -1116,6 +1117,49 @@ export const registryRoutes = new Elysia({ name: "registry" })
     (set.headers as Record<string, string | number>)["X-Terraform-Get"] = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive`;
     (set as { status: number }).status = 204;
     return undefined;
+  })
+  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+    const namespace = params.namespace ?? "";
+    const name = params.name ?? "";
+    const provider = params.provider ?? "";
+    const version = params.version ?? "";
+    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId);
+    if (mod === undefined) return registryNotFound(set);
+    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
+    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    // Serve the cached archive when present.
+    if (ver.archivePath !== null && ver.archivePath !== "" && await Bun.file(ver.archivePath).exists()) {
+      (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
+      return Bun.file(ver.archivePath);
+    }
+    // On-demand fetch from the version's git source: the semver tag is
+    // downloaded as a tarball (github.com/{owner}/{repo}/archive/refs/tags/
+    // {version}.tar.gz) and cached for subsequent requests. This mirrors
+    // TFE's "tag the module repo, consume from the registry" flow.
+    if (typeof ver.source === "string" && ver.source !== "") {
+      const base = ver.source.replace(/\/+$/, "");
+      const tarballUrl = `${base}/archive/refs/tags/${encodeURIComponent(ver.version)}.tar.gz`;
+      let response: Response;
+      try {
+        response = await fetch(tarballUrl);
+      } catch {
+        (set as { status: number }).status = 502;
+        return { errors: [{ status: "502", title: "Bad Gateway", detail: `Could not fetch module archive from ${base}` }] };
+      }
+      if (!response.ok) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: `No tag ${ver.version} archive available at ${base}` }] };
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      await mkdir(MODULE_STORAGE_DIR, { recursive: true });
+      const archivePath = join(MODULE_STORAGE_DIR, `${ver.id}-${ver.version}.tar.gz`);
+      await writeFile(archivePath, bytes, { mode: 0o600 });
+      await db.update(registryModuleVersions).set({ archivePath, status: "ok" }).where(eq(registryModuleVersions.id, ver.id));
+      (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-tar";
+      return Bun.file(archivePath);
+    }
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found", detail: "Module version has no archive or git source" }] };
   })
   .get("/api/registry/v1/modules/:namespace/:name", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
     const namespace = params.namespace ?? "";
@@ -2250,6 +2294,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const version = typeof attributes.version === "string" ? attributes.version : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
+    // Optional git repository the archive is fetched from on demand (the
+    // version tag is downloaded as a tarball). Example:
+    // https://github.com/essinghigh-org/tf-github-repository
+    const rawSource = attributes.source;
+    if (rawSource !== undefined && (typeof rawSource !== "string" || rawSource.trim() === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source must be a repository URL" }] };
+    }
+    const source = typeof rawSource === "string" && rawSource.trim() !== "" ? rawSource.trim() : null;
     const rawKeyId = attributes["key-id"];
     if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
       (set as { status: number }).status = 422;
@@ -2261,7 +2314,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the module namespace" }] };
     }
     const id = `modver-${crypto.randomUUID()}`;
-    await db.insert(registryModuleVersions).values({ id, moduleId, version, status: "pending", keyId, createdAt: Date.now() });
+    await db.insert(registryModuleVersions).values({ id, moduleId, version, status: "pending", source, keyId, createdAt: Date.now() });
     (set as { status: number }).status = 201;
     return { data: { id, type: "registry-module-versions", attributes: { version, status: "pending", "key-id": keyId, "created-at": new Date().toISOString() } } };
   })

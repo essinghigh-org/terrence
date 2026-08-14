@@ -15,6 +15,13 @@
       "when": 1786697143049,
       "tag": "0001_wakeful_iron_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786730723692,
+      "tag": "0002_safe_paibok",
+      "breakpoints": true
     }
   ]
 }

@@ -693,6 +693,7 @@ export const registryModuleVersions = sqliteTable("registry_module_versions", {
   version: text("version").notNull(),
   status: text("status").notNull().default("pending"), // 'pending', 'ok', 'errored'
   archivePath: text("archive_path"),
+  source: text("source"),
   keyId: text("key_id"),
   isDeprecated: integer("is_deprecated", { mode: "boolean" }).default(false),
   isRevoked: integer("is_revoked", { mode: "boolean" }).default(false),

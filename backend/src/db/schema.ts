@@ -7,9 +7,15 @@
 import * as sqliteSchema from "./schema-sqlite";
 import { buildPgSchema } from "./pg-convert";
 import { resolveDatabaseConfig } from "../lib/boot-config";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+// import.meta.dir is undefined under drizzle-kit's CJS loader; fall back to
+// import.meta.url so `drizzle-kit generate` can load the selector module.
+const moduleDir = typeof import.meta.dir === "string" && import.meta.dir !== ""
+  ? import.meta.dir
+  : dirname(fileURLToPath(import.meta.url));
+const storageDir = resolve(process.env.STORAGE_DIR ?? join(moduleDir, "../../storage"));
 const activeDriver = resolveDatabaseConfig(process.env, storageDir).driver;
 // Built lazily: constructing the pg mirror walks every sqlite table object,
 // which is wasted work on the sqlite path and can throw on exotic schema

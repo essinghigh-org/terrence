@@ -741,6 +741,7 @@ export const registryModuleVersions = pgTable("registry_module_versions", {
     version: text("version").notNull(),
     status: text("status").notNull().default("pending"),
     archivePath: text("archive_path"),
+    source: text("source"),
     keyId: text("key_id"),
     isDeprecated: boolean("is_deprecated").default(false),
     isRevoked: boolean("is_revoked").default(false),
