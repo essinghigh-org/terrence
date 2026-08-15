@@ -191,9 +191,11 @@ if (!isPostgres) {
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
   // predate the schema definitions, so create them idempotently at boot.
+  // runs_status_scheduled_idx deliberately comes AFTER the column convergence
+  // guard below: it references scheduled_at, which legacy databases may not
+  // have until the guard ALTERs it in.
   client.run("CREATE INDEX IF NOT EXISTS runs_workspace_status_created_idx ON runs (workspace_id, status, created_at)");
   client.run("CREATE INDEX IF NOT EXISTS runs_status_created_idx ON runs (status, created_at)");
-  client.run("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
   client.run("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
   client.run("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
 
@@ -219,6 +221,7 @@ if (!isPostgres) {
       }
     }
   }
+  client.run("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
 
   // -------------------------------------------------------------------------
   // Id-format migration: re-key persisted rows that predate the current ID
