@@ -433,6 +433,40 @@ describe("change calendar (21.4)", () => {
     }
   });
 
+  it("does not flag an apply whose scheduled time has already passed as future-scheduled (t_19f3556e)", async () => {
+    const pastScheduledRunId = `ops-calendar-past-sched-${suffix}`;
+    const confirmedAt = Date.now() - 60_000;
+    await db.insert(runs).values({
+      id: pastScheduledRunId,
+      workspaceId,
+      status: "confirmed",
+      createdAt: Date.now() - 180_000,
+      scheduledAt: Date.now() - 30_000,
+      statusTimestamps: {
+        "confirmed-at": new Date(confirmedAt).toISOString(),
+        "scheduled-at": new Date(Date.now() - 30_000).toISOString(),
+      },
+    });
+    try {
+      const response = await request(`/api/v2/organizations/${orgName}/change-calendar`, "GET", undefined, {
+        Authorization: `Bearer ${calendarToken}`,
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        data: { attributes: { kind: string; runId?: string; at?: string; scheduled?: boolean; "scheduled-at"?: string | null } }[];
+      };
+      const entry = body.data.find((item): boolean => item.attributes.runId === pastScheduledRunId);
+      expect(entry).toBeDefined();
+      // Past schedule: rendered as historical activity at the confirmation
+      // time, NOT as a future-scheduled action.
+      expect(entry?.attributes.scheduled).toBe(false);
+      expect(entry?.attributes["scheduled-at"]).toBeNull();
+      expect(entry?.attributes.at).toBe(new Date(confirmedAt).toISOString());
+    } finally {
+      await db.delete(runs).where(eq(runs.id, pastScheduledRunId));
+    }
+  });
+
   it("hides the calendar from users without org access", async () => {
     const response = await request(`/api/v2/organizations/nonexistent-${suffix}/change-calendar`);
     expect(response.status).toBe(404);

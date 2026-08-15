@@ -186,13 +186,18 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       for (const run of confirmedRuns) {
         const confirmedAt = (run.statusTimestamps as Readonly<Record<string, string>> | null)?.["confirmed-at"];
         const scheduledAt = run.scheduledAt;
+        // scheduled_at semantics (kanban t_19f3556e): an apply is only a
+        // FUTURE scheduled action while its scheduled time is still ahead.
+        // A confirmed run whose scheduled time has passed is historical
+        // activity (shown at its confirmation time, not flagged scheduled).
+        const futureScheduled = scheduledAt !== null && scheduledAt > Date.now();
         entries.push({
           kind: "apply",
-          at: scheduledAt !== null
+          at: futureScheduled
             ? new Date(scheduledAt).toISOString()
-            : confirmedAt ?? new Date(run.createdAt).toISOString(),
-          scheduled: scheduledAt !== null,
-          "scheduled-at": scheduledAt !== null ? new Date(scheduledAt).toISOString() : null,
+            : (confirmedAt ?? new Date(run.createdAt).toISOString()),
+          scheduled: futureScheduled,
+          "scheduled-at": futureScheduled ? new Date(scheduledAt).toISOString() : null,
           runId: run.id,
           workspaceId: run.workspaceId,
           workspaceName: names.get(run.workspaceId) ?? null,
