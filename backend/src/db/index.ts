@@ -262,7 +262,84 @@ if (!isPostgres) {
       return /^[0-9a-f]{16}$/.test(suffix);
     };
 
-    // 1. Compute old -> new id maps per entity.
+    // Journal: old -> new mappings are persisted BEFORE any mutation so an
+    // interrupted migration resumes idempotently on the next boot instead of
+    // orphaning referencing rows (kanban t_9ca58704). The journal also makes
+    // the filesystem-sidecar phase restartable: file renames cannot live in
+    // the database transaction, but the rename pass is a no-op for entries
+    // whose files are already in place.
+    const JOURNAL_TABLE = "_id_rekey_journal";
+    client.run(
+      `CREATE TABLE IF NOT EXISTS "${JOURNAL_TABLE}" (` +
+        "entity TEXT NOT NULL, old_id TEXT NOT NULL, new_id TEXT NOT NULL, " +
+        `PRIMARY KEY (entity, old_id))`,
+    );
+
+    // Build a table -> [{column, ref}] for every column that references each
+    // entity, discovered from the live foreign_key metadata.
+    const buildRefs = (entities: ReadonlySet<string>): Map<string, Array<{ table: string; column: string }>> => {
+      const refs = new Map<string, Array<{ table: string; column: string }>>();
+      const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+      for (const { name } of allTables) {
+        const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
+        for (const fk of fks) {
+          if (entities.has(fk.table)) {
+            if (!refs.has(fk.table)) refs.set(fk.table, []);
+            refs.get(fk.table)?.push({ table: name, column: fk.from });
+          }
+        }
+      }
+      return refs;
+    };
+
+    // Apply a rekey: referencing columns + primary keys in ONE transaction,
+    // then the run sidecar renames as an idempotent post-commit phase. The
+    // persisted journal makes the whole operation resumable after a crash.
+    const applyRekey = (
+      entityMaps: Map<string, Map<string, string>>,
+      refs: Map<string, Array<{ table: string; column: string }>>,
+    ): void => {
+      client.run("PRAGMA foreign_keys = OFF");
+      try {
+        client.run("BEGIN");
+        try {
+          for (const [parent, map] of entityMaps) {
+            for (const { table, column } of refs.get(parent) ?? []) {
+              const stmt = client.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`);
+              for (const [old, next] of map) stmt.run(next, old);
+            }
+            const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
+            for (const [old, next] of map) pkStmt.run(next, old);
+          }
+          client.run("COMMIT");
+        } catch (error: unknown) {
+          client.run("ROLLBACK");
+          throw error;
+        }
+      } finally {
+        client.run("PRAGMA foreign_keys = ON");
+      }
+      for (const [parent, map] of entityMaps) {
+        if (parent === "runs") renameRunSidecars(map);
+      }
+    };
+
+    // 0. Resume an interrupted migration from the persisted journal BEFORE
+    // computing fresh maps: journaled rows may already be re-keyed (crash
+    // after commit) or not (crash before commit); both resume idempotently.
+    const pendingRows = client.prepare(`SELECT entity, old_id, new_id FROM "${JOURNAL_TABLE}" ORDER BY rowid`).all() as {
+      entity: string;
+      old_id: string;
+      new_id: string;
+    }[];
+    const pendingMaps = new Map<string, Map<string, string>>();
+    for (const entry of pendingRows) {
+      const map = pendingMaps.get(entry.entity) ?? new Map<string, string>();
+      map.set(entry.old_id, entry.new_id);
+      pendingMaps.set(entry.entity, map);
+    }
+
+    // 1. Compute old -> new id maps per entity (rows still in the old format).
     const rekeyMaps = new Map<string, Map<string, string>>();
     for (const fmt of ID_FORMATS) {
       const rows = client.prepare(`SELECT id FROM "${fmt.table}"`).all() as { id: string }[];
@@ -276,41 +353,43 @@ if (!isPostgres) {
       }
       if (map.size > 0) rekeyMaps.set(fmt.table, map);
     }
-    if (rekeyMaps.size > 0) {
-      // Build a table -> [{column, ref}] for every column that references each
-      // entity, discovered from the live foreign_key metadata.
-      const refs = new Map<string, Array<{ table: string; column: string }>>();
-      const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
-      for (const { name } of allTables) {
-        const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
-        for (const fk of fks) {
-          if (rekeyMaps.has(fk.table)) {
-            if (!refs.has(fk.table)) refs.set(fk.table, []);
-            refs.get(fk.table)?.push({ table: name, column: fk.from });
-          }
-        }
-      }
 
-      client.run("PRAGMA foreign_keys = OFF");
-      try {
-        for (const [parent, map] of rekeyMaps) {
-          for (const { table, column } of refs.get(parent) ?? []) {
-            const stmt = client.prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`);
-            for (const [old, next] of map) stmt.run(next, old);
-          }
-          const pkStmt = client.prepare(`UPDATE "${parent}" SET id = ? WHERE id = ?`);
-          for (const [old, next] of map) pkStmt.run(next, old);
-          if (parent === "runs") renameRunSidecars(map);
+    const entityNames = [...new Set([...pendingMaps.keys(), ...rekeyMaps.keys()])];
+    if (entityNames.length > 0) {
+      const refs = buildRefs(new Set(entityNames));
+      if (pendingMaps.size > 0) applyRekey(pendingMaps, refs);
+      if (rekeyMaps.size > 0) {
+        // Journal BEFORE mutating so a crash can never lose the mapping.
+        const journalStmt = client.prepare(
+          `INSERT OR IGNORE INTO "${JOURNAL_TABLE}" (entity, old_id, new_id) VALUES (?, ?, ?)`,
+        );
+        for (const [entity, map] of rekeyMaps) {
+          for (const [old, next] of map) journalStmt.run(entity, old, next);
         }
-      } finally {
-        client.run("PRAGMA foreign_keys = ON");
+        applyRekey(rekeyMaps, refs);
+        const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
+        const sidecarSummary = sidecarsRenamed > 0 || sidecarRenameFailures > 0
+          ? `; renamed ${sidecarsRenamed} run sidecar files${sidecarRenameFailures > 0 ? `, ${sidecarRenameFailures} failed` : ""}`
+          : "";
+        console.warn(`[terrence] Migrated ${total} ids to the current format (${[...rekeyMaps.keys()].join(", ")})${sidecarSummary}.`);
       }
-      const entityNames = [...rekeyMaps.keys()].join(", ");
-      const total = [...rekeyMaps.values()].reduce((acc, m) => acc + m.size, 0);
-      const sidecarSummary = sidecarsRenamed > 0 || sidecarRenameFailures > 0
-        ? `; renamed ${sidecarsRenamed} run sidecar files${sidecarRenameFailures > 0 ? `, ${sidecarRenameFailures} failed` : ""}`
-        : "";
-      console.warn(`[terrence] Migrated ${total} ids to the current format (${entityNames})${sidecarSummary}.`);
+      // 2. Enforce referential integrity after re-keying: a crash-safe
+      // migration must never leave dangling references (kanban t_9ca58704).
+      const violations = client.prepare("PRAGMA foreign_key_check").all() as {
+        table: string;
+        rowid: number;
+        parent: string;
+        fkid: number;
+      }[];
+      if (violations.length > 0) {
+        const first = violations[0];
+        throw new Error(
+          `ID migration left ${violations.length} foreign-key violations ` +
+            `(first: ${first?.table ?? "?"} row ${String(first?.rowid)} -> ${first?.parent ?? "?"})`,
+        );
+      }
+      // 3. Fully applied: drop the journal so the next boot starts clean.
+      client.run(`DROP TABLE IF EXISTS "${JOURNAL_TABLE}"`);
     }
   }
 }

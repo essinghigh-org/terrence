@@ -77,7 +77,6 @@ test("id-format migration renames run sidecar artifacts alongside re-keyed rows"
   for (const id of ids) expect(id).toMatch(/^run-[0-9a-f]{16}$/);
   expect(ids).not.toContain("9e94c6d8-8c60-44a6-93e6-d9952866a20c");
   expect(ids).not.toContain("run-abcdef01234567");
-
   // Log FK columns were rewritten to the new ids.
   const logRuns = (check.prepare("SELECT DISTINCT run_id FROM logs ORDER BY run_id").all() as { run_id: string }[]).map((r) => r.run_id);
   expect(logRuns.sort()).toEqual([...ids].sort());
@@ -94,6 +93,79 @@ test("id-format migration renames run sidecar artifacts alongside re-keyed rows"
   }
   expect(contents).toEqual(new Set(['{"legacy":"uuid"}', '{"legacy":"14hex"}']));
   check.close();
+
+  await rm(testDir, { recursive: true, force: true });
+});
+
+test("interrupted id migration resumes from the persisted journal without orphaning references", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-id-resume-"));
+  const storageDir = join(testDir, "storage");
+  const dbPath = join(testDir, "terrence.db");
+  const env = { ...process.env, STORAGE_DIR: storageDir, DATABASE_URL: `file:${dbPath}` };
+  await mkdir(join(storageDir, "plan-json"), { recursive: true });
+  await mkdir(join(storageDir, "run-logs"), { recursive: true });
+
+  const bootOnce = async (): Promise<void> => {
+    const child = Bun.spawn([Bun.which("bun")!, "-e", BOOT_SCRIPT], {
+      cwd: join(import.meta.dir, "../.."),
+      env,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timedOut = await Promise.race([
+        child.exited.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), 30_000);
+        }),
+      ]);
+      expect(timedOut).toBe(false);
+      const output = await new Response(child.stdout).text();
+      expect(output).toContain("READY");
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (child.exitCode === null) child.kill();
+    }
+  };
+
+  await bootOnce();
+
+  // Simulate a crash mid-migration (the pre-journal bug): the run primary key
+  // was already re-keyed but its referencing log row still points at the old
+  // id, the sidecars still carry the old name, and the journal (from the
+  // crashed run) holds the mapping. Boot must repair the reference, rename
+  // the sidecars idempotently, and drop the journal.
+  const oldRunId = "legacy-run-id-000000000";
+  const newRunId = "run-0123456789abcdef";
+  const sql = new Database(dbPath);
+  sql.run("INSERT INTO organizations (id, name) VALUES ('org-1234567890abcdef', 'resume-org')");
+  sql.run("INSERT INTO workspaces (id, name, org_id, created_at) VALUES ('ws-1234567890abcdef', 'resume-ws', 'org-1234567890abcdef', 1)");
+  sql.run(`INSERT INTO runs (id, workspace_id, status, created_at) VALUES ('${newRunId}', 'ws-1234567890abcdef', 'planned_and_finished', 1)`);
+  sql.run(`INSERT INTO logs (id, run_id, phase, output_text, created_at) VALUES ('log-resume-1', '${oldRunId}', 'plan', 'boot 1', 1)`);
+  sql.run(
+    "CREATE TABLE IF NOT EXISTS _id_rekey_journal (entity TEXT NOT NULL, old_id TEXT NOT NULL, new_id TEXT NOT NULL, PRIMARY KEY (entity, old_id))",
+  );
+  sql.run(`INSERT INTO _id_rekey_journal (entity, old_id, new_id) VALUES ('runs', '${oldRunId}', '${newRunId}')`);
+  sql.close();
+  await writeFile(join(storageDir, "plan-json", `${oldRunId}.json`), '{"legacy":"resume"}');
+  await writeFile(join(storageDir, "run-logs", `${oldRunId}.json.gz`), "gz-resume");
+
+  await bootOnce();
+
+  const check = new Database(dbPath);
+  const logRun = (check.prepare("SELECT run_id FROM logs WHERE id = 'log-resume-1'").get() as { run_id: string }).run_id;
+  expect(logRun).toBe(newRunId);
+  // The journal is consumed once the migration is fully applied.
+  const journalTables = (check.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_id_rekey_journal'").all()).length;
+  expect(journalTables).toBe(0);
+  check.close();
+
+  // Sidecars were renamed to the new id; the old files are gone.
+  await expect(readFile(join(storageDir, "plan-json", `${newRunId}.json`), "utf8")).resolves.toBe('{"legacy":"resume"}');
+  await expect(readFile(join(storageDir, "run-logs", `${newRunId}.json.gz`), "utf8")).resolves.toBe("gz-resume");
+  await expect(readFile(join(storageDir, "plan-json", `${oldRunId}.json`), "utf8")).rejects.toThrow();
+  await expect(readFile(join(storageDir, "run-logs", `${oldRunId}.json.gz`), "utf8")).rejects.toThrow();
 
   await rm(testDir, { recursive: true, force: true });
 });
