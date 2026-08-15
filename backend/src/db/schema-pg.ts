@@ -961,6 +961,7 @@ export const runs = pgTable("runs", {
 }, (table) => [
     index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
     index("runs_status_created_idx").on(table.status, table.createdAt),
+    index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
   ]);
 
 export const samlSettings = pgTable("saml_settings", {

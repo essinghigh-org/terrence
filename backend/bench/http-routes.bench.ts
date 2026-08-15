@@ -54,14 +54,19 @@ const readyz = (): Promise<Response> => app.handle(new Request("http://localhost
 // each iteration here is one real HTTP request.
 await suite("http-end-to-end", {
   "GET /api/v2/ping (unauth)": async () => {
-    await ping();
+    const res = await ping();
+    if (!res.ok) throw new Error(`ping failed: ${res.status}`);
+    await res.arrayBuffer();
   },
   "GET /readyz": async () => {
-    await readyz();
+    const res = await readyz();
+    if (!res.ok) throw new Error(`readyz failed: ${res.status}`);
+    await res.text();
   },
   "GET workspace runs list (50/page, authed)": async () => {
     const res = await runsList();
     if (res.status !== 200) throw new Error(`runs list failed: ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    await res.arrayBuffer();
   },
 }, 5);
 

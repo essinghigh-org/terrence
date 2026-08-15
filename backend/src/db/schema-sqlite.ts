@@ -406,9 +406,11 @@ export const runs = sqliteTable("runs", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   // Hot access paths (benchmarked, kanban perf work): the queue scan is
-  // status-first; workspace run lists are workspace-first.
+  // status-first; workspace run lists are workspace-first; scheduled-applies
+  // polls are a status+range scan.
   index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
   index("runs_status_created_idx").on(table.status, table.createdAt),
+  index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
 ]);
 
 // Ephemeral per-run credentials (TFE run-token model). Minted when the worker

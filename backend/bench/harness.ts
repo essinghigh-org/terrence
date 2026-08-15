@@ -63,6 +63,11 @@ export async function suite(
 
 /** Print the collected results. Returns them for programmatic use. */
 export function report(jsonPath?: string): SuiteResult[] {
+  // --json <path> works from any caller (explicit arg wins over argv).
+  if (jsonPath === undefined) {
+    const flag = process.argv.indexOf("--json");
+    if (flag >= 0) jsonPath = process.argv[flag + 1];
+  }
   const width = Math.max(...results.map((r) => r.name.length + r.label.length + 3), 30);
   console.log(`\n${"benchmark".padEnd(width)} median     p95      min    ops/s`);
   console.log("-".repeat(width + 44));

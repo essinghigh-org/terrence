@@ -28,17 +28,20 @@ db.run(`CREATE TABLE runs (
 )`);
 
 const insert = db.prepare("INSERT INTO runs (id, workspace_id, status, created_at, scheduled_at, status_timestamps) VALUES (?, ?, ?, ?, ?, ?)");
+const now = Date.now();
 db.transaction(() => {
   for (let i = 0; i < RUNS; i += 1) {
     const ws = `ws-${i % WORKSPACES}`;
     const status = STATUSES[i % STATUSES.length];
-    const created = 1_700_000_000_000 + i * 1000;
-    insert.run(`run-${i}`, ws, status, created, status === "confirmed" ? created + 3_600_000 : null, JSON.stringify({ "confirmed-at": new Date(created).toISOString() }));
+    const created = now - (RUNS - i) * 60_000;
+    // Confirmed rows get schedules distributed around NOW so the calendar
+    // range predicate actually filters (not fixed historical timestamps).
+    const scheduledAt = status === "confirmed" ? now - 3_600_000 + (i % 7) * 3_600_000 : null;
+    insert.run(`run-${i}`, ws, status, created, scheduledAt, JSON.stringify({ "confirmed-at": new Date(created).toISOString() }));
   }
 })();
 
 const workspaceIds = Array.from({ length: 20 }, (_, i) => `ws-${i}`);
-const now = Date.now();
 
 function measure(label: string, fn: () => unknown, iterations = 30): void {
   // Warmup
