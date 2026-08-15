@@ -8,6 +8,7 @@ import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { vcsRepoResource } from "../lib/vcs-repo";
 
 const POLICY_ARCHIVE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
 
@@ -46,17 +47,6 @@ function policyCheckResource(
       "enforcement-level": policy?.enforcementLevel ?? null,
       "created-at": new Date(check.createdAt).toISOString(),
     },
-  };
-}
-
-function vcsRepoResource(vcsRepo: DeepReadonly<PolicySetVcsRepo> | null): Record<string, unknown> | null {
-  if (vcsRepo === null) return null;
-  return {
-    branch: vcsRepo.branch ?? null,
-    identifier: vcsRepo.identifier ?? null,
-    "oauth-token-id": vcsRepo.oauthTokenId ?? null,
-    "github-app-installation-id": vcsRepo.githubAppInstallationId ?? null,
-    "ingress-submodules": vcsRepo.ingressSubmodules ?? false,
   };
 }
 

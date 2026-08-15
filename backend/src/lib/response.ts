@@ -12,6 +12,7 @@ import { eq, asc } from "drizzle-orm";
 import { apiURL, signedApiURL , type DeepReadonly } from "./utils";
 import { parseStatePayload } from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
+import { vcsRepoResource } from "./vcs-repo";
 
 
 type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null }>;
@@ -238,7 +239,7 @@ export async function workspaceResource(
       "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
       "trigger-prefixes": workspace.triggerPrefixes ?? [],
       "trigger-patterns": workspace.triggerPatterns ?? [],
-      "vcs-repo": workspace.vcsRepo ?? null,
+      "vcs-repo": vcsRepoResource(workspace.vcsRepo ?? null),
       "queue-all-runs": workspace.queueAllRuns ?? true,
       "speculative-enabled": workspace.speculativeEnabled ?? true,
       "global-remote-state": workspace.globalRemoteState === true,

@@ -260,9 +260,9 @@ describe("GitHub Webhooks", () => {
     }));
     expect(createWorkspaceResponse.status).toBe(201);
     const workspaceResponse = await createWorkspaceResponse.json() as {
-      data: { attributes: { "vcs-repo": { githubAppInstallationId: string } } };
+      data: { attributes: { "vcs-repo": { "github-app-installation-id": string } } };
     };
-    expect(workspaceResponse.data.attributes["vcs-repo"].githubAppInstallationId).toBe(registered.data.id);
+    expect(workspaceResponse.data.attributes["vcs-repo"]["github-app-installation-id"]).toBe(registered.data.id);
     await db.delete(workspaces).where(eq(workspaces.name, "scoped-installation-workspace"));
   });
 

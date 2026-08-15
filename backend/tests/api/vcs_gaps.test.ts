@@ -7,6 +7,7 @@ import {
   apiTokens,
   githubAppInstallations,
   oauthClients,
+  oauthTokens,
   organizationMemberships,
   organizations,
   projects,
@@ -177,9 +178,9 @@ describe("VCS integration gaps", () => {
     expect(created.data.attributes["vcs-repo"]).toMatchObject({
       identifier: "example/infrastructure",
       branch: "release",
-      githubAppInstallationId: installationId,
-      ingressSubmodules: true,
-      tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+      "github-app-installation-id": installationId,
+      "ingress-submodules": true,
+      "tags-regex": "^v\\d+\\.\\d+\\.\\d+$",
     });
 
     const patchResponse = await request(`/api/v2/workspaces/${created.data.id}`, "PATCH", {
@@ -194,8 +195,8 @@ describe("VCS integration gaps", () => {
     const patched = await patchResponse.json();
     expect(patched.data.attributes["vcs-repo"]).toMatchObject({
       identifier: "example/infrastructure",
-      githubAppInstallationId: installationId,
-      tagsRegex: "^release-",
+      "github-app-installation-id": installationId,
+      "tags-regex": "^release-",
     });
 
     const invalidResponse = await request(`/api/v2/workspaces/${created.data.id}`, "PATCH", {
@@ -204,5 +205,47 @@ describe("VCS integration gaps", () => {
     expect(invalidResponse.status).toBe(422);
     const persisted = await db.query.workspaces.findFirst({ where: eq(workspaces.id, created.data.id) });
     expect(persisted?.vcsRepo?.tagsRegex).toBe("^release-");
+  });
+
+  test("serializes workspace vcs-repo with TFE kebab-case attribute names only", async () => {
+    // go-tfe (the tfe provider's JSON:API client) parses kebab-case
+    // attributes; camelCase keys in the response silently drop the
+    // credential on read, leaving the provider with an empty
+    // oauth_token_id / github_app_installation_id and a perpetual
+    // vcs_repo diff. The wire shape must never leak the stored keys.
+    const clientResponse = await createClient(`github-${suffix}`, "github");
+    expect(clientResponse.status).toBe(201);
+    const client = await clientResponse.json();
+    const tokenId = `ot-vcs-${suffix}`;
+    await db.insert(oauthTokens).values({
+      id: tokenId,
+      oauthClientId: client.data.id as string,
+      token: `oauth-secret-${suffix}`,
+    });
+
+    const createResponse = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
+      data: {
+        type: "workspaces",
+        attributes: {
+          name: `kebab-vcs-${suffix}`,
+          "vcs-repo": {
+            identifier: "example/kebab",
+            "oauth-token-id": tokenId,
+            "ingress-submodules": true,
+            "tags-regex": "^v1\\.",
+          },
+        },
+      },
+    });
+    expect(createResponse.status).toBe(201);
+    const created = await createResponse.json();
+    const vcsRepo = created.data.attributes["vcs-repo"] as Record<string, unknown>;
+    expect(vcsRepo["oauth-token-id"]).toBe(tokenId);
+    expect(vcsRepo["github-app-installation-id"]).toBeNull();
+    expect(vcsRepo["ingress-submodules"]).toBe(true);
+    expect(vcsRepo["tags-regex"]).toBe("^v1\\.");
+    for (const camelKey of ["oauthTokenId", "githubAppInstallationId", "ingressSubmodules", "tagsRegex", "cloneUrl"]) {
+      expect(camelKey in vcsRepo).toBe(false);
+    }
   });
 });
