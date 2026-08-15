@@ -205,7 +205,7 @@ const shade = (name: string, amount: number): string =>
 //   - small text needs >= 4.5:1 (amber-700+, emerald-700+, green-700+)
 // In dark mode the tokens are already light-on-dark (>= 9:1), so they map to the
 // raw token — no darkening needed.
-const legacyPalette = (mode: "light" | "dark"): Readonly<Record<string, string>> => {
+const legacyPalette = (mode: "light" | "dark") => {
   const warn = (lightPct: number): string => (mode === "light" ? shade("warning", lightPct) : color("warning"));
   const succ = (lightPct: number): string => (mode === "light" ? shade("success", lightPct) : color("success"));
   return {

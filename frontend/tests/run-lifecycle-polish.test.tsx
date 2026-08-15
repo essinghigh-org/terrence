@@ -82,7 +82,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
                     "applying-at": "2026-07-29T09:00:03.000Z",
                     "applied-at": "2026-07-29T09:00:04.000Z",
                   }
-                : {}),
+                : undefined),
             },
           },
         },

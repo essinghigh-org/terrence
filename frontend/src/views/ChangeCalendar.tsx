@@ -38,23 +38,23 @@ type CalendarPage = Readonly<{
   };
 }>;
 
-const KIND_LABEL: Record<CalendarEntry["attributes"]["kind"], string> = {
+const KIND_LABEL = {
   apply: "Confirmed apply",
   "change-request": "Change request",
   "auto-destroy": "Auto-destroy",
 };
 
-const KIND_ICON: Record<CalendarEntry["attributes"]["kind"], typeof CheckCircle2> = {
+const KIND_ICON = {
   apply: CheckCircle2,
   "change-request": GitPullRequest,
   "auto-destroy": Trash2,
 };
 
-const KIND_VARIANT: Record<CalendarEntry["attributes"]["kind"], "default" | "secondary" | "destructive"> = {
+const KIND_VARIANT = {
   apply: "default",
   "change-request": "secondary",
   "auto-destroy": "destructive",
-};
+} as const;
 
 function occurrenceLabel(entry: CalendarEntry): string {
   const { attributes } = entry;

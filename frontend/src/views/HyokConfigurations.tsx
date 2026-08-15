@@ -47,7 +47,7 @@ type HyokForm = {
   agentPoolId: string;
 };
 
-const TYPE_LABELS: Readonly<Record<string, string>> = {
+const TYPE_LABELS = {
   "aws-oidc-configurations": "AWS",
   "azure-oidc-configurations": "Azure",
   "gcp-oidc-configurations": "GCP",
@@ -55,7 +55,8 @@ const TYPE_LABELS: Readonly<Record<string, string>> = {
 };
 
 function oidcLabel(config: OidcConfig): string {
-  const label = TYPE_LABELS[config.type];
+  // SAFETY: unknown config types fall through to the raw type label below.
+  const label = TYPE_LABELS[config.type as keyof typeof TYPE_LABELS];
   return label ?? `${config.type} (${config.id})`;
 }
 
@@ -178,14 +179,12 @@ export function HyokConfigurations(): React.JSX.Element {
       return;
     }
     const selectedOidc = oidcConfigs.find((config): boolean => config.id === form.oidcConfigId);
-    const relationships: Record<string, unknown> = {
+    const relationships = {
       "oidc-configuration": {
         data: { id: form.oidcConfigId, type: selectedOidc === undefined ? "oidc-configurations" : selectedOidc.type },
       },
+      ...(form.agentPoolId !== "" ? { "agent-pool": { data: { id: form.agentPoolId, type: "agent-pools" } } } : undefined),
     };
-    if (form.agentPoolId !== "") {
-      relationships["agent-pool"] = { data: { id: form.agentPoolId, type: "agent-pools" } };
-    }
     try {
       await fetchApi(`/organizations/${encodeURIComponent(orgName)}/hyok-configurations`, {
         method: "POST",

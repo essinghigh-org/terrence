@@ -62,7 +62,7 @@ const COLUMN_GAP = 84;
 const ROW_GAP = 30;
 const PADDING = 36;
 
-const PROVIDER_COLORS: Readonly<Record<string, string>> = {
+const PROVIDER_COLORS = {
   aws: "28 84% 46%",
   awscc: "28 84% 46%",
   azurerm: "207 88% 42%",
@@ -143,7 +143,7 @@ function buildGraphModel(resources: readonly DependencyGraphResource[]): GraphMo
   const nodeAddresses = new Set(nodes.map((node): string => node.address));
   const edges = nodes.flatMap((node): readonly Readonly<{ from: string; to: string }>[] => node.dependencies
     .filter((dependency): boolean => nodeAddresses.has(dependency))
-    .map((dependency): Readonly<{ from: string; to: string }> => ({ from: dependency, to: node.address })));
+    .map((dependency) => ({ from: dependency, to: node.address })));
   if (nodes.length < 2 || edges.length === 0) return null;
 
   const levels = new Map<string, number>();
@@ -222,7 +222,8 @@ function providerTypeFrom(address: string, details: ResourceDetails | undefined)
 }
 
 function colorFor(provider: string): string {
-  return PROVIDER_COLORS[provider] ?? DEFAULT_PROVIDER_COLOR;
+  // SAFETY: unknown provider names fall through to DEFAULT_PROVIDER_COLOR below.
+  return PROVIDER_COLORS[provider as keyof typeof PROVIDER_COLORS] ?? DEFAULT_PROVIDER_COLOR;
 }
 
 function iconFor(providerType: string): LucideIcon {

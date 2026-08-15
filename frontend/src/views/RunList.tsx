@@ -63,7 +63,7 @@ type IncludedUser = {
   };
 };
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS = {
   pending: "Pending",
   fetching: "Fetching configuration",
   fetching_completed: "Configuration fetched",
@@ -101,14 +101,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 type RunType = "empty" | "plan" | "refresh" | "standard";
 
-const RUN_TYPE_DESCRIPTIONS: Record<RunType, string> = {
+const RUN_TYPE_DESCRIPTIONS = {
   standard: "Create a plan that can be confirmed and applied.",
   refresh: "Detect drift and synchronize the workspace state.",
   plan: "Create a speculative plan that cannot be applied.",
   empty: "Allow an unchanged plan to be confirmed and applied.",
 };
 
-const RUN_TYPE_LABELS: Record<RunType, string> = {
+const RUN_TYPE_LABELS = {
   standard: "Plan and apply",
   refresh: "Refresh state",
   plan: "Plan only",
@@ -116,7 +116,8 @@ const RUN_TYPE_LABELS: Record<RunType, string> = {
 };
 
 function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+  // SAFETY: unknown statuses fall through to the underscore-replaced label below.
+  return STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status.replace(/_/g, " ");
 }
 
 /**

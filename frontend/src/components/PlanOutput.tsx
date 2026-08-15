@@ -427,12 +427,12 @@ type DiffLine = {
 };
 
 type DiffMarker = "add" | "del" | "mod";
-const diffMarkerClasses: Record<DiffMarker, string> = {
+const diffMarkerClasses = {
   add: "text-success",
   del: "text-destructive",
   mod: "text-primary",
 };
-const diffMarkerText: Readonly<Record<DiffMarker, string>> = {
+const diffMarkerText = {
   add: "+",
   del: "-",
   mod: "~",
@@ -649,7 +649,7 @@ export function AttributeDiff({
   }
 
   const header = type !== undefined && name !== undefined
-    ? ((): { text: string; cls: string } => {
+    ? (() => {
         const op = operationFor(change.actions);
         if (op === "create") return { text: "+", cls: diffMarkerClasses.add };
         if (op === "delete" || op === "remove") return { text: "-", cls: diffMarkerClasses.del };
@@ -731,7 +731,7 @@ function providerLabel(providerName: string | undefined): string {
   return label === undefined || label === "" ? "provider unknown" : label;
 }
 
-const actionReasonLabels: Readonly<Record<string, string>> = {
+const actionReasonLabels = {
   replace_because_cannot_update: "Replacement required by provider",
   replace_because_tainted: "Resource is tainted",
   replace_by_request: "Replacement requested",
@@ -746,7 +746,8 @@ const actionReasonLabels: Readonly<Record<string, string>> = {
 };
 
 function actionReasonLabel(reason: string): string {
-  return actionReasonLabels[reason] ?? reason.replace(/_/g, " ");
+  // SAFETY: unknown action reasons fall through to the underscore-replaced label below.
+  return actionReasonLabels[reason as keyof typeof actionReasonLabels] ?? reason.replace(/_/g, " ");
 }
 
 function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): React.JSX.Element {
@@ -887,12 +888,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
   );
 }
 
-function summaryCounts(resources: readonly ResourceChange[]): Readonly<{
-  add: number;
-  change: number;
-  destroy: number;
-  replace: number;
-}> {
+function summaryCounts(resources: readonly ResourceChange[]) {
   let add = 0;
   let change = 0;
   let destroy = 0;

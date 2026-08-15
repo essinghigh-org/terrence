@@ -246,7 +246,7 @@ export function WorkspaceSettings({
             body: JSON.stringify({
               data: [...remoteStateConsumerIds]
                 .sort()
-                .map((id): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })),
+                .map((id) => ({ id, type: "workspaces" })),
             }),
           });
           setSavedConsumerKeys([...remoteStateConsumerIds].sort().join(","));

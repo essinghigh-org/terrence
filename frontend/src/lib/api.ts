@@ -87,7 +87,7 @@ export class ApiError extends Error {
  * surfaced so UIs can render per-field feedback instead of a single blob
  * (26.9). Unparsable pointers are dropped.
  */
-export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, unknown>>[]): Record<string, string> {
+export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, unknown>>[]) {
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];
@@ -379,7 +379,7 @@ export async function streamExplain(
   const send = async (accessToken: string | null): Promise<Response> => {
     const headers: HeadersInit = {
       "Content-Type": "application/vnd.api+json",
-      ...(accessToken !== null ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(accessToken !== null ? { Authorization: `Bearer ${accessToken}` } : undefined),
     };
     return fetch(url, {
       method: "POST",
@@ -387,7 +387,7 @@ export async function streamExplain(
       body: JSON.stringify({
         data: {
           type: "plan-explanations",
-          attributes: { kind, stream: true, ...(refresh ? { refresh: true } : {}) },
+          attributes: { kind, stream: true, ...(refresh ? { refresh: true } : undefined) },
         },
       }),
       signal,

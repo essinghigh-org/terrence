@@ -80,19 +80,13 @@ export function AdminScimSettings(): React.JSX.Element {
         await load();
         return;
       }
-      const attributes: Record<string, unknown> = {
+      const attributes = {
         paused,
         // site-admin-group-display-name is read-only (derived from the SCIM
         // id, which has no write path) — do not submit it.
+        ...(enabled ? { enabled: true } : undefined),
+        ...(siteAdminGroupScimId !== null && siteAdminGroupScimId !== "" ? { "site-admin-group-scim-id": siteAdminGroupScimId } : undefined),
       };
-      // The backend rejects enabled: false, so only send enabled when turning
-      // it on; omitting it keeps the current value.
-      if (enabled) {
-        attributes["enabled"] = true;
-      }
-      if (siteAdminGroupScimId !== null && siteAdminGroupScimId !== "") {
-        attributes["site-admin-group-scim-id"] = siteAdminGroupScimId;
-      }
       await fetchApi("/admin/scim-settings", {
         method: "PATCH",
         body: JSON.stringify({

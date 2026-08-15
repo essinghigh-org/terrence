@@ -149,13 +149,13 @@ function VariablesDialog({
       return;
     }
 
-    const attributes: Record<string, unknown> = {
+    const attributes = {
       key: key.trim(),
       category,
       sensitive,
       description: description.trim() !== "" ? description.trim() : null,
+      ...(editing?.attributes.sensitive !== true || value !== "" ? { value } : undefined),
     };
-    if (editing?.attributes.sensitive !== true || value !== "") attributes["value"] = value;
 
     setSaving(true);
     setError("");
@@ -603,7 +603,7 @@ export function VariableSets(): React.JSX.Element {
     const attached = [...selectedWorkspaceIds].filter((id: string): boolean => !currentIds.has(id));
     const detached = [...currentIds].filter((id: string): boolean => !selectedWorkspaceIds.has(id));
     const relationshipBody = (ids: string[]): string =>
-      JSON.stringify({ data: ids.map((id: string): { id: string; type: string } => ({ id, type: "workspaces" })) });
+      JSON.stringify({ data: ids.map((id: string) => ({ id, type: "workspaces" })) });
 
     setSavingWorkspaces(true);
     setWorkspaceError("");
@@ -632,7 +632,7 @@ export function VariableSets(): React.JSX.Element {
         relationships: {
           ...workspaceSet.relationships,
           workspaces: {
-            data: [...selectedWorkspaceIds].map((id: string): { id: string; type: string } => ({ id, type: "workspaces" })),
+            data: [...selectedWorkspaceIds].map((id: string) => ({ id, type: "workspaces" })),
           },
         },
       };

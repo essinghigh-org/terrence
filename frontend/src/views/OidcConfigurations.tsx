@@ -19,7 +19,7 @@ type OidcConfig = {
   attributes: Record<string, unknown>;
 };
 
-const TYPE_LABELS: Readonly<Record<string, string>> = {
+const TYPE_LABELS = {
   "aws-oidc-configurations": "AWS",
   "azure-oidc-configurations": "Azure",
   "gcp-oidc-configurations": "GCP",
@@ -104,7 +104,7 @@ export function OidcConfigurations(): React.JSX.Element {
     }
   };
 
-  const buildAttributes = (): Record<string, string> => {
+  const buildAttributes = () => {
     switch (configType) {
       case "aws-oidc-configurations":
         return { "role-arn": roleArn.trim() };
@@ -210,7 +210,8 @@ export function OidcConfigurations(): React.JSX.Element {
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
                       <Fingerprint className="h-4 w-4 text-muted-foreground" />
-                      {TYPE_LABELS[config.type] ?? config.type}
+                      {/* SAFETY: unknown config types fall back to the raw type string. */}
+                      {TYPE_LABELS[config.type as keyof typeof TYPE_LABELS] ?? config.type}
                     </div>
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>

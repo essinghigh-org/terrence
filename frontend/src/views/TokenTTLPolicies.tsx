@@ -149,7 +149,7 @@ export function TokenTTLPolicies(): React.JSX.Element {
         data: {
           type: "organization-token-ttl-policies",
           attributes: {
-            "token-ttl-policies": next.map((policy: TokenTTLPolicy): Record<string, unknown> => ({
+            "token-ttl-policies": next.map((policy: TokenTTLPolicy) => ({
               "token-type": policy.attributes["token-type"],
               "max-ttl-ms": policy.attributes["max-ttl-ms"],
             })),

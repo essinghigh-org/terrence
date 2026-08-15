@@ -23,7 +23,7 @@ function LocationProbe(): React.JSX.Element {
   return <span>{location.pathname}{location.search}</span>;
 }
 
-const moduleResource = (canManage = false): Record<string, unknown> => ({
+const moduleResource = (canManage = false) => ({
   id: "mod-network",
   type: "registry-modules",
   attributes: {
@@ -49,7 +49,7 @@ const moduleResource = (canManage = false): Record<string, unknown> => ({
   },
 });
 
-const section = (path: string, readme: string): Record<string, unknown> => ({
+const section = (path: string, readme: string) => ({
   path,
   readme,
   description: "Network module",
@@ -66,7 +66,7 @@ const section = (path: string, readme: string): Record<string, unknown> => ({
   ],
 });
 
-const versionResource = (id: string, version: string, readme: string): Record<string, unknown> => ({
+const versionResource = (id: string, version: string, readme: string) => ({
   id,
   type: "registry-module-versions",
   attributes: {

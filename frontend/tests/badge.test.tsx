@@ -6,8 +6,7 @@ import { Badge } from "../src/components/ui/badge";
 const classNameOf = (ui: ReactElement): string => {
   const { container } = render(ui);
   const el = container.querySelector("span[class]");
-  const elEl = el as unknown as { className: string } | null;
-  return elEl?.className ?? "";
+  return el?.className ?? "";
 };
 
 describe("Badge", (): void => {

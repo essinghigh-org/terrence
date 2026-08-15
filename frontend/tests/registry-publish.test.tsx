@@ -16,7 +16,7 @@ function changeInput(element: HTMLElement, value: string): void {
   fireEvent.change(element, { target: { value } });
 }
 
-function moduleResource(id: string, name: string, provider: string, mechanism: "vcs" | "manual" = "vcs"): Record<string, unknown> {
+function moduleResource(id: string, name: string, provider: string, mechanism: "vcs" | "manual" = "vcs") {
   return {
     id,
     type: "registry-modules",

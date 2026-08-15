@@ -11,7 +11,7 @@ const json = (data: unknown, status = 200): Response => new Response(JSON.string
 
 const noContent = (): Response => new Response(null, { status: 204 });
 
-const workspaceVar = (id: string, key: string, category: "terraform" | "env", sensitive = false): Record<string, unknown> => ({
+const workspaceVar = (id: string, key: string, category: "terraform" | "env", sensitive = false) => ({
   id,
   type: "vars",
   attributes: {
@@ -24,7 +24,7 @@ const workspaceVar = (id: string, key: string, category: "terraform" | "env", se
   },
 });
 
-const setVar = (id: string, key: string, category: "terraform" | "env", sensitive = false): Record<string, unknown> => ({
+const setVar = (id: string, key: string, category: "terraform" | "env", sensitive = false) => ({
   id,
   type: "vars",
   attributes: {
@@ -37,7 +37,7 @@ const setVar = (id: string, key: string, category: "terraform" | "env", sensitiv
   },
 });
 
-const variableSet = (id: string, name: string, options: { global?: boolean; description?: string | null; workspaceCount?: number; varCount?: number } = {}): Record<string, unknown> => ({
+const variableSet = (id: string, name: string, options: { global?: boolean; description?: string | null; workspaceCount?: number; varCount?: number } = {}) => ({
   id,
   type: "varsets",
   attributes: {
@@ -72,7 +72,7 @@ test("attach dialog shows the empty state when the organization has no variable 
     if (path === "/api/v2/organizations/essighigh/varsets") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate={true} />);
   fireEvent.click(view.getByRole("button", { name: "Attach variable set" }));

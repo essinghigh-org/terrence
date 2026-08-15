@@ -88,20 +88,16 @@ export function AdminSmtpSettings(): React.JSX.Element {
         setSaveError("Port must be an integer between 1 and 65535.");
         return;
       }
-      const attributes: Record<string, unknown> = {
+      const attributes = {
         enabled,
         host: host.trim(),
         port: portNumber,
         "sender-email": senderEmail.trim(),
         auth,
         username: username.trim(),
+        ...(password.trim() !== "" ? { password } : undefined),
+        ...(testEmail.trim() !== "" ? { "test-email-address": testEmail.trim() } : undefined),
       };
-      if (password.trim() !== "") {
-        attributes["password"] = password;
-      }
-      if (testEmail.trim() !== "") {
-        attributes["test-email-address"] = testEmail.trim();
-      }
       await fetchApi("/admin/smtp-settings", {
         method: "PATCH",
         body: JSON.stringify({

@@ -19,7 +19,7 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
-function token(): { id: string; attributes: Record<string, unknown> } {
+function token() {
   return {
     id: "tkn-1",
     attributes: {

@@ -167,9 +167,9 @@ export function WorkspaceTeamAccess({
       setEditorError("Select a team.");
       return;
     }
-    const attributes: Record<string, unknown> = {
+    const attributes = {
       access,
-      ...(access === "custom" ? { permissions } : {}),
+      ...(access === "custom" ? { permissions } : undefined),
     };
     setSaving(true);
     setEditorError("");
@@ -181,7 +181,7 @@ export function WorkspaceTeamAccess({
           body: JSON.stringify({
             data: {
               type: "team-workspaces",
-              ...(editing == null ? {} : { id: editing.id }),
+              ...(editing == null ? undefined : { id: editing.id }),
               attributes,
               ...(editing == null
                 ? {
@@ -190,7 +190,7 @@ export function WorkspaceTeamAccess({
                       workspace: { data: { id: workspaceId, type: "workspaces" } },
                     },
                   }
-                : {}),
+                : undefined),
             },
           }),
         },

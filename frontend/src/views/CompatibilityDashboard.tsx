@@ -17,7 +17,7 @@ type ProviderSurface = Readonly<Record<string, unknown> & {
   resources?: SurfaceEntry[];
 }>;
 
-const STATUS_STYLES: Readonly<Record<string, string>> = {
+const STATUS_STYLES = {
   covered: "border-success/30 bg-success/10 text-success",
   planned: "border-primary/30 bg-primary/10 text-primary",
   "backend-gap": "border-warning/30 bg-warning/10 text-warning",
@@ -56,7 +56,7 @@ function SurfaceTable({
           <TableRow key={entry.name}>
             <TableCell className="font-mono text-[13px]">{entry.name}</TableCell>
             <TableCell>
-              <Badge variant="outline" className={cn("rounded font-mono", STATUS_STYLES[entry.status])}>
+              <Badge variant="outline" className={cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])}>
                 {statusLabel(entry.status)}
               </Badge>
             </TableCell>

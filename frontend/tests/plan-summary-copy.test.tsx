@@ -13,7 +13,7 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function planFixture(): Record<string, unknown> {
+function planFixture() {
   return {
     terraform_version: "1.11.0",
     resource_changes: [

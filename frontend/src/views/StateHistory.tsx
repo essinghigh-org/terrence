@@ -24,11 +24,12 @@ type StateItem = {
 
 function stateStatus(value: unknown): string {
   if (typeof value !== "string" || value === "") return "Finalized";
-  const labels: Record<string, string> = {
+  const labels = {
     pending: "Pending",
     finalized: "Finalized",
   };
-  return labels[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
+  // SAFETY: unknown state values fall through to the title-cased label below.
+  return labels[value as keyof typeof labels] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
 }
 
 function runStatusLabel(value: string): string {

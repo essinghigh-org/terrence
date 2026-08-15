@@ -16,10 +16,7 @@ const json = (data: unknown, status = 200): Response =>
 const getUrl = (input: string | URL | Request): string =>
   typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
-function deferred<T>(): Readonly<{
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-}> {
+function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete): void => {
     resolve = complete;

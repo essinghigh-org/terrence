@@ -215,7 +215,7 @@ const TERMINAL_STATUSES = new Set([
   "unreachable",
 ]);
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS = {
   pending: "Pending",
   fetching: "Fetching configuration",
   fetching_completed: "Configuration fetched",
@@ -251,7 +251,7 @@ const STATUS_LABELS: Record<string, string> = {
   tag: "Tag",
 };
 
-const RUN_EVENT_LABELS: Readonly<Record<string, string>> = {
+const RUN_EVENT_LABELS = {
   apply: "Run confirmed",
   cancel: "Run canceled",
   create: "Run created",
@@ -261,12 +261,13 @@ const RUN_EVENT_LABELS: Readonly<Record<string, string>> = {
 };
 
 function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+  // SAFETY: unknown statuses fall through to the underscore-replaced label below.
+  return STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status.replace(/_/g, " ");
 }
 
 function sourceLabel(source: string | undefined): string {
   if (source === undefined || source === "") return "Unknown source";
-  const labels: Readonly<Record<string, string>> = {
+  const labels = {
     bitbucket: "Bitbucket",
     github: "GitHub",
     gitlab: "GitLab",
@@ -275,7 +276,8 @@ function sourceLabel(source: string | undefined): string {
     "tfe-no-code": "No-code provisioning",
     "tfe-ui": "UI",
   };
-  return labels[source] ?? statusLabel(source);
+  // SAFETY: unknown sources fall through to the raw source label below.
+  return labels[source as keyof typeof labels] ?? statusLabel(source);
 }
 
 function formatDate(value: string | undefined): string {
@@ -898,17 +900,18 @@ export function RunDetail({
     setPendingAction(action);
     try {
       const trimmedComment = comment.trim();
-      await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, {
+      const actionBody = {
         method: "POST",
-        ...(trimmedComment === "" ? {} : {
+        ...(trimmedComment !== "" ? {
           body: JSON.stringify({
             data: {
               type: "runs",
               attributes: { comment: trimmedComment },
             },
           }),
-        }),
-      });
+        } : undefined),
+      };
+      await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, actionBody);
       toast.add({ title: successTitle, type: "success" });
       setRefreshVersion((value: number): number => value + 1);
       return true;
@@ -1991,7 +1994,8 @@ export function RunDetail({
                         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                           <p className="text-foreground/85">
                             <span className="font-semibold text-foreground">{actor}</span>{" "}
-                            {RUN_EVENT_LABELS[event.attributes.action] ?? statusLabel(event.attributes.action)}
+                            {/* SAFETY: unknown event actions fall through to the status label fallback. */}
+                            {RUN_EVENT_LABELS[event.attributes.action as keyof typeof RUN_EVENT_LABELS] ?? statusLabel(event.attributes.action)}
                           </p>
                           <time
                             className="text-xs text-muted-foreground"

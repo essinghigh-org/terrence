@@ -85,7 +85,7 @@ export function PublishModuleDialog({
         if (attributes === null || typeof attributes !== "object") return [];
         const repository = attributes as Record<string, unknown>;
         if (typeof repository["identifier"] !== "string" || typeof repository["name"] !== "string") return [];
-        return [{ identifier: repository["identifier"], name: repository["name"], ...(typeof repository["owner"] === "string" ? { owner: repository["owner"] } : {}) }];
+        return [{ identifier: repository["identifier"], name: repository["name"], ...(typeof repository["owner"] === "string" ? { owner: repository["owner"] } : undefined) }];
       }));
     }).catch((caught: unknown): void => {
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Repositories could not be loaded.");
@@ -138,13 +138,13 @@ export function PublishModuleDialog({
       setError("Branch and initial version are required for branch-based publishing.");
       return;
     }
-    const vcsRepo: Record<string, string> = {
+    const vcsRepo = {
       identifier: repository.trim(),
       "display-identifier": repository.trim(),
       ...(selectedConnection.kind === "github-app"
         ? { "github-app-installation-id": selectedConnection.id }
         : { "oauth-token-id": selectedConnection.id }),
-      ...(workflow === "branch" ? { branch: branch.trim() } : {}),
+      ...(workflow === "branch" ? { branch: branch.trim() } : undefined),
     };
     const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules/vcs`, {
       method: "POST",
@@ -157,7 +157,7 @@ export function PublishModuleDialog({
             "module-provider": provider.trim(),
             "source-directory": sourceDirectory.trim(),
             "tag-prefix": workflow === "tag" ? tagPrefix.trim() : "",
-            ...(workflow === "branch" ? { version: version.trim() } : {}),
+            ...(workflow === "branch" ? { version: version.trim() } : undefined),
           },
         },
       }),

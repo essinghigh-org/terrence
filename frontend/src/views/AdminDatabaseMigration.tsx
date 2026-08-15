@@ -80,7 +80,7 @@ type StatusBody = {
 
 const ACTIVE_PHASES = new Set(["draining", "copying", "verifying"]);
 
-const STEP_LABELS: Record<string, string> = {
+const STEP_LABELS = {
   compatibility: "Compatibility check",
   maintenance: "Maintenance mode",
   drain: "Drain active work",
@@ -192,7 +192,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     setError(null);
     const response = await fetchApi(`/admin/db-migration/${path}`, {
       method,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? undefined : { body: JSON.stringify(body) }),
     });
     if (!(response instanceof Response)) return response;
     if (!response.ok) {
@@ -288,7 +288,8 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                     <li key={step.key} className="flex items-center gap-2 text-sm">
                       {stepSymbol(step.status)}
                       <span className={cn(step.status === "failed" && "text-destructive")}>
-                        {STEP_LABELS[step.key] ?? step.key}
+                        {/* SAFETY: unknown migration steps fall back to the raw step key below. */}
+                        {STEP_LABELS[step.key as keyof typeof STEP_LABELS] ?? step.key}
                       </span>
                       {step.detail !== null && (
                         <span className="truncate font-mono text-xs text-muted-foreground">{step.detail}</span>

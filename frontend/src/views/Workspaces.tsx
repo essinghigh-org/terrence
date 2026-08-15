@@ -140,7 +140,7 @@ async function fetchWorkspacePages(
 // The "running" set mirrors the executor's active statuses (worker.ts
 // blockerStatuses minus the completed-plan states, which belong to on-hold):
 // pre-plan/post-plan task execution, policy phases, queued apply, etc.
-const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
+const runStatusFilters = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
   errored: ["errored"],
   running: [
@@ -194,7 +194,8 @@ export function Workspaces(): React.JSX.Element {
     setLoadError("");
     setCanManageWorkspaces(false);
     try {
-      const statuses = runStatusFilters[statusFilter];
+      // SAFETY: unknown filter keys yield undefined, treated as "no filter" below.
+      const statuses = runStatusFilters[statusFilter as keyof typeof runStatusFilters];
       const query = statuses === undefined
         ? "?page%5Bsize%5D=100&include=current_run"
         : `?page%5Bsize%5D=100&include=current_run&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
@@ -207,8 +208,8 @@ export function Workspaces(): React.JSX.Element {
           : fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&include=current_run`, signal)
             .catch((): null => null),
         fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
-          .then((data): Readonly<{ data: Project[]; failed: false }> => ({ data, failed: false }))
-          .catch((): Readonly<{ data: Project[]; failed: true }> => ({ data: [], failed: true })),
+          .then((data) => ({ data, failed: false }))
+          .catch(() => ({ data: [], failed: true })),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}`,
           signal === undefined ? {} : { signal },

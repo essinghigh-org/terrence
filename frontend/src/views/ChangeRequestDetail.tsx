@@ -44,12 +44,12 @@ type AuditEntry = Readonly<{
   }>;
 }>;
 
-const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+const STATUS_VARIANT = {
   pending: "default",
   approved: "secondary",
   discarded: "destructive",
   archived: "outline",
-};
+} as const;
 
 function statusLabel(status: string): string {
   return status.replace(/_/g, " ").replace(/\b\w/g, (char): string => char.toUpperCase());
@@ -185,7 +185,8 @@ export function ChangeRequestDetail(): React.JSX.Element {
         )}
         description="Change request details, approval flow, and audit history."
         action={changeRequest !== null ? (
-          <Badge variant={STATUS_VARIANT[changeRequest.attributes.status] ?? "secondary"}>
+          /* SAFETY: unknown change-request statuses fall back to "secondary". */
+          <Badge variant={STATUS_VARIANT[changeRequest.attributes.status as keyof typeof STATUS_VARIANT] ?? "secondary"}>
             {statusLabel(changeRequest.attributes.status)}
           </Badge>
         ) : undefined}

@@ -19,6 +19,14 @@ import { cn, formatDateTime } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
+/** Mutable accumulator mirror of ResourceDetails (readonly upstream). */
+type MutableResourceDetails = {
+  provider?: string;
+  "provider-type"?: string;
+  module?: string;
+  "updated-at"?: string;
+};
+
 type Resource = Readonly<{
   id: string;
   attributes: Readonly<{
@@ -169,8 +177,8 @@ export function WorkspaceResources({
       `/workspaces/${encodeURIComponent(workspaceId)}/readme`,
       signal === undefined ? {} : { signal },
     ).then(
-      (value: unknown): Readonly<{ status: "fulfilled"; value: unknown }> => ({ status: "fulfilled", value }),
-      (reason: unknown): Readonly<{ status: "rejected"; reason: unknown }> => ({ status: "rejected", reason }),
+      (value: unknown) => ({ status: "fulfilled", value } as const),
+      (reason: unknown) => ({ status: "rejected", reason } as const),
     );
     const [resourceResult, outputResult, dependencyGraphResult] = await stateResults;
     if (isAborted(signal)) return;
@@ -239,10 +247,10 @@ export function WorkspaceResources({
     (): Output[] => outputs.filter((output): boolean => needle === "" || output.attributes.name.toLowerCase().includes(needle)),
     [needle, outputs],
   );
-  const resourceDetails = useMemo((): Readonly<Record<string, ResourceDetails>> => {
+  const resourceDetails = useMemo(() => {
     const details: Record<string, ResourceDetails> = {};
     resources.forEach((resource): void => {
-      const entry: { provider?: string; "provider-type"?: string; module?: string; "updated-at"?: string } = {};
+      const entry: MutableResourceDetails = {};
       if (resource.attributes.provider !== undefined) entry.provider = resource.attributes.provider;
       if (resource.attributes["provider-type"] !== undefined) entry["provider-type"] = resource.attributes["provider-type"];
       if (resource.attributes.module !== undefined) entry.module = resource.attributes.module;
@@ -259,11 +267,11 @@ export function WorkspaceResources({
   const activeError = tab === "resources" ? resourceError : tab === "outputs" ? outputError : dependencyGraphError;
 
   useEffect((): void => {
-    if (pages[tab] > pageCount) setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: pageCount }));
+    if (pages[tab] > pageCount) setPages((current) => ({ ...current, [tab]: pageCount }));
   }, [pageCount, pages, tab]);
 
   const setPage = (nextPage: number): void => {
-    setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: nextPage }));
+    setPages((current) => ({ ...current, [tab]: nextPage }));
   };
 
   return (

@@ -63,7 +63,7 @@ type OperationsSettings = {
 };
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_OPTIONS = DAY_LABELS.map((label, index): { day: number; label: string } => ({ day: index, label }));
+const DAY_OPTIONS = DAY_LABELS.map((label, index) => ({ day: index, label }));
 
 function humanizeDays(days: number[]): string {
   if (days.length === 0) return "Never";
@@ -265,7 +265,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
         days: [...window.days].sort(),
         "start-time": window["start-time"],
         "end-time": window["end-time"],
-        ...(window.timezone !== undefined && window.timezone !== "" ? { timezone: window.timezone } : {}),
+        ...(window.timezone !== undefined && window.timezone !== "" ? { timezone: window.timezone } : undefined),
       })),
     };
     attributes["plan-explainer"] = {
@@ -563,7 +563,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   id="explainer-provider"
                   name="provider"
                   value={explainerProvider}
-                  options={providers.map((provider): { id: string; label: string; hint?: string } => ({
+                  options={providers.map((provider) => ({
                     id: provider.id,
                     label: provider.name,
                     hint: provider.id === CUSTOM_PROVIDER_ID
@@ -590,7 +590,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   id="explainer-model"
                   name="model"
                   value={explainerModel}
-                  options={providerModels.map((model): { id: string; label: string; hint: string } => ({
+                  options={providerModels.map((model) => ({
                     id: model.id,
                     label: model.name,
                     hint: `${model.reasoning ? "reasoning · " : ""}${model.context !== null ? `${Math.round(model.context / 1000)}k ctx` : ""}`.replace(/^ · | $/g, ""),

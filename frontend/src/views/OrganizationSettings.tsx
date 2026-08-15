@@ -369,7 +369,7 @@ export function OrganizationSettings(): React.JSX.Element {
   };
 
   const setTeamPermission = (permission: OrganizationPermission, enabled: boolean): void => {
-    setTeamPermissions((current): Record<OrganizationPermission, boolean> => {
+    setTeamPermissions((current) => {
       const next = { ...current, [permission]: enabled };
       if (permission === "manage-projects" && enabled) next["manage-workspaces"] = true;
       if (permission === "manage-workspaces" && !enabled) next["manage-projects"] = false;

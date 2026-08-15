@@ -19,14 +19,17 @@ function requestUrl(input: string | URL | Request): string {
 type MockOrg = Readonly<{ id: string; externalId: string }>;
 type MockChild = Readonly<{ id: string; name: string }>;
 
-function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces?: MockChild[] } = {}): {
-  postedBody: () => unknown;
-  fetchMock: typeof fetch;
-} {
+/** JSON:API create-token body captured by the fetch mock. */
+type PostedBody = { data: { type: string; attributes: Record<string, unknown> } } | null;
+
+/** Token resource passed to onCreated. */
+type CreatedToken = { id: string; attributes: Record<string, unknown> };
+
+function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces?: MockChild[] } = {}) {
   const orgs: MockOrg[] = options.orgs ?? [{ id: "acme-org", externalId: "org-111" }];
   const projects: MockChild[] = options.projects ?? [];
   const workspaces: MockChild[] = options.workspaces ?? [];
-  let posted: unknown = null;
+  let posted: PostedBody = null;
   const fetchMock = mock(async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -36,7 +39,7 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
     const org = orgs.find((o): boolean => o.id === orgName);
     if (url === "/api/v2/organizations?page[size]=100") {
       return json({
-        data: orgs.map((o): Record<string, unknown> => ({
+        data: orgs.map((o) => ({
           id: o.id,
           type: "organizations",
           attributes: { name: o.id, "external-id": o.externalId },
@@ -45,12 +48,12 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
     }
     if (org !== undefined && url === `/api/v2/organizations/${orgName}/projects?page[size]=100`) {
       return json({
-        data: projects.map((p): Record<string, unknown> => ({ id: p.id, type: "projects", attributes: { name: p.name } })),
+        data: projects.map((p) => ({ id: p.id, type: "projects", attributes: { name: p.name } })),
       });
     }
     if (org !== undefined && url === `/api/v2/organizations/${orgName}/workspaces?page[size]=100`) {
       return json({
-        data: workspaces.map((w): Record<string, unknown> => ({ id: w.id, type: "workspaces", attributes: { name: w.name } })),
+        data: workspaces.map((w) => ({ id: w.id, type: "workspaces", attributes: { name: w.name } })),
       });
     }
     if (url === "/api/v2/tokens" && init?.method === "POST") {
@@ -59,18 +62,11 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  return { postedBody: (): unknown => posted, fetchMock: fetchMock as typeof fetch };
+  return { postedBody: (): PostedBody => posted, fetchMock: fetchMock as typeof fetch };
 }
 
 /** Testid anchors the root group plus every nested group (see TokenScopeDialog). */
-function tagGroupQueries(dialog: HTMLElement): {
-  rootKeys: () => HTMLElement[];
-  nestedKeys: () => HTMLElement[];
-  rootCombinator: () => HTMLElement;
-  nestedCombinator: () => HTMLElement;
-  rootAddCondition: () => HTMLElement;
-  nestedAddCondition: () => HTMLElement;
-} {
+function tagGroupQueries(dialog: HTMLElement) {
   const groups = (): HTMLElement[] => within(dialog).getAllByTestId("tag-group");
   const root = (): HTMLElement => groups()[0]!;
   const nested = (): HTMLElement | null => groups()[1] ?? null;
@@ -115,7 +111,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
   });
   globalThis.fetch = fetchMock;
 
-  let created: unknown = null;
+  let created: CreatedToken | null = null;
   const view = render(
     <TokenScopeDialog open onOpenChange={(): void => { /* noop */ }} onCreated={(token): void => { created = token; }} />,
   );

@@ -250,14 +250,14 @@ export function WorkspaceVariables({
       return;
     }
 
-    const attributes: Record<string, unknown> = {
+    const attributes = {
       key: key.trim(),
       category,
       sensitive,
       hcl,
       description: description.trim() === "" ? null : description.trim(),
+      ...(editing?.attributes.sensitive !== true || value !== "" ? { value } : undefined),
     };
-    if (editing?.attributes.sensitive !== true || value !== "") attributes["value"] = value;
 
     setSaving(true);
     setEditorError("");

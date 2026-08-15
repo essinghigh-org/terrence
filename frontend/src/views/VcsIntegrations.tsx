@@ -338,7 +338,7 @@ export function VcsIntegrations({
       }) as { data: OAuthClient };
       if (currentOrgNameRef.current !== actionOrgName) return;
       setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
-      setOauthTokensByClient((previous): Record<string, readonly OAuthToken[]> => ({
+      setOauthTokensByClient((previous) => ({
         ...previous,
         [res.data.id]: [],
       }));

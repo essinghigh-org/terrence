@@ -5,8 +5,7 @@ import { StatusBadge } from "../src/components/ui/status-badge";
 const classNameOf = (status: string): string => {
   const { container } = render(<StatusBadge status={status} />);
   const el = container.querySelector("span[class]");
-  const elEl = el as unknown as { className: string } | null;
-  return elEl?.className ?? "";
+  return el?.className ?? "";
 };
 
 describe("StatusBadge", (): void => {

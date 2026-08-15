@@ -1072,7 +1072,7 @@ export function Layout({
         .filter((entry): boolean => !pinned.some((pinnedEntry): boolean => pinnedEntry.workspaceName === entry.workspaceName))
         .slice(0, 4);
 
-      const shortcutLinks = [...pinned, ...recent].map((entry): { label: string; to: string; icon: typeof FolderGit2 } => ({
+      const shortcutLinks = [...pinned, ...recent].map((entry) => ({
         label: entry.workspaceName,
         to: `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(entry.workspaceName)}`,
         icon: Box,

@@ -14,10 +14,7 @@ const json = (data: unknown, status = 200): Response =>
     headers: { "Content-Type": "application/vnd.api+json" },
   });
 
-function deferred<T>(): Readonly<{
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-}> {
+function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete): void => {
     resolve = complete;

@@ -102,7 +102,7 @@ export function ModuleSharing(): React.JSX.Element {
       {
         method: "PATCH",
         body: JSON.stringify({
-          data: next.map((name): { type: string; id: string } => ({ type: "organizations", id: name })),
+          data: next.map((name) => ({ type: "organizations", id: name })),
         }),
       },
     );

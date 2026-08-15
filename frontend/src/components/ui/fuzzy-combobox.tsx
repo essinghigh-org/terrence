@@ -58,7 +58,7 @@ export function FuzzyCombobox({
     const q = query.trim().toLowerCase();
     if (q === "") return options.slice(0, 200);
     const scored = options
-      .map((option): { option: ComboboxOption; score: number } => ({
+      .map((option) => ({
         option,
         score: fuzzyScore(q, (option.label + " " + option.id).toLowerCase()),
       }))

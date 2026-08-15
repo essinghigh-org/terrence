@@ -50,7 +50,7 @@ export function VcsRepoSelector({
     if (search === "") return repositories;
     const terms = search.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
     return repositories
-      .map((repo: VcsRepoOption): { repo: VcsRepoOption; score: number } => {
+      .map((repo: VcsRepoOption) => {
         const identifier = repo.identifier.toLocaleLowerCase();
         const haystack = `${repo.identifier} ${repo.name} ${repo.owner ?? ""}`.toLocaleLowerCase();
         const score = terms.reduce((total: number, term: string): number => {

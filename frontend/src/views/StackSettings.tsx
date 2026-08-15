@@ -164,20 +164,20 @@ export function StackSettings(): React.JSX.Element {
     // (an empty object would otherwise clear/override the stored VCS values).
     const vcsIdentifier = safe(form.vcsIdentifier);
     const vcsBranch = form.vcsBranch.trim();
-    const attributes: Record<string, unknown> = {
+    const originalVcsIdentifier = (editingStack?.attributes["vcs-repo"]?.identifier ?? "").trim();
+    const attributes = {
       name,
       description: form.description,
       "working-directory": form.workingDirectory === "" ? (editingStack === null ? undefined : form.workingDirectory) : form.workingDirectory,
       "speculative-enabled": form.speculative,
+      ...(vcsIdentifier !== ""
+        ? { "vcs-repo": { identifier: vcsIdentifier, ...(vcsBranch === "" ? undefined : { branch: vcsBranch }) } }
+        : editingStack !== null && originalVcsIdentifier !== ""
+          // Editing a stack that currently has a VCS repo but the identifier was
+          // cleared: explicitly clear the stored VCS config.
+          ? { "vcs-repo": null }
+          : undefined),
     };
-    const originalVcsIdentifier = (editingStack?.attributes["vcs-repo"]?.identifier ?? "").trim();
-    if (vcsIdentifier !== "") {
-      attributes["vcs-repo"] = { identifier: vcsIdentifier, ...(vcsBranch === "" ? {} : { branch: vcsBranch }) };
-    } else if (editingStack !== null && originalVcsIdentifier !== "") {
-      // Editing a stack that currently has a VCS repo but the identifier was
-      // cleared: explicitly clear the stored VCS config.
-      attributes["vcs-repo"] = null;
-    }
     try {
       if (editingStack === null) {
         await fetchApi("/stacks", {

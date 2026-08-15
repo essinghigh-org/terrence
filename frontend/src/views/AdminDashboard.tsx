@@ -450,7 +450,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setLdapError("At least one authentication method must remain enabled.");
       return;
     }
-    const body: Record<string, unknown> = {
+    const body = {
       data: {
         type: "ldap-settings",
         attributes: {
@@ -524,7 +524,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlError("At least one authentication method must remain enabled.");
       return;
     }
-    const body: Record<string, unknown> = {
+    const body = {
       data: {
         type: "saml-settings",
         attributes: {
@@ -566,7 +566,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setOidcError("At least one authentication method must remain enabled.");
       return;
     }
-    const body: Record<string, unknown> = {
+    const body = {
       data: {
         type: "oidc-settings",
         attributes: {

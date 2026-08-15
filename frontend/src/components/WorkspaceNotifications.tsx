@@ -148,15 +148,15 @@ export function WorkspaceNotifications({
         : "Name and webhook URL are required.");
       return;
     }
-    const attributes: Record<string, unknown> = {
+    const attributes = {
       name: name.trim(),
       "destination-type": destinationType,
       url: isEmail ? "" : url.trim(),
       triggers: [...triggers],
       enabled,
+      ...(isEmail ? { "email-addresses": addresses } : undefined),
+      ...(token !== "" && !isEmail ? { token } : undefined),
     };
-    if (isEmail) attributes["email-addresses"] = addresses;
-    if (token !== "" && !isEmail) attributes["token"] = token;
 
     setSaving(true);
     setEditorError("");
@@ -170,7 +170,7 @@ export function WorkspaceNotifications({
           body: JSON.stringify({
             data: {
               type: "notification-configurations",
-              ...(editing == null ? {} : { id: editing.id }),
+              ...(editing == null ? undefined : { id: editing.id }),
               attributes,
             },
           }),

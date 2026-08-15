@@ -53,7 +53,13 @@ if (win.PointerEvent === undefined) {
       this.twist = eventInitDict.twist ?? 0;
     }
   }
-  (win as unknown as Record<string, unknown>)["PointerEvent"] = PointerEventPolyfill;
+  // SAFETY: jsdom lacks PointerEvent at runtime; the polyfill mirrors the spec
+  // surface above and is injected before any component renders.
+  Object.defineProperty(win, "PointerEvent", {
+    value: PointerEventPolyfill,
+    writable: true,
+    configurable: true,
+  });
   (globalThis as MutableGlobal)["PointerEvent"] = PointerEventPolyfill;
 }
 
@@ -63,7 +69,9 @@ Object.defineProperty(win, "alert", {
   configurable: true,
 });
 
-const elemProto = win.Element.prototype as unknown as Record<string, unknown>;
+// SAFETY: legacy IE-only methods are injected onto the jsdom Element prototype;
+// the intersection adds an index signature for the test-only polyfills below.
+const elemProto = win.Element.prototype as Element & Record<string, unknown>;
 elemProto["attachEvent"] = elemProto["attachEvent"] ?? noop;
 elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
 elemProto["scrollIntoView"] = elemProto["scrollIntoView"] ?? noop;
@@ -116,7 +124,13 @@ class DummyResizeObserver {
 }
 
 (globalThis as MutableGlobal)["MutationObserver"] = win.MutationObserver ?? DummyMutationObserver;
-(globalThis as MutableGlobal)["ResizeObserver"] = (win as unknown as Record<string, unknown>)["ResizeObserver"] ?? DummyResizeObserver;
+// SAFETY: jsdom may lack ResizeObserver at runtime; the dummy keeps tests
+// that observe elements from crashing when the browser would provide one.
+Object.defineProperty(win, "ResizeObserver", {
+  value: (win as Window & Record<string, unknown>)["ResizeObserver"] ?? DummyResizeObserver,
+  writable: true,
+  configurable: true,
+});
 
 type ReadonlyMutations = readonly MutationRecord[];
 

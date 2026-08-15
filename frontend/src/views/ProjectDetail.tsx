@@ -73,7 +73,7 @@ type VariableSet = Readonly<{
   }>;
 }>;
 
-const runStatusFilters: Readonly<Record<string, readonly string[]>> = {
+const runStatusFilters = {
   attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
   errored: ["errored"],
   running: ["pending", "fetching", "planning", "cost_estimating", "policy_checking", "applying"],

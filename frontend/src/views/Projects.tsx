@@ -123,7 +123,7 @@ export function Projects(): React.JSX.Element {
           body: JSON.stringify({
             data: {
               type: "projects",
-              ...(editingProject === null ? {} : { id: editingProject.id }),
+              ...(editingProject === null ? undefined : { id: editingProject.id }),
               attributes: {
                 name: name.trim(),
                 description: description.trim() === "" ? null : description.trim(),

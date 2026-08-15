@@ -169,8 +169,14 @@ function emptyGroup(): TagGroupNode {
  * (`isTagFilter` requires a non-empty key). Returns null when nothing is
  * filled in, which the caller maps to `tags: null`.
  */
-function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: unknown[] } | null {
-  const convert = (node: TagRuleNode): unknown => {
+/** Serialized tag rules: filters keep `key`/`value`, groups nest rules. */
+type SerializedTagRule =
+  | Readonly<{ key: string; value: string }>
+  | Readonly<{ combinator: "AND" | "OR"; rules: SerializedTagRule[] }>
+  | null;
+
+function serializeTags(root: TagGroupNode): Readonly<{ combinator: "AND" | "OR"; rules: SerializedTagRule[] }> | null {
+  const convert = (node: TagRuleNode): SerializedTagRule => {
     if (node.kind === "filter") {
       const key = node.key.trim();
       if (key === "") return null;
@@ -178,11 +184,13 @@ function serializeTags(root: TagGroupNode): { combinator: "AND" | "OR"; rules: u
     }
     const rules = node.rules
       .map(convert)
-      .filter((rule): rule is unknown => rule !== null);
+      .filter((rule): rule is Exclude<SerializedTagRule, null> => rule !== null);
     if (rules.length === 0) return null;
     return { combinator: node.combinator, rules };
   };
-  return convert(root) as { combinator: "AND" | "OR"; rules: unknown[] } | null;
+  // SAFETY: the builder root is always a group (emptyGroup returns kind: "group"),
+  // so convert() can only yield a group or null at this level.
+  return convert(root) as Readonly<{ combinator: "AND" | "OR"; rules: SerializedTagRule[] }> | null;
 }
 
 /** Render a node as a human-readable expression, or null when it holds no filled-in conditions. */
@@ -216,7 +224,7 @@ function resourceOptions(
   data: { id: string; attributes?: Record<string, unknown> }[],
   nameKey = "name",
 ): { id: string; name: string }[] {
-  return data.map((item): { id: string; name: string } => {
+  return data.map((item) => {
     const attributes = (item.attributes ?? {});
     const rawName = attributes[nameKey];
     return { id: item.id, name: typeof rawName === "string" ? rawName : item.id };
@@ -302,7 +310,7 @@ export function TokenScopeDialog({
     });
   };
   const toggleGrant = (key: string): void => {
-    setGranted((prev): Record<string, boolean> => {
+    setGranted((prev) => {
       const next = { ...prev };
       next[key] = !(prev[key] ?? false);
       return next;
@@ -400,20 +408,23 @@ export function TokenScopeDialog({
     setSaving(true);
     setError("");
     try {
-      const attributes: Record<string, unknown> = { description: description.trim() === "" ? "API token" : description.trim() };
-      if (fineGrained) {
-        if (orgId === "") throw new Error("Select an organization");
-        const tags = serializeTags(tagTree);
-        const scopes = {
-          version: 1,
-          orgs: [orgId],
-          projects: selectedProjects.size > 0 ? [...selectedProjects] : null,
-          workspaces: selectedWorkspaces.size > 0 ? [...selectedWorkspaces] : null,
-          tags,
-          permissions: Object.fromEntries(Object.entries(granted).filter(([, v]): boolean => v)),
-        };
-        attributes["scopes"] = scopes;
-      }
+      if (fineGrained && orgId === "") throw new Error("Select an organization");
+      const tags = fineGrained ? serializeTags(tagTree) : null;
+      const attributes = {
+        description: description.trim() === "" ? "API token" : description.trim(),
+        ...(fineGrained
+          ? {
+              scopes: {
+                version: 1,
+                orgs: [orgId],
+                projects: selectedProjects.size > 0 ? [...selectedProjects] : null,
+                workspaces: selectedWorkspaces.size > 0 ? [...selectedWorkspaces] : null,
+                tags,
+                permissions: Object.fromEntries(Object.entries(granted).filter(([, v]): boolean => v)),
+              },
+            }
+          : undefined),
+      };
       const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),

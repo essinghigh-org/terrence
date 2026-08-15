@@ -156,7 +156,7 @@ test("ignores stale projects and permissions after changing organizations", asyn
 
 test("filters workspaces by run status and adds, updates, and removes tags", async () => {
   const tags: { id: string; attributes: { key: string; value: string } }[] = [];
-  const workspace = (): Record<string, unknown> => ({
+  const workspace = () => ({
     id: "workspace-1",
     attributes: {
       name: "production",

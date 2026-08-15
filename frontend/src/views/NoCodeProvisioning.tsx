@@ -133,8 +133,9 @@ export function NoCodeProvisioning(): React.JSX.Element {
     Promise.all([
       fetchApi(`/organizations/${encodedOrg}/no-code-modules`) as Promise<{ data?: NoCodeModule[] }>,
       fetchApi(`/organizations/${encodedOrg}/registry-modules`) as Promise<{ data?: RegistryModule[] }>,
+      // SAFETY: the catch arm yields { data: [] }, matching the optional-data contract of Promise.all below.
       fetchApi(`/organizations/${encodedOrg}/projects`)
-        .catch((): { data: Project[] } => ({ data: [] })) as Promise<{ data?: Project[] }>,
+        .catch(() => ({ data: [] })) as Promise<{ data?: Project[] }>,
     ])
       .then(([noCodeResponse, registryResponse, projectResponse]): void => {
         if (!active) return;
@@ -258,7 +259,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
                 auto_apply: autoApply,
               },
               relationships: {
-                ...(projectId === "" ? {} : {
+                ...(projectId === "" ? undefined : {
                   project: { data: { id: projectId, type: "projects" } },
                 }),
                 vars: { data: variables },
@@ -453,7 +454,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
                       const value = inputValues[attributes.name] ?? "";
                       const validationError = inputErrors[attributes.name];
                       const updateValue = (nextValue: string): void => {
-                        setInputValues((current: Record<string, string>): Record<string, string> => ({
+                        setInputValues((current: Record<string, string>) => ({
                           ...current,
                           [attributes.name]: nextValue,
                         }));

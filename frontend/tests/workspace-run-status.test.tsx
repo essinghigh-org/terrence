@@ -16,13 +16,13 @@ const urlOf = (input: string | URL | Request): string =>
 // The workspace list now aggregates the latest run per workspace server-side
 // (include=current_run): the mocks mirror that shape with a current-run
 // relationship plus an included run resource.
-const includedRun = (id: string, status: string, workspaceId: string): Record<string, unknown> => ({
+const includedRun = (id: string, status: string, workspaceId: string) => ({
   id,
   type: "runs",
   attributes: { status, "created-at": "2026-08-01T00:00:00.000Z", message: "Manual run" },
   relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
 });
-const currentRunRelationship = (runId: string | null): Record<string, unknown> => ({
+const currentRunRelationship = (runId: string | null) => ({
   "current-run": { data: runId === null ? null : { id: runId, type: "runs" } },
 });
 
