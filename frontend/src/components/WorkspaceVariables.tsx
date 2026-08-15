@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,11 +40,38 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fetchApi } from "@/lib/api";
+import { fetchAllApiPages, fetchApi } from "@/lib/api";
 
 type VariableCategory = "terraform" | "env";
 
 type WorkspaceVariable = {
+  id: string;
+  attributes: {
+    key: string;
+    value: string | null;
+    category: VariableCategory;
+    sensitive: boolean;
+    hcl: boolean;
+    description: string | null;
+  };
+};
+
+type VariableSet = {
+  id: string;
+  attributes: {
+    name: string;
+    description: string | null;
+    global: boolean;
+    priority: boolean;
+    "parent-project-id": string | null;
+    "var-count": number;
+    "workspace-count": number;
+    "project-count": number;
+    "stack-count": number;
+  };
+};
+
+type VariableSetVariable = {
   id: string;
   attributes: {
     key: string;
@@ -61,9 +88,11 @@ const messageFrom = (error: unknown, fallback: string): string =>
 
 export function WorkspaceVariables({
   workspaceId,
+  orgName,
   canUpdate,
 }: Readonly<{
   workspaceId: string;
+  orgName: string;
   canUpdate: boolean;
 }>): React.JSX.Element {
   const [variables, setVariables] = useState<WorkspaceVariable[]>([]);
@@ -80,28 +109,112 @@ export function WorkspaceVariables({
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
 
+  // Attached variable sets: inherited variables stay on their set and are
+  // rendered read-only below the workspace-owned variables.
+  const [sets, setSets] = useState<VariableSet[]>([]);
+  const [setsVars, setSetsVars] = useState<Record<string, VariableSetVariable[]>>({});
+  const [setsLoading, setSetsLoading] = useState(true);
+  const [setsError, setSetsError] = useState("");
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [allSets, setAllSets] = useState<VariableSet[]>([]);
+  const [attachError, setAttachError] = useState("");
+  const [busySetId, setBusySetId] = useState<string | null>(null);
+
+  const loadAttachedSets = (active: { readonly value: boolean }): void => {
+    setSetsLoading(true);
+    setSetsError("");
+    fetchAllApiPages<VariableSet>(`/workspaces/${workspaceId}/varsets?page[size]=100`)
+      .then(async (attached: VariableSet[]): Promise<void> => {
+        if (!active.value) return;
+        const varsBySet = await Promise.all(attached.map(async (set: VariableSet): Promise<[string, VariableSetVariable[]]> => {
+          const vars = await fetchAllApiPages<VariableSetVariable>(`/varsets/${set.id}/relationships/vars?page[size]=100`);
+          return [set.id, vars];
+        }));
+        if (!active.value) return;
+        setSets(attached);
+        setSetsVars(Object.fromEntries(varsBySet));
+      })
+      .catch((error: unknown): void => {
+        if (active.value) setSetsError(messageFrom(error, "Failed to load variable sets"));
+      })
+      .finally((): void => {
+        if (active.value) setSetsLoading(false);
+      });
+  };
+
   useEffect((): (() => void) => {
-    let active = true;
+    const active = { value: true };
     setLoading(true);
     setPageError("");
 
     fetchApi(`/workspaces/${workspaceId}/vars?page[size]=100`)
       .then((response: unknown): void => {
-        if (!active) return;
+        if (!active.value) return;
         const data = (response as { data?: WorkspaceVariable[] }).data;
         setVariables(Array.isArray(data) ? data : []);
       })
       .catch((error: unknown): void => {
-        if (active) setPageError(messageFrom(error, "Failed to load workspace variables"));
+        if (active.value) setPageError(messageFrom(error, "Failed to load workspace variables"));
       })
       .finally((): void => {
-        if (active) setLoading(false);
+        if (active.value) setLoading(false);
       });
 
+    loadAttachedSets(active);
+
     return (): void => {
-      active = false;
+      active.value = false;
     };
   }, [workspaceId]);
+
+  const openAttach = (): void => {
+    if (!canUpdate) return;
+    setAttachError("");
+    setAllSets([]);
+    setAttachOpen(true);
+    fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`)
+      .then((orgSets: VariableSet[]): void => { setAllSets(orgSets); })
+      .catch((error: unknown): void => {
+        setAttachError(messageFrom(error, "Failed to load organization variable sets"));
+      });
+  };
+
+  const attachSet = async (set: VariableSet): Promise<void> => {
+    if (!canUpdate) return;
+    setBusySetId(set.id);
+    setAttachError("");
+    try {
+      await fetchApi(`/varsets/${set.id}/relationships/workspaces`, {
+        method: "POST",
+        body: JSON.stringify({ data: [{ type: "workspaces", id: workspaceId }] }),
+      });
+      const active = { value: true };
+      loadAttachedSets(active);
+      setAttachOpen(false);
+    } catch (error: unknown) {
+      setAttachError(messageFrom(error, "Failed to attach variable set"));
+    } finally {
+      setBusySetId(null);
+    }
+  };
+
+  const detachSet = async (set: VariableSet): Promise<void> => {
+    if (!canUpdate) return;
+    setBusySetId(set.id);
+    setSetsError("");
+    try {
+      await fetchApi(`/varsets/${set.id}/relationships/workspaces`, {
+        method: "DELETE",
+        body: JSON.stringify({ data: [{ type: "workspaces", id: workspaceId }] }),
+      });
+      const active = { value: true };
+      loadAttachedSets(active);
+    } catch (error: unknown) {
+      setSetsError(messageFrom(error, "Failed to detach variable set"));
+    } finally {
+      setBusySetId(null);
+    }
+  };
 
   const openEditor = (variable?: WorkspaceVariable): void => {
     if (!canUpdate) return;
@@ -179,6 +292,10 @@ export function WorkspaceVariables({
     }
   };
 
+  const unattachedSets = allSets.filter(
+    (set: VariableSet): boolean => !sets.some((attached: VariableSet): boolean => attached.id === set.id),
+  );
+
   return (
     <>
       <Card className="max-w-5xl">
@@ -188,7 +305,7 @@ export function WorkspaceVariables({
             <Badge variant="secondary">{variables.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Terraform and environment variables defined here override matching values from variable sets.
+            Variables owned by this workspace. They override matching values from attached variable sets.
           </CardDescription>
           {canUpdate && <CardAction>
             <Button onClick={(): void => { openEditor(); }}>
@@ -275,6 +392,125 @@ export function WorkspaceVariables({
               </TableBody>
             </Table>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-5xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Variable sets
+            <Badge variant="secondary">{sets.length}</Badge>
+          </CardTitle>
+          <CardDescription>
+            Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself.
+          </CardDescription>
+          {canUpdate && <CardAction>
+            <Button onClick={openAttach}>
+              <Plus data-icon="inline-start" />
+              Attach variable set
+            </Button>
+          </CardAction>}
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {setsError !== "" && (
+            <p role="alert" className="text-sm text-destructive">
+              {setsError}
+            </p>
+          )}
+          {setsLoading && (
+            <p className="text-sm text-muted-foreground">Loading variable sets…</p>
+          )}
+          {!setsLoading && sets.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No variable sets are attached to this workspace.
+            </p>
+          )}
+          {!setsLoading && sets.map((set: VariableSet): React.JSX.Element => {
+            const inherited = setsVars[set.id] ?? [];
+            return (
+              <div key={set.id} className="rounded-md border">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{set.attributes.name}</span>
+                    {set.attributes.global && <Badge variant="secondary">Global</Badge>}
+                    {set.attributes.priority && <Badge variant="secondary">Priority</Badge>}
+                    {!set.attributes.global && set.attributes["parent-project-id"] != null && (
+                      <Badge variant="outline">Project-owned</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {set.attributes["workspace-count"]} workspace{set.attributes["workspace-count"] === 1 ? "" : "s"}
+                      {set.attributes["project-count"] > 0 && (
+                        <> · {set.attributes["project-count"]} project{set.attributes["project-count"] === 1 ? "" : "s"}</>
+                      )}
+                    </span>
+                    {canUpdate && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busySetId === set.id}
+                        onClick={(): void => { void detachSet(set); }}
+                      >
+                        {busySetId === set.id
+                          ? <Spinner data-icon="inline-start" />
+                          : <Unplug data-icon="inline-start" />}
+                        Detach
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                {set.attributes.description !== null && set.attributes.description !== "" && (
+                  <p className="px-4 pt-3 text-sm text-muted-foreground">{set.attributes.description}</p>
+                )}
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Key</TableHead>
+                        <TableHead>Value</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Description</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inherited.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={4} className="h-12 text-center text-muted-foreground">
+                            This variable set has no variables.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {inherited.map((variable: VariableSetVariable): React.JSX.Element => (
+                        <TableRow key={variable.id}>
+                          <TableCell className="font-mono font-medium">
+                            <div className="flex items-center gap-2">
+                              {variable.attributes.key}
+                              {variable.attributes.sensitive && <Badge variant="secondary">Sensitive</Badge>}
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-48 truncate font-mono text-xs">
+                            {variable.attributes.sensitive ? "Sensitive — write only" : variable.attributes.value ?? "—"}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">
+                                {variable.attributes.category === "env" ? "Environment" : "Terraform"}
+                              </Badge>
+                              {variable.attributes.hcl && <Badge variant="secondary">HCL</Badge>}
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-48 truncate text-muted-foreground">
+                            {variable.attributes.description ?? "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -381,6 +617,62 @@ export function WorkspaceVariables({
               </DialogFooter>
             </FieldGroup>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={attachOpen} onOpenChange={setAttachOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Attach variable set</DialogTitle>
+            <DialogDescription>
+              Attach a variable set from {orgName}. Its variables are inherited by this workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {attachError !== "" && (
+              <p role="alert" className="text-sm text-destructive">{attachError}</p>
+            )}
+            {allSets.length === 0 && attachError === "" && (
+              <p className="text-sm text-muted-foreground">Loading organization variable sets…</p>
+            )}
+            {allSets.length > 0 && unattachedSets.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                All variable sets in this organization are already attached.
+              </p>
+            )}
+            {unattachedSets.map((set: VariableSet): React.JSX.Element => (
+              <div key={set.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{set.attributes.name}</span>
+                    {set.attributes.global && <Badge variant="secondary">Global</Badge>}
+                  </div>
+                  {set.attributes.description !== null && set.attributes.description !== "" && (
+                    <p className="truncate text-xs text-muted-foreground">{set.attributes.description}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {set.attributes["var-count"]} variable{set.attributes["var-count"] === 1 ? "" : "s"}
+                    {set.attributes["workspace-count"] > 0 && (
+                      <> · {set.attributes["workspace-count"]} workspace{set.attributes["workspace-count"] === 1 ? "" : "s"} attached</>
+                    )}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={busySetId === set.id}
+                  onClick={(): void => { void attachSet(set); }}
+                >
+                  {busySetId === set.id && <Spinner data-icon="inline-start" />}
+                  Attach
+                </Button>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={(): void => { setAttachOpen(false); }}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

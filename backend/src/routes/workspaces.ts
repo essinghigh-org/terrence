@@ -1,11 +1,12 @@
 import { Elysia } from "elysia";
 import { db, rawQueryAll } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, type users } from "../db/schema";
+import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, like, notInArray, sql } from "drizzle-orm";
 import {
   workspaceResource,
   workspaceOutputResources,
   workspaceVariableResource,
+  variableSetResource,
   tagBindingResource,
   type WorkspaceResourcePermissions,
 } from "../lib/response";
@@ -1316,6 +1317,32 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
     (set as { status: number }).status = 204;
     return {};
+  })
+  // Variable sets attached to this workspace (TFE model: inherited variables
+  // stay on their variable set — the workspace-variable list never flattens them).
+  .get("/api/v2/workspaces/:workspace_id/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const { number, size } = pageRequest(request);
+    const links = await db.query.variableSetWorkspaces.findMany({ where: eq(variableSetWorkspaces.workspaceId, workspaceId) });
+    const setIds = links.map((link: { readonly variableSetId: string }): string => link.variableSetId);
+    const [sets, countRows] = await Promise.all([
+      setIds.length === 0
+        ? Promise.resolve([])
+        : db.query.variableSets.findMany({
+            where: inArray(variableSets.id, setIds),
+            orderBy: [asc(variableSets.name), asc(variableSets.id)],
+            limit: size,
+            offset: (number - 1) * size,
+          }),
+      db.select({ total: count() }).from(variableSetWorkspaces).where(eq(variableSetWorkspaces.workspaceId, workspaceId)),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return {
+      data: await Promise.all(sets.map((set: typeof variableSets.$inferSelect): Promise<Record<string, unknown>> => variableSetResource(set))),
+      ...pagination(request, number, size, totalCount),
+    };
   })
   // --- Lock/Unlock ---
   .post("/api/v2/workspaces/:workspace_id/actions/lock", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {

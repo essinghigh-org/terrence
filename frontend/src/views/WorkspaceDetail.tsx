@@ -771,6 +771,7 @@ export function WorkspaceDetail({
         {activeSection === "variables" && canReadVariable && (
           <WorkspaceVariables
             workspaceId={workspace.id}
+            orgName={orgName ?? ""}
             canUpdate={workspace.attributes.permissions?.["can-update-variable"] === true}
           />
         )}
