@@ -250,7 +250,9 @@ export const configurationVersions = pgTable("configuration_versions", {
     errorMessage: text("error_message"),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.configurationVersions.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("configuration_versions_workspace_created_idx").on(table.workspaceId, table.createdAt),
+  ]);
 
 export const dataRetentionPolicies = pgTable("data_retention_policies", {
     id: text("id").notNull().primaryKey(),
@@ -956,7 +958,10 @@ export const runs = pgTable("runs", {
     scheduledAt: bigint("scheduled_at", { mode: "number" }),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-});
+}, (table) => [
+    index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
+    index("runs_status_created_idx").on(table.status, table.createdAt),
+  ]);
 
 export const samlSettings = pgTable("saml_settings", {
     id: text("id").notNull().primaryKey(),
@@ -1332,4 +1337,6 @@ export const workspaces = pgTable("workspaces", {
     contactEmail: text("contact_email"),
     updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.workspaces.updatedAt.defaultFn!()),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workspaces.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("workspaces_org_idx").on(table.orgId),
+  ]);

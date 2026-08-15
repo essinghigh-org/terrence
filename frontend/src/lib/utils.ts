@@ -12,6 +12,11 @@ type DeepReadonly<T> = T extends null | undefined
   ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
   : T;
 
+// NOTE: a memoized cn() was benchmarked and REVERTED (bench/frontend.bench.ts).
+// Key building + Map lookups cost ~0.23us/call while twMerge costs ~0.6us;
+// the all-strings check on the common conditional-heavy call patterns made
+// the cache a net loss on realistic workloads (+9-17%), with the win only
+// visible on pure-string repeats. twMerge is already the floor.
 export function cn(...inputs: readonly DeepReadonly<ClassValue>[]): string {
   return twMerge(clsx(inputs));
 }

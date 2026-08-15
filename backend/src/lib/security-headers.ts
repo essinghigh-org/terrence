@@ -11,10 +11,17 @@
 // same-origin and no remote image host ever needs to be allow-listed.
 const DEFAULT_IMG_SRC = ["'self'", "data:"];
 
-/** Build the CSP fresh each call (kept as a function for testability). */
+// The policy is static per process: build it once and serve the same string
+// on every response instead of re-joining arrays per request (this function
+// runs once per HTTP response). Kept as a function so tests can still call
+// it; the memo is reset only by the test reset below.
+let memoizedCsp: string | null = null;
+
+/** Build the CSP (memoized; the policy is static per process). */
 export function buildContentSecurityPolicy(): string {
+  if (memoizedCsp !== null) return memoizedCsp;
   const imgSrc = DEFAULT_IMG_SRC.join(" ");
-  return [
+  memoizedCsp = [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
@@ -31,6 +38,12 @@ export function buildContentSecurityPolicy(): string {
     // keeping unsafe-inline here without touching script-src is intentional.
     "style-src 'self' 'unsafe-inline'",
   ].join("; ");
+  return memoizedCsp;
+}
+
+/** Test-only reset so a mutated DEFAULT_IMG_SRC cannot leak across tests. */
+export function resetContentSecurityPolicyCache(): void {
+  memoizedCsp = null;
 }
 
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {

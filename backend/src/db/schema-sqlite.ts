@@ -280,7 +280,11 @@ export const workspaces = sqliteTable("workspaces", {
   contactEmail: text("contact_email"),
   updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  // Org-scoped workspace listings (permission checks, admin panels, VCS
+  // webhook candidate lookups).
+  index("workspaces_org_idx").on(table.orgId),
+]);
 
 export const remoteStateConsumers = sqliteTable("remote_state_consumers", {
   id: text("id").primaryKey(),
@@ -359,7 +363,10 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   errorMessage: text("error_message"),
   softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  // Latest-CV-per-workspace lookups and per-workspace version lists.
+  index("configuration_versions_workspace_created_idx").on(table.workspaceId, table.createdAt),
+]);
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -397,7 +404,12 @@ export const runs = sqliteTable("runs", {
   scheduledAt: integer("scheduled_at"),
   softDeletedAt: integer("soft_deleted_at"),
   createdAt: integer("created_at").notNull(),
-});
+}, (table) => [
+  // Hot access paths (benchmarked, kanban perf work): the queue scan is
+  // status-first; workspace run lists are workspace-first.
+  index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
+  index("runs_status_created_idx").on(table.status, table.createdAt),
+]);
 
 // Ephemeral per-run credentials (TFE run-token model). Minted when the worker
 // executes a run, stored hashed, revoked on terminal state. Grants ONLY
