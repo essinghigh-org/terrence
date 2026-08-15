@@ -225,4 +225,35 @@ describe("initial administrator bootstrap", () => {
       memberships: 1,
     });
   });
+
+  it("accepts the bootstrap secret via header as an alternative to the query string (kanban 5.3)", async () => {
+    const result = await runProbe(`
+      const { app } = await import("./src/app.ts");
+      const { db } = await import("./src/db/index.ts");
+
+      const request = (body) => app.handle(new Request(
+        "http://localhost/admin/initial-admin-user",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-iact-token": "initial-admin-token" },
+          body: JSON.stringify(body),
+        },
+      ));
+      const attributes = {
+        username: "owner",
+        email: "owner@example.test",
+        password: "chosen-admin-password",
+      };
+      const created = await request(attributes);
+      const createdBody = await created.json();
+      console.log(JSON.stringify({
+        status: created.status,
+        responseStatus: createdBody.status,
+        users: (await db.query.users.findMany()).length,
+      }));
+      process.exit(0);
+    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token" });
+
+    expect(result).toEqual({ status: 200, responseStatus: "created", users: 1 });
+  });
 });

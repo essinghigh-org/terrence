@@ -331,7 +331,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     const configuredToken = process.env.IACT_TOKEN;
-    const suppliedToken = request === undefined ? null : new URL(request.url).searchParams.get("token");
+    // TFE's installer passes the token as a query parameter, so the query
+    // form stays for compatibility (kanban 5.3). Accept a header alternative
+    // so fresh deployments can keep the secret out of proxy logs, browser
+    // history, and traces entirely.
+    const queryToken = request === undefined ? null : new URL(request.url).searchParams.get("token");
+    const headerToken = request === undefined ? null
+      : request.headers.get("x-iact-token")
+        ?? (() => {
+          const authorization = request.headers.get("authorization") ?? "";
+          return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+        })();
+    const suppliedToken = queryToken ?? headerToken;
     const configured = Buffer.from(configuredToken ?? "");
     const supplied = Buffer.from(suppliedToken ?? "");
     if (
