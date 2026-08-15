@@ -38,7 +38,7 @@ import { tmpdir } from "os";
 import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
-import { workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
+import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
@@ -145,6 +145,10 @@ function runWorkDir(runId: string): string {
   return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
 }
 
+// Warn once per (run, phase) so a burst of log writes cannot flood the log
+// output, while the failure counter still tracks every lost write.
+const warnedRunLogFailures = new Set<string>();
+
 async function writeLog(runId: string, phase: "plan" | "apply", outputText: string): Promise<void> {
   try {
     await db.insert(logs).values({
@@ -154,7 +158,18 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       outputText,
       createdAt: Date.now(),
     });
-  } catch {}
+  } catch (error: unknown) {
+    recordFailure("runLogWrites");
+    const key = `${runId}:${phase}`;
+    if (!warnedRunLogFailures.has(key)) {
+      warnedRunLogFailures.add(key);
+      log.error("Failed to persist run log output", {
+        runId,
+        phase,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 type RunStatusExtra = Readonly<Partial<Pick<

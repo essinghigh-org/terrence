@@ -37,6 +37,7 @@ export type ProcessSnapshot = ProcessSample & Readonly<{
   userCpuSeconds: number;
   systemCpuSeconds: number;
   requests: Readonly<{ total: number; inFlight: number; errors5xx: number }>;
+  failures: Readonly<Record<string, number>>;
   worker: Readonly<{
     polls: number;
     lastPollAt: number | null;
@@ -74,6 +75,23 @@ const counters = {
   workerLastPollOk: null as boolean | null,
   pollers: new Map<string, PollerStats>(),
 };
+
+/**
+ * Best-effort subsystem failures that used to be invisible (kanban 12.7/12.8).
+ * Each kind is a monotonically increasing counter so /metrics can show that
+ * something is silently degrading even when the failure path has no surface.
+ */
+const failures = {
+  auditWrites: 0,
+  runLogWrites: 0,
+};
+
+export type FailureKind = keyof typeof failures;
+
+/** Record one failed best-effort write; visible via processSnapshot().failures. */
+export function recordFailure(kind: FailureKind): void {
+  failures[kind] += 1;
+}
 
 let samples: ProcessSample[] = [];
 let maxSamples = DEFAULT_MAX_SAMPLES;
@@ -134,6 +152,7 @@ export function processSnapshot(): ProcessSnapshot {
       inFlight: counters.requestsInFlight,
       errors5xx: counters.errors5xx,
     },
+    failures: { ...failures },
     worker: {
       polls: counters.workerPolls,
       lastPollAt: counters.workerLastPollAt,

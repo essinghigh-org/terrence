@@ -11,6 +11,8 @@ import {
 import { and, desc, eq, gte, inArray, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
+import { recordFailure } from "./process-metrics";
+import { log } from "./log";
 import { jsonExtract } from "./db-json";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
@@ -87,7 +89,16 @@ export async function auditLog(
       details: details !== undefined ? { ...details } : null,
       createdAt: Date.now(),
     });
-  } catch {}
+    } catch (error: unknown) {
+      recordFailure("auditWrites");
+      log.error("Audit log write failed", {
+        action,
+        resourceType,
+        resourceId,
+        orgId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 }
 
 /**

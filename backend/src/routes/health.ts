@@ -138,6 +138,7 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       in_flight: snapshot.requests.inFlight,
       errors5xx: snapshot.requests.errors5xx,
     };
+    metrics.terrence_failures = { ...snapshot.failures };
     metrics.terrence_worker = {
       polls: snapshot.worker.polls,
       last_poll_at: snapshot.worker.lastPollAt,
