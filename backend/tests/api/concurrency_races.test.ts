@@ -223,4 +223,29 @@ describe("concurrency: queue claim races", () => {
     expect(canTransitionRunStatus("planned", "confirmed")).toBe(true);
     expect(canTransitionRunStatus("confirmed", "apply_queued")).toBe(true);
   });
+
+  it("confirmation cannot leave a run confirmed without a job when queueing fails (t_c5f59537)", async () => {
+    const stalePoolId = `conc-pool-stale-${suffix}`;
+    const staleWorkspaceId = `conc-ws-stale-${suffix}`;
+    const staleRunId = `conc-run-stale-${suffix}`;
+    await db.insert(agentPools).values({ id: stalePoolId, orgId, name: `conc-pool-stale-${suffix}`, organizationScoped: true });
+    await db.insert(workspaces).values({
+      id: staleWorkspaceId, orgId, name: "conc-ws-stale", executionMode: "agent", agentPoolId: stalePoolId,
+    });
+    await db.insert(runs).values({ id: staleRunId, workspaceId: staleWorkspaceId, status: "planned", createdAt: Date.now() });
+
+    // The pool vanishes while the run still targets it. Confirmation must
+    // fail WITHOUT flipping the run to confirmed and without a job: the old
+    // two-step path left the run confirmed-with-no-job, permanently stuck.
+    await db.delete(agentPools).where(eq(agentPools.id, stalePoolId));
+
+    const result = await confirmRunForApply(staleRunId);
+    expect(result.ok).toBe(false);
+    expect(await runStatus(staleRunId)).toBe("planned");
+    const jobs = await db.query.agentJobs.findMany({ where: eq(agentJobs.runId, staleRunId) });
+    expect(jobs.length).toBe(0);
+
+    await db.delete(runs).where(eq(runs.id, staleRunId));
+    await db.delete(workspaces).where(eq(workspaces.id, staleWorkspaceId));
+  });
 });

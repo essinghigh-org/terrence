@@ -59,7 +59,7 @@ import {
 } from "./lib/plan-json";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
-import { enqueueAgentApplyJob, recoverStaleAgentJobs } from "./lib/agent-jobs";
+import { insertAgentApplyJobTx, recoverStaleAgentJobs, type AgentJob } from "./lib/agent-jobs";
 import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-token";
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
@@ -2590,6 +2590,40 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
         continue;
       }
       scheduledBlockReasons.delete(`scheduled:${run.id}`);
+      if (workspace.executionMode === "agent") {
+        const pool = workspace.agentPoolId === null
+          ? undefined
+          : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+        if (
+          pool?.orgId !== workspace.orgId
+          || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
+        ) {
+          // Persistent pool failures must not spam the run log on every
+          // poll; log once per reason like the gate-block path. The run
+          // stays confirmed and is retried once the pool is reachable.
+          const key = `agent-pool:${run.id}`;
+          if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
+            scheduledBlockReasons.set(key, "pool-unreachable");
+            await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+          }
+          continue;
+        }
+        scheduledBlockReasons.delete(`agent-pool:${run.id}`);
+        // Claim (confirmed -> apply_queued) and job insert are ONE
+        // transaction (kanban t_c5f59537): a crash cannot leave the run
+        // apply_queued without a job. Concurrent polls see zero rows.
+        const job = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
+          const tx = transaction as unknown as typeof db;
+          try {
+            return await insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
+          } catch {
+            return undefined;
+          }
+        });
+        if (job === undefined) continue;
+        applied.push(run.id);
+        continue;
+      }
       // Atomic claim: only the poll that flips confirmed -> apply_queued
       // may dispatch; concurrent polls see zero rows and skip.
       const claimed = await db.update(runs).set({
@@ -2600,36 +2634,6 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
         },
       }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
       if (claimed.length === 0) continue;
-      if (workspace.executionMode === "agent") {
-        const pool = workspace.agentPoolId === null
-          ? undefined
-          : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
-        if (
-          pool?.orgId !== workspace.orgId
-          || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
-        ) {
-          // Persistent pool failures must not spam the run log on every
-          // poll; log once per reason like the gate-block path.
-          const key = `agent-pool:${run.id}`;
-          if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
-            scheduledBlockReasons.set(key, "pool-unreachable");
-            await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
-          }
-          // Restore the confirmed state so the next poll retries once the
-          // pool is reachable, mirroring the manual-apply path.
-          await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id));
-          continue;
-        }
-        scheduledBlockReasons.delete(`agent-pool:${run.id}`);
-        const job = await enqueueAgentApplyJob(run.id, pool.id);
-        if (job === undefined) {
-          // The agent job queue rejected the claim; restore for retry.
-          await db.update(runs).set({ status: "confirmed" }).where(eq(runs.id, run.id));
-          continue;
-        }
-        applied.push(run.id);
-        continue;
-      }
       // Fire-and-forget like the manual-apply dispatch: the poll cycle must
       // keep moving; executeApply owns its own lifecycle and errors are
       // logged, with the claim already taken so nothing re-dispatches.

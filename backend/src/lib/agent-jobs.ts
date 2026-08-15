@@ -43,7 +43,7 @@ export type AgentJobCompletion = Readonly<{
 
 
 type Agent = DeepReadonly<typeof agents.$inferSelect>;
-type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
+export type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
 type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
 type Database = Readonly<typeof db>;
 
@@ -611,6 +611,43 @@ export async function findClaimedAgentJob(
   return job === undefined ? undefined : claimedJobDetails(job);
 }
 
+/**
+ * Insert an agent apply job and flip the run confirmed -> apply_queued in one
+ * transaction. The caller owns the transaction; the run must be `confirmed`
+ * when this runs. Throwing rolls back the caller's whole transaction, so a
+ * crash can never leave a confirmed run without a job (kanban t_c5f59537).
+ */
+export async function insertAgentApplyJobTx(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: typeof db,
+  runId: string,
+  agentPoolId: string,
+  statusTimestamps: Readonly<Record<string, string>> | null,
+): Promise<AgentJob> {
+  const job: AgentJob = {
+    id: `ajob-${crypto.randomUUID()}`,
+    runId,
+    agentPoolId,
+    agentId: null,
+    phase: "apply",
+    status: "queued",
+    result: null,
+    errorMessage: null,
+    claimedAt: null,
+    completedAt: null,
+    createdAt: Date.now(),
+  };
+  await database.insert(agentJobs).values(job);
+  const updated = await database.update(runs).set({
+    agentPoolId,
+    status: "apply_queued",
+    statusTimestamps: timestampsWithStatus(statusTimestamps, "apply_queued"),
+  }).where(and(eq(runs.id, runId), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  if (updated.length === 0) throw new Error("Run changed while its agent apply job was queued");
+  return job;
+}
+
 export async function enqueueAgentApplyJob(
   runId: string,
   agentPoolId: string,
@@ -619,27 +656,7 @@ export async function enqueueAgentApplyJob(
     const tx = transaction as unknown as typeof db;
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run?.status !== "confirmed") return undefined;
-    const job: AgentJob = {
-      id: `ajob-${crypto.randomUUID()}`,
-      runId,
-      agentPoolId,
-      agentId: null,
-      phase: "apply",
-      status: "queued",
-      result: null,
-      errorMessage: null,
-      claimedAt: null,
-      completedAt: null,
-      createdAt: Date.now(),
-    };
-    await tx.insert(agentJobs).values(job);
-    const updated = await tx.update(runs).set({
-      agentPoolId,
-      status: "apply_queued",
-      statusTimestamps: timestampsWithStatus(run.statusTimestamps, "apply_queued"),
-    }).where(and(eq(runs.id, runId), eq(runs.status, "confirmed"))).returning({ id: runs.id });
-    if (updated.length === 0) throw new Error("Run changed while its agent apply job was queued");
-    return job;
+    return insertAgentApplyJobTx(tx, runId, agentPoolId, run.statusTimestamps);
   });
   if (queued !== undefined) void reportRunVcsStatus(runId, "apply_queued");
   return queued;

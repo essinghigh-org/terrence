@@ -2,8 +2,9 @@ import { eq, inArray, and } from "drizzle-orm";
 import { db } from "../db";
 import { runs, workspaces } from "../db/schema";
 import { getSettings, type Settings } from "./settings";
-import { enqueueAgentApplyJob } from "./agent-jobs";
+import { insertAgentApplyJobTx, type AgentJob } from "./agent-jobs";
 import { auditLog } from "./utils";
+import { reportRunVcsStatus } from "./webhooks";
 import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
@@ -166,16 +167,6 @@ export async function confirmRunForApply(
   if (workspace === undefined) {
     return { ok: false, reason: "Run workspace no longer exists" };
   }
-  const confirmed = await db.update(runs).set({
-    status: "confirmed",
-    statusTimestamps: {
-      ...(before.statusTimestamps ?? {}),
-      "confirmed-at": new Date().toISOString(),
-    },
-  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-  if (confirmed.length === 0) {
-    return { ok: false, reason: "Run apply is already queued" };
-  }
   // Machine-to-machine confirmation: audit as the webhook, not a user.
   await auditLog("apply", "runs", runId, null, workspace.orgId, {
     workspaceId: workspace.id,
@@ -187,9 +178,46 @@ export async function confirmRunForApply(
   if (workspace.executionMode === "agent") {
     const poolId = workspace.agentPoolId;
     if (poolId === null) return { ok: false, reason: "The workspace does not have an agent pool" };
-    const job = await enqueueAgentApplyJob(runId, poolId);
-    if (job === undefined) return { ok: false, reason: "Run apply is already queued" };
+    // Confirmation CAS and apply-job creation are ONE transaction (kanban
+    // t_c5f59537): a crash between the two previously left the run confirmed
+    // with no job, permanently desynced. A failure rolls back the confirm.
+    let queued: AgentJob | undefined;
+    let queueError: string | null = null;
+    try {
+      queued = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
+        const tx = transaction as unknown as typeof db;
+        const confirmedTimestamps = {
+          ...(before.statusTimestamps ?? {}),
+          "confirmed-at": new Date().toISOString(),
+        };
+        const confirmed = await tx.update(runs).set({
+          status: "confirmed",
+          statusTimestamps: confirmedTimestamps,
+        }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+        if (confirmed.length === 0) return undefined;
+        return insertAgentApplyJobTx(tx, runId, poolId, confirmedTimestamps);
+      });
+    } catch (error: unknown) {
+      queueError = error instanceof Error ? error.message : String(error);
+    }
+    if (queued === undefined) {
+      return {
+        ok: false,
+        reason: queueError === null ? "Run apply is already queued" : `Agent apply job could not be queued: ${queueError}`,
+      };
+    }
+    void reportRunVcsStatus(runId, "apply_queued");
     return { ok: true, status: "apply_queued" };
+  }
+  const confirmed = await db.update(runs).set({
+    status: "confirmed",
+    statusTimestamps: {
+      ...(before.statusTimestamps ?? {}),
+      "confirmed-at": new Date().toISOString(),
+    },
+  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  if (confirmed.length === 0) {
+    return { ok: false, reason: "Run apply is already queued" };
   }
   const { executeApply } = await import("../worker");
   executeApply(runId).catch((error: unknown): void => {
