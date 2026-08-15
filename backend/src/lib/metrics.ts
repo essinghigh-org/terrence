@@ -34,6 +34,7 @@ import {
   workspaceIdsForPermission,
 } from "./utils";
 import type { TokenScopes } from "./token-scopes";
+import { processHistory, processSnapshot, type ProcessSnapshot, type SampleWindow } from "./process-metrics";
 
 export type AgentPoolMetrics = Readonly<{
   id: string;
@@ -70,7 +71,18 @@ export type MetricsCollection = Readonly<{
       sizeBytes: number;
       walSizeBytes: number | null;
       pageCount: number;
+      cacheSizeBytes: number | null;
+      freelistBytes: number | null;
     }>;
+  }> | null;
+  /**
+   * Process-level runtime observability (rss, heap, request counters, worker
+   * poll stats, sampled history with growth rates). Instance-wide: present
+   * only for legacy tokens.
+   */
+  process: Readonly<{
+    snapshot: ProcessSnapshot;
+    history: SampleWindow;
   }> | null;
   /** Org-scoped workspace/run breakdown; present only for fine-grained tokens. */
   orgs: readonly OrgMetrics[] | null;
@@ -178,6 +190,8 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
       sizeBytes: database.sizeBytes,
       walSizeBytes: database.walSizeBytes,
       pageCount: database.pageCount,
+      cacheSizeBytes: database.cacheSizeBytes,
+      freelistBytes: database.freelistBytes,
     },
   };
 }
@@ -196,6 +210,7 @@ export async function collectLegacyMetrics(): Promise<MetricsCollection> {
   return {
     legacy: true,
     instance,
+    process: { snapshot: processSnapshot(), history: processHistory() },
     orgs: null,
     agentPools: agentPoolMetrics,
     agentPoolsTotal: agentPoolMetrics.length,
@@ -278,6 +293,7 @@ export async function collectScopedMetrics(
   return {
     legacy: false,
     instance: null,
+    process: null,
     orgs,
     agentPools: agentPoolMetrics,
     agentPoolsTotal: agentPoolMetrics.length,

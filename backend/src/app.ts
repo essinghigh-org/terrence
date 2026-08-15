@@ -9,6 +9,7 @@ import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
+import { requestFinished, requestStarted } from "./lib/process-metrics";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -114,6 +115,18 @@ export function handleAppError({
 }: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
+  // Error path: the request never reached onAfterHandle, so settle the
+  // in-flight counter here instead (same WeakMap consumption rule). The
+  // status mirrors the branch logic below so 404/422/400 do not count as 5xx.
+  const errored = requestMeta.get(request as unknown as Request);
+  if (errored !== undefined) {
+    const status = code === "NOT_FOUND" ? 404
+      : code === "VALIDATION" ? 422
+        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
+          : typeof mutableSet.status === "number" ? mutableSet.status : 500;
+    requestFinished(status);
+    requestMeta.delete(request as unknown as Request);
+  }
   if (code === "NOT_FOUND") {
     if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
       mutableSet.status = 404;
@@ -456,6 +469,7 @@ export const app = new Elysia()
     const pathname = url.pathname;
     const method = request.method;
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
+    requestStarted();
 
     const headers = set.headers as Record<string, string | number>;
     // CORS: never emit a hardcoded allow-origin fallback (a blanket
@@ -485,6 +499,10 @@ export const app = new Elysia()
       const method = meta.method;
       const path = meta.path;
       const status = set.status ?? 200;
+      requestFinished(typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200);
+      // Idempotent bookkeeping: the WeakMap entry is consumed here so an
+      // error path (onError) can never double-count the same request.
+      requestMeta.delete(request as unknown as Request);
       if (path.startsWith("/api/")) {
         log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`);
       }
@@ -647,6 +665,17 @@ setTimeout((): void => {
   }).catch((error: unknown): void => {
     log.error("Failed to start worker queue", { error: String(error) });
   });
+  // Memory/request observability sampler. Follows the worker switch: tests
+  // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
+  // production runs both. The ring buffer is what turns the /metrics rss
+  // growth figure into a leak trend instead of a steady-state snapshot.
+  if (process.env.TERRENCE_DISABLE_WORKER !== "1") {
+    import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
+      startProcessSampler();
+    }).catch((error: unknown): void => {
+      log.error("Failed to start metrics sampler", { error: String(error) });
+    });
+  }
   // Fire-and-forget sweep of the installed-binary cache (kanban 6.5):
   // removes installs whose executable no longer matches its persisted
   // digest so tampered binaries are re-downloaded before first use.

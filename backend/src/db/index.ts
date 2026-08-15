@@ -348,6 +348,17 @@ export async function databaseMetrics(): Promise<Readonly<{
   pageSize: number;
   pageCount: number;
   path: string;
+  /**
+   * SQLite page-cache budget in bytes (PRAGMA cache_size: positive = pages,
+   * negative = KiB). Null on postgres, which manages its own shared buffers.
+   */
+  cacheSizeBytes: number | null;
+  /**
+   * Freelist pages in bytes: free pages not yet returned to the OS. A
+   * steadily growing freelist indicates db bloat (churn + no VACUUM).
+   * Null on postgres.
+   */
+  freelistBytes: number | null;
 }>> {
   if (isPostgres) {
     const client = pgClient as postgres.Sql;
@@ -372,6 +383,8 @@ export async function databaseMetrics(): Promise<Readonly<{
       pageSize,
       pageCount: pageSize > 0 ? Math.floor(sizeBytes / pageSize) : 0,
       path,
+      cacheSizeBytes: null,
+      freelistBytes: null,
     };
   }
   const client = sqliteClient as Database;
@@ -393,7 +406,19 @@ export async function databaseMetrics(): Promise<Readonly<{
       walSizeBytes = 0;
     }
   }
-  return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath };
+  return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath, cacheSizeBytes: sqliteCacheSizeBytes(client, pageSize), freelistBytes: sqliteFreelistBytes(client, pageSize) };
+}
+
+/** SQLite page-cache budget in bytes: PRAGMA cache_size is pages when positive, KiB when negative. */
+function sqliteCacheSizeBytes(client: Database, pageSize: number): number {
+  const raw = (client.query("PRAGMA cache_size").get() as { cache_size: number } | null)?.cache_size ?? 0;
+  return raw > 0 ? raw * pageSize : -raw * 1024;
+}
+
+/** SQLite freelist footprint in bytes (free pages not yet returned to the OS). */
+function sqliteFreelistBytes(client: Database, pageSize: number): number {
+  const freelist = (client.query("PRAGMA freelist_count").get() as { freelist_count: number } | null)?.freelist_count ?? 0;
+  return freelist * pageSize;
 }
 
 /**

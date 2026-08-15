@@ -20,6 +20,8 @@ import { inArray } from "drizzle-orm";
 // metrics; fine-grained tokens see only the org/workspace/agent data their
 // scope is eligible for, never instance counters.
 describe("instance metrics", () => {
+  let server: { url: URL; stop: () => void };
+  let baseUrl: string;
   let legacyToken: string;
   let scopedToken: string;
   let workspaceRestrictedToken: string;
@@ -53,8 +55,13 @@ describe("instance metrics", () => {
 
   const auth = (token: string): Record<string, string> => ({ Authorization: `Bearer ${token}` });
 
+  const readJson = async (res: Response): Promise<Record<string, unknown>> =>
+    JSON.parse(await res.text()) as Record<string, unknown>;
+
   beforeAll(async () => {
     process.env.AGENT_HEARTBEAT_TIMEOUT_MS = "60000";
+    server = Bun.serve({ port: 0, fetch: (req: Request): Promise<Response> => app.handle(req) });
+    baseUrl = server.url.toString();
     await db.insert(users).values([
       { id: userId, username: `metrics-${suffix}@test`, passwordHash: "hash" },
       { id: otherUserId, username: `metrics-other-${suffix}@test`, passwordHash: "hash" },
@@ -171,6 +178,7 @@ describe("instance metrics", () => {
   });
 
   afterAll(async () => {
+    server.stop();
     if (previousHeartbeatTimeout === undefined) {
       delete process.env.AGENT_HEARTBEAT_TIMEOUT_MS;
     } else {
@@ -202,44 +210,71 @@ describe("instance metrics", () => {
   });
 
   test("rejects unauthenticated access", async () => {
-    const res = await app.handle(new Request("http://localhost/metrics"));
+    const res = await fetch(`${baseUrl}metrics`);
     expect(res.status).toBe(401);
   });
 
   test("rejects an unknown token", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth("metrics-nope") }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth("metrics-nope") });
     expect(res.status).toBe(401);
   });
 
   test("rejects a browser session access token (no instance metrics)", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(sessionToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(sessionToken) });
     expect(res.status).toBe(403);
-    const body = await res.json() as { errors: { status: string }[] };
+    const body = await readJson(res) as { errors: { status: string }[] };
     expect(body.errors[0]?.status).toBe("403");
   });
 
   test("legacy token sees instance-wide metrics plus agent queue depth", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(legacyToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(legacyToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await res.json() as { metrics: Record<string, unknown> };
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
 
     expect(metrics.terrence_users_total).toBeGreaterThanOrEqual(2);
     expect(metrics.terrence_organizations_total).toBeGreaterThanOrEqual(2);
     expect(metrics.terrence_workspaces_total).toBeGreaterThanOrEqual(3);
     expect(metrics.terrence_runs_total).toBeGreaterThanOrEqual(3);
-    expect(metrics.tfe_run_current_count).toMatchObject({ applied: expect.any(Number), pending: expect.any(Number) });
+    // NOTE: do not use toMatchObject with expect.any() on values that are
+    // read again afterwards — Bun 1.3.14 replaces matched values with {}
+    // (asymmetric-matcher materialization bug); use explicit typeof checks.
+    const runCounts = metrics.tfe_run_current_count as Record<string, unknown>;
+    expect(typeof runCounts.applied).toBe("number");
+    expect(typeof runCounts.pending).toBe("number");
     expect(metrics.terrence_database_size_bytes).toEqual(expect.any(Number));
     // WAL size can be null when the WAL has been folded into the main DB file
     // (graceful shutdown checkpoints it); both shapes are valid.
     expect(metrics.terrence_database_wal_size_bytes === null || typeof metrics.terrence_database_wal_size_bytes === "number").toBe(true);
     expect(metrics.terrence_database_page_count).toEqual(expect.any(Number));
+    expect(metrics.terrence_database_cache_size_bytes === null || typeof metrics.terrence_database_cache_size_bytes === "number").toBe(true);
+    expect(metrics.terrence_database_freelist_bytes === null || typeof metrics.terrence_database_freelist_bytes === "number").toBe(true);
     expect(metrics.terrence_agent_pools_total).toBeGreaterThanOrEqual(2);
+
+    // Process-level runtime observability (legacy tier only).
+    expect(metrics.terrence_process_rss_bytes).toBeGreaterThan(0);
+    expect(metrics.terrence_process_max_rss_bytes).toBeGreaterThan(0);
+    expect(metrics.terrence_process_heap_used_bytes).toBeGreaterThanOrEqual(0);
+    expect(metrics.terrence_process_uptime_seconds).toBeGreaterThanOrEqual(0);
+    const cpuSeconds = metrics.terrence_process_cpu_seconds as Record<string, unknown>;
+    expect(typeof cpuSeconds.user).toBe("number");
+    expect(typeof cpuSeconds.system).toBe("number");
+    // The /metrics request itself is counted, plus every earlier test request.
+    const requests = metrics.terrence_requests as { total: number; in_flight: number; errors5xx: number };
+    expect(typeof requests.total).toBe("number");
+    expect(typeof requests.in_flight).toBe("number");
+    expect(typeof requests.errors5xx).toBe("number");
+    expect(requests.total).toBeGreaterThanOrEqual(1);
+    const worker = metrics.terrence_worker as { polls: number; last_poll_at: number | null; last_poll_duration_ms: number | null; last_poll_ok: boolean | null };
+    expect(typeof worker.polls).toBe("number");
+    expect(worker.last_poll_at === null || typeof worker.last_poll_at === "number").toBe(true);
+    expect(worker.last_poll_duration_ms === null || typeof worker.last_poll_duration_ms === "number").toBe(true);
+    expect(worker.last_poll_ok === null || typeof worker.last_poll_ok === "boolean").toBe(true);
+    const history = metrics.terrence_process_history as { interval_ms: number; max_samples: number; samples: unknown[]; stats: { rss: { min: number; max: number; latest: number | null; growth_per_hour: number | null }; heap_used: { min: number; max: number; latest: number | null; growth_per_hour: number | null } } };
+    expect(history.interval_ms).toBeGreaterThan(0);
+    expect(history.max_samples).toBeGreaterThan(0);
+    expect(Array.isArray(history.samples)).toBe(true);
+    expect(history.stats.rss.min).toBeGreaterThanOrEqual(0);
+    expect(history.stats.rss.growth_per_hour === null || typeof history.stats.rss.growth_per_hour === "number").toBe(true);
 
     const pools = metrics.agent_pools as { id: string; agents_by_status: Record<string, number>; agents_stale: number; jobs_queued: number; jobs_claimed: number; jobs_errored: number; oldest_queued_wait_seconds: number }[];
     expect(pools.some((pool): boolean => pool.id === poolA)).toBe(true);
@@ -253,16 +288,17 @@ describe("instance metrics", () => {
   });
 
   test("fine-grained token sees only its org, no instance counters", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(scopedToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(scopedToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await res.json() as { metrics: Record<string, unknown> };
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
 
     // Instance-wide counters must NOT leak to a scoped token.
     expect(metrics.terrence_users_total).toBeUndefined();
     expect(metrics.terrence_organizations_total).toBeUndefined();
     expect(metrics.terrence_database_size_bytes).toBeUndefined();
+    // Process-level runtime observability is instance-wide too.
+    expect(metrics.terrence_process_rss_bytes).toBeUndefined();
+    expect(metrics.terrence_process_history).toBeUndefined();
 
     const orgs = metrics.organizations as { org_id: string; workspaces: number; runs_by_status: Record<string, number> }[];
     const orgA_ = orgs.find((org): boolean => org.org_id === orgA);
@@ -277,11 +313,9 @@ describe("instance metrics", () => {
   });
 
   test("workspace-restricted scope counts only eligible workspaces", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(workspaceRestrictedToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(workspaceRestrictedToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await res.json() as { metrics: Record<string, unknown> };
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
     const orgs = metrics.organizations as { org_id: string; workspaces: number; runs_by_status: Record<string, number> }[];
     const orgA_ = orgs.find((org): boolean => org.org_id === orgA);
     expect(orgA_!.workspaces).toBe(1); // only ws-a1
@@ -290,21 +324,17 @@ describe("instance metrics", () => {
   });
 
   test("scope without agent-pools:read sees no pool metrics", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(noAgentGrantToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(noAgentGrantToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await res.json() as { metrics: Record<string, unknown> };
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
     expect(metrics.agent_pools).toEqual([]);
     expect(metrics.terrence_agent_pools_total).toBe(0);
   });
 
   test("scoped token never sees another org's data", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics", { headers: auth(otherOrgToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(otherOrgToken) });
     expect(res.status).toBe(200);
-    const { metrics } = await res.json() as { metrics: Record<string, unknown> };
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
     const orgs = metrics.organizations as { org_id: string; workspaces: number }[];
     expect(orgs.some((org): boolean => org.org_id === orgB)).toBe(true);
     expect(orgs.some((org): boolean => org.org_id === orgA)).toBe(false);
@@ -314,9 +344,7 @@ describe("instance metrics", () => {
   });
 
   test("Prometheus text format carries queue-depth gauges with pool labels", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics?format=prometheus", { headers: auth(legacyToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics?format=prometheus`, { headers: auth(legacyToken) });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     const body = await res.text();
@@ -333,15 +361,20 @@ describe("instance metrics", () => {
     expect(body).toMatch(new RegExp(`terrence_agent_jobs_queued_total\\{pool_id="${poolA}",pool="pool-a",org="${orgA}"\\} 1`));
     expect(body).toMatch(/terrence_agents_stale_total\{[^}]*pool-a[^}]*\} 1/);
     expect(body).toMatch(/terrence_agent_queue_oldest_wait_seconds\{[^}]*pool-a[^}]*\} [1-9]\d*/);
+    // Process gauges (legacy tier).
+    expect(body).toContain("# TYPE terrence_process_rss_bytes gauge");
+    expect(body).toMatch(/terrence_process_rss_bytes \d+/);
+    expect(body).toMatch(/terrence_requests_total \d+/);
+    expect(body).toMatch(/terrence_worker_polls_total \d+/);
+    expect(body).toMatch(/terrence_database_freelist_bytes \d+/);
   });
 
   test("Prometheus format for a scoped token omits instance gauges", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/metrics?format=prometheus", { headers: auth(scopedToken) }),
-    );
+    const res = await fetch(`${baseUrl}metrics?format=prometheus`, { headers: auth(scopedToken) });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).not.toContain("terrence_users_total ");
+    expect(body).not.toContain("terrence_process_rss_bytes");
     expect(body).toContain(`terrence_org_workspaces_total{org="${orgA}"} 2`);
     expect(body).toContain(`terrence_agents_total{pool_id="${poolA}",pool="pool-a",org="${orgA}",status="idle"} 1`);
   });

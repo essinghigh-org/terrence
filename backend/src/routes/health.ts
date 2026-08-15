@@ -120,6 +120,61 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     metrics.terrence_database_size_bytes = collection.instance.database.sizeBytes;
     metrics.terrence_database_wal_size_bytes = collection.instance.database.walSizeBytes;
     metrics.terrence_database_page_count = collection.instance.database.pageCount;
+    metrics.terrence_database_cache_size_bytes = collection.instance.database.cacheSizeBytes;
+    metrics.terrence_database_freelist_bytes = collection.instance.database.freelistBytes;
+  }
+  if (collection.process !== null) {
+    const { snapshot, history } = collection.process;
+    metrics.terrence_process_rss_bytes = snapshot.rss;
+    metrics.terrence_process_max_rss_bytes = snapshot.maxRss;
+    metrics.terrence_process_heap_total_bytes = snapshot.heapTotal;
+    metrics.terrence_process_heap_used_bytes = snapshot.heapUsed;
+    metrics.terrence_process_external_bytes = snapshot.external;
+    metrics.terrence_process_array_buffers_bytes = snapshot.arrayBuffers;
+    metrics.terrence_process_uptime_seconds = snapshot.uptimeSeconds;
+    metrics.terrence_process_cpu_seconds = { user: snapshot.userCpuSeconds, system: snapshot.systemCpuSeconds };
+    metrics.terrence_requests = {
+      total: snapshot.requests.total,
+      in_flight: snapshot.requests.inFlight,
+      errors5xx: snapshot.requests.errors5xx,
+    };
+    metrics.terrence_worker = {
+      polls: snapshot.worker.polls,
+      last_poll_at: snapshot.worker.lastPollAt,
+      last_poll_duration_ms: snapshot.worker.lastPollDurationMs,
+      last_poll_ok: snapshot.worker.lastPollOk,
+      pollers: Object.fromEntries(Object.entries(snapshot.worker.pollers).map(([name, stats]): [string, Record<string, number | boolean | null>] => [name, {
+        runs: stats.runs,
+        errors: stats.errors,
+        last_duration_ms: stats.lastDurationMs,
+        last_ok: stats.lastOk,
+      }])),
+    };
+    metrics.terrence_process_history = {
+      interval_ms: history.intervalMs,
+      max_samples: history.maxSamples,
+      samples: history.samples.map((sample): Record<string, number> => ({
+        at: sample.at,
+        rss: sample.rss,
+        heap_used: sample.heapUsed,
+        requests_in_flight: sample.requestsInFlight,
+        worker_polls: sample.workerPolls,
+      })),
+      stats: {
+        rss: {
+          min: history.stats.rss.min,
+          max: history.stats.rss.max,
+          latest: history.stats.rss.latest,
+          growth_per_hour: history.stats.rss.growthPerHour,
+        },
+        heap_used: {
+          min: history.stats.heapUsed.min,
+          max: history.stats.heapUsed.max,
+          latest: history.stats.heapUsed.latest,
+          growth_per_hour: history.stats.heapUsed.growthPerHour,
+        },
+      },
+    };
   }
   if (collection.orgs !== null) {
     metrics.organizations = collection.orgs.map((org): Record<string, unknown> => ({
@@ -175,7 +230,86 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_database_page_count Database pages.",
       "# TYPE terrence_database_page_count gauge",
       `terrence_database_page_count ${instance.database.pageCount}`,
+      "# HELP terrence_database_cache_size_bytes Database page-cache budget (sqlite PRAGMA cache_size; null on postgres).",
+      "# TYPE terrence_database_cache_size_bytes gauge",
+      "# HELP terrence_database_freelist_bytes Database freelist pages in bytes (sqlite bloat signal; null on postgres).",
+      "# TYPE terrence_database_freelist_bytes gauge",
     );
+    // Backend-specific samples are omitted when the value is unavailable
+    // (postgres has no sqlite page cache/freelist) rather than emitting 0.
+    if (instance.database.cacheSizeBytes !== null) {
+      lines.push(`terrence_database_cache_size_bytes ${instance.database.cacheSizeBytes}`);
+    }
+    if (instance.database.freelistBytes !== null) {
+      lines.push(`terrence_database_freelist_bytes ${instance.database.freelistBytes}`);
+    }
+  }
+  if (collection.process !== null) {
+    const { snapshot, history } = collection.process;
+    lines.push(
+      "# HELP terrence_process_rss_bytes Resident set size (process memory actually held).",
+      "# TYPE terrence_process_rss_bytes gauge",
+      `terrence_process_rss_bytes ${snapshot.rss}`,
+      "# HELP terrence_process_max_rss_bytes Peak RSS observed by the OS scheduler.",
+      "# TYPE terrence_process_max_rss_bytes gauge",
+      `terrence_process_max_rss_bytes ${snapshot.maxRss}`,
+      "# HELP terrence_process_heap_used_bytes jsc heap used (informational in Bun; rss is authoritative).",
+      "# TYPE terrence_process_heap_used_bytes gauge",
+      `terrence_process_heap_used_bytes ${snapshot.heapUsed}`,
+      "# HELP terrence_process_external_bytes Memory attributed to external allocations.",
+      "# TYPE terrence_process_external_bytes gauge",
+      `terrence_process_external_bytes ${snapshot.external}`,
+      "# HELP terrence_process_uptime_seconds Process uptime.",
+      "# TYPE terrence_process_uptime_seconds gauge",
+      `terrence_process_uptime_seconds ${snapshot.uptimeSeconds}`,
+      "# HELP terrence_process_cpu_seconds_total Process CPU time by kind (user/system).",
+      "# TYPE terrence_process_cpu_seconds_total counter",
+      `terrence_process_cpu_seconds_total{kind="user"} ${snapshot.userCpuSeconds}`,
+      `terrence_process_cpu_seconds_total{kind="system"} ${snapshot.systemCpuSeconds}`,
+      "# HELP terrence_requests_total API requests started since boot.",
+      "# TYPE terrence_requests_total counter",
+      `terrence_requests_total ${snapshot.requests.total}`,
+      "# HELP terrence_requests_in_flight API requests currently being handled.",
+      "# TYPE terrence_requests_in_flight gauge",
+      `terrence_requests_in_flight ${snapshot.requests.inFlight}`,
+      "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
+      "# TYPE terrence_requests_errors5xx_total counter",
+      `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
+      "# HELP terrence_worker_polls_total Background queue poll cycles since boot.",
+      "# TYPE terrence_worker_polls_total counter",
+      `terrence_worker_polls_total ${snapshot.worker.polls}`,
+      "# HELP terrence_worker_last_poll_ok Whether the last poll cycle completed without an uncaught error.",
+      "# TYPE terrence_worker_last_poll_ok gauge",
+      "# HELP terrence_worker_last_poll_duration_ms Duration of the last poll cycle.",
+      "# TYPE terrence_worker_last_poll_duration_ms gauge",
+      "# HELP terrence_worker_poller_runs_total Poll cycles completed by poller.",
+      "# TYPE terrence_worker_poller_runs_total counter",
+      "# HELP terrence_worker_poller_errors_total Poll cycles that ended in error, by poller.",
+      "# TYPE terrence_worker_poller_errors_total counter",
+      "# HELP terrence_process_history_rss_growth_per_hour RSS linear-regression slope over the sample window (bytes/hour; leak detector).",
+      "# TYPE terrence_process_history_rss_growth_per_hour gauge",
+      "# HELP terrence_process_history_samples Samples currently held in the ring buffer.",
+      "# TYPE terrence_process_history_samples gauge",
+      `terrence_process_history_samples ${history.samples.length}`,
+    );
+    // Time-dependent samples are omitted before the first poll/history
+    // window exists (a 0 would read as a real measurement).
+    if (snapshot.worker.lastPollOk !== null) {
+      lines.push(`terrence_worker_last_poll_ok ${snapshot.worker.lastPollOk ? 1 : 0}`);
+    }
+    if (snapshot.worker.lastPollDurationMs !== null) {
+      lines.push(`terrence_worker_last_poll_duration_ms ${snapshot.worker.lastPollDurationMs}`);
+    }
+    if (history.stats.rss.growthPerHour !== null) {
+      lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
+    }
+    for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
+      const label = `poller="${prometheusLabel(poller)}"`;
+      lines.push(
+        `terrence_worker_poller_runs_total{${label}} ${stats.runs}`,
+        `terrence_worker_poller_errors_total{${label}} ${stats.errors}`,
+      );
+    }
   }
   if (collection.orgs !== null) {
     lines.push(

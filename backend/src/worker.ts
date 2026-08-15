@@ -38,6 +38,7 @@ import { tmpdir } from "os";
 import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
+import { workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
@@ -2664,24 +2665,37 @@ export function startWorkerQueue(): void {
   isWorkerLoopRunning = true;
 
   const poll = async (): Promise<void> => {
+    const pollCycleStarted = Date.now();
+    workerPollStarted();
     try {
       // Each poller catches its own failures: one broken poller (schema
       // drift, transient DB error) must never reject the shared Promise.all
-      // and starve the run queue alongside it.
-      const pollers = [
-        pollWorkerQueue(),
-        enqueueDueAutoDestroyRuns(),
-        enqueueDueAssessments().then(async (): Promise<void> => {
+      // and starve the run queue alongside it. Outcome timings feed the
+      // /metrics worker gauges.
+      const pollers: ReadonlyArray<readonly [string, Promise<unknown>]> = [
+        ["pollWorkerQueue", pollWorkerQueue()],
+        ["enqueueDueAutoDestroyRuns", enqueueDueAutoDestroyRuns()],
+        ["enqueueDueAssessments", enqueueDueAssessments().then(async (): Promise<void> => {
           await pollAssessmentQueue();
-        }),
-        applyDueScheduledRuns(),
+        })],
+        ["applyDueScheduledRuns", applyDueScheduledRuns()],
       ];
-      await Promise.all(pollers.map((poller): Promise<unknown> =>
-        poller.catch((error: unknown): void => {
-          log.error("Queue poller failed", { error });
-        })));
+      await Promise.all(pollers.map(([name, poller]): Promise<unknown> => {
+        const started = Date.now();
+        return poller
+          .then((result: unknown): unknown => {
+            workerPollerFinished(name, true, started);
+            return result;
+          })
+          .catch((error: unknown): void => {
+            workerPollerFinished(name, false, started);
+            log.error("Queue poller failed", { error });
+          });
+      }));
+      workerPollFinished(true, pollCycleStarted);
     } catch (err: unknown) {
       log.error("Queue error", { error: err });
+      workerPollFinished(false, pollCycleStarted);
     } finally {
       setTimeout((): void => { void poll(); }, WORKER_POLL_INTERVAL_MS);
     }
