@@ -30,7 +30,7 @@ import {
   agentJobs,
   agentPools,
 } from "./db/schema";
-import { eq, desc, asc, and, inArray, notInArray, sql, isNotNull } from "drizzle-orm";
+import { eq, desc, asc, and, gt, inArray, notInArray, or, sql, isNotNull } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHmac } from "node:crypto";
 import { join } from "path";
@@ -2365,13 +2365,37 @@ export async function pollWorkerQueue(): Promise<string[]> {
   if (isMaintenanceActive()) return [];
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
-  const pendingRuns = await db.query.runs.findMany({
-    where: eq(runs.status, "pending"),
-    orderBy: [asc(runs.createdAt)],
-    limit: 50,
-  });
+  // Keyset-paged scan over (createdAt, id): a page full of ineligible runs can
+  // no longer hide newer eligible ones (kanban 1.5). The cursor is stable even
+  // while earlier runs are claimed and leave the pending set.
+  const MAX_CLAIMS = 5;
+  const SCAN_PAGE_SIZE = 50;
   const claimedRunIds: string[] = [];
   const claimedWorkspaceIds = new Set<string>();
+  let cursorCreatedAt = 0;
+  let cursorId = "";
+  let morePages = true;
+  while (claimedRunIds.length < MAX_CLAIMS && morePages) {
+    const pendingRuns = await db.query.runs.findMany({
+      where: and(
+        eq(runs.status, "pending"),
+        cursorId === ""
+          ? undefined
+          : or(
+              gt(runs.createdAt, cursorCreatedAt),
+              and(eq(runs.createdAt, cursorCreatedAt), gt(runs.id, cursorId)),
+            ),
+      ),
+      orderBy: [asc(runs.createdAt), asc(runs.id)],
+      limit: SCAN_PAGE_SIZE,
+    });
+    if (pendingRuns.length === 0) break;
+    morePages = pendingRuns.length === SCAN_PAGE_SIZE;
+    const last = pendingRuns[pendingRuns.length - 1];
+    if (last !== undefined) {
+      cursorCreatedAt = last.createdAt;
+      cursorId = last.id;
+    }
 
   // Pre-fetch workspaces to avoid N+1 inside the loop
   const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
@@ -2384,7 +2408,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       );
 
   for (const run of pendingRuns) {
-    if (claimedRunIds.length === 5) break;
+    if (claimedRunIds.length === MAX_CLAIMS) break;
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
     const workspace = workspacesById.get(run.workspaceId);
@@ -2489,6 +2513,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       // Advance through plan_queued then dispatch to planning
       executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
     }
+  }
   }
 
   return claimedRunIds;

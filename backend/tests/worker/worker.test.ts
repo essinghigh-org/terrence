@@ -791,3 +791,39 @@ test("queues one run per unlocked idle workspace without resolving a binary in s
     binaryCacheCreated: false,
   });
 });
+
+test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.5)", async () => {
+  const result = await runWorkerScript(`
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { pollWorkerQueue } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    const lockedWorkspaces = Array.from({ length: 55 }, (_, i) => ({
+      id: "locked-ws-" + i, name: "locked-" + i, orgId: "org", autoApply: true, locked: true,
+    }));
+    await db.insert(workspaces).values([
+      ...lockedWorkspaces,
+      { id: "eligible-ws", name: "eligible", orgId: "org", autoApply: true },
+    ]);
+    const lockedRuns = Array.from({ length: 55 }, (_, i) => ({
+      id: "locked-run-" + i, workspaceId: "locked-ws-" + i, status: "pending", createdAt: i + 1,
+    }));
+    await db.insert(runs).values([
+      ...lockedRuns,
+      { id: "eligible-run", workspaceId: "eligible-ws", status: "pending", autoApply: true, createdAt: 100 },
+    ]);
+
+    const claimed = await pollWorkerQueue();
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const eligible = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "eligible-run") });
+      if (eligible?.status === "applied") break;
+      await Bun.sleep(10);
+    }
+    const eligible = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "eligible-run") });
+    console.log(JSON.stringify({ claimed, eligibleStatus: eligible?.status }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result.claimed).toContain("eligible-run");
+  expect(result.eligibleStatus).toBe("applied");
+});
