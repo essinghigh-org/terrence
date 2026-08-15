@@ -585,6 +585,55 @@ test("evaluates project policy sets after cost estimation and honors workspace e
   expect(result.statusKeys.slice(-2)).toEqual(["policy-override-at", "policy-soft-failed-at"]);
 });
 
+test("fails closed when plan JSON is unavailable instead of evaluating against state (kanban t_282cf10b)", async () => {
+  const result = await runWorkerScript(`
+    const { db } = await import("./src/db/index.ts");
+    const {
+      organizations,
+      policies,
+      policyChecks,
+      policySetWorkspaces,
+      policySets,
+      runs,
+      stateVersions,
+      workspaces,
+    } = await import("./src/db/schema.ts");
+    const { runPolicyChecks } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(policySets).values({ id: "set", orgId: "org", name: "set", kind: "opa" });
+    await db.insert(policySetWorkspaces).values({ id: "link", policySetId: "set", workspaceId: "workspace" });
+    await db.insert(policies).values({
+      id: "policy",
+      policySetId: "set",
+      name: "hard",
+      enforcementLevel: "hard-mandatory",
+      query: "package terrence",
+    });
+    // A finalized state version must NOT be used as the evaluation input.
+    await db.insert(stateVersions).values({
+      id: "state",
+      workspaceId: "workspace",
+      serial: 1,
+      statePayload: "{\\"resources\\":[]}",
+      status: "finalized",
+      intermediate: false,
+    });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", status: "pending", createdAt: Date.now() });
+
+    const verdict = await runPolicyChecks("run", "workspace", "org");
+    const checks = await db.query.policyChecks.findMany({ where: (row, { eq }) => eq(row.runId, "run") });
+    console.log(JSON.stringify({
+      verdict,
+      checks: checks.map(check => ({ status: check.status, error: check.result?.error })),
+    }));
+  `, { NODE_ENV: "test" });
+
+  expect(result.verdict).toEqual({ proceed: false, hardFailed: true, softFailed: false });
+  expect(result.checks).toEqual([{ status: "errored", error: "Plan JSON is unavailable; policy evaluation failed closed" }]);
+});
+
 test("evaluates Sentinel policies and persists structured results", async () => {
   const result = await runWorkerScript(`
     const { chmod, mkdir, readFile, writeFile } = await import("fs/promises");

@@ -1618,8 +1618,9 @@ export async function executeApply(runId: string): Promise<void> {
 /**
  * Evaluate policies attached to a workspace after a plan completes.
  * Returns an object indicating whether the run should proceed to apply.
+ * Exported for tests; the worker is the only production caller.
  */
-async function runPolicyChecks(
+export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
   orgId: string,
@@ -1668,24 +1669,34 @@ async function runPolicyChecks(
   );
   let planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
-  // Fallback to stored state version if plan JSON generation failed
-  if (planJsonPayload === null || planJsonPayload === "") {
-    const latestState = await db.query.stateVersions.findFirst({
-      where: and(
-        eq(stateVersions.workspaceId, workspaceId),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
-      ),
-      orderBy: [desc(stateVersions.serial)],
-    });
-    planJsonPayload = latestState?.statePayload ?? null;
-  }
-
-  await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
-
   let hardFailed = false;
   let softFailed = false;
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
+
+  // Fail closed (kanban t_282cf10b): policy evaluation must run against the
+  // CURRENT plan. Falling back to the latest state version would silently
+  // approve changes the policy never inspected. Without plan JSON every
+  // policy check errors and the run is blocked from applying.
+  if (planJsonPayload === null || planJsonPayload === "") {
+    await writeLog(runId, "plan", "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.");
+    for (const policy of allPolicies) {
+      checkBatch.push({
+        id: `pchk-${crypto.randomUUID()}`,
+        runId,
+        policyId: policy.id,
+        policySetId: policy.policySetId,
+        status: "errored",
+        result: { error: "Plan JSON is unavailable; policy evaluation failed closed" },
+        createdAt: Date.now(),
+      });
+      if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+      if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+    }
+    if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
+    return { proceed: !hardFailed && !softFailed, hardFailed, softFailed };
+  }
+
+  await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
 
   for (const policy of allPolicies) {
     const checkId = `pchk-${crypto.randomUUID()}`;
