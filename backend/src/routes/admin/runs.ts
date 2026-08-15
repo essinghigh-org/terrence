@@ -7,6 +7,7 @@ import { eq, and, desc, notInArray } from "drizzle-orm";
 import { runResource } from "../../lib/response";
 import { FINAL_RUN_STATUSES } from "../../lib/utils";
 import providerSurface from "../../data/provider_surface.json";
+import { getLatestTfeProviderVersion } from "../../lib/provider-version";
 import type { ParamCtx } from "./types";
 import type { RunItem } from "./helpers";
 export const runsRoutes = new Elysia({ name: "admin-runs" })
@@ -35,7 +36,14 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
   })
   .get("/api/v2/admin/provider-surface", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    return { data: providerSurface };
+    return {
+      data: {
+        ...providerSurface,
+        // Latest stable hashicorp/tfe release (cached, 24h TTL). Null when
+        // the upstream lookup fails; the dashboard hides the chip then.
+        "latest-available": await getLatestTfeProviderVersion(),
+      },
+    };
   })
   .get("/api/v2/admin/database-metrics", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }

@@ -9,7 +9,7 @@ export type VersionCacheEntry = Readonly<{
   fetchedAt: number;
 }>;
 
-export type VersionCacheTool = "tofu" | "terraform";
+export type VersionCacheTool = "tofu" | "terraform" | "tfe-provider";
 
 export type VersionCacheFile = Partial<Record<VersionCacheTool, VersionCacheEntry>>;
 
@@ -38,7 +38,7 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
   } catch {
     return {};
   }
-  for (const tool of ["tofu", "terraform"] as const) {
+  for (const tool of ["tofu", "terraform", "tfe-provider"] as const) {
     const entry = parsed[tool];
     if (entry === undefined) continue;
     if (!Array.isArray(entry.versions)

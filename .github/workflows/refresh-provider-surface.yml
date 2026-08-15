@@ -1,0 +1,57 @@
+name: Refresh provider surface
+
+on:
+  schedule:
+    # Weekly: Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refresh-provider-surface
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+
+      - name: Regenerate the provider surface from the latest release
+        run: bun backend/scripts/refresh-provider-surface.ts
+
+      - name: Open a pull request when the surface changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --exit-code --quiet -- \
+              backend/src/data/provider_surface.json \
+              backend/tests/e2e/provider_surface.json; then
+            echo "Provider surface is current; nothing to do."
+            exit 0
+          fi
+          VERSION="$(python3 -c "import json; print(json.load(open('backend/src/data/provider_surface.json'))['provider'].split()[-1])")"
+          BRANCH="chore/provider-surface-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add backend/src/data/provider_surface.json backend/tests/e2e/provider_surface.json
+          git commit -m "chore: refresh provider surface to ${VERSION}"
+          git push -u origin "$BRANCH" --force
+          if gh pr list --head "$BRANCH" --json number --jq 'length' | grep -q '^[1-9]'; then
+            echo "PR for $BRANCH already exists; branch force-updated."
+          else
+            gh pr create \
+              --title "chore: refresh provider surface to ${VERSION}" \
+              --body "Automated refresh from the weekly provider-surface job: regenerated from \`terraform providers schema -json\` against the latest hashicorp/tfe release. New resources are marked backend-gap until implemented."
+          fi

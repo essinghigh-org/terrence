@@ -1,6 +1,6 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.79.0 provider surface, generated from `terraform providers schema -json`. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
-  "provider": "hashicorp/tfe v0.79.0",
+  "_comment": "Authoritative hashicorp/tfe v0.80.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "provider": "hashicorp/tfe v0.80.0",
   "resource_count": 72,
   "data_source_count": 43,
   "resources_covered": 72,

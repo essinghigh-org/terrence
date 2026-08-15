@@ -17,6 +17,7 @@ type SurfaceEntry = Readonly<{ name: string; status: string }>;
 type ProviderSurface = Readonly<JsonObject & {
   provider?: string;
   resources?: SurfaceEntry[];
+  "latest-available"?: string | null;
 }>;
 
 const STATUS_STYLES = {
@@ -108,6 +109,22 @@ export function CompatibilityDashboard(): React.JSX.Element {
   const coveredResources = resources.filter((entry): boolean => entry.status === "covered").length;
   const coveredDataSources = dataSources.filter((entry): boolean => entry.status === "covered").length;
 
+  // Freshness line: compares the cataloged provider version against the
+  // latest stable release reported by the backend (cached upstream lookup).
+  const latestAvailable = data?.["latest-available"] ?? null;
+  const tracked = /v(\d+\.\d+\.\d+)/.exec(data?.provider ?? "")?.[1] ?? null;
+  let freshnessText = "";
+  let freshnessClass = "text-muted-foreground";
+  if (latestAvailable !== null) {
+    if (tracked === null || latestAvailable !== tracked) {
+      freshnessText = `Latest available: v${latestAvailable}${tracked !== null ? ` · tracking v${tracked}` : ""}`;
+      freshnessClass = "text-warning";
+    } else {
+      freshnessText = `Up to date with v${latestAvailable}`;
+      freshnessClass = "text-success";
+    }
+  }
+
   return (
     <PageShell>
       <PageHeader
@@ -128,6 +145,9 @@ export function CompatibilityDashboard(): React.JSX.Element {
         <p className="text-sm text-muted-foreground">No provider surface data available.</p>
       ) : (
         <>
+          {freshnessText !== "" && (
+            <p className={`mb-3 text-xs ${freshnessClass}`}>{freshnessText}</p>
+          )}
           <div className="grid gap-3 sm:grid-cols-4">
             <Card>
               <CardHeader variant="section"><CardTitle className="text-sm">Resources</CardTitle></CardHeader>

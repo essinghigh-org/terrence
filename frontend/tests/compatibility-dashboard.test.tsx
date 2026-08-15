@@ -20,6 +20,7 @@ afterEach((): void => {
 test("renders the provider surface catalog with counts and filters", async () => {
   const surface = {
     provider: "hashicorp/tfe v0.79.0",
+    "latest-available": "0.80.0",
     resource_count: 2,
     data_source_count: 1,
     resources_covered: 1,
@@ -74,4 +75,99 @@ test("renders the provider surface catalog with counts and filters", async () =>
     expect(view.getByText("tfe_workspace")).toBeTruthy();
     expect(view.queryByText("tfe_agent_pool")).toBeNull();
   });
+});
+
+test("flags a stale catalog against the latest available release", async () => {
+  const surface = {
+    provider: "hashicorp/tfe v0.79.0",
+    "latest-available": "0.80.0",
+    resource_count: 0,
+    data_source_count: 0,
+    resources_covered: 0,
+    data_sources_covered: 0,
+    resources: [],
+    data_sources: [],
+  };
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
+      <Routes>
+        <Route path="/app/admin/compatibility" element={<CompatibilityDashboard />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Latest available: v0.80.0 · tracking v0.79.0")).toBeTruthy();
+  });
+});
+
+test("reports up to date when the catalog matches the latest release", async () => {
+  const surface = {
+    provider: "hashicorp/tfe v0.80.0",
+    "latest-available": "0.80.0",
+    resource_count: 0,
+    data_source_count: 0,
+    resources_covered: 0,
+    data_sources_covered: 0,
+    resources: [],
+    data_sources: [],
+  };
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
+      <Routes>
+        <Route path="/app/admin/compatibility" element={<CompatibilityDashboard />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Up to date with v0.80.0")).toBeTruthy();
+  });
+});
+
+test("hides the freshness line when no latest release is reported", async () => {
+  const surface = {
+    provider: "hashicorp/tfe v0.79.0",
+    "latest-available": null,
+    resource_count: 0,
+    data_source_count: 0,
+    resources_covered: 0,
+    data_sources_covered: 0,
+    resources: [],
+    data_sources: [],
+  };
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
+      <Routes>
+        <Route path="/app/admin/compatibility" element={<CompatibilityDashboard />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText(/hashicorp\/tfe v0\.79\.0/)).toBeTruthy();
+  });
+  expect(view.queryByText(/Latest available/)).toBeNull();
+  expect(view.queryByText(/Up to date/)).toBeNull();
 });
