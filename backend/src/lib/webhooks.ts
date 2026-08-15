@@ -11,11 +11,13 @@ import {
   oauthTokens,
   organizations,
   policySets,
+  registryModules,
   runs,
   workspaces,
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
+import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog , type DeepReadonly } from "./utils";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
@@ -1036,9 +1038,45 @@ export async function handleBitbucketWebhook(eventName: string, payload: Webhook
   return parsed === undefined ? false : handleOAuthProviderWebhook("bitbucket", parsed.kind, parsed.details);
 }
 
+/**
+ * Resync every VCS registry module that points at the given repository when
+ * a tag is pushed. Tag prefix filtering mirrors the registry's tag-prefix
+ * setting; synchronizeRegistryModule imports any new matching tags and
+ * records per-module errors on the module row, so callers can run this
+ * fire-and-forget.
+ */
+export async function syncRegistryModulesForTag(repoFullName: string, tag: string): Promise<void> {
+  const modules = await db.query.registryModules.findMany({
+    where: and(
+      eq(registryModules.publishingMechanism, "vcs"),
+      eq(registryModules.repositoryIdentifier, repoFullName),
+    ),
+  });
+  for (const mod of modules) {
+    if (mod.tagPrefix !== "" && !tag.startsWith(mod.tagPrefix)) continue;
+    try {
+      await synchronizeRegistryModule(mod);
+    } catch (error: unknown) {
+      // The module row records the failure; keep syncing the rest.
+      console.error(`[terrence] Registry module sync failed for ${mod.id}:`, error instanceof Error ? error.message : error);
+    }
+  }
+}
+
 export async function handleGithubWebhook(eventName: string, payload: WebhookPayload): Promise<void> {
   const details = parseWebhook(eventName, payload);
   if (details === undefined) return;
+
+  // Tag pushes also feed the private module registry: VCS modules on the
+  // repository are resynced so new tags become registry versions without
+  // any outbound call (the GitHub App webhook is the transport, matching
+  // TFE's tag workflow). Isolated: a failing module must not affect the
+  // workspace run path below.
+  if (details.tag !== undefined) {
+    void syncRegistryModulesForTag(details.repoFullName, details.tag).catch((error: unknown): void => {
+      console.error("[terrence] Registry module tag sync failed:", error);
+    });
+  }
 
   const candidates = await db.query.workspaces.findMany({
     where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
