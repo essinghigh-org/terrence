@@ -134,6 +134,12 @@ describe("organization variable set API contract", () => {
       where: eq(variableSetWorkspaces.variableSetId, variableSetId),
     })).toHaveLength(2);
 
+    const related = await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET");
+    expect(related.status).toBe(200);
+    expect(((await related.json()).data as Array<{ id: string; type: string }>))
+      .toEqual([...workspaceIds].sort().map(id => ({ id, type: "workspaces" })));
+    expect((await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET", undefined, unrelatedToken)).status).toBe(404);
+
     const shown = await request(`/api/v2/varsets/${variableSetId}`);
     const shownData = (await shown.json()).data;
     expect(shownData.attributes["workspace-count"]).toBe(2);

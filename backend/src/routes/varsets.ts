@@ -208,6 +208,16 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     (set as { status: number }).status = 204;
     return {};
   })
+  .get("/api/v2/varsets/:varset_id/relationships/workspaces", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const varsetId = params.varset_id ?? "";
+    const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId);
+    if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const links = await db.query.variableSetWorkspaces.findMany({
+      where: eq(variableSetWorkspaces.variableSetId, record.id),
+      orderBy: [asc(variableSetWorkspaces.workspaceId)],
+    });
+    return { data: links.map((link: { readonly workspaceId: string }): Record<string, string> => ({ id: link.workspaceId, type: "workspaces" })) };
+  })
   .delete("/api/v2/varsets/:varset_id/relationships/workspaces", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const varsetId = params.varset_id ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
