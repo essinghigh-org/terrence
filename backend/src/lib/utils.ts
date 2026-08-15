@@ -13,6 +13,7 @@ import { timingSafeEqual, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
+import { isDiskFullError, markStorageDegraded } from "./storage-health";
 import { jsonExtract } from "./db-json";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
@@ -90,6 +91,7 @@ export async function auditLog(
       createdAt: Date.now(),
     });
     } catch (error: unknown) {
+      if (isDiskFullError(error)) markStorageDegraded("audit log writes are failing (disk full)");
       recordFailure("auditWrites");
       log.error("Audit log write failed", {
         action,

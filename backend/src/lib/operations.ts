@@ -4,6 +4,7 @@ import { runs, workspaces } from "../db/schema";
 import { getSettings, type Settings } from "./settings";
 import { enqueueAgentApplyJob } from "./agent-jobs";
 import { auditLog } from "./utils";
+import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
 
@@ -118,6 +119,10 @@ export async function applyGateBlockReason(
     getSettings("approval-webhook"),
     getSettings("maintenance-windows"),
   ]);
+  const degraded = storageDegradedReason();
+  if (degraded !== null) {
+    return `Applies paused: ${degraded}`;
+  }
   if (!skipApprovalGate && approvalWebhookBlocksApply(approvalSettings)) {
     return "Apply blocked: this instance requires approval through an external workflow (see admin approval-webhook settings)";
   }

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
 const planJsonDirectory = resolve(
   process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
@@ -44,11 +45,16 @@ function artifactPath(runId: string): string {
 }
 
 export async function writePlanJsonArtifact(runId: string, planJson: PlanJson): Promise<void> {
-  await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
-  const target = artifactPath(runId);
-  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
-  await rename(temporary, target);
+  try {
+    await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
+    const target = artifactPath(runId);
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
+    await rename(temporary, target);
+  } catch (error: unknown) {
+    if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
+    throw error;
+  }
 }
 
 export async function readPlanJsonArtifact(runId: string): Promise<PlanJson | undefined> {

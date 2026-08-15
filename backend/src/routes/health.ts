@@ -4,6 +4,7 @@ import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
+import { isStorageDegraded } from "../lib/storage-health";
 import { currentSiteAdmin, currentTokenScopes } from "../lib/request-scope";
 import {
   collectLegacyMetrics,
@@ -139,6 +140,7 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       errors5xx: snapshot.requests.errors5xx,
     };
     metrics.terrence_failures = { ...snapshot.failures };
+    metrics.terrence_storage_degraded = isStorageDegraded() ? 1 : 0;
     metrics.terrence_worker = {
       polls: snapshot.worker.polls,
       last_poll_at: snapshot.worker.lastPollAt,
@@ -371,14 +373,15 @@ async function readinessResponse(set: SetCtx["set"]): Promise<unknown> {
   } catch {
     dbOk = false;
   }
-  const status = dbOk ? "OK" : "ERROR";
-  if (!dbOk) (set as { status: number }).status = 503;
+  const diskDegraded = isStorageDegraded();
+  const status = dbOk && !diskDegraded ? "OK" : "ERROR";
+  if (!dbOk || diskDegraded) (set as { status: number }).status = 503;
   return {
     node: "terrence-node-1",
     status,
     checks: [
       { check: "database", status: dbOk ? "OK" : "ERROR" },
-      { check: "disk", status: "OK" },
+      { check: "disk", status: diskDegraded ? "ERROR" : "OK" },
       { check: "task-worker", status: "OK" },
       { check: "archivist", status: "OK" },
     ],
@@ -508,6 +511,10 @@ export const healthRoutes = new Elysia({ name: "health" })
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
       await db.query.users.findFirst();
+      if (isStorageDegraded()) {
+        (set as { status: number }).status = 503;
+        return "not ready: storage degraded";
+      }
       return "ready";
     } catch {
       (set as { status: number }).status = 503;
@@ -524,6 +531,10 @@ export const healthRoutes = new Elysia({ name: "health" })
   .get("/api/v1/readiness", async ({ set }: SetCtx): Promise<{ status: string }> => {
     try {
       await db.query.users.findFirst();
+      if (isStorageDegraded()) {
+        (set as { status: number }).status = 503;
+        return { status: "not_ready" };
+      }
       return { status: "ready" };
     } catch {
       (set as { status: number }).status = 503;

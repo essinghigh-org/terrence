@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { logs } from "../db/schema";
+import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
 export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">>;
 
@@ -22,8 +23,13 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
     orderBy: [asc(logs.createdAt)],
   });
   if (runLogs.length === 0) return false;
-  await mkdir(storageDirectory, { recursive: true, mode: 0o700 });
-  await writeFile(runLogArchivePath(runId), gzipSync(JSON.stringify(runLogs)), { mode: 0o600 });
+  try {
+    await mkdir(storageDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(runLogArchivePath(runId), gzipSync(JSON.stringify(runLogs)), { mode: 0o600 });
+  } catch (error: unknown) {
+    if (isDiskFullError(error)) markStorageDegraded("run log archives are failing (disk full)");
+    throw error;
+  }
   return true;
 }
 

@@ -39,6 +39,7 @@ import { mkdir, rm, writeFile, readFile, exists, readdir, rename } from "fs/prom
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
+import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/storage-health";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
@@ -159,6 +160,7 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       createdAt: Date.now(),
     });
   } catch (error: unknown) {
+    if (isDiskFullError(error)) markStorageDegraded("run log writes are failing (disk full)");
     recordFailure("runLogWrites");
     const key = `${runId}:${phase}`;
     if (!warnedRunLogFailures.has(key)) {
@@ -2363,6 +2365,7 @@ let isWorkerLoopRunning = false;
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
+  if (isStorageDegraded()) return [];
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
   // Keyset-paged scan over (createdAt, id): a page full of ineligible runs can
@@ -2533,6 +2536,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
  */
 export async function applyDueScheduledRuns(): Promise<string[]> {
   if (isMaintenanceActive()) return [];
+  if (isStorageDegraded()) return [];
   const now = Date.now();
   const dueRuns = await db.query.runs.findMany({
     columns: { id: true, workspaceId: true, planOnly: true, savePlan: true, statusTimestamps: true },
