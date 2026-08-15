@@ -257,7 +257,7 @@ function VariablesDialog({
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                {/* SAFETY: the select options are generated from the same union; the change event carries one of them. */}
                 <Select name="variable-category" value={category} onValueChange={(val: string): void => {
    // SAFETY: the change event carries one of the union values the UI renders from the same options.
    setCategory(val as VariableCategory);

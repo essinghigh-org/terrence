@@ -58,7 +58,7 @@ function SurfaceTable({
           <TableRow key={entry.name}>
             <TableCell className="font-mono text-[13px]">{entry.name}</TableCell>
             <TableCell>
-// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
+              {/* SAFETY: the status union covers exactly the map keys; unmatched values are handled by the surrounding fallback. */}
               <Badge variant="outline" className={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])}>
                 {statusLabel(entry.status)}

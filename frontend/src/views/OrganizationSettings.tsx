@@ -995,14 +995,14 @@ team.attributes["name"] as string}</option>
                               <p className="font-semibold text-[14px] text-primary">
                                 {teamName}
                               </p>
-// SAFETY: the fixture field matches the API contract type.
+                              {/* SAFETY: the fixture field matches the API contract type. */}
                               <p className="text-xs text-muted-foreground mt-0.5">{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 (team.attributes["users-count"] as number | undefined) ?? 0} members</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
-// SAFETY: the fixture field matches the API contract type.
+                              {/* SAFETY: the fixture field matches the API contract type. */}
                               {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 (team.attributes["visibility"] as string | undefined) ?? "organization"}
                             </span>

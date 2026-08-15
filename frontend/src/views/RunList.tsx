@@ -630,7 +630,7 @@ export function RunList({
               </div>
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">Run type</legend>
-// SAFETY: the value matches the fixture's declared contract.
+                {/* SAFETY: the value matches the fixture's declared contract. */}
                 {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 (Object.keys(RUN_TYPE_LABELS) as RunType[]).map((type): React.JSX.Element => (
                   <label

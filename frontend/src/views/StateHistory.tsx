@@ -238,7 +238,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
             {loadState.kind === "ready" && loadState.states.map((s: StateItem): React.JSX.Element => (
               <TableRow key={s.id}>
                 <TableCell>
-// SAFETY: the fixture field matches the API contract type.
+                  {/* SAFETY: the fixture field matches the API contract type. */}
                   <p className="font-bold">#{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 s.attributes["serial"] as number}</p>
                   <p className="font-mono text-xs text-muted-foreground">{s.id}</p>
