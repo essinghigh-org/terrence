@@ -108,6 +108,7 @@ test("creates a workspace from the modal", async () => {
       return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+    if (url.startsWith("/api/v2/available-versions")) return json({ data: ["1.9.3"] });
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
       return json({ data: { id: "ws-1", attributes: { name: "production" } } });
     }
@@ -130,6 +131,9 @@ test("creates a workspace from the modal", async () => {
 
   changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
   changeInput(asElement(view.getByLabelText("Execution Engine")), "terraform");
+  // Engine Version is a catalog-driven select; wait for the mocked version
+  // option to exist before selecting it.
+  await waitFor((): void => { expect(view.getByRole("option", { name: "1.9.3" })).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText(/Engine Version/)), "1.9.3");
   // Switch source to VCS so Repository Identifier fields appear
   fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
@@ -1097,7 +1101,7 @@ test("keeps advisory policy failures non-blocking and names the policy", async (
   );
 
   await view.findByText("Tag recommendations");
-  expect(view.getByText(/Pull request · GitHub · Created/)).toBeTruthy();
+  expect(view.getByText(/Run created/)).toBeTruthy();
   expect(view.getByText("Pull request from GitHub")).toBeTruthy();
   expect(view.getByText("Optional naming advice")).toBeTruthy();
   expect(view.getByText("passed · 2 advisory issues")).toBeTruthy();
@@ -1171,7 +1175,8 @@ test("queues a run, displays its logs, and applies it", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => { expect(detail.getByText(/Plan: 1 to add./)).toBeTruthy(); }, { timeout: 5000 });
-  fireEvent.click(detail.getByRole("button", { name: "Confirm & Apply" }));
+  fireEvent.click(detail.getByRole("button", { name: "Review & apply" }));
+  fireEvent.click(detail.getByRole("button", { name: "Confirm & apply" }));
   await waitFor((): void => { expect(fetchMock.mock.calls.some(([url, init]): boolean =>
     getUrlString(url).endsWith("/runs/run-12345678/actions/apply") &&
     init?.method === "POST"
