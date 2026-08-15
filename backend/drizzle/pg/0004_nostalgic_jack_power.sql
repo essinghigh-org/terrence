@@ -1,0 +1,1 @@
+ALTER TABLE "notification_configurations" ADD COLUMN "email_addresses" jsonb;

@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
-type DestinationType = "generic" | "slack" | "microsoft-teams";
+type DestinationType = "generic" | "slack" | "microsoft-teams" | "email";
 
 type NotificationConfiguration = {
   id: string;
@@ -50,6 +50,7 @@ type NotificationConfiguration = {
     name: string;
     "destination-type": DestinationType;
     url: string;
+    "email-addresses"?: string[];
     triggers: string[];
     enabled: boolean;
     token?: string | null;
@@ -87,6 +88,7 @@ export function WorkspaceNotifications({
   const [name, setName] = useState("");
   const [destinationType, setDestinationType] = useState<DestinationType>("generic");
   const [url, setUrl] = useState("");
+  const [emailAddresses, setEmailAddresses] = useState("");
   const [token, setToken] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [triggers, setTriggers] = useState<Set<string>>(new Set(["run:completed", "run:errored"]));
@@ -119,6 +121,7 @@ export function WorkspaceNotifications({
     setName(configuration?.attributes.name ?? "");
     setDestinationType(configuration?.attributes["destination-type"] ?? "generic");
     setUrl(configuration?.attributes.url ?? "");
+    setEmailAddresses(configuration?.attributes["email-addresses"]?.join(", ") ?? "");
     setToken("");
     setEnabled(configuration?.attributes.enabled ?? true);
     setTriggers(new Set(configuration?.attributes.triggers ?? ["run:completed", "run:errored"]));
@@ -137,18 +140,23 @@ export function WorkspaceNotifications({
 
   const saveConfiguration = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (name.trim() === "" || url.trim() === "") {
-      setEditorError("Name and webhook URL are required.");
+    const isEmail = destinationType === "email";
+    const addresses = emailAddresses.split(",").map((item: string): string => item.trim()).filter((item: string): boolean => item !== "");
+    if (name.trim() === "" || (!isEmail && url.trim() === "") || (isEmail && addresses.length === 0)) {
+      setEditorError(isEmail
+        ? "Name and at least one email address are required."
+        : "Name and webhook URL are required.");
       return;
     }
     const attributes: Record<string, unknown> = {
       name: name.trim(),
       "destination-type": destinationType,
-      url: url.trim(),
+      url: isEmail ? "" : url.trim(),
       triggers: [...triggers],
       enabled,
     };
-    if (token !== "") attributes["token"] = token;
+    if (isEmail) attributes["email-addresses"] = addresses;
+    if (token !== "" && !isEmail) attributes["token"] = token;
 
     setSaving(true);
     setEditorError("");
@@ -335,37 +343,58 @@ export function WorkspaceNotifications({
                   <SelectItem value="generic">Generic webhook</SelectItem>
                   <SelectItem value="slack">Slack</SelectItem>
                   <SelectItem value="microsoft-teams">Microsoft Teams</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
                 </Select>
               </Field>
-              <Field data-invalid={editorError !== "" && url.trim() === ""}>
-                <FieldLabel htmlFor="notification-url">Webhook URL</FieldLabel>
-                <Input
-                  id="notification-url"
-                  name="webhook-url"
-                  autoComplete="url"
-                  type="url"
-                  value={url}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUrl(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUrl(event.currentTarget.value); }}
-                  aria-invalid={editorError !== "" && url.trim() === ""}
-                  placeholder="https://example.com/webhook"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="notification-token">Token</FieldLabel>
-                <Input
-                  id="notification-token"
-                  name="webhook-token"
-                  type="password"
-                  value={token}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setToken(event.target.value); }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setToken(event.currentTarget.value); }}
-                  autoComplete="new-password"
-                />
-                <FieldDescription>
-                  {editing == null ? "Optional bearer token." : "Leave blank to keep the current token."}
-                </FieldDescription>
-              </Field>
+              {destinationType === "email" ? (
+                <Field data-invalid={editorError !== "" && emailAddresses.trim() === ""}>
+                  <FieldLabel htmlFor="notification-email-addresses">Email addresses</FieldLabel>
+                  <Input
+                    id="notification-email-addresses"
+                    name="email-addresses"
+                    autoComplete="off"
+                    type="email"
+                    value={emailAddresses}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmailAddresses(event.target.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setEmailAddresses(event.currentTarget.value); }}
+                    aria-invalid={editorError !== "" && emailAddresses.trim() === ""}
+                    placeholder="team@example.com, oncall@example.com"
+                  />
+                  <FieldDescription>Comma-separated recipients. Delivered via the SMTP settings.</FieldDescription>
+                </Field>
+              ) : (
+                <Field data-invalid={editorError !== "" && url.trim() === ""}>
+                  <FieldLabel htmlFor="notification-url">Webhook URL</FieldLabel>
+                  <Input
+                    id="notification-url"
+                    name="webhook-url"
+                    autoComplete="url"
+                    type="url"
+                    value={url}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUrl(event.target.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUrl(event.currentTarget.value); }}
+                    aria-invalid={editorError !== "" && url.trim() === ""}
+                    placeholder="https://example.com/webhook"
+                  />
+                </Field>
+              )}
+              {destinationType !== "email" && (
+                <Field>
+                  <FieldLabel htmlFor="notification-token">Token</FieldLabel>
+                  <Input
+                    id="notification-token"
+                    name="webhook-token"
+                    type="password"
+                    value={token}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setToken(event.target.value); }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setToken(event.currentTarget.value); }}
+                    autoComplete="new-password"
+                  />
+                  <FieldDescription>
+                    {editing == null ? "Optional bearer token." : "Leave blank to keep the current token."}
+                  </FieldDescription>
+                </Field>
+              )}
               <Field orientation="horizontal">
                 <Checkbox
                   id="notification-enabled"

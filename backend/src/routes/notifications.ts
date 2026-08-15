@@ -49,6 +49,14 @@ function isWebhookUrl(value: string): boolean {
   }
 }
 
+const EMAIL_ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmailAddresses(value: unknown): value is readonly string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((item): item is string => typeof item === "string" && EMAIL_ADDRESS_RE.test(item));
+}
+
 type FieldError = { status: string; title: string; detail: string; source: { pointer: string } };
 
 /**
@@ -56,11 +64,17 @@ type FieldError = { status: string; title: string; detail: string; source: { poi
  * (26.9). Returns [] when the input is valid. Each error carries a
  * JSON:API source.pointer so consumers can render per-field feedback.
  */
-function createValidationErrors(name: string, url: string, destinationType: string): FieldError[] {
+function createValidationErrors(name: string, url: string, destinationType: string, emailAddresses: unknown): FieldError[] {
   const errors: FieldError[] = [];
   if (name === "") errors.push({ status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } });
-  if (!isWebhookUrl(url)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "URL must be a valid http(s) webhook", source: { pointer: "/data/attributes/url" } });
-  if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, or microsoft-teams", source: { pointer: "/data/attributes/destination-type" } });
+  if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, microsoft-teams, or email", source: { pointer: "/data/attributes/destination-type" } });
+  if (destinationType === "email") {
+    if (!isValidEmailAddresses(emailAddresses)) {
+      errors.push({ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain at least one valid email address", source: { pointer: "/data/attributes/email-addresses" } });
+    }
+  } else if (!isWebhookUrl(url)) {
+    errors.push({ status: "422", title: "Unprocessable Entity", detail: "URL must be a valid http(s) webhook", source: { pointer: "/data/attributes/url" } });
+  }
   return errors;
 }
 
@@ -91,6 +105,7 @@ function notificationResource(
       name: configuration.name,
       "destination-type": configuration.destinationType,
       url: configuration.url,
+      "email-addresses": configuration.emailAddresses ?? [],
       triggers: configuration.triggers,
       enabled: configuration.enabled === true,
       token: null,
@@ -168,11 +183,13 @@ function createValues(
   const destinationType = typeof attributes["destination-type"] === "string"
     ? attributes["destination-type"]
     : "";
-  if (
-    name === ""
-    || !isWebhookUrl(url)
-    || !isNotificationDestination(destinationType)
-  ) return undefined;
+  const emailAddresses = attributes["email-addresses"];
+  const valid = name !== ""
+    && isNotificationDestination(destinationType)
+    && (destinationType === "email"
+      ? isValidEmailAddresses(emailAddresses)
+      : isWebhookUrl(url));
+  if (!valid) return undefined;
 
   return {
     id: `nc-${crypto.randomUUID()}`,
@@ -181,7 +198,8 @@ function createValues(
     teamId: null,
     name,
     destinationType,
-    url,
+    url: destinationType === "email" ? "" : url,
+    emailAddresses: destinationType === "email" ? [...emailAddresses as readonly string[]] : null,
     triggers: Array.isArray(attributes.triggers)
       ? attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string")
       : ["run:created", "run:completed"],
@@ -211,9 +229,10 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         typeof attributes.name === "string" ? attributes.name.trim() : "",
         typeof attributes.url === "string" ? attributes.url : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
+        attributes["email-addresses"],
       );
       (set as { status: number }).status = 422;
-      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
     }
     await db.insert(notificationConfigurations).values(values);
     const created = await db.query.notificationConfigurations.findFirst({
@@ -242,9 +261,10 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         typeof attributes.name === "string" ? attributes.name.trim() : "",
         typeof attributes.url === "string" ? attributes.url : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
+        attributes["email-addresses"],
       );
       (set as { status: number }).status = 422;
-      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
     }
     await db.insert(notificationConfigurations).values(values);
     const created = await db.query.notificationConfigurations.findFirst({
@@ -270,10 +290,16 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
     const url = typeof attributes.url === "string" ? attributes.url : "";
     const destinationType = typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "";
-    if (name === "" || !isWebhookUrl(url) || !isNotificationDestination(destinationType)) {
-      const errors = createValidationErrors(name, url, destinationType);
+    const emailAddresses = attributes["email-addresses"];
+    const valid = name !== ""
+      && isNotificationDestination(destinationType)
+      && (destinationType === "email"
+        ? isValidEmailAddresses(emailAddresses)
+        : isWebhookUrl(url));
+    if (!valid) {
+      const errors = createValidationErrors(name, url, destinationType, emailAddresses);
       (set as { status: number }).status = 422;
-      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url, and destination-type are required" }] };
+      return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
     }
     const values = {
       id: `nc-${crypto.randomUUID()}`,
@@ -282,7 +308,8 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       teamId,
       name,
       destinationType,
-      url,
+      url: destinationType === "email" ? "" : url,
+      emailAddresses: destinationType === "email" ? [...emailAddresses as readonly string[]] : null,
       triggers: Array.isArray(attributes.triggers)
         ? attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string")
         : ["run:created", "run:completed"],
@@ -312,6 +339,13 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       && isNotificationDestination(attributes["destination-type"])
     ) updates.destinationType = attributes["destination-type"];
     if (typeof attributes.url === "string" && isWebhookUrl(attributes.url)) updates.url = attributes.url;
+    if (attributes["email-addresses"] !== undefined) {
+      if (!isValidEmailAddresses(attributes["email-addresses"])) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain at least one valid email address", source: { pointer: "/data/attributes/email-addresses" } }] };
+      }
+      updates.emailAddresses = [...attributes["email-addresses"] as readonly string[]];
+    }
     if (Array.isArray(attributes.triggers)) {
       updates.triggers = attributes.triggers.filter((trigger: unknown): trigger is string => typeof trigger === "string");
     }
