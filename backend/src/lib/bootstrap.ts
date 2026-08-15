@@ -3,6 +3,7 @@ import { db } from "../db";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
 import { auditLog } from "./utils";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
+import { lockFirstUserElection } from "../db/first-user";
 
 export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | "skipped"> {
   const password = process.env.ADMIN_PASSWORD;
@@ -35,6 +36,9 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
 
   const created = await db.transaction(async (tx: unknown): Promise<{ created: boolean; organizationCreated: boolean }> => {
     const t = tx as typeof db;
+    // Serialize the first-user election across concurrent processes (PG
+    // advisory lock; no-op on SQLite): see db/first-user.ts.
+    await lockFirstUserElection(t);
     const currentCount = (await t.select({ value: count() }).from(users))[0]?.value ?? 0;
     if (currentCount > 0) return { created: false, organizationCreated: false };
     await t.insert(users).values({

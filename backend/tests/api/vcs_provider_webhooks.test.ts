@@ -327,4 +327,50 @@ describe("GitLab and Bitbucket webhooks", () => {
     expect(response.status).toBe(401);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) })).toHaveLength(0);
   });
+
+  // Regression: the Bitbucket HMAC must verify against the exact bytes on the
+  // wire. Clients (e.g. python-requests with a dict body) commonly send
+  // pretty-printed JSON; re-serializing the parsed object compactly before
+  // computing the HMAC rejected every non-canonical delivery.
+  test("verifies a Bitbucket signature over a pretty-printed (non-canonical) body", async () => {
+    const rawBody = JSON.stringify(bitbucketPayload, null, 2);
+    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-event-key": "repo:push",
+        "x-hub-signature": bitbucketSignature(rawBody),
+      },
+      body: rawBody,
+    }));
+    expect(response.status).toBe(200);
+    const version = await waitForUploaded(bitbucketWorkspaceId);
+    expect(version).toMatchObject({
+      source: "bitbucket",
+      status: "uploaded",
+      ingressAttributes: {
+        branch: "main",
+        commitSha: "abcdef1234567890abcdef1234567890abcdef12",
+        senderUsername: "bitbucket-user",
+      },
+    });
+  });
+
+  test("rejects a Bitbucket signature computed over a different serialization", async () => {
+    // Signature over the compact form, delivery in pretty-printed form: the
+    // bytes differ, so the signature MUST NOT verify.
+    const prettyBody = JSON.stringify(bitbucketPayload, null, 2);
+    const compactSignature = bitbucketSignature(JSON.stringify(bitbucketPayload));
+    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-event-key": "repo:push",
+        "x-hub-signature": compactSignature,
+      },
+      body: prettyBody,
+    }));
+    expect(response.status).toBe(401);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) })).toHaveLength(0);
+  });
 });

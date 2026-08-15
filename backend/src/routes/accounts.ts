@@ -8,6 +8,7 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
 import { log } from "../lib/log";
 import { authPlugin } from "../auth";
+import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
@@ -380,6 +381,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
       const t = tx as typeof db;
+      // Serialize the first-user election across concurrent requests (PG
+      // advisory lock; no-op on SQLite): see db/first-user.ts.
+      await lockFirstUserElection(t);
       if (((await t.select({ value: count() }).from(users))[0]?.value ?? 0) !== 0) return null;
       await t.insert(users).values({
         id: userId,
@@ -708,21 +712,20 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const id = crypto.randomUUID();
     const normalizedEmail = typeof email === "string" && email.trim() !== "" ? email.trim() : null;
 
+    // Local signup NEVER elects a site admin. The first user on a fresh
+    // instance must come from the ADMIN_PASSWORD (or installer IACT)
+    // bootstrap, whose count-then-insert runs under a serialized first-user
+    // lock. Letting signup elect admins from a plain count raced two
+    // concurrent signups into two site admins on PostgreSQL.
     try {
-      const isSiteAdmin = await db.transaction(async (tx: unknown): Promise<boolean> => {
-        const t = tx as typeof db;
-        const userCount = (await t.select({ val: count() }).from(users))[0]?.val ?? 0;
-        const admin = userCount === 0;
-        await t.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: admin });
-        return admin;
-      });
+      await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
       await auditLog("create", "users", id, null, null, { username });
       (set as { status: number }).status = 201;
       return {
         data: {
           id,
           type: "users",
-          attributes: { username, email: normalizedEmail, "is-site-admin": isSiteAdmin },
+          attributes: { username, email: normalizedEmail, "is-site-admin": false },
         },
       };
     } catch (e: unknown) {

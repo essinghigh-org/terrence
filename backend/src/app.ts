@@ -11,6 +11,7 @@ import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import { requestFinished, requestStarted } from "./lib/process-metrics";
+import { API_BODY_LIMIT_BYTES, BodyTooLargeError, isUploadPath, readTextWithLimit } from "./lib/body-limit";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -129,14 +130,19 @@ export function handleAppError({
 }: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
+  // Elysia wraps onParse failures in its own ParseError; the original is
+  // preserved as `cause` (elysia/dist/error.js ParseError).
+  const isBodyTooLarge = error instanceof BodyTooLargeError
+    || (code === "PARSE" && error instanceof Error && error.cause instanceof BodyTooLargeError);
   // Error path: the request never reached onAfterHandle, so settle the
   // in-flight counter here instead (same WeakMap consumption rule). The
-  // status mirrors the branch logic below so 404/422/400 do not count as 5xx.
+  // status mirrors the branch logic below so 404/422/400/413 do not count
+  // as 5xx.
   const errored = requestMeta.get(request as unknown as Request);
   if (errored !== undefined) {
     const status = code === "NOT_FOUND" ? 404
       : code === "VALIDATION" ? 422
-        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
+        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (isBodyTooLarge ? 413 : 400)
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
@@ -152,6 +158,16 @@ export function handleAppError({
     return { errors: [{ status: "404", title: "Not Found" }] };
   }
   mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+  if (isBodyTooLarge) {
+    mutableSet.status = 413;
+    return {
+      errors: [{
+        status: "413",
+        title: "Payload Too Large",
+        detail: `Request body exceeds the ${API_BODY_LIMIT_BYTES} byte limit for this endpoint`,
+      }],
+    };
+  }
   const clientStatus = code === "VALIDATION" ? 422
     : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
       : null;
@@ -478,12 +494,34 @@ export const app = new Elysia()
     skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
   }))
   .use(oauthPlugin)
-  .onRequest(({ request, set }: RequestContext): void => {
+  .onRequest(({ request, set }: RequestContext): Record<string, unknown> | undefined => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
     requestStarted();
+
+    // Body-size guard: upload paths keep the 100 MiB server-level limit, but
+    // every other endpoint (login, JSON APIs, webhooks) rejects oversized
+    // bodies before Elysia buffers them. Content-Length is checked here (no
+    // buffering); chunked bodies are capped during onParse below.
+    if (!isUploadPath(pathname)) {
+      const contentLength = Number(request.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > API_BODY_LIMIT_BYTES) {
+        // Settle the request counters here; a short-circuited onRequest may
+        // never reach onAfterHandle. Idempotent if it does (meta is gone).
+        requestFinished(413);
+        requestMeta.delete(request as unknown as Request);
+        (set as { status: number }).status = 413;
+        return {
+          errors: [{
+            status: "413",
+            title: "Payload Too Large",
+            detail: `Request body exceeds the ${API_BODY_LIMIT_BYTES} byte limit for this endpoint`,
+          }],
+        };
+      }
+    }
 
     const headers = set.headers as Record<string, string | number>;
     // CORS: never emit a hardcoded allow-origin fallback (a blanket
@@ -564,11 +602,24 @@ export const app = new Elysia()
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
-    if (new URL(request.url).pathname === "/api/webhooks/github" || new URL(request.url).pathname === "/api/v2/webhooks/run-approval") {
-      return request.text();
+    const pathname = new URL(request.url).pathname;
+    // HMAC-verified webhooks must verify against the exact bytes on the wire;
+    // a JSON round-trip would re-serialize noncanonically and break signatures.
+    if (
+      pathname === "/api/webhooks/github"
+      || pathname === "/api/webhooks/bitbucket"
+      || pathname === "/api/v2/webhooks/run-approval"
+    ) {
+      return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
     }
-    if (contentType === "application/vnd.api+json") {
-      const text = await request.text();
+    // Any JSON-flavored content type (vnd.api+json, application/json,
+    // application/scim+json, ...) is capped and parsed here so chunked
+    // bodies without Content-Length cannot buffer up to the 100 MiB server
+    // limit. Non-JSON types (multipart avatar uploads, archive blobs) stay
+    // on Elysia's default parse; the archive paths are upload-path exempt
+    // by design.
+    if (contentType !== undefined && contentType.includes("json")) {
+      const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
       try {
         return JSON.parse(text) as Record<string, unknown>;
       } catch {
