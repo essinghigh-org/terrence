@@ -25,6 +25,7 @@ describe("organization variable set API contract", () => {
   const orgToken = `org-token-${suffix}`;
   const workspaceIds = [`workspace-a-${suffix}`, `workspace-b-${suffix}`];
   const unrelatedWorkspaceId = `other-workspace-${suffix}`;
+  const detachedWorkspaceId = `detached-workspace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -57,6 +58,7 @@ describe("organization variable set API contract", () => {
     await db.insert(workspaces).values([
       { id: workspaceIds[0]!, name: `alpha-${suffix}`, orgId },
       { id: workspaceIds[1]!, name: `beta-${suffix}`, orgId },
+      { id: detachedWorkspaceId, name: `gamma-${suffix}`, orgId },
       { id: unrelatedWorkspaceId, name: `other-${suffix}`, orgId: unrelatedOrgId },
     ]);
   });
@@ -139,6 +141,19 @@ describe("organization variable set API contract", () => {
     expect(((await related.json()).data as Array<{ id: string; type: string }>))
       .toEqual([...workspaceIds].sort().map(id => ({ id, type: "workspaces" })));
     expect((await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET", undefined, unrelatedToken)).status).toBe(404);
+
+    // Workspace side: attached variable sets are listed per workspace. Inherited
+    // variables are never flattened into the workspace-variable collection.
+    const workspaceSets = await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`);
+    expect(workspaceSets.status).toBe(200);
+    const workspaceSetsData = (await workspaceSets.json()).data as Array<{ id: string }>;
+    expect(workspaceSetsData).toHaveLength(1);
+    expect(workspaceSetsData[0]!.id).toBe(variableSetId);
+    expect((await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`, "GET", undefined, unrelatedToken)).status).toBe(404);
+    expect((await request(`/api/v2/workspaces/${unrelatedWorkspaceId}/varsets`)).status).toBe(404);
+    const noSetWorkspace = await request(`/api/v2/workspaces/${detachedWorkspaceId}/varsets`);
+    expect(noSetWorkspace.status).toBe(200);
+    expect(((await noSetWorkspace.json()).data as Array<unknown>)).toEqual([]);
 
     const shown = await request(`/api/v2/varsets/${variableSetId}`);
     const shownData = (await shown.json()).data;
