@@ -21,6 +21,7 @@ import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { getLastOrganization } from "@/lib/lastOrganization";
 import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type Organization = Readonly<{
   id: string;
@@ -138,7 +139,7 @@ export function Dashboard(): React.JSX.Element {
       .then((response): void => {
 // SAFETY: /api/v2/metadata returns the MetadataDocument per contract.
         const version = (response as MetadataDocument).version;
-        if (typeof version === "string") {
+        if (isString(version)) {
           const safe = version.replace(/[^A-Za-z0-9._-]/g, "");
           if (safe !== "") setAppVersion(safe);
         }

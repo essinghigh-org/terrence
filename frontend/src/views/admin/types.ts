@@ -1,3 +1,4 @@
+import { isBoolean, isString } from "../../lib/type-guards";
 // Shared types and helpers for the admin dashboard sections.
 export type AdminSection =
   | "security"
@@ -11,12 +12,12 @@ export type AdminSection =
 
 export const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string => {
   const value = attrs[key];
-  return typeof value === "string" ? value : fallback;
+  return isString(value) ? value : fallback;
 };
 
 export const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean => {
   const value = attrs[key];
-  return typeof value === "boolean" ? value : fallback;
+  return isBoolean(value) ? value : fallback;
 };
 
 export type ItemAttrs = {

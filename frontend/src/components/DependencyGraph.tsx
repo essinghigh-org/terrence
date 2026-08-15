@@ -288,7 +288,7 @@ function toFlowEdges(model: GraphModel, dark: boolean): FlowEdge[] {
 
 function useDarkMode(): boolean {
   const [dark, setDark] = useState((): boolean =>
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark"));
+    document !== undefined && document.documentElement.classList.contains("dark"));
   useEffect((): (() => void) => {
     const root = document.documentElement;
     const observer = new MutationObserver((): void => {

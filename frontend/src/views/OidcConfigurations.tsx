@@ -12,6 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Fingerprint, Plus, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type OidcConfig = {
   id: string;
@@ -31,7 +32,7 @@ function displayValue(config: OidcConfig): string {
   const candidates = ["role-arn", "workload-identity-provider-id", "identity", "address"];
   for (const key of candidates) {
     const value = attrs[key];
-    if (typeof value === "string") return value;
+    if (isString(value)) return value;
   }
   return config.id;
 }

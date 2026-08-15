@@ -14,6 +14,7 @@ import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions"
 import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
 import { cn } from "../lib/utils";
+import { isRecord, isString } from "../lib/type-guards";
 
 type RegistryProvider = Readonly<{
   id: string;
@@ -25,15 +26,15 @@ type RegistryProvider = Readonly<{
 
 function providerFromResource(resource: unknown): RegistryProvider {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const raw = resource !== null && typeof resource === "object" ? resource as Record<string, unknown> : {};
+  const raw = isRecord(resource) ? resource as Record<string, unknown> : {};
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = raw["attributes"] !== null && typeof raw["attributes"] === "object" ? raw["attributes"] as Record<string, unknown> : {};
+  const attributes = isRecord(raw["attributes"]) ? raw["attributes"] as Record<string, unknown> : {};
   return {
-    id: typeof raw["id"] === "string" ? raw["id"] : "",
-    name: typeof attributes["name"] === "string" ? attributes["name"] : "",
-    namespace: typeof attributes["namespace"] === "string" ? attributes["namespace"] : "",
-    registryName: typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private",
-    createdAt: typeof attributes["created-at"] === "string" ? attributes["created-at"] : "",
+    id: isString(raw["id"]) ? raw["id"] : "",
+    name: isString(attributes["name"]) ? attributes["name"] : "",
+    namespace: isString(attributes["namespace"]) ? attributes["namespace"] : "",
+    registryName: isString(attributes["registry-name"]) ? attributes["registry-name"] : "private",
+    createdAt: isString(attributes["created-at"]) ? attributes["created-at"] : "",
   };
 }
 
@@ -85,7 +86,7 @@ export function Registry(): React.JSX.Element {
         };
         if (!controller.signal.aborted) {
           setModules(Array.isArray(response.data) ? response.data.map(registryModuleFromResource) : []);
-          setProviderOptions(Array.isArray(response.meta?.providers) ? response.meta.providers.filter((value): value is string => typeof value === "string") : []);
+          setProviderOptions(Array.isArray(response.meta?.providers) ? response.meta.providers.filter((value): value is string => isString(value)) : []);
           setTotalPages(response.meta?.pagination?.["total-pages"] ?? 1);
         }
       } else {

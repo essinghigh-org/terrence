@@ -83,6 +83,7 @@ import { setLastOrganization } from "../lib/lastOrganization";
 import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
+import { isString } from "../lib/type-guards";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
 
@@ -263,7 +264,7 @@ export function Layout({
         setMustChangePassword(attributes?.["must-change-password"] === true);
         setAccountName(attributes?.username ?? "");
         setAvatarUrl(attributes?.["avatar-url"] ?? "");
-        if (typeof attributes?.theme === "string") applyThemeIfUnchanged(attributes.theme, themeRevision);
+        if (isString(attributes?.theme)) applyThemeIfUnchanged(attributes.theme, themeRevision);
       }
       if (organizationsResult.status === "fulfilled") {
         setOrganizationNames(
@@ -466,7 +467,7 @@ export function Layout({
       const name = (response as {
         data?: { attributes?: { name?: unknown } };
       }).data?.attributes?.name;
-      setProjectName(typeof name === "string" && name !== "" ? name : projectId ?? "");
+      setProjectName(isString(name) && name !== "" ? name : projectId ?? "");
     }).catch((): void => {
       setProjectName(projectId ?? "");
     });

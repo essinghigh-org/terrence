@@ -1,3 +1,4 @@
+import { isRecord, isString } from "../lib/type-guards";
 /**
  * Named saved views for the workspace explorer (kanban 14.10).
  *
@@ -21,14 +22,14 @@ function storeKey(orgName: string): string {
 
 /** True when the localStorage entry carries the SavedView fields. */
 function isSavedView(view: unknown): view is SavedView {
-  if (typeof view !== "object" || view === null) return false;
+  if (!isRecord(view)) return false;
   // SAFETY: only the checked fields are read; the object may carry arbitrary
   // extra fields written by older app versions or other tabs.
   const candidate = view as { name?: unknown; search?: unknown; statusFilter?: unknown; projectFilter?: unknown };
-  return typeof candidate.name === "string"
-    && typeof candidate.search === "string"
-    && typeof candidate.statusFilter === "string"
-    && typeof candidate.projectFilter === "string";
+  return isString(candidate.name)
+    && isString(candidate.search)
+    && isString(candidate.statusFilter)
+    && isString(candidate.projectFilter);
 }
 
 export function getSavedViews(orgName: string): SavedView[] {

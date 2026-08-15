@@ -11,6 +11,7 @@ import { Spinner } from "../components/ui/spinner";
 import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type OAuthClient = Readonly<{
   readonly id: string;
@@ -76,7 +77,7 @@ type VcsAccess = "allowed" | "denied" | "error";
 
 function authorizationUrl(payload: AuthorizationDocument): string {
   const rawUrl = payload.data?.attributes?.["authorization-url"];
-  if (typeof rawUrl !== "string" || rawUrl === "") throw new Error("The server did not return an authorization URL.");
+  if (!isString(rawUrl) || rawUrl === "") throw new Error("The server did not return an authorization URL.");
   let destination: URL;
   try {
     destination = new URL(rawUrl);
@@ -476,7 +477,7 @@ export function VcsIntegrations({
                     ghApps.map((app: GitHubAppInstallation): React.JSX.Element => (
                       <TableRow key={app.id}>
                         <TableCell className="font-medium flex items-center gap-2">
-                          {typeof app.attributes["icon-url"] === "string" && app.attributes["icon-url"] !== "" && (
+                          {isString(app.attributes["icon-url"]) && app.attributes["icon-url"] !== "" && (
                             <img
                               src={app.attributes["icon-url"]}
                               className="size-6 rounded-full"
@@ -559,7 +560,7 @@ export function VcsIntegrations({
                   const connected = statusKnown && tokens.length > 0;
                   const providerUser = tokens
                     .map((token): string | null | undefined => token.attributes["service-provider-user"])
-                    .find((value): value is string => typeof value === "string" && value !== "");
+                    .find((value): value is string => isString(value) && value !== "");
                   const connecting = connectingClientId === client.id;
                   return (
                     <TableRow key={client.id}>
@@ -606,7 +607,7 @@ export function VcsIntegrations({
                             size="sm"
                             variant="destructive"
                             onClick={(): void => {
-                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                              const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                               if (isTestEnv) {
                                 void handleDelete(client);
                               } else {

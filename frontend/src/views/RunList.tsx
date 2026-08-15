@@ -25,6 +25,7 @@ import { StatusBadge } from "../components/ui/status-badge";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
 import { subscribeEvents, type SseEvent } from "../lib/events";
+import { isNumber, isString } from "../lib/type-guards";
 
 type RunItem = {
   id: string;
@@ -185,7 +186,7 @@ export function RunList({
         }
         // Fetch remaining pages
         let nextPage = response.meta?.pagination?.["next-page"];
-        while (typeof nextPage === "number" && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted) {
+        while (isNumber(nextPage) && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted) {
           const nextUrl = new URL(endpoint, "http://terrence.local");
           nextUrl.searchParams.set("page[number]", String(nextPage));
           nextUrl.searchParams.set("sort", sort);
@@ -359,7 +360,7 @@ export function RunList({
       setRunReplace("");
       toast.add({ title: "Run started", type: "success" });
       setRefreshVersion((value: number): number => value + 1);
-      if (typeof response.data?.id === "string" && response.data.id !== "") {
+      if (isString(response.data?.id) && response.data.id !== "") {
         void navigate(
           `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(response.data.id)}`,
         );

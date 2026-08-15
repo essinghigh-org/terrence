@@ -1,3 +1,4 @@
+import { isNumber, isRecord, isString } from "../lib/type-guards";
 /**
  * Recent and pinned workspace shortcuts (kanban 26.11, 26.12).
  *
@@ -33,13 +34,13 @@ function notifyShortcutChange(): void {
 
 /** True when the localStorage entry carries the three WorkspaceVisit fields. */
 function isWorkspaceVisit(entry: unknown): entry is WorkspaceVisit {
-  if (typeof entry !== "object" || entry === null) return false;
+  if (!isRecord(entry)) return false;
   // SAFETY: only the checked fields are read; the object may carry arbitrary
   // extra fields written by older app versions or other tabs.
   const visit = entry as { orgName?: unknown; workspaceName?: unknown; visitedAt?: unknown };
-  return typeof visit.orgName === "string"
-    && typeof visit.workspaceName === "string"
-    && typeof visit.visitedAt === "number";
+  return isString(visit.orgName)
+    && isString(visit.workspaceName)
+    && isNumber(visit.visitedAt);
 }
 
 export function getRecentWorkspaces(): WorkspaceVisit[] {

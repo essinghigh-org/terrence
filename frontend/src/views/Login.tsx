@@ -7,6 +7,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
+import { isString } from "../lib/type-guards";
 
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
@@ -50,12 +51,12 @@ export function Login(): React.JSX.Element {
         body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
       }) as { data: { attributes: { token?: string; "expired-at"?: string | null; "must-change-password"?: boolean; "mfa-required"?: boolean; "mfa-challenge-token"?: string } } };
       const attributes = response.data.attributes;
-      if (attributes["mfa-required"] === true && typeof attributes["mfa-challenge-token"] === "string") {
+      if (attributes["mfa-required"] === true && isString(attributes["mfa-challenge-token"])) {
         setMfaChallengeToken(attributes["mfa-challenge-token"]);
         setMfaCode("");
         return;
       }
-      if (typeof attributes.token !== "string") throw new Error("Missing access token");
+      if (!isString(attributes.token)) throw new Error("Missing access token");
       setAuthToken(attributes.token, attributes["expired-at"], true);
       await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
     } catch (_error: unknown) {

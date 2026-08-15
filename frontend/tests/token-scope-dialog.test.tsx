@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
 import { TokenScopeDialog } from "../src/components/TokenScopeDialog";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,7 +14,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  return isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 }
 
 type MockOrg = Readonly<{ id: string; externalId: string }>;

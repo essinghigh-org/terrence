@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Projects } from "../src/views/Projects";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -11,7 +12,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function urlOf(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  return isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 }
 
 afterEach((): void => {

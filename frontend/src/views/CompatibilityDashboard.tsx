@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { fetchApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { isNumber } from "../lib/type-guards";
 
 type SurfaceEntry = Readonly<{ name: string; status: string }>;
 
@@ -130,13 +131,13 @@ export function CompatibilityDashboard(): React.JSX.Element {
             <Card>
               <CardHeader variant="section"><CardTitle className="text-sm">Resources</CardTitle></CardHeader>
               <CardContent className="tabular-nums text-2xl font-bold">
-                {typeof data["resource_count"] === "number" ? data["resource_count"] : resources.length}
+                {isNumber(data["resource_count"]) ? data["resource_count"] : resources.length}
               </CardContent>
             </Card>
             <Card>
               <CardHeader variant="section"><CardTitle className="text-sm">Data sources</CardTitle></CardHeader>
               <CardContent className="tabular-nums text-2xl font-bold">
-                {typeof data["data_source_count"] === "number" ? data["data_source_count"] : dataSources.length}
+                {isNumber(data["data_source_count"]) ? data["data_source_count"] : dataSources.length}
               </CardContent>
             </Card>
             <Card>

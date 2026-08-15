@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Layers, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type VcsRepo = { identifier?: string; branch?: string | null } | null;
 
@@ -289,7 +290,7 @@ export function StackSettings(): React.JSX.Element {
                       <Layers className="h-4 w-4 text-muted-foreground" />
                       {stack.attributes.name}
                     </div>
-                    {typeof stack.attributes.description === "string" && stack.attributes.description !== "" && (
+                    {isString(stack.attributes.description) && stack.attributes.description !== "" && (
                       <div className="text-xs text-muted-foreground">{stack.attributes.description}</div>
                     )}
                   </TableCell>

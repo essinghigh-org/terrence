@@ -4,6 +4,7 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,7 +14,7 @@ const json = (data: unknown): Response =>
   });
 
 const getUrl = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 afterEach((): void => {
   cleanup();

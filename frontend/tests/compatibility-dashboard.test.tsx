@@ -3,12 +3,13 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { CompatibilityDashboard } from "../src/views/CompatibilityDashboard";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
 const urlOf = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 afterEach((): void => {
   cleanup();

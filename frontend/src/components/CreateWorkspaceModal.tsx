@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { isString } from "../lib/type-guards";
 
 type CreateWorkspaceModalProps = {
   orgName: string;
@@ -65,7 +66,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const versions = (response as { data?: unknown }).data;
         if (!controller.signal.aborted && Array.isArray(versions)) {
-          setAvailableVersions(versions.filter((version): version is string => typeof version === "string"));
+          setAvailableVersions(versions.filter((version): version is string => isString(version)));
         }
       })
       .catch((): void => {})

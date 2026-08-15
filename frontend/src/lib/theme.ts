@@ -1,3 +1,4 @@
+import { isString } from "../lib/type-guards";
 type ThemeMode = "light" | "dark";
 export type ThemeId = string;
 
@@ -285,7 +286,7 @@ const legacyPalette = (mode: "light" | "dark") => {
 };
 
 export function getTheme(themeId: unknown): ThemeDefinition {
-  return typeof themeId === "string" ? themesById.get(themeId) ?? defaultTheme : defaultTheme;
+  return isString(themeId) ? themesById.get(themeId) ?? defaultTheme : defaultTheme;
 }
 
 export function getThemeRevision(): number {
@@ -305,7 +306,7 @@ function getStoredThemeId(): ThemeId {
 }
 
 function syncThemeColorMeta(theme: ThemeDefinition): void {
-  if (typeof document === "undefined") return;
+  if (document === undefined) return;
   // Update every theme-color meta (incl. media-scoped variants) so the
   // browser chrome tracks the selected theme regardless of prefers-color-scheme.
   const content = `hsl(${theme.colors["background"] ?? "0 0% 100%"})`;
@@ -317,7 +318,7 @@ function syncThemeColorMeta(theme: ThemeDefinition): void {
 export function applyTheme(themeId?: unknown): ThemeId {
   const theme = getTheme(themeId ?? getStoredThemeId());
   themeRevision += 1;
-  if (typeof document === "undefined") return theme.id;
+  if (document === undefined) return theme.id;
 
   const root = document.documentElement;
   root.dataset["theme"] = theme.id;

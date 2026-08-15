@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { isString } from "../src/lib/type-guards";
 import {
   ApiError,
   bootstrapAuth,
@@ -16,7 +17,7 @@ import {
 } from "../src/lib/api";
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }

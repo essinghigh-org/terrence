@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { WorkspaceNotifications } from "../src/components/WorkspaceNotifications";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -26,7 +27,7 @@ test("loads workspace webhooks and creates a webhook using notification configur
     },
   };
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === "POST") return json({ data: created }, 201);
     if (url === "/api/v2/workspaces/ws-1/notification-configurations") {
       return json({ data: [{ ...created, id: "nc-1", attributes: { ...created.attributes, name: "Existing webhook" } }] });

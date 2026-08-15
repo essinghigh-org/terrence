@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { setAuthToken } from "../src/lib/api";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { WorkspaceVcs } from "../src/components/WorkspaceVcs";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -15,7 +16,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   return input instanceof URL ? input.toString() : input.url;
 }
 

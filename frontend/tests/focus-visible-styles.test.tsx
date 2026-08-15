@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 // Kanban 25.1: custom-styled buttons must keep a visible keyboard focus
 // indicator. Base UI controls and ui/button already carry ring styles; these
@@ -18,7 +19,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   return input instanceof URL ? input.toString() : input.url;
 }
 

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { AccountSettings } from "../src/views/AccountSettings";
 import { getAuthToken, setAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown): Response =>
@@ -27,7 +28,7 @@ function changeInput(element: HTMLElement, value: string): void {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }

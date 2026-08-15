@@ -20,6 +20,7 @@ import { setDisplayTimeFormat } from "../lib/display-time-format";
 import { useDisplayTimezone } from "../lib/useDisplayTimezone";
 import { useDisplayTimeFormat } from "../lib/useDisplayTimeFormat";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -270,7 +271,7 @@ export function AccountSettings(): React.JSX.Element {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { theme: selectedTheme } } }),
       }) as { data: Account };
-      const persistedTheme = typeof response.data.attributes.theme === "string"
+      const persistedTheme = isString(response.data.attributes.theme)
         ? getTheme(response.data.attributes.theme).id
         : selectedTheme;
       setAccount(response.data);
@@ -327,7 +328,7 @@ export function AccountSettings(): React.JSX.Element {
   async function handleTokenCreated(created: { id: string; attributes: Record<string, unknown> }): Promise<void> {
     setError("");
     setSuccessMsg("");
-    setCreatedTokenSecret(typeof created.attributes["token"] === "string" ? created.attributes["token"] : null);
+    setCreatedTokenSecret(isString(created.attributes["token"]) ? created.attributes["token"] : null);
     if (account !== null) {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
@@ -603,7 +604,7 @@ export function AccountSettings(): React.JSX.Element {
                           disabled={revokingSessionId === session.id}
                           aria-label={`Revoke session ${session.id}`}
                           onClick={(): void => {
-                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void handleRevokeSession(session);
                             } else {
@@ -799,7 +800,7 @@ export function AccountSettings(): React.JSX.Element {
                 {tokens.map((token): React.JSX.Element => (
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">
-                      {typeof token.attributes["description"] === "string" && token.attributes["description"].trim() !== ""
+                      {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
                         ? token.attributes["description"]
                         : "No description"}
                       {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
@@ -807,12 +808,12 @@ export function AccountSettings(): React.JSX.Element {
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {typeof token.attributes["created-at"] === "string"
+                      {isString(token.attributes["created-at"])
                         ? formatSessionDate(token.attributes["created-at"])
                         : "Unknown"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {typeof token.attributes["last-used-at"] === "string"
+                      {isString(token.attributes["last-used-at"])
                         ? formatSessionDate(token.attributes["last-used-at"])
                         : "Never"}
                     </TableCell>
@@ -823,7 +824,7 @@ export function AccountSettings(): React.JSX.Element {
                         aria-label={`Delete token ${token.id}`}
                         disabled={deletingTokenId === token.id}
                         onClick={(): void => {
-                          const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                          const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                           if (isTestEnv) {
                             void handleDeleteToken(token.id);
                           } else {

@@ -6,20 +6,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { Spinner } from "../components/ui/spinner";
 import { fetchApi } from "../lib/api";
+import { isRecord, isString } from "../lib/type-guards";
 
 type Platform = Readonly<{ id: string; os: string; arch: string; filename: string; shasum: string }>;
 type Version = Readonly<{ id: string; version: string; protocols: readonly string[]; keyId: string | null; createdAt: string; platforms: readonly Platform[] }>;
 
 function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
+  return isString(value) ? value : "";
 }
 
 function platformFromResource(raw: unknown): Platform {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const item = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const item = isRecord(raw) ? raw as Record<string, unknown> : {};
   const rawAttributes = item["attributes"];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
+  const attributes = isRecord(rawAttributes) ? rawAttributes as Record<string, unknown> : {};
   return {
     id: stringValue(item["id"]),
     os: stringValue(attributes["os"]),
@@ -44,18 +45,18 @@ export function RegistryProviderDetail(): React.JSX.Element {
       const versionResponse = await fetchApi(`/registry-providers/${encodeURIComponent(providerResponse.data.id)}/versions`, { signal: controller.signal }) as { data?: unknown[] };
       const loaded = await Promise.all((versionResponse.data ?? []).map(async (raw): Promise<Version> => {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const item = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
+        const item = isRecord(raw) ? raw as Record<string, unknown> : {};
         const rawAttributes = item["attributes"];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
+        const attributes = isRecord(rawAttributes) ? rawAttributes as Record<string, unknown> : {};
         const id = stringValue(item["id"]);
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const platformResponse = await fetchApi(`/registry-provider-versions/${encodeURIComponent(id)}/platforms`, { signal: controller.signal }) as { data?: unknown[] };
         return {
           id,
           version: stringValue(attributes["version"]),
-          protocols: Array.isArray(attributes["protocols"]) ? attributes["protocols"].filter((value): value is string => typeof value === "string") : [],
-          keyId: typeof attributes["key-id"] === "string" ? attributes["key-id"] : null,
+          protocols: Array.isArray(attributes["protocols"]) ? attributes["protocols"].filter((value): value is string => isString(value)) : [],
+          keyId: isString(attributes["key-id"]) ? attributes["key-id"] : null,
           createdAt: stringValue(attributes["created-at"]),
           platforms: (platformResponse.data ?? []).map(platformFromResource),
         };

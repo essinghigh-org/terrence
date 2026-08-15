@@ -46,6 +46,7 @@ import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffo
 import { subscribeEvents, type SseEvent } from "../lib/events";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
+import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
 
 type RunActions = {
   "is-cancelable"?: boolean;
@@ -330,14 +331,14 @@ function formatMonthlyCost(value: string | undefined): string {
 
 function policyResultText(result: unknown): string {
   if (result === null || result === undefined) return "No detailed result";
-  if (typeof result === "string") return result;
-  if (typeof result === "number" || typeof result === "boolean" || typeof result === "bigint") return `${result}`;
-  if (typeof result !== "object") return "No detailed result";
+  if (isString(result)) return result;
+  if (isNumber(result) || isBoolean(result) || isBigInt(result)) return `${result}`;
+  if (!isObjectLike(result)) return "No detailed result";
 // SAFETY: the fixture object is read as a record; each field is typed below.
   const details = result as Record<string, unknown>;
   const summary: string[] = [];
-  if (typeof details["policy"] === "string") summary.push(details["policy"]);
-  if (typeof details["error"] === "string") summary.push(details["error"]);
+  if (isString(details["policy"])) summary.push(details["policy"]);
+  if (isString(details["error"])) summary.push(details["error"]);
   const violations = details["violations"];
   if (Array.isArray(violations)) {
     summary.push(`${violations.length} violation${violations.length === 1 ? "" : "s"}${
@@ -350,7 +351,7 @@ function policyResultText(result: unknown): string {
     ["advisory-failed", "advisory failure"],
   ] as const) {
     const count = details[key];
-    if (typeof count === "number" && count > 0) {
+    if (isNumber(count) && count > 0) {
       summary.push(`${count} ${label}${count === 1 ? "" : "s"}`);
     }
   }
@@ -366,9 +367,9 @@ function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
   // SAFETY: the run result payload is read as a record; the advisory-failed
   // field is typeof-validated before the comparison.
   return result !== null
-    && typeof result === "object"
+    && isObjectLike(result)
     && !Array.isArray(result)
-    && typeof (result as Record<string, unknown>)["advisory-failed"] === "number"
+    && isNumber((result as Record<string, unknown>)["advisory-failed"])
     && ((result as Record<string, unknown>)["advisory-failed"] as number) > 0;
 }
 
@@ -377,12 +378,12 @@ function phaseStatusFromRun(
   phase: "plan" | "apply",
   timestamps: Readonly<Record<string, string>>,
 ): string {
-  const planStarted = typeof timestamps["planning-at"] === "string";
-  const planFinished = typeof timestamps["planned-at"] === "string"
-    || typeof timestamps["planned-and-finished-at"] === "string"
-    || typeof timestamps["planned-and-saved-at"] === "string";
+  const planStarted = isString(timestamps["planning-at"]);
+  const planFinished = isString(timestamps["planned-at"])
+    || isString(timestamps["planned-and-finished-at"])
+    || isString(timestamps["planned-and-saved-at"]);
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => typeof timestamps[key] === "string");
+    .some((key: string): boolean => isString(timestamps[key]));
   if (phase === "apply") {
     if (status === "applied") return "finished";
     if (status === "applying") return "running";
@@ -448,9 +449,9 @@ function ResourceCounts({
 }>): React.JSX.Element {
   const pending = ["pending", "queued", "running"].includes(status);
   if (pending
-    || typeof additions !== "number"
-    || typeof changes !== "number"
-    || typeof destructions !== "number") {
+    || !isNumber(additions)
+    || !isNumber(changes)
+    || !isNumber(destructions)) {
     return (
       <span className="text-xs font-medium text-muted-foreground">
         {pending ? "Resources pending" : "Resources unavailable"}
@@ -459,7 +460,7 @@ function ResourceCounts({
   }
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
-      {typeof imports === "number" && imports > 0 && <span className="text-foreground">&amp;{imports} to import</span>}
+      {isNumber(imports) && imports > 0 && <span className="text-foreground">&amp;{imports} to import</span>}
       <span className="text-success">+{additions} to add</span>
       <span className="text-primary">~{changes} to change</span>
       <span className="text-destructive">−{destructions} to destroy</span>
@@ -1134,7 +1135,7 @@ export function RunDetail({
       });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const newRunId = (body as { data?: { id?: string } }).data?.id;
-      if (typeof newRunId === "string" && newRunId !== "") {
+      if (isString(newRunId) && newRunId !== "") {
         navigate(`${workspacePath}/runs/${encodeURIComponent(newRunId)}`);
       } else {
         setRerunError("The run was created but the response did not include a run id.");
@@ -1161,8 +1162,8 @@ export function RunDetail({
     "resource-imports": attributes["resource-imports"],
   };
   const backendPlanImportCount = planCounts["resource-imports"];
-  const planImportCount = typeof backendPlanImportCount === "number"
-    ? typeof artifactImportCount === "number"
+  const planImportCount = isNumber(backendPlanImportCount)
+    ? isNumber(artifactImportCount)
       ? Math.max(backendPlanImportCount, artifactImportCount)
       : backendPlanImportCount
     : artifactImportCount;
@@ -1235,7 +1236,7 @@ export function RunDetail({
     "policy_soft_failed",
   ].includes(status);
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => typeof timestamps[key] === "string");
+    .some((key: string): boolean => isString(timestamps[key]));
   const terminatedBeforeApply = [
     "canceled",
     "discarded",
@@ -1260,7 +1261,7 @@ export function RunDetail({
       applyDisabledReasons.push("A policy check soft-failed. Someone with override permission must override it before this run can be applied.");
     }
     if (attributes["workspace-locked"] === true) {
-      applyDisabledReasons.push(`Workspace is locked: ${typeof attributes["workspace-locked-reason"] === "string" ? attributes["workspace-locked-reason"] : "Locked manually"}`);
+      applyDisabledReasons.push(`Workspace is locked: ${isString(attributes["workspace-locked-reason"]) ? attributes["workspace-locked-reason"] : "Locked manually"}`);
     }
     if (permissions?.["can-apply"] !== true) {
       applyDisabledReasons.push("You do not have permission to apply in this workspace.");
@@ -1345,9 +1346,9 @@ export function RunDetail({
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <span>{typeof attributes.branch === "string" ? attributes.branch : "Default branch"}</span>
+              <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
-                typeof attributes["commit-url"] === "string" && attributes["commit-url"] !== "" ? (
+                isString(attributes["commit-url"]) && attributes["commit-url"] !== "" ? (
                   <a
                     href={attributes["commit-url"]}
                     target="_blank"
@@ -1745,7 +1746,7 @@ export function RunDetail({
                           <div className="font-medium">{check.attributes.address ?? check.id}</div>
                           {check.attributes.kind !== null && check.attributes.kind !== undefined && <div className="text-xs text-muted-foreground">{check.attributes.kind}</div>}
                         </TableCell>
-                        <TableCell className="whitespace-normal">{check.attributes.message ?? (typeof check.attributes.detail === "string" ? check.attributes.detail : "—")}</TableCell>
+                        <TableCell className="whitespace-normal">{check.attributes.message ?? (isString(check.attributes.detail) ? check.attributes.detail : "—")}</TableCell>
                         <TableCell><Badge variant={["failed", "errored"].includes(check.attributes.status) ? "destructive" : "secondary"}>{check.attributes.status.replace(/_/g, " ")}</Badge></TableCell>
                       </TableRow>
                     ))}

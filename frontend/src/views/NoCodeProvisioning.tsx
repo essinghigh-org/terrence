@@ -31,6 +31,7 @@ import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { isBigInt, isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
 
 type RegistryModule = Readonly<{
   id: string;
@@ -83,10 +84,10 @@ function messageFrom(error: unknown, fallback: string): string {
 }
 
 function inputValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (isString(value)) return value;
   if (value === undefined || value === null) return "";
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return value.toString();
-  return typeof value === "object" ? JSON.stringify(value) : "";
+  if (isNumber(value) || isBoolean(value) || isBigInt(value)) return value.toString();
+  return isRecord(value) ? JSON.stringify(value) : "";
 }
 
 function inputValidation(variable: InputVariable, value: string): string | undefined {
@@ -188,7 +189,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
         if (!active) return;
         // SAFETY: the endpoint contract returns the JSON:API envelope; the
         // data field is Array-checked by the component.
-        const data = response !== null && typeof response === "object"
+        const data = isRecord(response)
           ? (response as { data?: InputVariable[] }).data ?? []
           : [];
         setInputVariables(data);

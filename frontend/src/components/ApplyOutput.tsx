@@ -15,6 +15,7 @@ import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
 import { AttributeDiff } from "./PlanOutput";
+import { isNumber, isRecord, isString } from "../lib/type-guards";
 
 type Change = {
   actions: string[];
@@ -100,10 +101,6 @@ const operationConfig = {
   "no-op": { symbol: "·", className: "text-muted-foreground/70" },
 } satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function operationFor(actions: readonly string[], actionReason?: string): Operation {
   if (actions.includes("create") && actions.includes("delete")) return "replace";
   if (actions.includes("create")) return "create";
@@ -165,12 +162,15 @@ function parseApplyLogsToExecMap(
         const json = JSON.parse(trimmed) as Record<string, unknown>;
         const type = json["type"];
         const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
-        const resObj = isRecord(hook?.["resource"]) ? hook["resource"] : undefined;
-        const addr = typeof resObj?.["addr"] === "string" ? resObj["addr"] : undefined;
+        const rawResource = hook?.["resource"];
+        const resObj = isRecord(rawResource) ? rawResource : undefined;
+        const rawAddr = resObj?.["addr"];
+        const addr = isString(rawAddr) ? rawAddr : undefined;
 
         if (addr !== undefined && map.has(addr)) {
           if (type === "apply_start") {
-            const act = typeof hook?.["action"] === "string" ? hook["action"] : "";
+            const rawAction = hook?.["action"];
+            const act = isString(rawAction) ? rawAction : "";
             const st: ExecutionState =
               act === "create" ? "creating" :
               act === "update" ? "modifying" :
@@ -178,13 +178,16 @@ function parseApplyLogsToExecMap(
             map.set(addr, { state: st });
           } else if (type === "apply_progress") {
             const current = map.get(addr);
-            const elapsed = typeof hook?.["elapsed_seconds"] === "number" ? `${hook["elapsed_seconds"]}s` : undefined;
+            const rawElapsed = hook?.["elapsed_seconds"];
+            const elapsed = isNumber(rawElapsed) ? `${rawElapsed}s` : undefined;
             if (current !== undefined) {
               map.set(addr, { ...current, elapsed });
             }
           } else if (type === "apply_complete") {
-            const act = typeof hook?.["action"] === "string" ? hook["action"] : "";
-            const idVal = typeof hook?.["id_value"] === "string" ? hook["id_value"] : undefined;
+            const rawAction = hook?.["action"];
+            const act = isString(rawAction) ? rawAction : "";
+            const rawIdValue = hook?.["id_value"];
+            const idVal = isString(rawIdValue) ? rawIdValue : undefined;
             const st: ExecutionState =
               act === "create" ? "created" :
               act === "update" ? "modified" :

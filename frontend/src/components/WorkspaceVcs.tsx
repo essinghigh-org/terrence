@@ -27,6 +27,7 @@ import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { VcsRepoSelector } from "@/components/VcsRepoSelector";
 import { fetchApi } from "@/lib/api";
+import { isString } from "../lib/type-guards";
 
 type VcsRepo = {
   identifier?: string;
@@ -109,7 +110,7 @@ export async function loadOrganizationVcsConnections(
       return {
         id: token.id,
         kind: "oauth-token",
-        label: `${client.attributes.name} — ${provider}${typeof user === "string" && user !== "" ? ` (${user})` : ""}`,
+        label: `${client.attributes.name} — ${provider}${isString(user) && user !== "" ? ` (${user})` : ""}`,
         value: `oauth-token:${token.id}`,
       };
     });

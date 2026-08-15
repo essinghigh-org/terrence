@@ -44,6 +44,7 @@ import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
 import { formatDate, formatDateTime } from "../lib/utils";
+import { isNumber, isString } from "../lib/type-guards";
 
 export type WorkspaceSection =
   | "overview"
@@ -239,7 +240,7 @@ export function WorkspaceDetail({
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const name = (response as { data?: { attributes?: { name?: unknown } } }).data
           ?.attributes?.name;
-        setProjectName(typeof name === "string" && name !== "" ? name : "");
+        setProjectName(isString(name) && name !== "" ? name : "");
       })
       .catch((): void => {
         if (!controller.signal.aborted) setProjectName("");
@@ -658,7 +659,7 @@ export function WorkspaceDetail({
                         {latestRun.attributes.message ?? "Manual run"}
                       </p>
                       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-                        {typeof latestRunCreatedAt === "string" && latestRunCreatedAt !== "" && (
+                        {isString(latestRunCreatedAt) && latestRunCreatedAt !== "" && (
                           <time dateTime={latestRunCreatedAt}>
                             {formatDateTime(latestRunCreatedAt)}
                           </time>
@@ -666,9 +667,9 @@ export function WorkspaceDetail({
                         {latestRun.attributes.source !== undefined && (
                           <span>{latestRun.attributes.source}</span>
                         )}
-                        {typeof latestRunCounts?.["resource-additions"] === "number"
-                          && typeof latestRunCounts["resource-changes"] === "number"
-                          && typeof latestRunCounts["resource-destructions"] === "number" && (
+                        {isNumber(latestRunCounts?.["resource-additions"])
+                          && isNumber(latestRunCounts["resource-changes"])
+                          && isNumber(latestRunCounts["resource-destructions"]) && (
                           <span className="flex items-center gap-3 font-medium">
                             <span className="text-success">+{latestRunCounts["resource-additions"]}</span>
                             <span className="text-primary">~{latestRunCounts["resource-changes"]}</span>
@@ -868,7 +869,7 @@ export function WorkspaceDetail({
               <p className="text-sm text-muted-foreground">
                 This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
               </p>
-              {workspace.attributes.locked === true && typeof workspace.attributes["locked-reason"] === "string" && (
+              {workspace.attributes.locked === true && isString(workspace.attributes["locked-reason"]) && (
                 <p className="mt-2 text-sm text-muted-foreground">
                   Reason: {workspace.attributes["locked-reason"]}
                 </p>

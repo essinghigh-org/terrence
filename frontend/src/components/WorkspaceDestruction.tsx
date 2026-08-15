@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
+import { isString } from "../lib/type-guards";
 
 type WorkspaceDeletionResource = {
   id: string;
@@ -110,7 +111,7 @@ export function WorkspaceDestruction({
         }),
       }) as { data?: { id?: unknown } };
       const runId = response.data?.id;
-      if (typeof runId !== "string" || runId === "") {
+      if (!isString(runId) || runId === "") {
         throw new Error("Destroy plan response did not include a run ID");
       }
       await navigate(

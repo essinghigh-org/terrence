@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Layout } from "../src/components/Layout";
 import { AdminDashboard } from "../src/views/AdminDashboard";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown): Response =>
@@ -24,7 +25,7 @@ const typeInput = (element: HTMLInputElement, value: string): void => {
   fireEvent.keyUp(element, { key: "a" });
 };
 const urlOf = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 // Track the configuration as the mock IdP "server" sees it after each PATCH,
 // so the GET re-fetches after saving reflect the newly enabled providers.
@@ -100,7 +101,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/saml-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = typeof init.body === "string"
+      const body = isString(init.body)
         ? JSON.parse(init.body) as { data?: { attributes?: { enabled?: unknown } } }
         : {};
       samlServerEnabled = body.data?.attributes?.enabled === true;
@@ -125,13 +126,13 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = typeof init.body === "string"
+      const body = isString(init.body)
         ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
         : {};
       const attributes = body.data?.attributes ?? {};
       oidcPatchAttributes = attributes;
       oidcServerEnabled = attributes.enabled === true;
-      if (typeof attributes["client-secret"] === "string") oidcServerSecretSet = true;
+      if (isString(attributes["client-secret"])) oidcServerSecretSet = true;
       if (attributes["client-secret"] === null) oidcServerSecretSet = false;
       return json({
         data: {
@@ -153,7 +154,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/general-settings" && init?.method === "PATCH") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = typeof init.body === "string" ? JSON.parse(init.body) as { data?: { attributes?: { "local-auth-enabled"?: boolean } } } : {};
+      const body = isString(init.body) ? JSON.parse(init.body) as { data?: { attributes?: { "local-auth-enabled"?: boolean } } } : {};
       localAuthServerEnabled = body.data?.attributes?.["local-auth-enabled"] ?? localAuthServerEnabled;
       return json({ data: { id: "general-settings", type: "general-settings", attributes: { "local-auth-enabled": localAuthServerEnabled } } });
     }
@@ -180,7 +181,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const body = typeof init.body === "string"
+      const body = isString(init.body)
         ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
         : {};
       ldapPatchAttributes = body.data?.attributes ?? null;
@@ -297,7 +298,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     expect(fetchMock.mock.calls.some(([input, init]): boolean =>
       urlOf(input) === "/api/v2/admin/general-settings"
       && init?.method === "PATCH"
-      && typeof init.body === "string"
+      && isString(init.body)
       && !(JSON.parse(init.body) as { data: { attributes: { "local-auth-enabled": boolean } } }).data.attributes["local-auth-enabled"],
     )).toBeTrue();
   });

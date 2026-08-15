@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { WorkspaceVariables } from "../src/components/WorkspaceVariables";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -65,7 +66,7 @@ afterEach((): void => {
 
 test("attach dialog shows the empty state when the organization has no variable sets", async () => {
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const path = new URL(url, "http://terrence.local").pathname;
     if (path === "/api/v2/workspaces/ws-1/vars") return json({ data: [] });
     if (path === "/api/v2/workspaces/ws-1/varsets") return json({ data: [] });
@@ -85,7 +86,7 @@ test("attach dialog shows the empty state when the organization has no variable 
 
 test("renders workspace variables and attached variable sets as separate sections", async () => {
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const path = new URL(url, "http://terrence.local").pathname;
     if (path === "/api/v2/workspaces/ws-1/vars") {
       return json({ data: [workspaceVar("wv-1", "LOCAL_KEY", "env")] });
@@ -119,7 +120,7 @@ test("renders workspace variables and attached variable sets as separate section
 test("attaches and detaches variable sets from the workspace", async () => {
   let attached = [variableSet("vs-1", "github-provider", { workspaceCount: 2, varCount: 2 })];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const path = new URL(url, "http://terrence.local").pathname;
     const method = init?.method ?? "GET";
     if (path === "/api/v2/workspaces/ws-1/vars") return json({ data: [] });

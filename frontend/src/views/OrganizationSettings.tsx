@@ -17,6 +17,7 @@ import { OrganizationTags } from "../components/OrganizationTags";
 import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isRecord, isString } from "../lib/type-guards";
 
 type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
 type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
@@ -59,7 +60,7 @@ type OrganizationPermission = typeof organizationPermissions[number];
 function teamOrganizationAccess(team: Team): Record<OrganizationPermission, boolean> {
   const raw = team.attributes["organization-access"];
   // SAFETY: the typeof-object guard is the boundary check; fields are typeof-validated below.
-  const access = raw !== null && typeof raw === "object" && !Array.isArray(raw)
+  const access = isRecord(raw) && !Array.isArray(raw)
     ? raw as Record<string, unknown>
     : {};
   // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
@@ -305,7 +306,7 @@ export function OrganizationSettings(): React.JSX.Element {
         }),
       }) as { data: Organization };
       setOrg(res.data);
-      const updatedName = typeof res.data.attributes["name"] === "string"
+      const updatedName = isString(res.data.attributes["name"])
         ? res.data.attributes["name"]
         : name.trim();
       setName(updatedName);
@@ -895,7 +896,7 @@ export function OrganizationSettings(): React.JSX.Element {
                             aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
                             disabled={!canManageUsers}
                             onClick={(): void => {
-                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                              const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                               if (isTestEnv) { void removeMembership(membership); }
                               else { setMemberToRemove(membership); }
                             }}
@@ -1235,7 +1236,7 @@ team.attributes["name"] as string}</option>
                               aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
                               disabled={!canManageUsers}
                               onClick={(): void => {
-                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                                 if (isTestEnv) {
                                   void removeMembership(membership);
                                 } else {

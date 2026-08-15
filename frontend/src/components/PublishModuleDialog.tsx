@@ -18,6 +18,7 @@ import { Select, SelectItem } from "./ui/select";
 import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath } from "../lib/registry";
 import { cn } from "../lib/utils";
+import { isRecord, isString } from "../lib/type-guards";
 
 type Repository = Readonly<{ identifier: string; name: string; owner?: string }>;
 type SourceKind = "vcs" | "manual";
@@ -81,14 +82,14 @@ export function PublishModuleDialog({
       const data: unknown = (response as { data?: unknown }).data;
       const rows: unknown[] = Array.isArray(data) ? data : [];
       setRepositories(rows.flatMap((item): Repository[] => {
-        if (item === null || typeof item !== "object") return [];
+        if (!isRecord(item)) return [];
 // SAFETY: the fixture object is read as a record; each field is typed below.
         const attributes: unknown = (item as Record<string, unknown>)["attributes"];
-        if (attributes === null || typeof attributes !== "object") return [];
+        if (!isRecord(attributes)) return [];
 // SAFETY: the fixture object is read as a record; each field is typed below.
         const repository = attributes as Record<string, unknown>;
-        if (typeof repository["identifier"] !== "string" || typeof repository["name"] !== "string") return [];
-        return [{ identifier: repository["identifier"], name: repository["name"], ...(typeof repository["owner"] === "string" ? { owner: repository["owner"] } : undefined) }];
+        if (!isString(repository["identifier"]) || !isString(repository["name"])) return [];
+        return [{ identifier: repository["identifier"], name: repository["name"], ...(isString(repository["owner"]) ? { owner: repository["owner"] } : undefined) }];
       }));
     }).catch((caught: unknown): void => {
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Repositories could not be loaded.");

@@ -2,6 +2,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { resolveDisplayTimeZone } from "./display-timezone";
 import { resolveDisplayTimeFormat } from "./display-time-format";
+import { isString } from "../lib/type-guards";
 
 type DeepReadonly<T> = T extends null | undefined
   ? T
@@ -26,7 +27,7 @@ const BARE_ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 function toDisplayDate(value: Date | string | number | null | undefined, timeZone?: string): Date {
   if (value instanceof Date) return value;
   if (value == null || value === "") return new Date(NaN);
-  if (typeof value === "string") {
+  if (isString(value)) {
     const bare = BARE_ISO_DATE.exec(value.trim());
     if (bare !== null) {
       // When rendering for a pinned display timezone, interpret the calendar

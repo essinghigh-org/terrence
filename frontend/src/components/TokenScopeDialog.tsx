@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { toast } from "../components/ui/toast";
+import { isString } from "../lib/type-guards";
 
 /**
  * Permission grants offered in the fine-grained scope picker. Each maps to a
@@ -227,7 +228,7 @@ function resourceOptions(
   return data.map((item) => {
     const attributes = (item.attributes ?? {});
     const rawName = attributes[nameKey];
-    return { id: item.id, name: typeof rawName === "string" ? rawName : item.id };
+    return { id: item.id, name: isString(rawName) ? rawName : item.id };
   });
 }
 
@@ -263,10 +264,14 @@ export function TokenScopeDialog({
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       const parsed = data
-        .map((item): OrgOption => ({
-          id: typeof item.attributes?.["external-id"] === "string" ? item.attributes["external-id"] : item.id,
-          name: typeof item.attributes?.["name"] === "string" ? item.attributes["name"] : item.id,
-        }))
+        .map((item): OrgOption => {
+          const externalId = item.attributes?.["external-id"];
+          const displayName = item.attributes?.["name"];
+          return {
+            id: isString(externalId) ? externalId : item.id,
+            name: isString(displayName) ? displayName : item.id,
+          };
+        })
         .sort((a, b): number => a.name.localeCompare(b.name));
       setOrgs(parsed);
       if (parsed.length > 0) {

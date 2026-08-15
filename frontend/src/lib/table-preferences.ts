@@ -1,4 +1,5 @@
 import type { TableDensity } from "@/components/ui/table";
+import { isRecord, isString } from "../lib/type-guards";
 
 /**
  * Per-view table preferences (kanban 14.22). Column visibility and density
@@ -25,10 +26,10 @@ export function getTablePreferences(viewId: string): TablePreferences | null {
     // SAFETY: localStorage content is untrusted; the parsed object is
     // field-validated below before any value is used.
     const parsed = JSON.parse(raw) as Partial<TablePreferences>;
-    if (typeof parsed !== "object" || parsed === null) return null;
+    if (!isRecord(parsed)) return null;
     const density: TableDensity = parsed.density === "dense" ? "dense" : "comfortable";
     const visibleColumns = Array.isArray(parsed.visibleColumns)
-      ? parsed.visibleColumns.filter((value): value is string => typeof value === "string")
+      ? parsed.visibleColumns.filter((value): value is string => isString(value))
       : [];
     if (visibleColumns.length === 0 && parsed.density === undefined) return null;
     return { density, visibleColumns };

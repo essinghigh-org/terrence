@@ -7,6 +7,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Spinner } from "../components/ui/spinner";
 import { UserCog } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type ScimSettingsAttributes = {
   enabled?: boolean;
@@ -45,11 +46,8 @@ export function AdminScimSettings(): React.JSX.Element {
       setPreviouslyEnabled(attrs?.enabled === true);
       setPaused(attrs?.paused === true);
       setSiteAdminGroupScimId(attrs?.["site-admin-group-scim-id"] ?? null);
-      setSiteAdminGroupDisplayName(
-        typeof attrs?.["site-admin-group-display-name"] === "string"
-          ? attrs["site-admin-group-display-name"]
-          : "",
-      );
+      const siteAdminGroupDisplayName = attrs?.["site-admin-group-display-name"];
+      setSiteAdminGroupDisplayName(isString(siteAdminGroupDisplayName) ? siteAdminGroupDisplayName : "");
     } catch (reason) {
       if (mounted.current) {
         setLoadError(reason instanceof Error ? reason.message : "Failed to load SCIM settings.");

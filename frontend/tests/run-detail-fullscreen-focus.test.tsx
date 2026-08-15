@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 // Kanban 25.2: the fullscreen plan/apply log dialog must move focus into the
 // dialog when it opens and hand focus back to the trigger button on close
@@ -17,7 +18,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   return input instanceof URL ? input.toString() : input.url;
 }
 

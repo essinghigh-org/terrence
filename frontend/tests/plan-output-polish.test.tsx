@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { PlanOutput } from "../src/components/PlanOutput";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -305,7 +306,7 @@ test("keeps a ready artifact across status changes and hides it immediately for 
     resolveNext = resolve;
   });
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes("plan-run-first")) {
       return json({
         resource_changes: [{

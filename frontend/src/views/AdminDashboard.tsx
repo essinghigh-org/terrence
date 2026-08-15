@@ -18,13 +18,14 @@ import { VersionsAdmin } from "./admin/versions";
 import { AuditAdmin } from "./admin/audit";
 import { AuthAdmin } from "./admin/auth";
 import type { AdminSection, DataItem, SecuritySummary } from "./admin/types";
+import { isBoolean, isNumber, isString } from "../lib/type-guards";
 const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string => {
   const value = attrs[key];
-  return typeof value === "string" ? value : fallback;
+  return isString(value) ? value : fallback;
 };
 const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean => {
   const value = attrs[key];
-  return typeof value === "boolean" ? value : fallback;
+  return isBoolean(value) ? value : fallback;
 };
 async function saveAuthSettings(options: Readonly<{
   setSaving: (saving: boolean) => void;
@@ -222,7 +223,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           signupEnabled: ping["signup-enabled"] === true,
           sandboxEnabled: sandbox?.enabled === true,
           sandboxAvailable: sandbox?.available === true,
-          sandboxReason: typeof sandbox?.reason === "string" ? sandbox.reason : null,
+          sandboxReason: isString(sandbox?.reason) ? sandbox.reason : null,
         });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
@@ -348,7 +349,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlAttrGroups(attrString(attrs, "attr-groups", "MemberOf"));
       setSamlAttrSiteAdmin(attrString(attrs, "attr-site-admin", "SiteAdmin"));
       setSamlSiteAdminRole(attrString(attrs, "site-admin-role", "site-admins"));
-      setSamlTimeout(typeof attrs["sso-api-token-session-timeout"] === "number" ? attrs["sso-api-token-session-timeout"] : 1209600);
+      setSamlTimeout(isNumber(attrs["sso-api-token-session-timeout"]) ? attrs["sso-api-token-session-timeout"] : 1209600);
       setSamlAcsUrl(attrString(attrs, "acs-consumer-url", ""));
       setSamlMetadataUrl(attrString(attrs, "metadata-url", ""));
     } catch (err: unknown) {
@@ -390,7 +391,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setPersistedLdapEnabled(attrBoolean(attrs, "enabled", false));
       setLdapLinkByEmail(attrBoolean(attrs, "link-by-email", false));
       setLdapHost(attrString(attrs, "host", ""));
-      setLdapPort(typeof attrs["port"] === "number" ? attrs["port"] : 636);
+      setLdapPort(isNumber(attrs["port"]) ? attrs["port"] : 636);
       setLdapEncryption(attrString(attrs, "encryption", "ldaps"));
       setLdapBindDn(attrString(attrs, "bind-dn", ""));
       setLdapBindPassword("");

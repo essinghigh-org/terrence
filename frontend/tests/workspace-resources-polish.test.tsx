@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
 import { WorkspaceResources } from "../src/components/WorkspaceResources";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown, status = 200): Response =>
@@ -18,7 +19,7 @@ afterEach((): void => {
 test("shows searchable resources and redacts sensitive outputs", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
         data: [{
@@ -130,7 +131,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
 test("paginates resources and outputs independently", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
         data: Array.from({ length: 21 }, (_, index) => ({

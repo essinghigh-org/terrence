@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { FileClock, KeyRound, RefreshCw, ShieldX } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isString } from "../lib/type-guards";
 
 type AuditTrailToken = {
   id: string;
@@ -113,7 +114,7 @@ export function AuditTrailTokens(): React.JSX.Element {
         },
       ) as AuditTrailTokenResponse;
       const secret = response.data.attributes.token;
-      setGeneratedToken(typeof secret === "string" ? secret : "");
+      setGeneratedToken(isString(secret) ? secret : "");
       setExpiresIn("");
       await loadAuditTrailToken();
     } catch (reason) {

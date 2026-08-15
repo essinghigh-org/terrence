@@ -4,6 +4,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -15,7 +16,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   return input instanceof URL ? input.toString() : input.url;
 }
 
@@ -50,7 +51,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     }
     if (url === "/api/v2/runs/run-polished/actions/apply" && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      applyBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
+      applyBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
       applied = true;
       return new Response(null, { status: 202 });
     }
@@ -300,7 +301,7 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
     const url = requestUrl(input);
     if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     if (url === "/api/v2/runs" && init?.method === "POST") {
-      if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+      if (!isString(init.body)) throw new Error("Expected a JSON request body");
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-plan-only" } }, 201);
@@ -368,7 +369,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
       });
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
-      if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+      if (!isString(init.body)) throw new Error("Expected a JSON request body");
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-cloned" } }, 201);

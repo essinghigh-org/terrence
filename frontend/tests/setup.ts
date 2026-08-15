@@ -194,5 +194,5 @@ if (win.document.body !== null && win.document.body !== undefined) {
 
 afterEach((): void => {
   cleanup();
-  if (typeof localStorage !== "undefined") localStorage.clear();
+  if (localStorage !== undefined) localStorage.clear();
 });

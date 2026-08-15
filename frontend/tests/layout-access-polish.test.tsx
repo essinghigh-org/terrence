@@ -6,6 +6,7 @@ import { Layout } from "../src/components/Layout";
 import { AdminDashboard } from "../src/views/AdminDashboard";
 import { AccountSettings } from "../src/views/AccountSettings";
 import { OrganizationSettings } from "../src/views/OrganizationSettings";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown, status = 200): Response =>
@@ -30,7 +31,7 @@ afterEach((): void => {
 test("shows identity, organization switching, and site administration when authorized", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
     }
@@ -97,7 +98,7 @@ test("redirects non-administrators before loading site data", async () => {
 test("uses one contextual sidebar across organization settings", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
@@ -153,7 +154,7 @@ test("uses one contextual sidebar across organization settings", async () => {
 
 test("keeps General visible and gates managed organization navigation independently", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
@@ -192,7 +193,7 @@ test("keeps General visible and gates managed organization navigation independen
 
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
         === "/api/v2/organizations/acme")).toBe(true);
   });
   expect(view.queryByRole("link", { name: "Projects" })).toBeNull();
@@ -215,7 +216,7 @@ test("fails closed while organization permissions change or fail to load", async
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
@@ -258,7 +259,7 @@ test("fails closed while organization permissions change or fail to load", async
   fireEvent.click(view.getByRole("link", { name: "Open platform" }));
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
         === "/api/v2/organizations/platform")).toBe(true);
     expect(acmeSignal?.aborted).toBe(true);
   });
@@ -285,7 +286,7 @@ test("fails closed while organization permissions change or fail to load", async
 test("uses contextual account navigation", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
@@ -318,7 +319,7 @@ test("uses contextual account navigation", async () => {
 test("only shows password navigation while a password change is required", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
         data: {
@@ -355,7 +356,7 @@ test("only shows password navigation while a password change is required", async
 test("scrolls contextual account links after account data loads", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
         data: {
@@ -397,7 +398,7 @@ test("keeps failed account details read-only until retry succeeds", async () => 
   let detailsRequests = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       detailsRequests += 1;
       if (detailsRequests === 1) {

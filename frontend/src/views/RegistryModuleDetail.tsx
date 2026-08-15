@@ -23,6 +23,7 @@ import {
   type RegistryModuleVersion,
 } from "../lib/registry";
 import { cn } from "../lib/utils";
+import { isString } from "../lib/type-guards";
 
 type DetailTab = "readme" | "inputs" | "outputs" | "dependencies" | "resources";
 type Confirmation = "revoke" | "delete-version" | "delete-module" | null;
@@ -39,7 +40,7 @@ function publishingLabel(module: RegistryModule): string {
 }
 
 function displayDefault(value: unknown): string {
-  if (typeof value === "string") return JSON.stringify(value);
+  if (isString(value)) return JSON.stringify(value);
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
@@ -109,7 +110,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
     ...metadata.examples,
   ], [metadata]);
   const section = sections.find((candidate): boolean => candidate.path === sectionPath) ?? sections[0] ?? null;
-  const host = typeof window === "undefined" ? "terrence.example.com" : window.location.host;
+  const host = window === undefined ? "terrence.example.com" : window.location.host;
   const sourceAddress = `${host}/${namespace}/${name}/${provider}`;
   const alias = name.replace(/[^A-Za-z0-9_]/g, "_");
   const usage = section === null || selectedVersion === null ? "" : [

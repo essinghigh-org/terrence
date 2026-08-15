@@ -39,6 +39,7 @@ import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/li
 import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { isNumber } from "../lib/type-guards";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -126,7 +127,7 @@ async function fetchWorkspacePages(
     }
 
     const nextPage = response.meta?.pagination?.["next-page"];
-    if (typeof nextPage !== "number" || !Number.isSafeInteger(nextPage) || nextPage < 1) {
+    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) {
       pageEndpoint = null;
       continue;
     }

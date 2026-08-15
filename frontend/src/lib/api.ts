@@ -1,3 +1,4 @@
+import { isNumber, isRecord, isString } from "../lib/type-guards";
 const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
 export const AUTH_EXPIRED_EVENT = "terrence:auth-expired";
@@ -92,8 +93,8 @@ export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, u
   for (const entry of rawErrors) {
     const source = entry["source"];
     const pointer = asRecordOrNull(source)?.["pointer"];
-    if (typeof pointer !== "string" || pointer === "") continue;
-    const detail = typeof entry["detail"] === "string" ? entry["detail"] : "";
+    if (!isString(pointer) || pointer === "") continue;
+    const detail = isString(entry["detail"]) ? entry["detail"] : "";
     if (detail === "") continue;
     const path = pointer
       .replace(/^\/data\/attributes\//, "")
@@ -129,8 +130,8 @@ export function setAuthToken(
   refreshable = false,
 ): void {
   accessToken = token;
-  const normalizedExpiry = typeof expiresAt === "string" ? Date.parse(expiresAt) : expiresAt;
-  accessTokenExpiry = typeof normalizedExpiry === "number" && Number.isFinite(normalizedExpiry)
+  const normalizedExpiry = isString(expiresAt) ? Date.parse(expiresAt) : expiresAt;
+  accessTokenExpiry = isNumber(normalizedExpiry) && Number.isFinite(normalizedExpiry)
     ? normalizedExpiry
     : null;
   refreshableSession = refreshable;
@@ -233,10 +234,10 @@ async function refreshAccessToken(force = false): Promise<string | null> {
     const document = await readResponseBody(response) as AccessTokenDocument;
     const token = document.data?.attributes?.token;
     const expiresAt = document.data?.attributes?.["expired-at"];
-    if (typeof token !== "string" || token === "") return null;
+    if (!isString(token) || token === "") return null;
     setAuthToken(
       token,
-      typeof expiresAt === "string" || typeof expiresAt === "number" ? expiresAt : null,
+      isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null,
       true,
     );
     return token;
@@ -256,7 +257,7 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     // SAFETY: Headers accepts record and tuple-array shapes; the readonly
     // modifiers on the stored options are compile-time only.
     const headers = new Headers(options.headers as HeadersInit | undefined);
-    if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || typeof options.body === "string")) {
+    if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || isString(options.body))) {
       headers.set("Content-Type", "application/vnd.api+json");
     }
     if (accessToken !== null && accessToken !== "") {
@@ -301,8 +302,10 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     }
     const errors = await parseErrorBody(response);
     const firstErr = errors[0];
-    const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
-    const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
+    const rawDetail = firstErr?.["detail"];
+    const rawTitle = firstErr?.["title"];
+    const detail = isString(rawDetail) ? rawDetail : null;
+    const title = isString(rawTitle) ? rawTitle : null;
     throw new ApiError(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
@@ -332,7 +335,7 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
     if (Array.isArray(response.data)) data.push(...response.data);
 
     const nextPage = response.meta?.pagination?.["next-page"];
-    if (typeof nextPage !== "number" || !Number.isSafeInteger(nextPage) || nextPage < 1) {
+    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) {
       pageEndpoint = null;
       continue;
     }
@@ -351,7 +354,7 @@ const REASONING_EFFORT_SET = new Set<string>(["none", "minimal", "low", "medium"
 
 /** View an unknown value as a string-keyed record, or null when it is not an object. */
 function asRecordOrNull(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== "object") return null;
+  if (!isRecord(value)) return null;
   // SAFETY: the typeof-object guard is the boundary check; callers validate
   // individual fields with typeof before use.
   return value as Record<string, unknown>;
@@ -361,7 +364,7 @@ function asRecordOrNull(value: unknown): Record<string, unknown> | null {
 function reasoningEffortValue(value: unknown): ReasoningEffort | null {
   // SAFETY: the set membership check is the boundary validation; unknown
   // backend values degrade to null so the UI renders the default effort.
-  return typeof value === "string" && REASONING_EFFORT_SET.has(value) ? value as ReasoningEffort : null;
+  return isString(value) && REASONING_EFFORT_SET.has(value) ? value as ReasoningEffort : null;
 }
 
 /** Parse a JSON:API error document from a failed response, or [] when it is not JSON. */
@@ -452,8 +455,10 @@ export async function streamExplain(
     }
     const errors = await parseErrorBody(response);
     const firstErr = errors[0];
-    const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
-    const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
+    const rawDetail = firstErr?.["detail"];
+    const rawTitle = firstErr?.["title"];
+    const detail = isString(rawDetail) ? rawDetail : null;
+    const title = isString(rawTitle) ? rawTitle : null;
     throw new ApiError(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
@@ -545,33 +550,33 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
   if (object === null) return null;
   switch (name) {
     case "meta": {
-      const model = typeof object["model"] === "string" ? object["model"] : "";
+      const model = isString(object["model"]) ? object["model"] : "";
       const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
       const kindValue = object["kind"];
       const kind: ExplainKind = kindValue === "apply" ? "apply" : "plan";
       return { name: "meta", data: { kind, model, "reasoning-effort": reasoningEffort } };
     }
     case "thinking": {
-      const text = typeof object["text"] === "string" ? object["text"] : "";
+      const text = isString(object["text"]) ? object["text"] : "";
       return text === "" ? null : { name: "thinking", data: { text } };
     }
     case "content": {
-      const text = typeof object["text"] === "string" ? object["text"] : "";
+      const text = isString(object["text"]) ? object["text"] : "";
       return { name: "content", data: { text } };
     }
     case "content-reset": {
-      const text = typeof object["text"] === "string" ? object["text"] : "";
+      const text = isString(object["text"]) ? object["text"] : "";
       return { name: "content-reset", data: { text } };
     }
     case "done": {
-      const model = typeof object["model"] === "string" ? object["model"] : "";
+      const model = isString(object["model"]) ? object["model"] : "";
       const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
-      const generatedAt = typeof object["generated-at"] === "string" ? object["generated-at"] : new Date().toISOString();
+      const generatedAt = isString(object["generated-at"]) ? object["generated-at"] : new Date().toISOString();
       const cached = object["cached"] === true;
       return { name: "done", data: { model, "reasoning-effort": reasoningEffort, "generated-at": generatedAt, cached } };
     }
     case "error": {
-      const message = typeof object["message"] === "string" && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
+      const message = isString(object["message"]) && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
       return { name: "error", data: { message } };
     }
     default:

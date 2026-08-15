@@ -365,7 +365,7 @@ function VariablesDialog({
                               size="sm"
                               variant="destructive"
                               onClick={(): void => {
-                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                                const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                                 if (isTestEnv) {
                                   void deleteVariable(variable);
                                 } else {
@@ -755,7 +755,7 @@ export function VariableSets(): React.JSX.Element {
                           size="sm"
                           variant="destructive"
                           onClick={(): void => {
-                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void deleteVariableSet(variableSet);
                             } else {

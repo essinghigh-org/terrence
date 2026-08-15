@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, type ComponentType, type JSX, type ReactNode } from "react";
+import { isFunction } from "./lib/type-guards";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Register } from "./views/Register";
@@ -30,10 +31,10 @@ function lazyView(
   const load = async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
     const module = await importer();
     const component = module[name];
-    if (typeof component !== "function") {
+    // SAFETY: chunk exports are components; anything else is a broken build.
+    if (!isFunction(component)) {
       throw new Error(`View ${name} is missing from its chunk`);
     }
-// SAFETY: the typeof-function check above narrows the chunk export to a component.
     return { default: component as ComponentType<Record<string, unknown>> };
   };
   return lazy(async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {

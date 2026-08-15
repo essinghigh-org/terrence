@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { NoCodeProvisioning } from "../src/views/NoCodeProvisioning";
+import { isRecord, isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const originalAlert = globalThis.alert;
@@ -18,8 +19,8 @@ afterEach((): void => {
 });
 
 function getUrl(input: unknown): string {
-  if (typeof input === "string") return input;
-  return input !== null && typeof input === "object" && "url" in input && typeof input.url === "string"
+  if (isString(input)) return input;
+  return isRecord(input) && "url" in input && isString(input.url)
     ? input.url
     : "";
 }

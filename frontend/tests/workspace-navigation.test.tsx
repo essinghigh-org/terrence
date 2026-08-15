@@ -4,6 +4,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,7 +14,7 @@ const json = (data: unknown): Response =>
   });
 
 const getUrl = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -101,7 +102,7 @@ test("ignores an aborted workspace response after the route changes", async () =
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -132,7 +133,7 @@ test("ignores an aborted workspace response after the route changes", async () =
   fireEvent.click(view.getByRole("link", { name: "Open staging" }));
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
         === "/api/v2/organizations/acme/workspaces/staging")).toBe(true);
   });
   await act(async (): Promise<void> => {
@@ -159,7 +160,7 @@ test("renders before the latest run finishes and ignores an aborted run response
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -228,7 +229,7 @@ test("blocks update-only settings when can-update is false", async () => {
   const requestedUrls: string[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -280,7 +281,7 @@ test("blocks update-only settings when can-update is false", async () => {
 test("fails closed when update permission is missing from readable settings", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -320,7 +321,7 @@ test("fails closed when update permission is missing from readable settings", as
 
 test("keeps workspace variables readable without mutation permission", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -382,7 +383,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -437,7 +438,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
 
   await waitFor((): void => {
     expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
         === "/api/v2/organizations/acme/workspaces/renamed")).toBe(true);
   });
   expect(view.getByRole("link", { name: "renamed" }).getAttribute("href"))
@@ -449,7 +450,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
 test("renders controlled workspace sections with current resources and project context", async () => {
   const project = deferred<Response>();
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -537,7 +538,7 @@ test("renders controlled workspace sections with current resources and project c
 
 test("passes workspace run-task permission into the routed settings section", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -575,7 +576,7 @@ test("passes workspace run-task permission into the routed settings section", as
     expect(view.getByRole("button", { name: "Attach run task" })).toBeTruthy();
   });
   expect(fetchMock.mock.calls.some(([input]): boolean =>
-    (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+    (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
       === "/api/v2/organizations/acme/run-tasks")).toBe(true);
 });
 
@@ -584,7 +585,7 @@ test("returns to the organization workspace list after deleting a workspace", as
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -633,14 +634,14 @@ test("returns to the organization workspace list after deleting a workspace", as
     expect(view.getByText("Organization workspaces")).toBeTruthy();
   });
   expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)
+    (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
       === "/api/v2/workspaces/ws-1"
     && init?.method === "DELETE")).toBe(true);
 });
 
 test("project settings sidebar marks exactly one section active", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()
@@ -676,7 +677,7 @@ test("project settings sidebar marks exactly one section active", async () => {
 
 test("project settings variable sets section marks only variable sets active", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string"
+    const url = isString(input)
       ? input
       : input instanceof URL
         ? input.toString()

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { RunDetail } from "../src/views/RunDetail";
 import { Toaster } from "../src/components/ui/toast";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
@@ -16,7 +17,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  return isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 }
 
 afterEach((): void => {

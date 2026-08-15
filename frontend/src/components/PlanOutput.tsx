@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
+import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
 
 type Change = {
   actions: string[];
@@ -118,57 +119,53 @@ const operationConfig = {
   "no-op": { symbol: "·", className: "text-muted-foreground/70" },
 } satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isChange(value: unknown): value is Change {
   if (!isRecord(value)
     || !Array.isArray(value["actions"])
-    || !value["actions"].every((action: unknown): boolean => typeof action === "string")) return false;
+    || !value["actions"].every((action: unknown): boolean => isString(action))) return false;
   const importing = value["importing"];
   const replacePaths = value["replace_paths"];
   return (importing === undefined || (
       isRecord(importing)
-      && (importing["id"] === undefined || typeof importing["id"] === "string")
-      && (importing["unknown"] === undefined || typeof importing["unknown"] === "boolean")
+      && (importing["id"] === undefined || isString(importing["id"]))
+      && (importing["unknown"] === undefined || isBoolean(importing["unknown"]))
     ))
     && (replacePaths === undefined || (
       Array.isArray(replacePaths)
       && replacePaths.every((path: unknown): boolean =>
         Array.isArray(path)
-        && path.every((step: unknown): boolean => typeof step === "string" || typeof step === "number"),
+        && path.every((step: unknown): boolean => isString(step) || isNumber(step)),
       )
     ));
 }
 
 function isResourceChange(value: unknown): value is ResourceChange {
   return isRecord(value)
-    && typeof value["address"] === "string"
-    && typeof value["type"] === "string"
-    && (value["deposed"] === undefined || typeof value["deposed"] === "string")
-    && (value["module_address"] === undefined || typeof value["module_address"] === "string")
-    && (value["mode"] === undefined || typeof value["mode"] === "string")
-    && (value["name"] === undefined || typeof value["name"] === "string")
-    && (value["previous_address"] === undefined || typeof value["previous_address"] === "string")
-    && (value["provider_name"] === undefined || typeof value["provider_name"] === "string")
-    && (value["action_reason"] === undefined || typeof value["action_reason"] === "string")
+    && isString(value["address"])
+    && isString(value["type"])
+    && (value["deposed"] === undefined || isString(value["deposed"]))
+    && (value["module_address"] === undefined || isString(value["module_address"]))
+    && (value["mode"] === undefined || isString(value["mode"]))
+    && (value["name"] === undefined || isString(value["name"]))
+    && (value["previous_address"] === undefined || isString(value["previous_address"]))
+    && (value["provider_name"] === undefined || isString(value["provider_name"]))
+    && (value["action_reason"] === undefined || isString(value["action_reason"]))
     && isChange(value["change"]);
 }
 
 function isActionInvocation(value: unknown): value is ActionInvocation {
   if (!isRecord(value)
-    || (value["address"] !== undefined && typeof value["address"] !== "string")
-    || (value["type"] !== undefined && typeof value["type"] !== "string")
-    || (value["name"] !== undefined && typeof value["name"] !== "string")
-    || (value["provider_name"] !== undefined && typeof value["provider_name"] !== "string")) return false;
+    || (value["address"] !== undefined && !isString(value["address"]))
+    || (value["type"] !== undefined && !isString(value["type"]))
+    || (value["name"] !== undefined && !isString(value["name"]))
+    || (value["provider_name"] !== undefined && !isString(value["provider_name"]))) return false;
   const lifecycleTrigger = value["lifecycle_action_trigger"];
   return (lifecycleTrigger === undefined || (
       isRecord(lifecycleTrigger)
       && (lifecycleTrigger["triggering_resource_address"] === undefined
-        || typeof lifecycleTrigger["triggering_resource_address"] === "string")
+        || isString(lifecycleTrigger["triggering_resource_address"]))
       && (lifecycleTrigger["action_trigger_event"] === undefined
-        || typeof lifecycleTrigger["action_trigger_event"] === "string")
+        || isString(lifecycleTrigger["action_trigger_event"]))
     ))
     && (value["invoke_action_trigger"] === undefined || isRecord(value["invoke_action_trigger"]));
 }
@@ -187,8 +184,8 @@ function parsePlanJson(value: unknown): PlanJson | null {
     && (!Array.isArray(drift) || !drift.every(isResourceChange))) return null;
   if (outputs !== undefined
     && (!isRecord(outputs) || !Object.values(outputs).every(isChange))) return null;
-  if (value["terraform_version"] !== undefined && typeof value["terraform_version"] !== "string") return null;
-  if (value["format_version"] !== undefined && typeof value["format_version"] !== "string") return null;
+  if (value["terraform_version"] !== undefined && !isString(value["terraform_version"])) return null;
+  if (value["format_version"] !== undefined && !isString(value["format_version"])) return null;
   return value;
 }
 
@@ -230,13 +227,13 @@ function collectionKeys(values: readonly unknown[]): readonly (string | number)[
 }
 
 function childValue(value: unknown, key: string | number): unknown {
-  if (typeof key === "number") return Array.isArray(value) ? value[key] : undefined;
+  if (isNumber(key)) return Array.isArray(value) ? value[key] : undefined;
   return isRecord(value) ? value[key] : undefined;
 }
 
 function formatPath(path: readonly (string | number)[]): string {
   return path.reduce<string>((value, step): string =>
-    typeof step === "number"
+    isNumber(step)
       ? `${value}[${step}]`
       : value === "" ? step : `${value}.${step}`,
   "");
@@ -268,7 +265,7 @@ function collectDiffRows(
   const keys = collectionKeys(values);
   if (keys.length > 0) {
     return keys.flatMap((key): readonly DiffRow[] => {
-      const childPath = typeof key === "number"
+      const childPath = isNumber(key)
         ? `${path}[${key}]`
         : path === "" ? key : `${path}.${key}`;
       return collectDiffRows(
@@ -305,8 +302,8 @@ function attributeDiff(change: Change): readonly DiffRow[] {
 function formatValue(value: unknown): string {
   if (value === undefined) return "—";
   if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (isString(value)) return JSON.stringify(value);
+  if (isNumber(value) || isBoolean(value)) return String(value);
   return Array.isArray(value) ? "[…]" : "{…}";
 }
 

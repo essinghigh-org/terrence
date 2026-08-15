@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { AccountSettings } from "../src/views/AccountSettings";
 import { getAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -12,7 +13,7 @@ function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
 }
 function url(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  return isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 }
 function account(): Response {
   return json({ data: { id: "user-1", type: "users", attributes: { username: "alice", email: "alice@example.com", "must-change-password": false } } });
@@ -91,4 +92,3 @@ test("disables MFA with a current authenticator code", async () => {
   fireEvent.click(view.getByRole("button", { name: "Disable MFA" }));
   expect(await view.findByText("Multi-factor authentication disabled")).toBeTruthy();
 });
-

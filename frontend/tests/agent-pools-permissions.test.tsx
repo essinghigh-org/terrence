@@ -3,6 +3,7 @@ import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AgentPools } from "../src/views/AgentPools";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,7 +14,7 @@ afterEach((): void => {
 
 test("fails closed on the direct agent-pools route without management permission", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/organizations/acme") {
       return new Response(JSON.stringify({
         data: { attributes: { permissions: { "can-manage-agent-pools": false } } },
@@ -35,7 +36,7 @@ test("fails closed on the direct agent-pools route without management permission
   expect(view.getByText("You do not have permission to manage agent pools for this organization.")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Create Agent Pool" })).toBeNull();
   expect(fetchMock.mock.calls.every(([input]): boolean => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     return !url.endsWith("/agent-pools");
   })).toBeTrue();
 });

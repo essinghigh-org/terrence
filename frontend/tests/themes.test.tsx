@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { AccountSettings } from "../src/views/AccountSettings";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../src/lib/theme";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -15,7 +16,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function requestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  return isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 }
 
 function account(theme = "original-light"): Response {
@@ -44,7 +45,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
     if (url === "/api/v2/account/sessions") return json({ data: [] });
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     if (url === "/api/v2/account/update" && init?.method === "PATCH") {
-      const body = typeof init.body === "string" ? init.body : "";
+      const body = isString(init.body) ? init.body : "";
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       updatedTheme = JSON.parse(body).data.attributes.theme as string;
       return account(updatedTheme);

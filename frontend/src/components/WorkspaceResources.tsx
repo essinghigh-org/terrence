@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { ApiError, fetchAllApiPages, fetchApi } from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
+import { isRecord, isString } from "../lib/type-guards";
 
 const PAGE_SIZE = 20;
 
@@ -63,7 +64,7 @@ type DependencyGraphState = Readonly<{
 function outputValue(output: Output): string {
   if (output.attributes.sensitive === true) return "Sensitive value";
   const value = output.attributes.value;
-  if (typeof value === "string") return value;
+  if (isString(value)) return value;
   if (value === undefined) return "—";
   return JSON.stringify(value);
 }
@@ -201,11 +202,11 @@ export function WorkspaceResources({
       const attributes = (dependencyGraphResult.value as { data?: { attributes?: { nodes?: unknown } } }).data?.attributes;
       const nodes = Array.isArray(attributes?.nodes)
         ? attributes.nodes.flatMap((value): DependencyGraphResource[] => {
-            if (value === null || typeof value !== "object") return [];
+            if (!isRecord(value)) return [];
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
             const node = value as { address?: unknown; dependencies?: unknown };
-            if (typeof node.address !== "string" || !Array.isArray(node.dependencies)) return [];
-            return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => typeof dependency === "string") }];
+            if (!isString(node.address) || !Array.isArray(node.dependencies)) return [];
+            return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => isString(dependency)) }];
           })
         : [];
       setDependencyGraph({ nodes });

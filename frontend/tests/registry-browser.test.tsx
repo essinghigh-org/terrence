@@ -5,13 +5,14 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { RegistrySettingsRedirect } from "../src/App";
 import { Registry } from "../src/views/Registry";
 import { RegistryModuleDetail } from "../src/views/RegistryModuleDetail";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
   status,
   headers: { "Content-Type": "application/vnd.api+json" },
 });
-const urlOf = (input: string | URL | Request): string => typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+const urlOf = (input: string | URL | Request): string => isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 function changeInput(element: HTMLElement, value: string): void {
   fireEvent.input(element, { target: { value } });

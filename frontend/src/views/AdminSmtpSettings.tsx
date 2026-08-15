@@ -8,6 +8,7 @@ import { Select, SelectItem } from "../components/ui/select";
 import { Spinner } from "../components/ui/spinner";
 import { Mail } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { isNumber, isString } from "../lib/type-guards";
 
 type SmtpAttributes = {
   enabled?: boolean;
@@ -55,11 +56,12 @@ export function AdminSmtpSettings(): React.JSX.Element {
       if (!mounted.current) return;
       const attrs = response.data?.attributes;
       setEnabled(attrs?.enabled === true);
-      setHost(typeof attrs?.host === "string" ? attrs.host : "");
-      setPort(attrs !== undefined && typeof attrs.port === "number" ? String(attrs.port) : "25");
-      setSenderEmail(typeof attrs?.["sender-email"] === "string" ? attrs["sender-email"] : "");
-      setAuth(typeof attrs?.auth === "string" && attrs.auth !== "" ? attrs.auth : "plain");
-      setUsername(typeof attrs?.username === "string" ? attrs.username : "");
+      setHost(isString(attrs?.host) ? attrs.host : "");
+      setPort(attrs !== undefined && isNumber(attrs.port) ? String(attrs.port) : "25");
+      const senderEmail = attrs?.["sender-email"];
+      setSenderEmail(isString(senderEmail) ? senderEmail : "");
+      setAuth(isString(attrs?.auth) && attrs.auth !== "" ? attrs.auth : "plain");
+      setUsername(isString(attrs?.username) ? attrs.username : "");
       setPassword("");
       setTestEmail("");
     } catch (reason) {

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { WorkspaceDestruction } from "../src/components/WorkspaceDestruction";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -12,7 +13,7 @@ const json = (data: unknown, status = 200): Response => new Response(JSON.string
 });
 
 const requestUrl = (input: string | URL | Request): string => (
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url
 );
 
 const changeInput = (element: HTMLElement, value: string): void => {
@@ -106,7 +107,7 @@ test("fails closed and deletes only after exact confirmation and a successful re
   });
   expect(view.queryByRole("dialog")).toBeNull();
   expect(fetchMock.mock.calls.map(([input, init]): [string, string | undefined] => [
-    typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+    isString(input) ? input : input instanceof URL ? input.toString() : input.url,
     init?.method,
   ])).toEqual([
     ["/api/v2/workspaces/ws%2F1", "DELETE"],
@@ -121,12 +122,12 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
     const url = requestUrl(input);
     if (url === "/api/v2/workspaces/ws%2F1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      patchBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
+      patchBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
       return json({ data: { id: "ws/1", type: "workspaces" } });
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      runBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
+      runBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
       return json({ data: { id: "run/destroy", type: "runs" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);

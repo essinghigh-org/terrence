@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Workspaces } from "../src/views/Workspaces";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const json = (data: unknown, status = 200): Response =>
@@ -11,7 +12,7 @@ const json = (data: unknown, status = 200): Response =>
     headers: { "Content-Type": "application/vnd.api+json" },
   });
 const urlOf = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 // The workspace list now aggregates the latest run per workspace server-side
 // (include=current_run): the mocks mirror that shape with a current-run

@@ -10,6 +10,7 @@ import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
+import { isRecord, isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
@@ -24,18 +25,18 @@ afterEach((): void => {
   // Reset the in-memory auth state (access tokens are no longer persisted)
   // before the localStorage cleanup so no test inherits a session.
   expireAuthSession();
-  if (typeof localStorage !== "undefined") localStorage.clear();
+  if (localStorage !== undefined) localStorage.clear();
   globalThis.fetch = originalFetch;
   globalThis.confirm = originalConfirm;
   globalThis.alert = originalAlert;
 });
 
 function getUrlString(input: unknown): string {
-  if (typeof input === "string") return input;
+  if (isString(input)) return input;
   if (input instanceof URL) return input.toString();
-  if (input !== null && typeof input === "object" && "url" in input) {
+  if (isRecord(input) && "url" in input) {
     const u = input.url;
-    if (typeof u === "string") return u;
+    if (isString(u)) return u;
   }
   return "";
 }

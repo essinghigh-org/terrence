@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { WorkspaceSettings } from "../src/components/WorkspaceSettings";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
@@ -14,7 +15,7 @@ const json = (data: unknown, status = 200): Response =>
   });
 
 const getUrl = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

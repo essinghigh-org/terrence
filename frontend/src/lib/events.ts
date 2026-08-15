@@ -1,4 +1,5 @@
 import { ApiError, prepareAuthToken } from "./api";
+import { isRecord } from "../lib/type-guards";
 
 export type RunStatusEvent = Readonly<{
   "run-id": string;
@@ -123,7 +124,7 @@ function parseEventFrame(frame: string): SseEvent | null {
     const parsed = JSON.parse(raw) as unknown;
     // SAFETY: the typeof-object guard is the boundary check; the data field
     // is consumed as a record of string-typed values by the event handlers.
-    const data = parsed !== null && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    const data = isRecord(parsed) ? parsed as Record<string, unknown> : {};
     return {
       name,
       data,

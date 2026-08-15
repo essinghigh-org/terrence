@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isString } from "../lib/type-guards";
 import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -23,7 +24,7 @@ type StateItem = {
 };
 
 function stateStatus(value: unknown): string {
-  if (typeof value !== "string" || value === "") return "Finalized";
+  if (!isString(value) || value === "") return "Finalized";
   const labels = {
     pending: "Pending",
     finalized: "Finalized",
@@ -49,7 +50,7 @@ type LoadState =
   | Readonly<{ kind: "ready"; states: StateItem[] }>;
 
 function formatDate(value: unknown): string {
-  if (typeof value !== "string" || value === "") return "—";
+  if (!isString(value) || value === "") return "—";
   const date = new Date(value);
   return formatDateTime(date);
 }
@@ -87,7 +88,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     const stateStr = s.attributes["state"] as string | undefined;
     if (stateStr != null) {
       try {
-        const parsed: unknown = typeof stateStr === "string" ? JSON.parse(stateStr) : stateStr;
+        const parsed: unknown = isString(stateStr) ? JSON.parse(stateStr) : stateStr;
         setSelectedState(JSON.stringify(parsed, null, 2));
       } catch {
         setSelectedState(stateStr);
@@ -102,7 +103,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
 // SAFETY: the fixture field matches the API contract type.
       const rawPayload = (res.data?.attributes?.["state"] as string | undefined) ?? "{}";
       try {
-        const parsed: unknown = typeof rawPayload === "string" ? JSON.parse(rawPayload) : rawPayload;
+        const parsed: unknown = isString(rawPayload) ? JSON.parse(rawPayload) : rawPayload;
         setSelectedState(JSON.stringify(parsed, null, 2));
       } catch {
         setSelectedState(rawPayload);
@@ -118,7 +119,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
   const handleDownload = async (s: StateItem): Promise<void> => {
     try {
       const rawText: unknown = await fetchApi(`/state-versions/${s.id}/download`);
-      const payloadString = typeof rawText === "string" ? rawText : JSON.stringify(rawText, null, 2);
+      const payloadString = isString(rawText) ? rawText : JSON.stringify(rawText, null, 2);
       const blob = new Blob([payloadString], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -249,12 +250,12 @@ s.attributes["serial"] as number}</p>
                         to={`/app/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}/runs/${encodeURIComponent(s.relationships.run.data.id)}`}
                         className="text-primary hover:underline"
                       >
-                        {typeof s.attributes["run-message"] === "string" && s.attributes["run-message"] !== ""
+                        {isString(s.attributes["run-message"]) && s.attributes["run-message"] !== ""
                           ? s.attributes["run-message"]
                           : "Manual run"}
                       </Link>
                       <span className="text-[11px] text-muted-foreground">
-                        {typeof s.attributes["run-status"] === "string"
+                        {isString(s.attributes["run-status"])
                           ? runStatusLabel(s.attributes["run-status"])
                           : "Run Status Unknown"}
                       </span>
@@ -263,8 +264,8 @@ s.attributes["serial"] as number}</p>
                   ) : "—"}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
-                  {typeof s.attributes["vcs-commit-sha"] === "string" ? (
-                    typeof s.attributes["vcs-commit-url"] === "string" ? (
+                  {isString(s.attributes["vcs-commit-sha"]) ? (
+                    isString(s.attributes["vcs-commit-url"]) ? (
                       <a
                         href={s.attributes["vcs-commit-url"]}
                         target="_blank"
