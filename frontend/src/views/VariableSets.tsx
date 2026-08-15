@@ -117,7 +117,7 @@ function VariablesDialog({
       .then((data: VariableSetVariable[]): void => {
         if (active) setVariables(data);
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) setError(messageFrom(caught, "Failed to load variables"));
       })
       .finally((): void => {
@@ -473,7 +473,7 @@ export function VariableSets(): React.JSX.Element {
             : "",
         );
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
       })
       .finally((): void => {

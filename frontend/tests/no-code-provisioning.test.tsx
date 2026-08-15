@@ -3,10 +3,11 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { NoCodeProvisioning } from "../src/views/NoCodeProvisioning";
 import { isRecord, isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 const originalAlert = globalThis.alert;
-const json = (data: unknown, status = 200): Response =>
+const json = (data: JsonValue, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -18,7 +19,7 @@ afterEach((): void => {
   globalThis.alert = originalAlert;
 });
 
-function getUrl(input: unknown): string {
+function getUrl(input: string | URL | Request): string {
   if (isString(input)) return input;
   return isRecord(input) && "url" in input && isString(input.url)
     ? input.url
@@ -27,7 +28,8 @@ function getUrl(input: unknown): string {
 
 function changeInput(element: HTMLElement, value: string): void {
 // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (next: string) => void } | undefined;
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  const tracker = (element as { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
   fireEvent.input(element, { target: { value } });

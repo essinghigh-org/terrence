@@ -1,4 +1,5 @@
 import { isNumber, isRecord, isString } from "../lib/type-guards";
+import type { JsonObject, JsonValue } from "@/lib/json";
 const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
 export const AUTH_EXPIRED_EVENT = "terrence:auth-expired";
@@ -50,7 +51,7 @@ function storageRemove(key: string): void {
 type ReadonlyResponse = Readonly<{
   readonly status: number;
   readonly headers: Readonly<Headers>;
-  readonly json: () => Promise<unknown>;
+  readonly json: () => Promise<JsonValue>;
   readonly text: () => Promise<string>;
 }>;
 
@@ -88,7 +89,7 @@ export class ApiError extends Error {
  * surfaced so UIs can render per-field feedback instead of a single blob
  * (26.9). Unparsable pointers are dropped.
  */
-export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, unknown>>[]) {
+export function extractFieldErrors(rawErrors: readonly Readonly<JsonObject>[]) {
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];
@@ -152,7 +153,7 @@ export function consumeAuthExpiry(): boolean {
   return expired;
 }
 
-export async function readResponseBody(response: ReadonlyResponse): Promise<unknown> {
+export async function readResponseBody(response: ReadonlyResponse): Promise<JsonValue> {
   if (response.status === 204) return null;
   const contentType = response.headers.get("Content-Type");
   if (contentType?.includes("json") === true) {
@@ -247,7 +248,7 @@ async function refreshAccessToken(force = false): Promise<string | null> {
   return refreshRequest;
 }
 
-export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<unknown> {
+export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyRequestInit = {}): Promise<T> {
   // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
   // are used verbatim; everything else is relative to the v2 API base.
   const url = endpoint.startsWith("/api/")
@@ -313,7 +314,9 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     );
   }
 
-  return readResponseBody(response);
+  // SAFETY: callers declare the expected response contract via the type
+  // argument; the raw body is decoded by the caller's boundary checks.
+  return readResponseBody(response) as Promise<T>;
 }
 
 export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {
@@ -330,7 +333,7 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
       signal === undefined ? {} : { signal },
     ) as {
       data?: T[];
-      meta?: { pagination?: Record<string, unknown> };
+      meta?: { pagination?: JsonObject };
     };
     if (Array.isArray(response.data)) data.push(...response.data);
 
@@ -353,11 +356,11 @@ export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "
 const REASONING_EFFORT_SET = new Set<string>(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** View an unknown value as a string-keyed record, or null when it is not an object. */
-function asRecordOrNull(value: unknown): Record<string, unknown> | null {
+function asRecordOrNull(value: unknown): JsonObject | null {
   if (!isRecord(value)) return null;
   // SAFETY: the typeof-object guard is the boundary check; callers validate
   // individual fields with typeof before use.
-  return value as Record<string, unknown>;
+  return value as JsonObject;
 }
 
 /** Narrow a backend reasoning-effort value to the known union, or null. */
@@ -368,12 +371,12 @@ function reasoningEffortValue(value: unknown): ReasoningEffort | null {
 }
 
 /** Parse a JSON:API error document from a failed response, or [] when it is not JSON. */
-async function parseErrorBody(response: Response): Promise<readonly Record<string, unknown>[]> {
+async function parseErrorBody(response: Response): Promise<readonly JsonObject[]> {
   const errorBody = asRecordOrNull(await response.json().catch((): null => null));
   const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
   // SAFETY: Array.isArray is the boundary check; entries are only read via
   // typeof-validated string fields in extractFieldErrors below.
-  return Array.isArray(rawErrors) ? rawErrors as Record<string, unknown>[] : [];
+  return Array.isArray(rawErrors) ? rawErrors as JsonObject[] : [];
 }
 
 /**

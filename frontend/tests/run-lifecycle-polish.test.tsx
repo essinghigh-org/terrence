@@ -5,10 +5,11 @@ import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },

@@ -1,13 +1,14 @@
 import { afterEach } from "bun:test";
 import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
+import type { JsonObject } from "../src/lib/json";
 
 configure({ defaultHidden: true });
 
 const jsdom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
 const win = jsdom.window;
 
-type MutableGlobal = Record<string, unknown>;
+type MutableGlobal = JsonObject;
 
 // SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["window"] = win;
@@ -75,7 +76,7 @@ Object.defineProperty(win, "alert", {
 
 // SAFETY: legacy IE-only methods are injected onto the jsdom Element prototype;
 // the intersection adds an index signature for the test-only polyfills below.
-const elemProto = win.Element.prototype as Element & Record<string, unknown>;
+const elemProto = win.Element.prototype as Element & JsonObject;
 elemProto["attachEvent"] = elemProto["attachEvent"] ?? noop;
 elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
 elemProto["scrollIntoView"] = elemProto["scrollIntoView"] ?? noop;
@@ -151,7 +152,7 @@ class DummyResizeObserver {
 // SAFETY: jsdom may lack ResizeObserver at runtime; the dummy keeps tests
 // that observe elements from crashing when the browser would provide one.
 Object.defineProperty(win, "ResizeObserver", {
-  value: (win as Window & Record<string, unknown>)["ResizeObserver"] ?? DummyResizeObserver,
+  value: (win as Window & JsonObject)["ResizeObserver"] ?? DummyResizeObserver,
   writable: true,
   configurable: true,
 });

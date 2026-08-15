@@ -4,10 +4,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Projects } from "../src/views/Projects";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
 }
 

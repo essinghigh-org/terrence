@@ -6,10 +6,11 @@ import { AccountSettings } from "../src/views/AccountSettings";
 import { getAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/vnd.api+json" } });
 }
 function url(input: string | URL | Request): string {

@@ -18,26 +18,28 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { RunSandboxGate } from "./components/RunSandboxGate";
 import { Toaster, toast } from "./components/ui/toast";
 import { useDisplayTimezone } from "./lib/useDisplayTimezone";
+import type { JsonObject } from "./lib/json";
 
 /**
  * Route-level code splitting (10.16): every view is a separate Vite chunk,
  * loaded on first navigation. Login/Register stay eager so the entry
  * screens never wait on a chunk fetch.
  */
-function lazyView(
-  importer: () => Promise<Record<string, unknown>>,
-  name: string,
-): ComponentType<Record<string, unknown>> {
-  const load = async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
+function lazyView<TModule extends object>(
+  importer: () => Promise<TModule>,
+  name: keyof TModule,
+): ComponentType<JsonObject> {
+  const load = async (): Promise<{ default: ComponentType<JsonObject> }> => {
     const module = await importer();
     const component = module[name];
     // SAFETY: chunk exports are components; anything else is a broken build.
     if (!isFunction(component)) {
-      throw new Error(`View ${name} is missing from its chunk`);
+      throw new Error(`View ${String(name)} is missing from its chunk`);
     }
-    return { default: component as ComponentType<Record<string, unknown>> };
+    // SAFETY: the isFunction check above narrows the chunk export to a component.
+    return { default: component as ComponentType<JsonObject> };
   };
-  return lazy(async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {
+  return lazy(async (): Promise<{ default: ComponentType<JsonObject> }> => {
     try {
       return await load();
     } catch (firstError: unknown) {

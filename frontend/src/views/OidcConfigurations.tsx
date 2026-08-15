@@ -13,11 +13,12 @@ import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions"
 import { Fingerprint, Plus, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type OidcConfig = {
   id: string;
   type: string;
-  attributes: Record<string, unknown>;
+  attributes: JsonObject;
 };
 
 const TYPE_LABELS = {

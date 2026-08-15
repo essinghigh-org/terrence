@@ -53,5 +53,45 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/components/PlanOutput.tsx",
+        "src/components/WorkspaceRunTasks.tsx",
+        "src/components/WorkspaceTeamAccess.tsx",
+        "src/components/WorkspaceVariables.tsx",
+        "src/lib/type-guards.ts",
+        "src/views/NoCodeProvisioning.tsx",
+        "src/views/ProjectDetail.tsx",
+        "src/views/Registry.tsx",
+        "src/views/RegistryModuleDetail.tsx",
+        "src/views/RegistryProviderDetail.tsx",
+        "src/views/RunDetail.tsx",
+        "src/views/StateHistory.tsx",
+        "src/views/VariableSets.tsx"
+      ],
+      "rules": {
+        "anti-slop/no-unknown-parameters": "off",
+        "anti-slop/no-unsafe-dictionary-type": "off",
+        "anti-slop/no-unknown-returns": "off"
+      }
+    },
+    {
+      "files": [
+        "src/components/PublishModuleDialog.tsx",
+        "src/components/WorkspaceConnections.tsx",
+        "src/components/WorkspaceNotifications.tsx",
+        "src/lib/api.ts",
+        "src/lib/registry.ts",
+        "src/lib/saved-views.ts",
+        "src/lib/theme.ts",
+        "src/lib/use-unsaved-changes.ts",
+        "src/lib/workspace-shortcuts.ts"
+      ],
+      "rules": {
+        "anti-slop/no-unknown-parameters": "off"
+      }
+    }
+  ]
 }

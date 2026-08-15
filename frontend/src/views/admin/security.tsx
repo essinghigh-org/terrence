@@ -31,11 +31,10 @@ function DatabaseStorageCard(): React.JSX.Element {
   const [metrics, setMetrics] = useState<DatabaseMetrics | null>(null);
   useEffect((): (() => void) => {
     let cancelled = false;
-    void fetchApi("/api/v2/admin/database-metrics")
-      .then((body: unknown): void => {
+    void fetchApi<{ data?: DatabaseMetrics | null }>("/api/v2/admin/database-metrics")
+      .then((body): void => {
         if (!cancelled) {
-          // SAFETY: the metrics endpoint returns the JSON:API envelope per contract.
-          setMetrics((body as { data?: DatabaseMetrics | null }).data ?? null);
+          setMetrics(body.data ?? null);
         }
       })
       .catch((): void => {

@@ -11,11 +11,12 @@ import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 import { isRecord, isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
 const originalAlert = globalThis.alert;
-const json = (data: unknown): Response =>
+const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
@@ -31,7 +32,7 @@ afterEach((): void => {
   globalThis.alert = originalAlert;
 });
 
-function getUrlString(input: unknown): string {
+function getUrlString(input: string | URL | Request): string {
   if (isString(input)) return input;
   if (input instanceof URL) return input.toString();
   if (isRecord(input) && "url" in input) {
@@ -42,11 +43,12 @@ function getUrlString(input: unknown): string {
 }
 
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-const asElement = (el: unknown): HTMLElement => el as HTMLElement;
+const asElement = (el: Element | null): HTMLElement => el as HTMLElement;
 
 const changeInput = (element: HTMLElement, value: string): void => {
 // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (v: string) => void } | undefined;
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  const tracker = (element as { _valueTracker?: { setValue: (v: string) => void } })._valueTracker;
   if (tracker !== undefined) {
     tracker.setValue(value === "" ? "x" : "");
   }
@@ -236,7 +238,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
 
 test("does not report a successful latest run for a workspace with no runs", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: unknown): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -265,7 +267,7 @@ test("does not report a successful latest run for a workspace with no runs", asy
 test("creates, edits, and deletes a workspace variable", async () => {
   const variables: {
     id: string;
-    attributes: Record<string, unknown>;
+    attributes: JsonObject;
   }[] = [];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
@@ -289,7 +291,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
     }
     if (url.endsWith("/workspaces/ws-1/vars") && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       const variable = { id: "var-1", attributes: payload.data.attributes };
       variables.push(variable);
       return json({ data: variable });
@@ -297,7 +299,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
     if (url.includes("/workspaces/ws-1/vars?") && init?.method === undefined) return json({ data: variables });
     if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       variables[0] = { id: "var-1", attributes: payload.data.attributes };
       return json({ data: variables[0] });
     }
@@ -391,7 +393,7 @@ test("updates workspace execution and auto-apply settings", async () => {
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       return json({
         data: {
@@ -476,7 +478,7 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       return json({
         data: {
           ...workspace,
@@ -548,11 +550,11 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
 });
 
 test("manages workspace run triggers and custom team access", async () => {
-  const triggers: Record<string, unknown>[] = [];
+  const triggers: JsonObject[] = [];
   const teamAccess: {
     id: string;
-    attributes: Record<string, unknown>;
-    relationships: Record<string, unknown>;
+    attributes: JsonObject;
+    relationships: JsonObject;
   }[] = [];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
@@ -599,8 +601,8 @@ test("manages workspace run triggers and custom team access", async () => {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: {
-          attributes: Record<string, unknown>;
-          relationships: Record<string, unknown>;
+          attributes: JsonObject;
+          relationships: JsonObject;
         };
       };
       const relationship = {
@@ -613,7 +615,7 @@ test("manages workspace run triggers and custom team access", async () => {
     }
     if (url === "/api/v2/team-workspaces/tw-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       teamAccess[0] = {
         ...teamAccess[0]!,
         attributes: payload.data.attributes,
@@ -698,7 +700,7 @@ test("manages workspace run triggers and custom team access", async () => {
 test("creates, verifies, edits, and deletes a workspace notification", async () => {
   const configurations: {
     id: string;
-    attributes: Record<string, unknown>;
+    attributes: JsonObject;
   }[] = [];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
@@ -719,7 +721,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
     }
     if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       const configuration = { id: "nc-1", attributes: payload.data.attributes };
       configurations.push(configuration);
       return json({ data: configuration });
@@ -729,7 +731,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
     }
     if (url === "/api/v2/notification-configurations/nc-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       configurations[0] = { id: "nc-1", attributes: payload.data.attributes };
       return json({ data: configurations[0] });
     }
@@ -835,7 +837,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       const vcsRepo = payload.data.attributes["vcs-repo"];
       workspace = {
@@ -845,17 +847,17 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
           ...payload.data.attributes,
           "vcs-repo": vcsRepo === null ? null : {
 // SAFETY: the fixture field is a string per the API contract.
-            identifier: (vcsRepo as Record<string, unknown>)["identifier"] as string,
+            identifier: (vcsRepo as JsonObject)["identifier"] as string,
 // SAFETY: the fixture field matches the API contract type.
-            branch: ((vcsRepo as Record<string, unknown>)["branch"] as string | null) ?? undefined,
+            branch: ((vcsRepo as JsonObject)["branch"] as string | null) ?? undefined,
             githubAppInstallationId: (
 // SAFETY: the fixture field matches the API contract type.
-              (vcsRepo as Record<string, unknown>)["github-app-installation-id"] as string | null
+              (vcsRepo as JsonObject)["github-app-installation-id"] as string | null
             ) ?? undefined,
 // SAFETY: the fixture field matches the API contract type.
-            ingressSubmodules: (vcsRepo as Record<string, unknown>)["ingress-submodules"] as boolean,
+            ingressSubmodules: (vcsRepo as JsonObject)["ingress-submodules"] as boolean,
 // SAFETY: the fixture field matches the API contract type.
-            tagsRegex: ((vcsRepo as Record<string, unknown>)["tags-regex"] as string | null) ?? undefined,
+            tagsRegex: ((vcsRepo as JsonObject)["tags-regex"] as string | null) ?? undefined,
           },
         },
       };
@@ -902,7 +904,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   const saveCall = fetchMock.mock.calls.find(([input, init]): boolean => {
     if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-    const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+    const body = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
     return body.data.attributes["vcs-repo"] !== null;
   });
   if (saveCall === undefined) throw new Error("Expected VCS settings PATCH request");
@@ -929,7 +931,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   const disconnectCall = fetchMock.mock.calls.find(([input, init]): boolean => {
     if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-    const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+    const body = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
     return body.data.attributes["vcs-repo"] === null;
   });
   expect(disconnectCall).toBeDefined();
@@ -1233,7 +1235,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
     },
   };
 
-  const varsList: Record<string, unknown>[] = [apiToken];
+  const varsList: JsonObject[] = [apiToken];
 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
@@ -1262,7 +1264,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       init?.method === "POST"
     ) {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       const newVar = {
         id: "var-database",
         type: "vars",
@@ -1276,7 +1278,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       init?.method === "PATCH"
     ) {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       const updatedToken = {
         ...apiToken,
         attributes: {
@@ -1285,7 +1287,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
           value: null,
         },
       };
-      const idx = varsList.findIndex((v: Record<string, unknown>): boolean => v["id"] === "var-token");
+      const idx = varsList.findIndex((v: JsonObject): boolean => v["id"] === "var-token");
       if (idx !== -1) varsList[idx] = updatedToken;
       return json({ data: updatedToken });
     }
@@ -1293,7 +1295,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       url.endsWith("/varsets/varset-shared/relationships/vars/var-database") &&
       init?.method === "DELETE"
     ) {
-      const idx = varsList.findIndex((v: Record<string, unknown>): boolean => v["id"] === "var-database");
+      const idx = varsList.findIndex((v: JsonObject): boolean => v["id"] === "var-database");
       if (idx !== -1) varsList.splice(idx, 1);
       return new Response(null, { status: 204 });
     }

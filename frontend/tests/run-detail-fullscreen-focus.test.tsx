@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 // Kanban 25.2: the fullscreen plan/apply log dialog must move focus into the
 // dialog when it opens and hand focus back to the trigger button on close
@@ -10,7 +11,7 @@ import { isString } from "../src/lib/type-guards";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },

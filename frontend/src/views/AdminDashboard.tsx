@@ -19,11 +19,12 @@ import { AuditAdmin } from "./admin/audit";
 import { AuthAdmin } from "./admin/auth";
 import type { AdminSection, DataItem, SecuritySummary } from "./admin/types";
 import { isBoolean, isNumber, isString } from "../lib/type-guards";
-const attrString = (attrs: Record<string, unknown>, key: string, fallback: string): string => {
+import type { JsonObject } from "@/lib/json";
+const attrString = (attrs: JsonObject, key: string, fallback: string): string => {
   const value = attrs[key];
   return isString(value) ? value : fallback;
 };
-const attrBoolean = (attrs: Record<string, unknown>, key: string, fallback: boolean): boolean => {
+const attrBoolean = (attrs: JsonObject, key: string, fallback: boolean): boolean => {
   const value = attrs[key];
   return isBoolean(value) ? value : fallback;
 };
@@ -333,7 +334,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/saml-settings") as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
       setSamlEnabled(attrBoolean(attrs, "enabled", false));
@@ -367,7 +368,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/general-settings") as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
       const trusted = res.data.attributes["trusted-client-ip-headers"];
@@ -384,7 +385,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/ldap-settings") as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
       setLdapEnabled(attrBoolean(attrs, "enabled", false));
@@ -513,7 +514,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/oidc-settings") as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
       setOidcEnabled(attrBoolean(attrs, "enabled", false));

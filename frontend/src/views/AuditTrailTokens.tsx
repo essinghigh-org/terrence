@@ -10,6 +10,7 @@ import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions"
 import { FileClock, KeyRound, RefreshCw, ShieldX } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
+import type { MutableJsonObject } from "@/lib/json";
 
 type AuditTrailToken = {
   id: string;
@@ -96,7 +97,7 @@ export function AuditTrailTokens(): React.JSX.Element {
     setGenerating(true);
     setActionError("");
     try {
-      const attributes: Record<string, unknown> = {};
+      const attributes: MutableJsonObject = {};
       if (expiresIn.trim() !== "") {
         attributes["expired-at"] = expiresIn.trim();
       }

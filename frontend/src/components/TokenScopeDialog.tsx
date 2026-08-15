@@ -13,6 +13,7 @@ import {
 } from "../components/ui/dialog";
 import { toast } from "../components/ui/toast";
 import { isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 /**
  * Permission grants offered in the fine-grained scope picker. Each maps to a
@@ -222,7 +223,7 @@ type WorkspaceOption = Readonly<{ id: string; name: string }>;
 
 /** Extract an `id` + `name` pair from a JSON:API resource item. */
 function resourceOptions(
-  data: { id: string; attributes?: Record<string, unknown> }[],
+  data: { id: string; attributes?: JsonObject }[],
   nameKey = "name",
 ): { id: string; name: string }[] {
   return data.map((item) => {
@@ -239,7 +240,7 @@ export function TokenScopeDialog({
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (token: { id: string; attributes: Record<string, unknown> }) => void;
+  onCreated: (token: { id: string; attributes: JsonObject }) => void;
 }>): React.JSX.Element {
   const [description, setDescription] = useState("");
   const [fineGrained, setFineGrained] = useState(false);
@@ -260,9 +261,8 @@ export function TokenScopeDialog({
   useEffect((): void => {
     if (!open) return;
     setError("");
-    void fetchApi("/organizations?page[size]=100").then((response: unknown): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>("/organizations?page[size]=100").then((response): void => {
+      const data = response.data ?? [];
       const parsed = data
         .map((item): OrgOption => {
           const externalId = item.attributes?.["external-id"];
@@ -288,16 +288,14 @@ export function TokenScopeDialog({
     let cancelled = false;
     setProjects([]);
     setWorkspaces([]);
-    void fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response: unknown): void => {
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response): void => {
       if (cancelled) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
+      const data = response.data ?? [];
       setProjects(resourceOptions(data));
     }).catch((): void => { /* org may not expose projects */ });
-    void fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response: unknown): void => {
+    void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response): void => {
       if (cancelled) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
+      const data = response.data ?? [];
       setWorkspaces(resourceOptions(data));
     }).catch((): void => { /* workspaces may not be listable */ });
     return (): void => { cancelled = true; };
@@ -437,7 +435,7 @@ export function TokenScopeDialog({
       const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),
-      }) as { data: { id: string; attributes: Record<string, unknown> } };
+      }) as { data: { id: string; attributes: JsonObject } };
       onCreated(created.data);
       onOpenChange(false);
       reset();

@@ -10,6 +10,7 @@ import { Spinner } from "../components/ui/spinner";
 import { toast } from "../components/ui/toast";
 import { ArrowLeft, CheckCircle2, GitPullRequest, History, XCircle } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import type { JsonObject } from "@/lib/json";
 
 type ChangeRequest = Readonly<{
   id: string;
@@ -38,7 +39,7 @@ type AuditEntry = Readonly<{
     action: string;
     "resource-type": string;
     "resource-id": string | null;
-    details?: Readonly<Record<string, unknown>> | null;
+    details?: Readonly<JsonObject> | null;
     "created-at": string;
     "actor-username": string | null;
   }>;

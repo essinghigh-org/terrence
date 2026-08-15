@@ -32,8 +32,8 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
     const response = await fetchApi(`/cidr-ranges?filter[cidr-range-list][id]=${encodeURIComponent(listId)}`) as { data?: CidrRange[] };
     setRanges(Array.isArray(response.data) ? response.data : []);
   };
-  useEffect(() => { void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load CIDR range lists"); }).finally(() => { setLoading(false); }); }, [path]);
-  useEffect(() => { void loadRanges(selectedListId).catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load CIDR ranges"); }); }, [selectedListId]);
+  useEffect(() => { void load().catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load CIDR range lists"); }).finally(() => { setLoading(false); }); }, [path]);
+  useEffect(() => { void loadRanges(selectedListId).catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load CIDR ranges"); }); }, [selectedListId]);
 
   const createList = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault(); if (listName.trim() === "") return; setSaving(true); setError("");

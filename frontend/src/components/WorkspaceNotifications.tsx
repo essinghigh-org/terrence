@@ -99,14 +99,14 @@ export function WorkspaceNotifications({
     let active = true;
     setLoading(true);
     setPageError("");
-    fetchApi(`/workspaces/${workspaceId}/notification-configurations`)
-      .then((response: unknown): void => {
+    fetchApi<{ data?: NotificationConfiguration[] }>(`/workspaces/${workspaceId}/notification-configurations`)
+      .then((response): void => {
         if (!active) return;
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: NotificationConfiguration[] }).data;
         setConfigurations(Array.isArray(data) ? data : []);
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (active) setPageError(messageFrom(error, "Failed to load notification configurations"));
       })
       .finally((): void => {

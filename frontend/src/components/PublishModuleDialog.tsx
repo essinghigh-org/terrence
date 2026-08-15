@@ -19,6 +19,7 @@ import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath } from "../lib/registry";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
+import type { JsonObject, JsonValue } from "@/lib/json";
 
 type Repository = Readonly<{ identifier: string; name: string; owner?: string }>;
 type SourceKind = "vcs" | "manual";
@@ -60,7 +61,7 @@ export function PublishModuleDialog({
     setError("");
     void loadOrganizationVcsConnections(orgName, controller.signal)
       .then((loaded): void => { if (!controller.signal.aborted) setConnections(loaded); })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "VCS connections could not be loaded.");
       })
       .finally((): void => { if (!controller.signal.aborted) setLoadingConnections(false); });
@@ -84,14 +85,14 @@ export function PublishModuleDialog({
       setRepositories(rows.flatMap((item): Repository[] => {
         if (!isRecord(item)) return [];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const attributes: unknown = (item as Record<string, unknown>)["attributes"];
+        const attributes: unknown = (item as JsonObject)["attributes"];
         if (!isRecord(attributes)) return [];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const repository = attributes as Record<string, unknown>;
+        const repository = attributes as JsonObject;
         if (!isString(repository["identifier"]) || !isString(repository["name"])) return [];
         return [{ identifier: repository["identifier"], name: repository["name"], ...(isString(repository["owner"]) ? { owner: repository["owner"] } : undefined) }];
       }));
-    }).catch((caught: unknown): void => {
+    }).catch((caught): void => {
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Repositories could not be loaded.");
     }).finally((): void => { if (!controller.signal.aborted) setLoadingRepositories(false); });
     return (): void => { controller.abort(); };
@@ -126,7 +127,7 @@ export function PublishModuleDialog({
     }
   };
 
-  const finish = async (resource: unknown): Promise<void> => {
+  const finish = async (resource: JsonValue): Promise<void> => {
     const module = registryModuleFromResource(resource);
     reset();
     onOpenChange(false);
@@ -166,7 +167,7 @@ export function PublishModuleDialog({
           },
         },
       }),
-    }) as { data: unknown };
+    }) as { data: JsonValue };
     await finish(response.data);
   };
 
@@ -209,7 +210,7 @@ export function PublishModuleDialog({
     }) as { data: { attributes?: { status?: string } } };
     if (uploadResponse.data.attributes?.status !== "ok") throw new Error("The uploaded module archive was not accepted.");
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    const detail = await fetchApi(`/registry-modules/${encodeURIComponent(target.moduleId)}`) as { data: unknown };
+    const detail = await fetchApi(`/registry-modules/${encodeURIComponent(target.moduleId)}`) as { data: JsonValue };
     await finish(detail.data);
   };
 

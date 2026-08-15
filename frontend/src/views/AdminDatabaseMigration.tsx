@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchApi } from "../lib/api";
+import type { JsonValue } from "../lib/json";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -189,13 +190,17 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     return (): void => { if (pollTimer.current !== null) clearTimeout(pollTimer.current); };
   }, [status, error, load]);
 
-  const act = useCallback(async (path: string, method: string, body?: unknown): Promise<unknown> => {
+  const act = useCallback(async (path: string, method: string, body?: JsonValue): Promise<JsonValue> => {
     setError(null);
     const response = await fetchApi(`/admin/db-migration/${path}`, {
       method,
       ...(body === undefined ? undefined : { body: JSON.stringify(body) }),
     });
-    if (!(response instanceof Response)) return response;
+    if (!(response instanceof Response)) {
+      // SAFETY: fetchApi resolves the parsed JSON body; the raw-Response branch
+      // is a legacy path that never occurs for the admin db-migration endpoints.
+      return response as JsonValue;
+    }
     if (!response.ok) {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const parsed = (await response.json().catch((): null => null)) as { errors?: { detail?: string }[] } | null;
@@ -204,7 +209,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     return response.json();
   }, []);
 
-  const runAction = useCallback(async (path: string, method: string, body?: unknown, thenLoad = true): Promise<void> => {
+  const runAction = useCallback(async (path: string, method: string, body?: JsonValue, thenLoad = true): Promise<void> => {
     setBusy(path);
     try {
       await act(path, method, body);
@@ -439,7 +444,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                         const result = (body as { data: { ok?: boolean; detail?: string } }).data;
                         setTestResult(result.ok === false ? `Connection failed: ${result.detail ?? "unknown error"}` : "Connection OK");
                       })
-                      .catch((err: unknown): void => {
+                      .catch((err): void => {
                         setError(err instanceof Error ? err.message : String(err));
                       })
                       .finally((): void => { setBusy(null); });
@@ -459,7 +464,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
                         setCompatResult((body as { data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } }).data);
                       })
-                      .catch((err: unknown): void => {
+                      .catch((err): void => {
                         setError(err instanceof Error ? err.message : String(err));
                       })
                       .finally((): void => { setBusy(null); });

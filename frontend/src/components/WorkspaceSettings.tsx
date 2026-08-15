@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { JsonValue } from "../lib/json";
 import { useUnsavedChangesWarning } from "@/lib/use-unsaved-changes";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,7 +41,7 @@ type WorkspaceSettingsResource = {
     "terraform-version"?: string;
     "working-directory"?: string | null;
     permissions?: { "can-update"?: boolean };
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
 };
 
@@ -181,7 +182,7 @@ export function WorkspaceSettings({
         ].sort().join(","),
       );
       setRemoteStateLoadState("ready");
-    }).catch((caught: unknown): void => {
+    }).catch((caught): void => {
       if (controller.signal.aborted) return;
       setRemoteStateLoadState("error");
       setRemoteStateLoadError(

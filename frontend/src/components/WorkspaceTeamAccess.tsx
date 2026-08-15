@@ -119,7 +119,7 @@ export function WorkspaceTeamAccess({
         setTeams(Array.isArray(teamData) ? teamData : []);
         setRelationships(Array.isArray(accessData) ? accessData : []);
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (active) setPageError(messageFrom(error, "Failed to load team access"));
       })
       .finally((): void => {

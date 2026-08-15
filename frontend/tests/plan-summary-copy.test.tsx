@@ -2,11 +2,12 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { PlanOutput, planSummaryMarkdown } from "../src/components/PlanOutput";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },

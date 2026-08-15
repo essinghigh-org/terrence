@@ -401,14 +401,11 @@ export function Layout({
     setCapabilities(DEFAULT_CAPABILITIES);
     if (!hasOrg) return undefined;
     const controller = new AbortController();
-    void fetchApi(`/organizations/${encodeURIComponent(orgName)}`, {
+    void fetchApi<{ data?: { attributes?: { permissions?: OrganizationPermissions; capabilities?: Capabilities } } }>(`/organizations/${encodeURIComponent(orgName)}`, {
       signal: controller.signal,
-    }).then((response: unknown): void => {
+    }).then((response): void => {
       if (controller.signal.aborted) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const attributes = (response as {
-        data?: { attributes?: { permissions?: OrganizationPermissions; capabilities?: Capabilities } };
-      }).data?.attributes;
+      const attributes = response.data?.attributes;
       setOrganizationPermissions(attributes?.permissions ?? null);
       setCapabilities(attributes?.capabilities ?? DEFAULT_CAPABILITIES);
       setOrganizationPermissionPath(orgPath);
@@ -428,22 +425,12 @@ export function Layout({
     if (!hasWorkspace) return undefined;
 
     const controller = new AbortController();
-    void fetchApi(
+    void fetchApi<{ data?: { attributes?: { permissions?: { "can-read-state-versions"?: boolean; "can-read-variable"?: boolean } } } }>(
       `/organizations/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`,
       { signal: controller.signal },
-    ).then((response: unknown): void => {
+    ).then((response): void => {
       if (controller.signal.aborted) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const permissions = (response as {
-        data?: {
-          attributes?: {
-            permissions?: {
-              "can-read-state-versions"?: boolean;
-              "can-read-variable"?: boolean;
-            };
-          };
-        };
-      }).data?.attributes?.permissions;
+      const permissions = response.data?.attributes?.permissions;
       setCanReadStateVersions(permissions?.["can-read-state-versions"] === true);
       setCanReadVariable(permissions?.["can-read-variable"] === true);
       setWorkspacePermissionPath(workspacePath);
@@ -459,14 +446,11 @@ export function Layout({
     if (!hasProject || projectId === undefined) return undefined;
 
     const controller = new AbortController();
-    void fetchApi(`/projects/${encodeURIComponent(projectId)}`, {
+    void fetchApi<{ data?: { attributes?: { name?: unknown } } }>(`/projects/${encodeURIComponent(projectId)}`, {
       signal: controller.signal,
-    }).then((response: unknown): void => {
+    }).then((response): void => {
       if (controller.signal.aborted) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const name = (response as {
-        data?: { attributes?: { name?: unknown } };
-      }).data?.attributes?.name;
+      const name = response.data?.attributes?.name;
       setProjectName(isString(name) && name !== "" ? name : projectId ?? "");
     }).catch((): void => {
       setProjectName(projectId ?? "");

@@ -4,10 +4,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { WorkspaceDestruction } from "../src/components/WorkspaceDestruction";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
+const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
   status,
   headers: { "Content-Type": "application/vnd.api+json" },
 });
@@ -18,7 +19,8 @@ const requestUrl = (input: string | URL | Request): string => (
 
 const changeInput = (element: HTMLElement, value: string): void => {
 // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (nextValue: string) => void } | undefined;
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  const tracker = (element as { _valueTracker?: { setValue: (nextValue: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
   fireEvent.input(element, { target: { value } });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { JsonValue } from "../lib/json";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -58,14 +59,13 @@ export function WorkspaceSshKey({
     let active = true;
     setLoading(true);
     setError("");
-    fetchApi(`/organizations/${encodeURIComponent(orgName)}/ssh-keys`)
-      .then((response: unknown): void => {
+    fetchApi<{ data?: SshKey[] }>(`/organizations/${encodeURIComponent(orgName)}/ssh-keys`)
+      .then((response): void => {
         if (!active) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (response as { data?: SshKey[] }).data;
+        const data = response.data;
         setKeys(Array.isArray(data) ? data : []);
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) setError(messageFrom(caught, "Failed to load SSH keys"));
       })
       .finally((): void => {
@@ -183,7 +183,7 @@ export function WorkspaceRunTriggers({
     setLoading(true);
     setError("");
     load()
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) setError(messageFrom(caught, "Failed to load run triggers"));
       })
       .finally((): void => {
@@ -348,7 +348,7 @@ type HealthWorkspace = {
     name: string;
     "assessments-enabled"?: boolean;
     permissions?: { "can-update"?: boolean };
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
 };
 

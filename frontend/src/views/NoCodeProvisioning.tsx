@@ -32,6 +32,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 import { isBigInt, isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type RegistryModule = Readonly<{
   id: string;
@@ -156,7 +157,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
             : items[0]?.noCode.id ?? "",
         );
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) setError(messageFrom(caught, "Failed to load no-code modules"));
       })
       .finally((): void => {
@@ -184,21 +185,17 @@ export function NoCodeProvisioning(): React.JSX.Element {
     let active = true;
     setInputsLoading(true);
     setInputErrors({});
-    fetchApi(`/no-code-modules/${encodeURIComponent(selectedId)}/input-variables`)
-      .then((response: unknown): void => {
+    fetchApi<{ data?: InputVariable[] }>(`/no-code-modules/${encodeURIComponent(selectedId)}/input-variables`)
+      .then((response): void => {
         if (!active) return;
-        // SAFETY: the endpoint contract returns the JSON:API envelope; the
-        // data field is Array-checked by the component.
-        const data = isRecord(response)
-          ? (response as { data?: InputVariable[] }).data ?? []
-          : [];
+        const data = response.data ?? [];
         setInputVariables(data);
         setInputValues(Object.fromEntries(data.map((variable: InputVariable): [string, string] => [
           variable.attributes.name,
           variable.attributes["has-default"] ? inputValue(variable.attributes.default) : "",
         ])));
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) setError(messageFrom(caught, "Failed to inspect module inputs"));
       })
       .finally((): void => {
@@ -235,7 +232,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
     setSaving(true);
     setError("");
     try {
-      const variables = inputVariables.flatMap((variable: InputVariable): Record<string, unknown>[] => {
+      const variables = inputVariables.flatMap((variable: InputVariable): JsonObject[] => {
         const value = inputValues[variable.attributes.name] ?? "";
         if (value === "" && !variable.attributes.required) return [];
         return [{

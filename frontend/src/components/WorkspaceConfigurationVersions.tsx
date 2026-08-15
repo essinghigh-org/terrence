@@ -6,8 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { toast } from "../components/ui/toast";
 import { ErrorPanel } from "./ui/error-panel";
 import { isString } from "../lib/type-guards";
+import type { JsonValue } from "../lib/json";
 
-type ConfigurationVersion = { id: string; attributes: { status?: string; source?: string; speculative?: boolean; "created-at"?: string; [key: string]: unknown } };
+type ConfigurationVersion = { id: string; attributes: { status?: string; source?: string; speculative?: boolean; "created-at"?: string; [key: string]: JsonValue } };
 
 export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ workspaceId: string }>): React.JSX.Element {
   const [versions, setVersions] = useState<ConfigurationVersion[]>([]);
@@ -19,8 +20,8 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
     const response = await fetchApi(`/workspaces/${workspaceId}/configuration-versions?page[size]=50`) as { data?: ConfigurationVersion[] };
     setVersions(Array.isArray(response.data) ? response.data : []);
   };
-  useEffect(() => { void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
-  const retryLoad = (): void => { setError(""); setLoading(true); void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); };
+  useEffect(() => { void load().catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
+  const retryLoad = (): void => { setError(""); setLoading(true); void load().catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); };
   const createVersion = async (): Promise<void> => {
     setCreating(true); setError("");
     try {

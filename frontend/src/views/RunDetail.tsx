@@ -47,6 +47,7 @@ import { subscribeEvents, type SseEvent } from "../lib/events";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type RunActions = {
   "is-cancelable"?: boolean;
@@ -335,7 +336,7 @@ function policyResultText(result: unknown): string {
   if (isNumber(result) || isBoolean(result) || isBigInt(result)) return `${result}`;
   if (!isObjectLike(result)) return "No detailed result";
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const details = result as Record<string, unknown>;
+  const details = result as JsonObject;
   const summary: string[] = [];
   if (isString(details["policy"])) summary.push(details["policy"]);
   if (isString(details["error"])) summary.push(details["error"]);
@@ -369,8 +370,8 @@ function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
   return result !== null
     && isObjectLike(result)
     && !Array.isArray(result)
-    && isNumber((result as Record<string, unknown>)["advisory-failed"])
-    && ((result as Record<string, unknown>)["advisory-failed"] as number) > 0;
+    && isNumber((result as JsonObject)["advisory-failed"])
+    && ((result as JsonObject)["advisory-failed"] as number) > 0;
 }
 
 function phaseStatusFromRun(

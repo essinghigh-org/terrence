@@ -5,10 +5,11 @@ import { setAuthToken } from "../src/lib/api";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { WorkspaceVcs } from "../src/components/WorkspaceVcs";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -200,7 +201,7 @@ test("switches an existing workspace to a registered OAuth connection", async ()
   });
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const attributes = (patchBody as {
-    data: { attributes: Record<string, unknown> };
+    data: { attributes: JsonObject };
   }).data.attributes;
   expect(attributes["vcs-repo"]).toEqual({
     identifier: "acme/infrastructure",
@@ -249,7 +250,7 @@ test("keeps local workspace creation independent from VCS connections", async ()
   });
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const attributes = (createBody as {
-    data: { attributes: Record<string, unknown> };
+    data: { attributes: JsonObject };
   }).data.attributes;
   expect(attributes.source).toBe("local");
   expect(Object.hasOwn(attributes, "vcs-repo")).toBe(false);

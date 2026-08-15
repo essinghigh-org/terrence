@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { JsonValue } from "../lib/json";
 import { useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,7 @@ export type VcsWorkspace = {
     "trigger-patterns"?: string[];
     "speculative-enabled"?: boolean;
     permissions?: { "can-update"?: boolean };
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
 };
 
@@ -198,14 +199,13 @@ export function WorkspaceVcs({
     if (!canUpdate || orgName === "" || connectionValue === "") return undefined;
     const controller = new AbortController();
     setVcsRepositoriesLoading(true);
-    void fetchApi(
+    void fetchApi<{ data?: { attributes: { identifier: string; name: string; owner?: string } }[] }>(
       `/organizations/${encodeURIComponent(orgName)}/vcs-connections/${encodeURIComponent(connectionValue)}/repositories`,
       { signal: controller.signal },
     )
-      .then((res: unknown): void => {
+      .then((res): void => {
         if (controller.signal.aborted) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
+        const list = res.data;
         if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
       .catch((): void => {})
@@ -224,7 +224,7 @@ export function WorkspaceVcs({
       .then((loaded: VcsConnection[]): void => {
         if (!controller.signal.aborted) setConnections(loaded);
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (!controller.signal.aborted) {
           setConnectionsError(
             caught instanceof Error ? caught.message : "Registered VCS connections could not be loaded.",

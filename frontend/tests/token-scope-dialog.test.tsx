@@ -3,10 +3,11 @@ import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/re
 
 import { TokenScopeDialog } from "../src/components/TokenScopeDialog";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -21,10 +22,10 @@ type MockOrg = Readonly<{ id: string; externalId: string }>;
 type MockChild = Readonly<{ id: string; name: string }>;
 
 /** JSON:API create-token body captured by the fetch mock. */
-type PostedBody = { data: { type: string; attributes: Record<string, unknown> } } | null;
+type PostedBody = { data: { type: string; attributes: JsonObject } } | null;
 
 /** Token resource passed to onCreated. */
-type CreatedToken = { id: string; attributes: Record<string, unknown> };
+type CreatedToken = { id: string; attributes: JsonObject };
 
 function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces?: MockChild[] } = {}) {
   const orgs: MockOrg[] = options.orgs ?? [{ id: "acme-org", externalId: "org-111" }];
@@ -149,7 +150,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -214,7 +215,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -272,7 +273,7 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
+  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],

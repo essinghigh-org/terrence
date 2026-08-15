@@ -40,6 +40,7 @@ import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 import { isNumber } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -119,7 +120,7 @@ async function fetchWorkspacePages(
     ) as {
       data?: Workspace[];
       included?: RunSummary[];
-      meta?: { pagination?: Record<string, unknown> };
+      meta?: { pagination?: JsonObject };
     };
     if (Array.isArray(response.data)) workspaces.push(...response.data);
     if (Array.isArray(response.included)) {

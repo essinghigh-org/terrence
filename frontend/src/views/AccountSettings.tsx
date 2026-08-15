@@ -21,6 +21,7 @@ import { useDisplayTimezone } from "../lib/useDisplayTimezone";
 import { useDisplayTimeFormat } from "../lib/useDisplayTimeFormat";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type BrowserSession = Readonly<{
   readonly id: string;
@@ -45,7 +46,7 @@ export function AccountSettings(): React.JSX.Element {
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
-  const [tokens, setTokens] = useState<{ id: string; attributes: Record<string, unknown> }[]>([]);
+  const [tokens, setTokens] = useState<{ id: string; attributes: JsonObject }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -123,7 +124,7 @@ export function AccountSettings(): React.JSX.Element {
       if (!requiresChange) {
         void loadSessions();
         // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+        const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: JsonObject }[] };
         setTokens(tokensRes.data);
         await loadMfa();
       }
@@ -325,13 +326,13 @@ export function AccountSettings(): React.JSX.Element {
   }
 
   /* ---- Token Create ---- */
-  async function handleTokenCreated(created: { id: string; attributes: Record<string, unknown> }): Promise<void> {
+  async function handleTokenCreated(created: { id: string; attributes: JsonObject }): Promise<void> {
     setError("");
     setSuccessMsg("");
     setCreatedTokenSecret(isString(created.attributes["token"]) ? created.attributes["token"] : null);
     if (account !== null) {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
+      const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: JsonObject }[] };
       setTokens(tokensRes.data);
     }
   }
@@ -343,7 +344,7 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       await fetchApi(`/authentication-tokens/${tokenId}`, { method: "DELETE" });
-      setTokens((prev: { id: string; attributes: Record<string, unknown> }[]): { id: string; attributes: Record<string, unknown> }[] => prev.filter((t: { id: string; attributes: Record<string, unknown> }): boolean => t.id !== tokenId));
+      setTokens((prev: { id: string; attributes: JsonObject }[]): { id: string; attributes: JsonObject }[] => prev.filter((t: { id: string; attributes: JsonObject }): boolean => t.id !== tokenId));
       setSuccessMsg("Token deleted");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to delete token";

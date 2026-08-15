@@ -2,10 +2,11 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { WorkspaceVariables } from "../src/components/WorkspaceVariables";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
+const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
   status,
   headers: { "Content-Type": "application/vnd.api+json" },
 });

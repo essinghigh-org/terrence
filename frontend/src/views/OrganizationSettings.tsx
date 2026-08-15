@@ -18,8 +18,9 @@ import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
-type Team = Readonly<{ id: string; attributes: Readonly<Record<string, unknown>> }>;
+type Team = Readonly<{ id: string; attributes: Readonly<JsonObject> }>;
 type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
 type Membership = Readonly<{
   id: string;
@@ -34,7 +35,7 @@ type OrganizationPermissions = Readonly<{
 }>;
 type Organization = Readonly<{
   id: string;
-  attributes: Readonly<Record<string, unknown> & { permissions?: OrganizationPermissions }>;
+  attributes: Readonly<JsonObject & { permissions?: OrganizationPermissions }>;
 }>;
 
 const organizationPermissions = [
@@ -61,7 +62,7 @@ function teamOrganizationAccess(team: Team): Record<OrganizationPermission, bool
   const raw = team.attributes["organization-access"];
   // SAFETY: the typeof-object guard is the boundary check; fields are typeof-validated below.
   const access = isRecord(raw) && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
+    ? raw as JsonObject
     : {};
   // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
   return Object.fromEntries(
@@ -365,12 +366,7 @@ export function OrganizationSettings(): React.JSX.Element {
     setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string | undefined) ?? "organization" }));
     setTeamTokenMgmt((prev) => ({ ...prev, [team.id]: team.attributes["allow-member-token-management"] === true }));
     // Load team members via include=users (returns included user resources)
-    void fetchApi(`/teams/${encodeURIComponent(team.id)}?include=users`).then((response: unknown): void => {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const r = response as {
-        data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined;
-        included?: { id: string; type: string; attributes: { username?: string; email?: string } }[];
-      };
+    void fetchApi<{ data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] }>(`/teams/${encodeURIComponent(team.id)}?include=users`).then((r): void => {
       if (r.data !== undefined) {
         const d = r.data;
 // SAFETY: the fixture field matches the API contract type.
@@ -468,9 +464,7 @@ export function OrganizationSettings(): React.JSX.Element {
       });
       setTeamMemberCounts((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
       // Refresh member list
-      void fetchApi(`/teams/${encodeURIComponent(teamId)}?include=users`).then((response: unknown): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const r = response as { data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] };
+      void fetchApi<{ data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] }>(`/teams/${encodeURIComponent(teamId)}?include=users`).then((r): void => {
         if (r.data !== undefined) {
           const d = r.data;
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.

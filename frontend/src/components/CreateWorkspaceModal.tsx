@@ -61,10 +61,9 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     if (!open) return undefined;
     const controller = new AbortController();
     setVersionsLoading(true);
-    void fetchApi(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, { signal: controller.signal })
-      .then((response: unknown): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const versions = (response as { data?: unknown }).data;
+    void fetchApi<{ data?: unknown }>(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, { signal: controller.signal })
+      .then((response): void => {
+        const versions = response.data;
         if (!controller.signal.aborted && Array.isArray(versions)) {
           setAvailableVersions(versions.filter((version): version is string => isString(version)));
         }
@@ -109,14 +108,13 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     if (!open || sourceType !== "vcs" || vcsConnectionValue === "") return undefined;
     const controller = new AbortController();
     setVcsReposLoading(true);
-    void fetchApi(
+    void fetchApi<{ data?: { attributes: { identifier: string; name: string; owner?: string } }[] }>(
       `/organizations/${encodeURIComponent(orgName)}/vcs-connections/${encodeURIComponent(vcsConnectionValue)}/repositories`,
       { signal: controller.signal },
     )
-      .then((res: unknown): void => {
+      .then((res): void => {
         if (controller.signal.aborted) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
+        const list = res.data;
         if (Array.isArray(list)) {
           setVcsRepositories(list.map((item) => item.attributes));
         }

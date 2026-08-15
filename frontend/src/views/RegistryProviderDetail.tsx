@@ -7,6 +7,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/
 import { Spinner } from "../components/ui/spinner";
 import { fetchApi } from "../lib/api";
 import { isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type Platform = Readonly<{ id: string; os: string; arch: string; filename: string; shasum: string }>;
 type Version = Readonly<{ id: string; version: string; protocols: readonly string[]; keyId: string | null; createdAt: string; platforms: readonly Platform[] }>;
@@ -17,10 +18,10 @@ function stringValue(value: unknown): string {
 
 function platformFromResource(raw: unknown): Platform {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const item = isRecord(raw) ? raw as Record<string, unknown> : {};
+  const item = isRecord(raw) ? raw as JsonObject : {};
   const rawAttributes = item["attributes"];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = isRecord(rawAttributes) ? rawAttributes as Record<string, unknown> : {};
+  const attributes = isRecord(rawAttributes) ? rawAttributes as JsonObject : {};
   return {
     id: stringValue(item["id"]),
     os: stringValue(attributes["os"]),
@@ -45,10 +46,10 @@ export function RegistryProviderDetail(): React.JSX.Element {
       const versionResponse = await fetchApi(`/registry-providers/${encodeURIComponent(providerResponse.data.id)}/versions`, { signal: controller.signal }) as { data?: unknown[] };
       const loaded = await Promise.all((versionResponse.data ?? []).map(async (raw): Promise<Version> => {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const item = isRecord(raw) ? raw as Record<string, unknown> : {};
+        const item = isRecord(raw) ? raw as JsonObject : {};
         const rawAttributes = item["attributes"];
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const attributes = isRecord(rawAttributes) ? rawAttributes as Record<string, unknown> : {};
+        const attributes = isRecord(rawAttributes) ? rawAttributes as JsonObject : {};
         const id = stringValue(item["id"]);
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const platformResponse = await fetchApi(`/registry-provider-versions/${encodeURIComponent(id)}/platforms`, { signal: controller.signal }) as { data?: unknown[] };
@@ -64,7 +65,7 @@ export function RegistryProviderDetail(): React.JSX.Element {
       if (!controller.signal.aborted) setVersions(loaded);
     };
     void load()
-      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Provider could not be loaded."); })
+      .catch((caught): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Provider could not be loaded."); })
       .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
     return (): void => { controller.abort(); };
   }, [name, namespace, orgName]);

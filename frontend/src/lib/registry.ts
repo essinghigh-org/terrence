@@ -1,4 +1,5 @@
 import { isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 export type RegistryModuleVersion = Readonly<{
   id: string;
   version: string;
@@ -66,14 +67,14 @@ export type RegistryModule = Readonly<{
 }>;
 
 /** View an unknown value as a record, or {} when it is not an object. */
-function asRecord(value: unknown): Record<string, unknown> {
+function asRecord(value: unknown): JsonObject {
   if (!isRecord(value)) return {};
   // SAFETY: the typeof-object guard is the boundary check; callers only read
   // string-typed fields and validate each with typeof afterwards.
-  return value as Record<string, unknown>;
+  return value as JsonObject;
 }
 
-function attributes(resource: unknown): Record<string, unknown> {
+function attributes(resource: unknown): JsonObject {
   return asRecord(asRecord(resource)["attributes"]);
 }
 
@@ -126,6 +127,91 @@ export function registryModuleFromResource(resource: unknown): RegistryModule {
   };
 }
 
+/** Decode a registry metadata section from the JSON:API metadata payload. */
+function sectionFrom(value: unknown): RegistryModuleSection | null {
+  if (!isRecord(value)) return null;
+  const stringField = (key: string): string | null => (isString(value[key]) ? value[key] : null);
+  const inputFrom = (entry: unknown): RegistryModuleSection["inputs"][number][] => {
+    if (!isRecord(entry)) return [];
+    const name = isString(entry["name"]) ? entry["name"] : "";
+    const type = isString(entry["type"]) ? entry["type"] : "";
+    const description = isString(entry["description"]) ? entry["description"] : null;
+    if (name === "" || type === "") return [];
+    return [{
+      name,
+      type,
+      description,
+      defaultValue: entry["default-value"],
+      required: entry["required"] === true,
+      sensitive: entry["sensitive"] === true,
+      nullable: entry["nullable"] === true,
+    }];
+  };
+  const outputFrom = (entry: unknown): RegistryModuleSection["outputs"][number][] => {
+    if (!isRecord(entry)) return [];
+    const name = isString(entry["name"]) ? entry["name"] : "";
+    if (name === "") return [];
+    return [{
+      name,
+      description: isString(entry["description"]) ? entry["description"] : null,
+      sensitive: entry["sensitive"] === true,
+    }];
+  };
+  const referenceFrom = (entry: unknown): RegistryModuleSection["providers"][number][] => {
+    if (!isRecord(entry)) return [];
+    const name = isString(entry["name"]) ? entry["name"] : "";
+    if (name === "") return [];
+    return [{
+      name,
+      source: isString(entry["source"]) ? entry["source"] : null,
+      versionConstraint: isString(entry["version-constraint"]) ? entry["version-constraint"] : null,
+    }];
+  };
+  const resourceFrom = (entry: unknown): RegistryModuleSection["resources"][number][] => {
+    if (!isRecord(entry)) return [];
+    const name = isString(entry["name"]) ? entry["name"] : "";
+    const type = isString(entry["type"]) ? entry["type"] : "";
+    if (name === "" || type === "") return [];
+    return [{
+      name,
+      type,
+      mode: entry["mode"] === "data" ? "data" : "managed",
+    }];
+  };
+  return {
+    path: stringField("path") ?? "",
+    readme: stringField("readme") ?? "",
+    description: stringField("description"),
+    inputs: Array.isArray(value["inputs"]) ? value["inputs"].flatMap(inputFrom) : [],
+    outputs: Array.isArray(value["outputs"]) ? value["outputs"].flatMap(outputFrom) : [],
+    providers: Array.isArray(value["providers"]) ? value["providers"].flatMap(referenceFrom) : [],
+    modules: Array.isArray(value["modules"]) ? value["modules"].flatMap(referenceFrom) : [],
+    resources: Array.isArray(value["resources"]) ? value["resources"].flatMap(resourceFrom) : [],
+  };
+}
+
+/** Decode the full registry module metadata payload (section + submodules). */
+function metadataFrom(value: unknown): RegistryModuleMetadata | null {
+  if (!isRecord(value)) return null;
+  const section = sectionFrom(value);
+  if (section === null) return null;
+  const diagnostics = Array.isArray(value["diagnostics"])
+    ? value["diagnostics"].flatMap((entry): string[] => (isString(entry) ? [entry] : []))
+    : [];
+  return {
+    ...section,
+    submodules: Array.isArray(value["submodules"]) ? value["submodules"].flatMap((entry): RegistryModuleSection[] => {
+      const parsed = sectionFrom(entry);
+      return parsed === null ? [] : [parsed];
+    }) : [],
+    examples: Array.isArray(value["examples"]) ? value["examples"].flatMap((entry): RegistryModuleSection[] => {
+      const parsed = sectionFrom(entry);
+      return parsed === null ? [] : [parsed];
+    }) : [],
+    diagnostics,
+  };
+}
+
 export function registryModuleVersionFromResource(resource: unknown): RegistryModuleVersion {
   const raw = asRecord(resource);
   const value = attributes(resource);
@@ -135,9 +221,9 @@ export function registryModuleVersionFromResource(resource: unknown): RegistryMo
     status: isString(value["status"]) ? value["status"] : "pending",
     deprecated: value["deprecated"] === true,
     revoked: value["revoked"] === true,
-    // SAFETY: the typeof-object guard above is the boundary check; metadata is
-    // treated as opaque (the backend echoes it back on re-publish).
-    metadata: isRecord(value["metadata"]) ? value["metadata"] as RegistryModuleMetadata : null,
+    // SAFETY: the metadata payload is decoded field-by-field by metadataFrom;
+    // unparsable values degrade to null.
+    metadata: metadataFrom(value["metadata"]),
     commitSha: isString(value["commit-sha"]) ? value["commit-sha"] : null,
     tag: isString(value["tag"]) ? value["tag"] : null,
     branch: isString(value["branch"]) ? value["branch"] : null,

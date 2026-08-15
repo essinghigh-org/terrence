@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
 import { isString } from "../lib/type-guards";
 
+
 export function Login(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -24,10 +25,9 @@ export function Login(): React.JSX.Element {
   const navigate = useNavigate();
 
   useEffect((): void => {
-    fetchApi("/ping")
-      .then((data: unknown): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const resp = data as { "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } };
+    fetchApi<{ "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } }>("/ping")
+      .then((data): void => {
+        const resp = data;
         setSignupEnabled(resp["signup-enabled"] !== false);
         setLocalAuthEnabled(resp["local-auth-enabled"] !== false);
         setSamlEnabled(resp.sso?.saml === true);

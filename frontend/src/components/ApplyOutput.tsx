@@ -16,6 +16,7 @@ import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
 import { AttributeDiff } from "./PlanOutput";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type Change = {
   actions: string[];
@@ -159,7 +160,7 @@ function parseApplyLogsToExecMap(
     if (trimmed.startsWith("{")) {
       try {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-        const json = JSON.parse(trimmed) as Record<string, unknown>;
+        const json = JSON.parse(trimmed) as JsonObject;
         const type = json["type"];
         const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
         const rawResource = hook?.["resource"];
@@ -302,7 +303,7 @@ function ApplyResourceRow({
     event.preventDefault();
     event.stopPropagation();
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
+    const clipboard = navigator.clipboard;
     if (clipboard !== undefined) {
       void clipboard.writeText(resource.address);
       setCopied(true);

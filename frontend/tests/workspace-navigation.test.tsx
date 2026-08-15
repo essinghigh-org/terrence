@@ -5,10 +5,11 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: unknown): Response =>
+const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
@@ -404,7 +405,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       return json({
         data: {

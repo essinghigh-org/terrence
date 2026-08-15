@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { formatDate, formatDateTime, formatDateTimeExact } from "../src/lib/utils";
+import type { JsonObject } from "../src/lib/json";
 
 const savedTZ = process.env.TZ;
 
@@ -12,7 +13,7 @@ afterEach(() => {
 /** Run a snippet in a child process with a specific TZ (Bun test workers
  * ignore process.env.TZ mutations). Returns the parsed JSON the snippet
  * prints as its final line. */
-function runWithTZ(tz: string, script: string): Record<string, unknown> {
+function runWithTZ(tz: string, script: string): JsonObject {
   const r = spawnSync("bun", ["-e", script], {
     cwd: process.cwd(),
     env: { ...process.env, TZ: tz },

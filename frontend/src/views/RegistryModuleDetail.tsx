@@ -24,6 +24,7 @@ import {
 } from "../lib/registry";
 import { cn } from "../lib/utils";
 import { isString } from "../lib/type-guards";
+import type { JsonValue } from "@/lib/json";
 
 type DetailTab = "readme" | "inputs" | "outputs" | "dependencies" | "resources";
 type Confirmation = "revoke" | "delete-version" | "delete-module" | null;
@@ -81,7 +82,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
       .then(async (response): Promise<void> => {
         if (controller.signal.reason !== undefined) return;
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const loadedModule = registryModuleFromResource((response as { data: unknown }).data);
+        const loadedModule = registryModuleFromResource((response as { data: JsonValue }).data);
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const versionResponse = await fetchApi(`/registry-modules/${encodeURIComponent(loadedModule.id)}/versions`, { signal: controller.signal }) as { data?: unknown[] };
         if (controller.signal.reason !== undefined) return;
@@ -97,7 +98,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
           setSearchParams(next, { replace: true });
         }
       })
-      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Module could not be loaded."); })
+      .catch((caught): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Module could not be loaded."); })
       .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
     return (): void => { controller.abort(); };
   }, [name, namespace, orgName, provider, reload]); // search params are intentionally handled without refetching

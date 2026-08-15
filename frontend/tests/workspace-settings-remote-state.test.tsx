@@ -5,10 +5,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceSettings } from "../src/components/WorkspaceSettings";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: unknown, status = 200): Response =>
+const json = (data: JsonValue, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -89,7 +90,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       return json({
         data: {
@@ -152,7 +153,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
   if (workspacePatch === undefined) throw new Error("Expected workspace settings PATCH");
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   const workspacePayload = JSON.parse(workspacePatch[1]?.body as string) as {
-    data: { attributes: Record<string, unknown> };
+    data: { attributes: JsonObject };
   };
   expect(workspacePayload.data.attributes["global-remote-state"]).toBe(false);
   expect(workspacePayload.data.attributes["project-remote-state"]).toBe(false);
@@ -202,7 +203,7 @@ test("reconciles general settings before reporting a remote-state replacement fa
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       return json({
         data: {
@@ -283,7 +284,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: Record<string, unknown> };
+        data: { attributes: JsonObject };
       };
       return json({
         data: {

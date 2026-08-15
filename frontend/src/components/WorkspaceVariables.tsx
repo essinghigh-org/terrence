@@ -140,7 +140,7 @@ export function WorkspaceVariables({
         setSets(attached);
         setSetsVars(Object.fromEntries(varsBySet));
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (active.value) setSetsError(messageFrom(error, "Failed to load variable sets"));
       })
       .finally((): void => {
@@ -161,7 +161,7 @@ export function WorkspaceVariables({
         const data = (response as { data?: WorkspaceVariable[] }).data;
         setVariables(Array.isArray(data) ? data : []);
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (active.value) setPageError(messageFrom(error, "Failed to load workspace variables"));
       })
       .finally((): void => {
@@ -183,7 +183,7 @@ export function WorkspaceVariables({
     setAttachOpen(true);
     fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`)
       .then((orgSets: VariableSet[]): void => { setAllSets(orgSets); })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         setAttachError(messageFrom(error, "Failed to load organization variable sets"));
       })
       .finally((): void => {

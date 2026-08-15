@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject } from "../src/lib/json";
 import {
   ApiError,
   bootstrapAuth,
@@ -347,7 +348,7 @@ test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)",
     { status: "404", title: "Not Found", detail: "gone", source: { pointer: "/data/attributes/repo" } },
     // No pointer - the generic title/detail path carries it, not field errors
     { status: "422", title: "X", detail: "no-pointer" },
-  ] as Record<string, unknown>[];
+  ] as JsonObject[];
 
   expect(extractFieldErrors(rawErrors)).toEqual({
     name: "Name is required",
@@ -362,7 +363,7 @@ test("extractFieldErrors ignores malformed pointers and empty details", () => {
     { detail: "d", source: { pointer: "/data/attributes/ok" } },
     { detail: "", source: { pointer: "/data/attributes/empty" } },
     { detail: "no pointer" },
-  ] as Record<string, unknown>[])).toEqual({ ok: "d" });
+  ] as JsonObject[])).toEqual({ ok: "d" });
 });
 
 test("fetchApi surfaces field-level 422 details on ApiError", async () => {

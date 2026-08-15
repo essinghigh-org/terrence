@@ -3,9 +3,10 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 
 import { WorkspaceRunTasks } from "../src/components/WorkspaceRunTasks";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown, status = 200): Response =>
+const json = (data: JsonValue, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },

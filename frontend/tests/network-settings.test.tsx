@@ -3,9 +3,10 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { OrganizationCidrRanges } from "../src/components/OrganizationCidrRanges";
 import { WorkspaceConfigurationVersions } from "../src/components/WorkspaceConfigurationVersions";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 const urlOf = (input: string | URL | Request): string => isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
 

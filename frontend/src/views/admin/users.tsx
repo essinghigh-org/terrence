@@ -15,7 +15,7 @@ export function UsersAdmin(props: Readonly<{
   const runUserAction = (id: string, actionPath: string, successTitle: string, failureTitle: string): void => {
     void fetchApi(`/api/v2/admin/users/${id}/actions/${actionPath}`, { method: "POST" })
       .then((): void => { void loadAdminData(); toast.add({ title: successTitle, type: "success" }); })
-      .catch((err: unknown): void => { toast.add({ title: failureTitle, description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+      .catch((err): void => { toast.add({ title: failureTitle, description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
   };
   return (
             <Card>

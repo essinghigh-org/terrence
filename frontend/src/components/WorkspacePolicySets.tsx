@@ -41,14 +41,13 @@ export function WorkspacePolicySets({
     let active = true;
     setLoading(true);
     setError("");
-    fetchApi(`/workspaces/${workspaceId}/policy-sets`)
-      .then((response: unknown): void => {
+    fetchApi<{ data?: PolicySet[] }>(`/workspaces/${workspaceId}/policy-sets`)
+      .then((response): void => {
         if (!active) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (response as { data?: PolicySet[] }).data;
+        const data = response.data;
         setPolicySets(Array.isArray(data) ? data : []);
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active) {
           setError(caught instanceof Error ? caught.message : "Failed to load policy sets");
         }

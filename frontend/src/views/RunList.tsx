@@ -26,6 +26,7 @@ import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
 import { subscribeEvents, type SseEvent } from "../lib/events";
 import { isNumber, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type RunItem = {
   id: string;
@@ -174,7 +175,7 @@ export function RunList({
       const response = await fetchApi(`${firstUrl.pathname}${firstUrl.search}`, signal === undefined ? {} : { signal }) as {
         data?: RunItem[];
         included?: IncludedUser[];
-        meta?: { pagination?: Record<string, unknown> };
+        meta?: { pagination?: JsonObject };
       };
       if (!signal.aborted) {
         const allRuns = Array.isArray(response.data) ? [...response.data] : [];
@@ -195,7 +196,7 @@ export function RunList({
           const nextRes = await fetchApi(nextPath, signal === undefined ? {} : { signal }) as {
             data?: RunItem[];
             included?: IncludedUser[];
-            meta?: { pagination?: Record<string, unknown> };
+            meta?: { pagination?: JsonObject };
           };
           if (signal.aborted) break;
           if (Array.isArray(nextRes.data)) allRuns.push(...nextRes.data);

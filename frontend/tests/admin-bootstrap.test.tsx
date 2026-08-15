@@ -5,9 +5,10 @@ import { AccountSettings } from "../src/views/AccountSettings";
 import { getAuthToken, setAuthToken } from "../src/lib/api";
 import { Login } from "../src/views/Login";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown): Response =>
+const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
@@ -20,7 +21,8 @@ afterEach((): void => {
 
 function changeInput(element: HTMLElement, value: string): void {
 // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (next: string) => void } | undefined;
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  const tracker = (element as { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
   fireEvent.input(element, { target: { value } });

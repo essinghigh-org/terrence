@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { JsonObject } from "../src/lib/json";
 
 const indexHtml = readFileSync(join(import.meta.dir, "../index.html"), "utf8");
 const manifest = readFileSync(join(import.meta.dir, "../public/manifest.webmanifest"), "utf8");
@@ -51,7 +52,7 @@ describe("index.html document metadata", (): void => {
 describe("Web App Manifest", (): void => {
   it("is valid JSON with stand-alone display and the required icons", (): void => {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-    const parsed = JSON.parse(manifest) as Record<string, unknown>;
+    const parsed = JSON.parse(manifest) as JsonObject;
     expect(parsed.display).toBe("standalone");
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const icons = parsed.icons as { sizes?: string; purpose?: string }[];

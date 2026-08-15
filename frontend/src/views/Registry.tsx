@@ -15,6 +15,7 @@ import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type RegistryProvider = Readonly<{
   id: string;
@@ -26,9 +27,9 @@ type RegistryProvider = Readonly<{
 
 function providerFromResource(resource: unknown): RegistryProvider {
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const raw = isRecord(resource) ? resource as Record<string, unknown> : {};
+  const raw = isRecord(resource) ? resource as JsonObject : {};
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = isRecord(raw["attributes"]) ? raw["attributes"] as Record<string, unknown> : {};
+  const attributes = isRecord(raw["attributes"]) ? raw["attributes"] as JsonObject : {};
   return {
     id: isString(raw["id"]) ? raw["id"] : "",
     name: isString(attributes["name"]) ? attributes["name"] : "",
@@ -96,7 +97,7 @@ export function Registry(): React.JSX.Element {
       }
     };
     void load()
-      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Registry could not be loaded."); })
+      .catch((caught): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Registry could not be loaded."); })
       .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
     return (): void => { controller.abort(); };
   }, [activeTab, moduleSearch, orgName, page, providerFilter, publishingFilter, reload]);

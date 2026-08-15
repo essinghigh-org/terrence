@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
 
+
 export function Register(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -18,10 +19,9 @@ export function Register(): React.JSX.Element {
   const navigate = useNavigate();
 
   useEffect((): void => {
-    fetchApi("/ping")
-      .then((data: unknown): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const resp = data as { "signup-enabled"?: boolean };
+    fetchApi<{ "signup-enabled"?: boolean }>("/ping")
+      .then((data): void => {
+        const resp = data;
         if (resp["signup-enabled"] === false) {
           setSignupDisabled(true);
           void navigate("/login");

@@ -69,7 +69,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       }).data?.attributes;
       setPermissions(attributes?.permissions);
       setLoaded(true);
-    }).catch((caught: unknown) => {
+    }).catch((caught) => {
       if (controller.signal.aborted) return;
       setPermissions(undefined);
       setLoaded(true);

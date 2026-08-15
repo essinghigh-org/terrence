@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { KeyRound, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import type { JsonObject } from "@/lib/json";
 
 type Hyok = {
   id: string;
@@ -32,7 +33,7 @@ type Hyok = {
 type OidcConfig = {
   id: string;
   type: string;
-  attributes: Record<string, unknown>;
+  attributes: JsonObject;
 };
 
 type AgentPool = {

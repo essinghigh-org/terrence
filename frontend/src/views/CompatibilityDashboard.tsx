@@ -10,10 +10,11 @@ import { fetchApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 import { isNumber } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type SurfaceEntry = Readonly<{ name: string; status: string }>;
 
-type ProviderSurface = Readonly<Record<string, unknown> & {
+type ProviderSurface = Readonly<JsonObject & {
   provider?: string;
   resources?: SurfaceEntry[];
 }>;

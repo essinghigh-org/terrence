@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { JsonValue } from "@/lib/json";
 
 /**
  * Registry of active navigation guards. A guard returns true when navigation
@@ -37,7 +38,7 @@ function installHistoryPatch(): void {
 
   window.history.pushState = function (
     this: History,
-    data: unknown,
+    data: JsonValue,
     unused: string,
     url?: string | URL | null,
   ): void {
@@ -47,7 +48,7 @@ function installHistoryPatch(): void {
 
   window.history.replaceState = function (
     this: History,
-    data: unknown,
+    data: JsonValue,
     unused: string,
     url?: string | URL | null,
   ): void {

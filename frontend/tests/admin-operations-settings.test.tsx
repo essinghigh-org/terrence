@@ -2,9 +2,10 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { AdminOperationsSettings } from "../src/views/AdminOperationsSettings";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
+const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
   status,
   headers: { "Content-Type": "application/vnd.api+json" },
 });
@@ -28,12 +29,12 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
       "reasoning-effort": null,
     },
   };
-  let savedBody: Record<string, unknown> | undefined;
+  let savedBody: JsonObject | undefined;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      savedBody = JSON.parse(init.body as string) as Record<string, unknown>;
+      savedBody = JSON.parse(init.body as string) as JsonObject;
       return json({ data: { attributes: settings } });
     }
     if (url === "/api/v2/admin/operations-settings") return json({ data: { attributes: settings } });
@@ -62,9 +63,9 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   await waitFor((): void => { expect(savedBody).toBeDefined(); });
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = (savedBody?.data as Record<string, unknown>)?.attributes as Record<string, unknown>;
+  const attributes = (savedBody?.data as JsonObject)?.attributes as JsonObject;
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const explainer = attributes["plan-explainer"] as Record<string, unknown>;
+  const explainer = attributes["plan-explainer"] as JsonObject;
   expect(explainer["base-url"]).toBe("https://api.example.com/v1");
   expect(explainer["endpoint-url"]).toBeUndefined();
 

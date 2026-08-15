@@ -5,9 +5,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "../src/components/Layout";
 import { AdminDashboard } from "../src/views/AdminDashboard";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown): Response =>
+const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
@@ -33,8 +34,8 @@ let samlServerEnabled = false;
 let oidcServerEnabled = false;
 let oidcServerSecretSet = true;
 let ldapServerEnabled = false;
-let oidcPatchAttributes: Record<string, unknown> | null = null;
-let ldapPatchAttributes: Record<string, unknown> | null = null;
+let oidcPatchAttributes: JsonObject | null = null;
+let ldapPatchAttributes: JsonObject | null = null;
 let localAuthServerEnabled = true;
 
 beforeEach((): void => {
@@ -127,7 +128,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     if (url === "/api/v2/admin/oidc-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const body = isString(init.body)
-        ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
+        ? JSON.parse(init.body) as { data?: { attributes?: JsonObject } }
         : {};
       const attributes = body.data?.attributes ?? {};
       oidcPatchAttributes = attributes;
@@ -182,7 +183,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     if (url === "/api/v2/admin/ldap-settings" && init?.method === "PATCH") {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const body = isString(init.body)
-        ? JSON.parse(init.body) as { data?: { attributes?: Record<string, unknown> } }
+        ? JSON.parse(init.body) as { data?: { attributes?: JsonObject } }
         : {};
       ldapPatchAttributes = body.data?.attributes ?? null;
       ldapServerEnabled = body.data?.attributes?.enabled === true;

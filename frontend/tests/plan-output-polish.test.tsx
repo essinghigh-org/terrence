@@ -2,10 +2,11 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { PlanOutput } from "../src/components/PlanOutput";
 import { isString } from "../src/lib/type-guards";
+import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-function json(data: unknown, status = 200): Response {
+function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
@@ -14,7 +15,8 @@ function json(data: unknown, status = 200): Response {
 
 function changeInput(element: HTMLElement, value: string): void {
 // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
-  const tracker = Reflect.get(element, "_valueTracker") as { setValue: (next: string) => void } | undefined;
+  // SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
+  const tracker = (element as { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
   fireEvent.input(element, { target: { value } });

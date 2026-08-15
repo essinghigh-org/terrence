@@ -4,9 +4,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { Registry } from "../src/views/Registry";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
+const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
   status,
   headers: { "Content-Type": "application/vnd.api+json" },
 });
@@ -80,7 +81,7 @@ afterEach((): void => {
 });
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
-  let payload: Record<string, unknown> | null = null;
+  let payload: JsonObject | null = null;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
@@ -88,7 +89,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
     if (base !== null) return base;
     if (url === "/api/v2/organizations/acme/registry-modules/vcs" && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      payload = JSON.parse(init.body as string) as Record<string, unknown>;
+      payload = JSON.parse(init.body as string) as JsonObject;
       return json({ data: moduleResource("mod-vcs", "network", "aws") }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -105,7 +106,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
   await view.findByText("Module detail landing");
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = ((payload?.data as Record<string, unknown>).attributes as Record<string, unknown>);
+  const attributes = ((payload?.data as JsonObject).attributes as JsonObject);
   expect(attributes["module-name"]).toBe("network");
   expect(attributes["module-provider"]).toBe("aws");
   expect(attributes["source-directory"]).toBe("modules/network");
@@ -118,7 +119,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
 });
 
 test("publishes branch configuration with branch and initial version", async () => {
-  let attributes: Record<string, unknown> | null = null;
+  let attributes: JsonObject | null = null;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
@@ -126,7 +127,7 @@ test("publishes branch configuration with branch and initial version", async () 
     if (base !== null) return base;
     if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
+      const body = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       attributes = body.data.attributes;
       return json({ data: moduleResource("mod-branch", "network", "azurerm") }, 201);
     }
@@ -147,7 +148,7 @@ test("publishes branch configuration with branch and initial version", async () 
   expect(attributes?.["source-directory"]).toBe("terraform/module");
   expect(attributes?.version).toBe("3.2.1");
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  expect((attributes?.["vcs-repo"] as Record<string, unknown>)["branch"]).toBe("release");
+  expect((attributes?.["vcs-repo"] as JsonObject)["branch"]).toBe("release");
   expect(attributes?.["tag-prefix"]).toBe("");
 });
 

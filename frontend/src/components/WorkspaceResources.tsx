@@ -15,6 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ApiError, fetchAllApiPages, fetchApi } from "@/lib/api";
+import type { JsonValue } from "@/lib/json";
 import { cn, formatDateTime } from "@/lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 
@@ -174,12 +175,12 @@ export function WorkspaceResources({
         signal === undefined ? {} : { signal },
       ),
     ]);
-    const readmeResult = fetchApi(
+    const readmeResult = fetchApi<JsonValue>(
       `/workspaces/${encodeURIComponent(workspaceId)}/readme`,
       signal === undefined ? {} : { signal },
     ).then(
-      (value: unknown) => ({ status: "fulfilled", value } as const),
-      (reason: unknown) => ({ status: "rejected", reason } as const),
+      (value: JsonValue) => ({ status: "fulfilled", value } as const),
+      (reason: JsonValue) => ({ status: "rejected", reason } as const),
     );
     const [resourceResult, outputResult, dependencyGraphResult] = await stateResults;
     if (isAborted(signal)) return;

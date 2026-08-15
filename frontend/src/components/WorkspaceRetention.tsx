@@ -28,8 +28,8 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
   useEffect((): (() => void) => {
     let active = true;
     setLoading(true);
-    void fetchApi(`/workspaces/${workspaceId}/relationships/data-retention-policy`)
-      .then((response: unknown): void => {
+    void fetchApi<{ data?: { attributes?: { "max-days"?: number; "enabled"?: boolean } } }>(`/workspaces/${workspaceId}/relationships/data-retention-policy`)
+      .then((response): void => {
         if (!active) return;
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: Retention }).data;
@@ -38,7 +38,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
         setCount(data.attributes["state-versions-count"] ?? 0);
         setDays(data.attributes["delete-older-than-n-days"] ?? 0);
       })
-      .catch((caught: unknown): void => {
+      .catch((caught): void => {
         if (active && !(caught instanceof Error && caught.message.includes("404"))) {
           setError(caught instanceof Error ? caught.message : "Could not load retention policy");
         }

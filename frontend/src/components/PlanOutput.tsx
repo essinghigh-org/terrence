@@ -10,6 +10,7 @@ import {
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
+import type { JsonObject } from "@/lib/json";
 
 type Change = {
   actions: string[];
@@ -47,7 +48,7 @@ type ActionInvocation = {
     triggering_resource_address?: string;
     action_trigger_event?: string;
   };
-  invoke_action_trigger?: Record<string, unknown>;
+  invoke_action_trigger?: JsonObject;
 };
 
 type PlanJson = {
@@ -761,7 +762,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
     event.preventDefault();
     event.stopPropagation();
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
+    const clipboard = navigator.clipboard;
     if (clipboard !== undefined) {
       void clipboard.writeText(resource.address);
       setCopied(true);
@@ -1173,7 +1174,7 @@ export function PlanOutput({
             className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-              const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
+              const clipboard = navigator.clipboard;
               if (clipboard !== undefined) {
                 void clipboard.writeText(planSummaryMarkdown({ ...counts, importCount })).then((): void => {
                   setSummaryCopied(true);

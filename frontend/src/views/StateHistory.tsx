@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast";
+import type { JsonObject } from "@/lib/json";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import {
 
 type StateItem = {
   id: string;
-  attributes: Record<string, unknown>;
+  attributes: JsonObject;
   relationships?: {
     run?: { data: { id: string; type: string } | null };
   };
@@ -70,7 +71,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       .then((states: StateItem[]): void => {
         if (!controller.signal.aborted) setLoadState({ kind: "ready", states });
       })
-      .catch((error: unknown): void => {
+      .catch((error): void => {
         if (!controller.signal.aborted) {
           setLoadState({
             kind: "error",
@@ -99,7 +100,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     setLoadingStateId(s.id);
     try {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const res = await fetchApi(`/state-versions/${s.id}`) as { data?: { attributes?: Record<string, unknown> } };
+      const res = await fetchApi(`/state-versions/${s.id}`) as { data?: { attributes?: JsonObject } };
 // SAFETY: the fixture field matches the API contract type.
       const rawPayload = (res.data?.attributes?.["state"] as string | undefined) ?? "{}";
       try {

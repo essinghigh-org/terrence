@@ -45,6 +45,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
 import { formatDate, formatDateTime } from "../lib/utils";
 import { isNumber, isString } from "../lib/type-guards";
+import type { JsonValue } from "@/lib/json";
 
 export type WorkspaceSection =
   | "overview"
@@ -94,12 +95,12 @@ type Workspace = {
       "can-update"?: boolean;
       "can-update-variable"?: boolean;
     };
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
   relationships?: {
     project?: { data: { id: string; type: string } | null };
     "ssh-key"?: { data: { id: string; type: string } | null };
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
 }
 
@@ -113,7 +114,7 @@ type RunSummary = {
     "resource-destructions"?: number;
     source?: string;
     status: string;
-    [key: string]: unknown;
+    [key: string]: JsonValue;
   };
 }
 
@@ -155,7 +156,7 @@ export function WorkspaceDetail({
       const runs = await fetchApi(
         `/api/v2/workspaces/${workspaceId}/runs?page[size]=1`,
         { signal },
-      ) as { data: unknown };
+      ) as { data: JsonValue };
       if (signal.aborted || activeWorkspaceId.current !== workspaceId) return;
 // SAFETY: the runs list carries RunSummary resources per the endpoint contract.
       setLatestRun(Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null);
@@ -234,11 +235,10 @@ export function WorkspaceDetail({
     setProjectName(null);
     if (projectId === undefined || activeSection !== "overview") return undefined;
     const controller = new AbortController();
-    void fetchApi(`/projects/${encodeURIComponent(projectId)}`, { signal: controller.signal })
-      .then((response: unknown): void => {
+    void fetchApi<{ data?: { attributes?: { name?: unknown } } }>(`/projects/${encodeURIComponent(projectId)}`, { signal: controller.signal })
+      .then((response): void => {
         if (controller.signal.aborted) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const name = (response as { data?: { attributes?: { name?: unknown } } }).data
+        const name = response.data
           ?.attributes?.name;
         setProjectName(isString(name) && name !== "" ? name : "");
       })

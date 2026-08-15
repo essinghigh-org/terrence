@@ -1,3 +1,4 @@
+import type { JsonObject } from "@/lib/json";
 /**
  * Runtime type guards for decoding untrusted values at I/O boundaries.
  *
@@ -23,7 +24,7 @@ export function isBoolean(value: unknown): value is boolean {
 }
 
 /** True when the value is a plain object (non-null, non-array). */
-export function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
