@@ -24,6 +24,7 @@ type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
 type WebhookDetails = Readonly<{
   readonly branch?: string;
+  readonly targetBranch?: string;
   readonly cloneUrl: string;
   readonly commitMessage: string;
   readonly commitSha: string;
@@ -148,7 +149,9 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
   if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) {
     const pullRequest = asRecord(payload.pull_request);
     const head = asRecord(pullRequest?.head);
+    const base = asRecord(pullRequest?.base);
     const branch = requiredString(head?.ref);
+    const targetBranch = requiredString(base?.ref);
     const commitSha = requiredString(head?.sha);
     const commitMessage = requiredString(pullRequest?.title);
     const commitUrl = requiredString(pullRequest?.html_url);
@@ -156,6 +159,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     if (branch === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
     return {
       branch,
+      ...(targetBranch === undefined ? {} : { targetBranch }),
       cloneUrl,
       commitMessage,
       commitSha,
@@ -221,6 +225,7 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
     if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
     const lastCommit = asRecord(attributes?.last_commit);
     const branch = requiredString(attributes?.source_branch);
+    const targetBranch = requiredString(attributes?.target_branch);
     const commitSha = requiredString(lastCommit?.id);
     const commitMessage = requiredString(attributes?.title)
       ?? requiredString(lastCommit?.message)
@@ -239,6 +244,7 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
       kind: "pull_request",
       details: {
         branch,
+        ...(targetBranch === undefined ? {} : { targetBranch }),
         cloneUrl,
         commitMessage,
         commitSha,
@@ -313,13 +319,16 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedPro
   if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") {
     const pullRequest = asRecord(payload.pullrequest);
     const source = asRecord(pullRequest?.source);
+    const destination = asRecord(pullRequest?.destination);
     const branchValue = asRecord(source?.branch);
+    const destinationBranch = asRecord(destination?.branch);
     const commit = asRecord(source?.commit);
     const commitLinks = asRecord(commit?.links);
     const commitHtml = asRecord(commitLinks?.html);
     const prLinks = asRecord(pullRequest?.links);
     const prHtml = asRecord(prLinks?.html);
     const branch = requiredString(branchValue?.name);
+    const targetBranch = requiredString(destinationBranch?.name);
     const commitSha = requiredString(commit?.hash);
     const commitMessage = requiredString(pullRequest?.title) ?? "Pull request";
     const commitUrl = requiredString(prHtml?.href) ?? requiredString(commitHtml?.href);
@@ -335,6 +344,7 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedPro
       kind: "pull_request",
       details: {
         branch,
+        ...(targetBranch === undefined ? {} : { targetBranch }),
         cloneUrl,
         commitMessage,
         commitSha,
@@ -526,6 +536,89 @@ async function githubPullRequestFiles(
       const filename = asRecord(item)?.filename;
       if (typeof filename !== "string" || filename === "") return undefined;
       files.add(filename);
+    }
+    return files;
+  } catch {
+    return undefined;
+  }
+}
+
+async function gitlabMergeRequestFiles(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  if (workspace === undefined || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "gitlab")) return undefined;
+  try {
+    const credentials = await oauthProviderCredentials(workspace, "gitlab");
+    if (credentials === undefined) return undefined;
+    const response = await fetch(
+      `${credentials.apiUrl}/projects/${encodeURIComponent(details.repoFullName)}/merge_requests/${String(details.pullRequestNumber)}/changes`,
+      {
+        headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) return undefined;
+    const body = await response.json() as unknown;
+    const changes = asRecord(body)?.changes;
+    if (!Array.isArray(changes)) return undefined;
+    const files = new Set<string>();
+    for (const item of changes) {
+      const change = asRecord(item);
+      const newPath = change?.new_path;
+      if (typeof newPath !== "string" || newPath === "") return undefined;
+      files.add(newPath);
+    }
+    return files;
+  } catch {
+    return undefined;
+  }
+}
+
+async function bitbucketPullRequestFiles(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  if (workspace === undefined || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "bitbucket")) return undefined;
+  try {
+    const credentials = await oauthProviderCredentials(workspace, "bitbucket");
+    if (credentials === undefined) return undefined;
+    const [owner, repo] = details.repoFullName.split("/");
+    const auth = { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" };
+
+    // Bitbucket Cloud diffstat: values[].new.path.
+    const cloudUrl = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
+    const cloudResponse = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (cloudResponse.ok) {
+      const body = await cloudResponse.json() as unknown;
+      const values = asRecord(body)?.values;
+      if (Array.isArray(values)) {
+        const files = new Set<string>();
+        for (const item of values) {
+          const entry = asRecord(item);
+          const path = asRecord(entry?.new)?.path;
+          if (typeof path !== "string" || path === "") return undefined;
+          files.add(path);
+        }
+        return files;
+      }
+    }
+
+    // Bitbucket Data Center: changes endpoint with path.toString entries.
+    const dcUrl = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
+    const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!dcResponse.ok) return undefined;
+    const dcBody = await dcResponse.json() as unknown;
+    const dcValues = asRecord(dcBody)?.values;
+    if (!Array.isArray(dcValues)) return undefined;
+    const files = new Set<string>();
+    for (const item of dcValues) {
+      const path = asRecord(item)?.path;
+      const pathName = asRecord(path)?.toString ?? (typeof path === "string" ? path : undefined);
+      if (typeof pathName !== "string" || pathName === "") return undefined;
+      files.add(pathName);
     }
     return files;
   } catch {
@@ -948,13 +1041,32 @@ async function handleOAuthProviderWebhook(
   const candidates = await db.query.workspaces.findMany({
     where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
-  const matchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
+  const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
     if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== details.branch) return false;
-    return matchesFileTriggers(workspace, details.filesChanged);
+    // PR/MR events are matched against the target (base) branch: a workspace
+    // pinned to `main` must trigger on MRs from feature branches targeting
+    // main, not on the source branch name (kanban 1.6).
+    const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
+      ? details.targetBranch
+      : details.branch;
+    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== eventBranch) return false;
+    return true;
   });
+  // PR/MR payloads carry no changed-file list (kanban 1.6): fetch it from the
+  // provider API once per event so file trigger patterns actually filter
+  // speculative runs. Failures fall back to the empty set (trigger-all) so a
+  // VCS API outage can never silently drop a run.
+  let triggerDetails = details;
+  if (kind === "pull_request") {
+    const filesChanged = provider === "gitlab"
+      ? await gitlabMergeRequestFiles(branchMatchedWorkspaces[0], details)
+      : await bitbucketPullRequestFiles(branchMatchedWorkspaces[0], details);
+    if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
+  }
+  const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean =>
+    details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
 
   const downloads: Promise<void>[] = [];
   for (const workspace of matchedWorkspaces) {
@@ -1085,7 +1197,13 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
     if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== details.branch) return false;
+    // PR events are matched against the base branch (kanban 1.6): a
+    // workspace pinned to `main` must trigger on PRs from feature branches
+    // that target main, not on the head branch name.
+    const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
+      ? details.targetBranch
+      : details.branch;
+    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== eventBranch) return false;
     return true;
   });
   let triggerDetails = details;

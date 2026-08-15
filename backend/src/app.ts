@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
+import { readFileSync } from "node:fs";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { syncedTrustedClientIp } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
@@ -19,9 +20,11 @@ const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX
 // Branded server-level error page (built from frontend/public/404.html).
 // Loaded once at startup; unknown paths get a real 404 with this page instead
 // of a silent 200 empty body. Falls back to plain text when dist is missing.
+// NOTE: this must stay synchronous — a top-level await here leaves `app` in
+// TDZ for importers in the module graph (broke every test importing app).
 let frontend404Html: string | null = null;
 try {
-  frontend404Html = await Bun.file(FRONTEND_404).text();
+  frontend404Html = readFileSync(FRONTEND_404, "utf8");
 } catch {
   frontend404Html = null;
 }
