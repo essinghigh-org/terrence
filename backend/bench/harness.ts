@@ -28,26 +28,27 @@ let suiteName = "";
 const DEFAULT_ITERATIONS = 40;
 const WARMUP_RUNS = 3;
 
-export function suite(
+export async function suite(
   name: string,
   fns: Readonly<Record<string, BenchFn>>,
   iterations: number = DEFAULT_ITERATIONS,
-): void {
+): Promise<void> {
   suiteName = name;
   for (const [label, fn] of Object.entries(fns)) {
-    // Warmup (also flushes lazy caches / JIT tiers).
-    for (let i = 0; i < WARMUP_RUNS; i += 1) void fn();
+    // Warmup (also flushes lazy caches / JIT tiers). Async fns are awaited so
+    // concurrent requests can never race each other inside the benchmark.
+    for (let i = 0; i < WARMUP_RUNS; i += 1) await fn();
     const times: number[] = [];
     for (let i = 0; i < iterations; i += 1) {
       const start = performance.now();
-      void fn();
+      await fn();
       times.push(performance.now() - start);
     }
     times.sort((a, b) => a - b);
-    const median = times[Math.floor(times.length / 2)];
-    const p95 = times[Math.floor(times.length * 0.95)] ?? times[times.length - 1];
+    const median = times[Math.floor(times.length / 2)] ?? 0;
+    const p95 = times[Math.floor(times.length * 0.95)] ?? times[times.length - 1] ?? 0;
     const min = times[0] ?? 0;
-    const avg = times.reduce((a, b) => a + b, 0) / times.length;
+    const avg = times.reduce((a, b) => a + b, 0) / Math.max(times.length, 1);
     results.push({
       name,
       label,

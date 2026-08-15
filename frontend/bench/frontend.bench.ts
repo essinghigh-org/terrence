@@ -38,7 +38,7 @@ const realWorldRows: Cv[] = Array.from({ length: 500 }, (_, i) => [
   `row-class-${i % 10}`,
 ]);
 
-suite("cn", {
+await suite("cn", {
   "500 repeated identical string calls": () => {
     for (const args of repeatedInputs) cn(...args);
   },
@@ -92,7 +92,7 @@ function calendarEntries(count: number): CalendarEntry[] {
 }
 const mixed200 = calendarEntries(200);
 const mixed2000 = calendarEntries(2000);
-suite("calendar-sort", {
+await suite("calendar-sort", {
   "200 entries": () => {
     sortEntries(mixed200);
   },

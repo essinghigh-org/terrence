@@ -10,7 +10,7 @@ import { renderPayloadForDestination } from "../src/lib/notifications";
 import { pageRequest, pagination, signedApiURL } from "../src/lib/utils";
 
 // --- security headers (runs once per HTTP response) ---
-suite("security-headers", {
+await suite("security-headers", {
   "applySecurityHeaders (fresh target)": () => {
     applySecurityHeaders({});
   },
@@ -34,7 +34,7 @@ const HOSTS = [
   "0:0:0:0:0:ffff:127.0.0.1", "2001:4860:4860::8888", "sub.domain.co.uk",
   "my-workspace-123.s3.amazonaws.com", "8.8.8.8", "1.1.1.1",
 ];
-suite("url-safety", {
+await suite("url-safety", {
   "privateHostReason over 24-host corpus": () => {
     for (const host of HOSTS) privateHostReason(host);
   },
@@ -63,7 +63,7 @@ function syntheticPlan(resources: number): PlanJson {
 }
 const plan1000 = syntheticPlan(1000);
 const plan100 = syntheticPlan(100);
-suite("plan-json", {
+await suite("plan-json", {
   "planJsonResourceCounts (1000 resources)": () => {
     planJsonResourceCounts(plan1000);
   },
@@ -86,7 +86,7 @@ const runPayload: Record<string, unknown> = {
   organization_name: "acme",
   notifications: [{ message: "Run Completed", trigger: "run:completed", run_status: "completed" }],
 };
-suite("notifications", {
+await suite("notifications", {
   "renderPayloadForDestination (generic)": () => {
     renderPayloadForDestination({ id: "cfg", workspaceId: "ws", name: "n", destinationType: "generic", url: "https://x.invalid", triggers: [], enabled: true, token: null } as never, runPayload);
   },
@@ -119,7 +119,7 @@ function syntheticRun(id: string): Record<string, unknown> {
   } as Record<string, unknown>;
 }
 const runList100 = Array.from({ length: 100 }, (_, i) => syntheticRun(`run-${i}`));
-suite("run-resource", {
+await suite("run-resource", {
   "single runResource": () => {
     runResource(runList100[0] as never, true, false, undefined, null);
   },
@@ -132,7 +132,7 @@ suite("run-resource", {
 const fakeRequest = {
   url: "https://terrence.local/api/v2/organizations/acme/workspaces?page%5Bnumber%5D=2&page%5Bsize%5D=25",
 } as never;
-suite("request-helpers", {
+await suite("request-helpers", {
   "pageRequest": () => {
     pageRequest(fakeRequest);
   },
