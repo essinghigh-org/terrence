@@ -334,8 +334,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // TFE's installer passes the token as a query parameter, so the query
     // form stays for compatibility (kanban 5.3). Accept a header alternative
     // so fresh deployments can keep the secret out of proxy logs, browser
-    // history, and traces entirely.
-    const queryToken = request === undefined ? null : new URL(request.url).searchParams.get("token");
+    // history, and traces entirely. Operators that never use the installer
+    // flow can disable the query form outright with IACT_QUERY_TOKEN_DISABLED.
+    const queryEnabled = process.env.IACT_QUERY_TOKEN_DISABLED !== "1" && process.env.IACT_QUERY_TOKEN_DISABLED !== "true";
+    const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
     const headerToken = request === undefined ? null
       : request.headers.get("x-iact-token")
         ?? (() => {

@@ -80,11 +80,14 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
 
     const mockFetch = async (input: string | URL | Request): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
-      if (url.includes("/merge_requests/7/changes")) return Response.json(mergeRequestChanges);
-      if (url.includes("/tarball/")) {
+      if (url.includes("/merge_requests/7/changes")) {
+        return mergeRequestChanges instanceof Response ? mergeRequestChanges : Response.json(mergeRequestChanges);
+      }
+      if (url.includes("/tarball/") || url.includes("archive.tar.gz")) {
         tarballFetches += 1;
         return new Response(new Uint8Array([1, 2, 3]));
       }
+      if (url.includes("/statuses/")) return Response.json({});
       throw new Error(`Unexpected outbound request: ${url}`);
     };
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
@@ -103,26 +106,44 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
     return list.length;
   }
 
+  function resetTarballCounter(): void {
+    tarballFetches = 0;
+  }
+
   it("does not create a run when the MR changes do not match the trigger patterns", async () => {
+    resetTarballCounter();
     mergeRequestChanges = { changes: [{ new_path: "docs/readme.md" }] };
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(0);
+    // No run means no configuration download either.
+    expect(tarballFetches).toBe(0);
   });
 
   it("creates a speculative run when the MR changes match the trigger patterns", async () => {
+    resetTarballCounter();
     mergeRequestChanges = { changes: [{ new_path: "src/main.tf" }, { new_path: "docs/readme.md" }] };
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(1);
     const created = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
     expect(created?.id).toBeDefined();
+    expect(tarballFetches).toBe(1);
+  });
+
+  it("falls back to trigger-all when the MR changes payload is malformed", async () => {
+    // A 200 response with an unusable body must not drop the event.
+    const before = await runCount();
+    mergeRequestChanges = { changes: "not-an-array" } as unknown as Record<string, unknown>;
+    const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
+    expect(handled).toBe(true);
+    expect(await runCount()).toBe(before + 1);
   });
 
   it("falls back to trigger-all when the MR changes fetch fails", async () => {
     // A failed/404 changes fetch must not drop the event: the run still fires.
     const before = await runCount();
-    mergeRequestChanges = { changes: "not-an-array" } as unknown as Record<string, unknown>;
+    mergeRequestChanges = new Response("not found", { status: 404 }) as unknown as Record<string, unknown>;
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(before + 1);

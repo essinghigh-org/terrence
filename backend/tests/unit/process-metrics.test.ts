@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { recordFailure, processSnapshot } from "../../src/lib/process-metrics";
 
 describe("process metrics failure counters", () => {
-  afterEach(() => {
-    // The counters are module-level; this suite only asserts relative deltas.
-  });
-
   it("exposes zeroed failure counters in the snapshot", () => {
     const before = processSnapshot().failures;
     expect(before.auditWrites ?? 0).toBeGreaterThanOrEqual(0);

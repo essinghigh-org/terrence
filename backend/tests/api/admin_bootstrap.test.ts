@@ -256,4 +256,39 @@ describe("initial administrator bootstrap", () => {
 
     expect(result).toEqual({ status: 200, responseStatus: "created", users: 1 });
   });
+
+  it("rejects a wrong header bootstrap secret and honors IACT_QUERY_TOKEN_DISABLED (kanban 5.3)", async () => {
+    const result = await runProbe(`
+      const { app } = await import("./src/app.ts");
+      const { db } = await import("./src/db/index.ts");
+
+      const request = (init) => app.handle(new Request(
+        "http://localhost/admin/initial-admin-user",
+        { method: "POST", headers: { "Content-Type": "application/json", ...init.headers }, body: init.body },
+      ));
+      const attributes = {
+        username: "owner",
+        email: "owner@example.test",
+        password: "chosen-admin-password",
+      };
+      const body = JSON.stringify(attributes);
+      const wrongHeader = await request({ headers: { "x-iact-token": "wrong-token" }, body });
+      const queryForm = await app.handle(new Request(
+        "http://localhost/admin/initial-admin-user?token=initial-admin-token",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body },
+      ));
+      console.log(JSON.stringify({
+        wrongHeader: wrongHeader.status,
+        queryForm: queryForm.status,
+        users: (await db.query.users.findMany()).length,
+      }));
+      process.exit(0);
+    `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token", IACT_QUERY_TOKEN_DISABLED: "1" });
+
+    // Query form disabled by env: 404 even with the correct token. The
+    // header form is also disabled by the same env? No — header stays active,
+    // but this probe only exercises the wrong header (404) and the query
+    // form (404 due to the kill switch). No user is created.
+    expect(result).toEqual({ wrongHeader: 404, queryForm: 404, users: 0 });
+  });
 });

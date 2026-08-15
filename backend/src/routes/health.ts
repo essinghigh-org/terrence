@@ -247,6 +247,14 @@ function prometheusLines(collection: MetricsCollection): string[] {
       lines.push(`terrence_database_freelist_bytes ${instance.database.freelistBytes}`);
     }
   }
+  // Global latch: emitted for every collection shape (scoped tokens too).
+  if (isStorageDegraded()) {
+    lines.push(
+      "# HELP terrence_storage_degraded Storage degraded (disk full) latched; applies are paused and readiness reports 503.",
+      "# TYPE terrence_storage_degraded gauge",
+      "terrence_storage_degraded 1",
+    );
+  }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
     lines.push(
@@ -278,6 +286,11 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
       "# TYPE terrence_requests_errors5xx_total counter",
       `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
+      "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
+      "# TYPE terrence_failures_total counter",
+      ...Object.entries(snapshot.failures).map(([kind, value]): string =>
+        `terrence_failures_total{kind="${prometheusLabel(kind)}"} ${value}`,
+      ),
       "# HELP terrence_worker_polls_total Background queue poll cycles since boot.",
       "# TYPE terrence_worker_polls_total counter",
       `terrence_worker_polls_total ${snapshot.worker.polls}`,

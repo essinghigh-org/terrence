@@ -552,23 +552,32 @@ async function gitlabMergeRequestFiles(
   try {
     const credentials = await oauthProviderCredentials(workspace, "gitlab");
     if (credentials === undefined) return undefined;
-    const response = await fetch(
-      `${credentials.apiUrl}/projects/${encodeURIComponent(details.repoFullName)}/merge_requests/${String(details.pullRequestNumber)}/changes`,
-      {
-        headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-      },
-    );
-    if (!response.ok) return undefined;
-    const body = await response.json() as unknown;
-    const changes = asRecord(body)?.changes;
-    if (!Array.isArray(changes)) return undefined;
+    // Follow X-Next-Page until all changes are collected (bounded): a
+    // truncated file list would make trigger patterns miss matching files.
     const files = new Set<string>();
-    for (const item of changes) {
-      const change = asRecord(item);
-      const newPath = change?.new_path;
-      if (typeof newPath !== "string" || newPath === "") return undefined;
-      files.add(newPath);
+    let page = 1;
+    let nextPage: string | null = "1";
+    const MAX_PAGES = 10;
+    while (nextPage !== null && page <= MAX_PAGES) {
+      const response = await fetch(
+        `${credentials.apiUrl}/projects/${encodeURIComponent(details.repoFullName)}/merge_requests/${String(details.pullRequestNumber)}/changes?per_page=100&page=${page}`,
+        {
+          headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        },
+      );
+      if (!response.ok) return undefined;
+      const body = await response.json() as unknown;
+      const changes = asRecord(body)?.changes;
+      if (!Array.isArray(changes)) return undefined;
+      for (const item of changes) {
+        const change = asRecord(item);
+        const newPath = change?.new_path;
+        if (typeof newPath !== "string" || newPath === "") return undefined;
+        files.add(newPath);
+      }
+      nextPage = response.headers.get("x-next-page");
+      page += 1;
     }
     return files;
   } catch {
@@ -587,38 +596,48 @@ async function bitbucketPullRequestFiles(
     if (credentials === undefined) return undefined;
     const [owner, repo] = details.repoFullName.split("/");
     const auth = { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" };
+    const files = new Set<string>();
+    const MAX_PAGES = 10;
 
-    // Bitbucket Cloud diffstat: values[].new.path.
-    const cloudUrl = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
-    const cloudResponse = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    if (cloudResponse.ok) {
+    // Bitbucket Cloud diffstat: values[].new.path (new.path absent for
+    // deleted files; fall back to old.path so deletions still filter).
+    let cloudUrl: string | null = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
+    for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
+      const cloudResponse = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+      if (!cloudResponse.ok) break;
       const body = await cloudResponse.json() as unknown;
       const values = asRecord(body)?.values;
-      if (Array.isArray(values)) {
-        const files = new Set<string>();
-        for (const item of values) {
-          const entry = asRecord(item);
-          const path = asRecord(entry?.new)?.path;
-          if (typeof path !== "string" || path === "") return undefined;
-          files.add(path);
-        }
-        return files;
+      if (!Array.isArray(values)) return undefined;
+      for (const item of values) {
+        const entry = asRecord(item);
+        const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
+        if (typeof path !== "string" || path === "") return undefined;
+        files.add(path);
       }
+      const next = asRecord(body)?.next;
+      cloudUrl = typeof next === "string" && next !== "" ? next : null;
+      if (cloudUrl === null) return files;
     }
+    if (files.size > 0) return files;
 
     // Bitbucket Data Center: changes endpoint with path.toString entries.
-    const dcUrl = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
-    const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    if (!dcResponse.ok) return undefined;
-    const dcBody = await dcResponse.json() as unknown;
-    const dcValues = asRecord(dcBody)?.values;
-    if (!Array.isArray(dcValues)) return undefined;
-    const files = new Set<string>();
-    for (const item of dcValues) {
-      const path = asRecord(item)?.path;
-      const pathName = asRecord(path)?.toString ?? (typeof path === "string" ? path : undefined);
-      if (typeof pathName !== "string" || pathName === "") return undefined;
-      files.add(pathName);
+    let dcUrl: string | null = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
+    for (let page = 1; dcUrl !== null && page <= MAX_PAGES; page += 1) {
+      const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+      if (!dcResponse.ok) return undefined;
+      const dcBody = await dcResponse.json() as unknown;
+      const dcValues = asRecord(dcBody)?.values;
+      if (!Array.isArray(dcValues)) return undefined;
+      for (const item of dcValues) {
+        const path = asRecord(item)?.path;
+        const pathName = asRecord(path)?.toString ?? (typeof path === "string" ? path : undefined);
+        if (typeof pathName !== "string" || pathName === "") return undefined;
+        files.add(pathName);
+      }
+      const nextStart = asRecord(dcBody)?.nextPageStart;
+      dcUrl = typeof nextStart === "number" && Number.isFinite(nextStart)
+        ? `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100&start=${nextStart}`
+        : null;
     }
     return files;
   } catch {
@@ -1031,6 +1050,20 @@ export async function createConfigurationVersionFromVcs(
   return cvId;
 }
 
+function matchesConfiguredBranch(
+  vcsRepo: DeepReadonly<VcsRepo>,
+  details: DeepReadonly<WebhookDetails>,
+): boolean {
+  if (vcsRepo.branch === undefined || vcsRepo.branch === "") return true;
+  // PR/MR events are matched against the target (base) branch: a workspace
+  // pinned to `main` must trigger on PRs/MRs from feature branches that
+  // target main, not on the source branch name (kanban 1.6).
+  const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
+    ? details.targetBranch
+    : details.branch;
+  return eventBranch !== undefined && eventBranch !== "" && vcsRepo.branch === eventBranch;
+}
+
 async function handleOAuthProviderWebhook(
   provider: OAuthProvider,
   kind: "push" | "pull_request",
@@ -1045,14 +1078,7 @@ async function handleOAuthProviderWebhook(
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
     if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    // PR/MR events are matched against the target (base) branch: a workspace
-    // pinned to `main` must trigger on MRs from feature branches targeting
-    // main, not on the source branch name (kanban 1.6).
-    const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
-      ? details.targetBranch
-      : details.branch;
-    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== eventBranch) return false;
-    return true;
+    return matchesConfiguredBranch(vcsRepo, details);
   });
   // PR/MR payloads carry no changed-file list (kanban 1.6): fetch it from the
   // provider API once per event so file trigger patterns actually filter
@@ -1197,14 +1223,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
     if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    // PR events are matched against the base branch (kanban 1.6): a
-    // workspace pinned to `main` must trigger on PRs from feature branches
-    // that target main, not on the head branch name.
-    const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
-      ? details.targetBranch
-      : details.branch;
-    if (vcsRepo.branch !== undefined && vcsRepo.branch !== "" && vcsRepo.branch !== eventBranch) return false;
-    return true;
+    return matchesConfiguredBranch(vcsRepo, details);
   });
   let triggerDetails = details;
   if (eventName === "pull_request") {

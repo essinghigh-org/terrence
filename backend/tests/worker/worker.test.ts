@@ -848,6 +848,8 @@ test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.
     const { pollWorkerQueue } = await import("./src/worker.ts");
 
     await db.insert(organizations).values({ id: "org", name: "org" });
+    // 55 locked workspaces: SCAN_PAGE_SIZE is 50, so the eligible run lands
+    // on the SECOND page. The pre-fix scan never looked past the first page.
     const lockedWorkspaces = Array.from({ length: 55 }, (_, i) => ({
       id: "locked-ws-" + i, name: "locked-" + i, orgId: "org", autoApply: true, locked: true,
     }));
@@ -864,10 +866,12 @@ test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.
     ]);
 
     const claimed = await pollWorkerQueue();
-    for (let attempt = 0; attempt < 100; attempt++) {
+    // Generous budget: the simulated run applies inside the child process and
+    // slow CI can exceed one second for the full child lifecycle.
+    for (let attempt = 0; attempt < 500; attempt++) {
       const eligible = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "eligible-run") });
       if (eligible?.status === "applied") break;
-      await Bun.sleep(10);
+      await Bun.sleep(20);
     }
     const eligible = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "eligible-run") });
     console.log(JSON.stringify({ claimed, eligibleStatus: eligible?.status }));

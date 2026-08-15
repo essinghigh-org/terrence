@@ -462,6 +462,18 @@ describe("change calendar (21.4)", () => {
       expect(entry?.attributes.scheduled).toBe(false);
       expect(entry?.attributes["scheduled-at"]).toBeNull();
       expect(entry?.attributes.at).toBe(new Date(confirmedAt).toISOString());
+
+      // The range predicate must match its rendering: a range around the
+      // confirmation time includes the past-scheduled run.
+      const ranged = await request(
+        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(confirmedAt - 30_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(confirmedAt + 30_000).toISOString())}`,
+        "GET",
+        undefined,
+        { Authorization: `Bearer ${calendarToken}` },
+      );
+      expect(ranged.status).toBe(200);
+      const rangedBody = (await ranged.json()) as { data: { attributes: { runId?: string } }[] };
+      expect(rangedBody.data.some((item): boolean => item.attributes.runId === pastScheduledRunId)).toBe(true);
     } finally {
       await db.delete(runs).where(eq(runs.id, pastScheduledRunId));
     }

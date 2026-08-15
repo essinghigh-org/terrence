@@ -340,11 +340,14 @@ if (!isPostgres) {
     }
 
     // 1. Compute old -> new id maps per entity (rows still in the old format).
+    // Old ids already covered by the journal are skipped: resume owns them.
+    const journaledOldIds = new Set(pendingRows.map((entry): string => `${entry.entity}:${entry.old_id}`));
     const rekeyMaps = new Map<string, Map<string, string>>();
     for (const fmt of ID_FORMATS) {
       const rows = client.prepare(`SELECT id FROM "${fmt.table}"`).all() as { id: string }[];
       const map = new Map<string, string>();
       for (const { id } of rows) {
+        if (journaledOldIds.has(`${fmt.table}:${id}`)) continue;
         if (isNewId(id, fmt.prefix, fmt.fullUuidSuffix)) continue;
         const suffix = fmt.fullUuidSuffix
           ? crypto.randomUUID()
@@ -374,13 +377,16 @@ if (!isPostgres) {
         console.warn(`[terrence] Migrated ${total} ids to the current format (${[...rekeyMaps.keys()].join(", ")})${sidecarSummary}.`);
       }
       // 2. Enforce referential integrity after re-keying: a crash-safe
-      // migration must never leave dangling references (kanban t_9ca58704).
-      const violations = client.prepare("PRAGMA foreign_key_check").all() as {
+      // migration must never leave dangling references to re-keyed entities
+      // (kanban t_9ca58704). Scoped to the entities this migration touched so
+      // unrelated pre-existing violations do not block boot.
+      const rekeyedParents = new Set(entityNames);
+      const violations = (client.prepare("PRAGMA foreign_key_check").all() as {
         table: string;
         rowid: number;
         parent: string;
         fkid: number;
-      }[];
+      }[]).filter((violation): boolean => rekeyedParents.has(violation.parent));
       if (violations.length > 0) {
         const first = violations[0];
         throw new Error(

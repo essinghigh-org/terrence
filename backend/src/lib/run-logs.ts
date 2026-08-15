@@ -1,10 +1,11 @@
 import { gzipSync, gunzipSync } from "node:zlib";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { logs } from "../db/schema";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
+import { recordFailure } from "./process-metrics";
 
 export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">>;
 
@@ -23,10 +24,18 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
     orderBy: [asc(logs.createdAt)],
   });
   if (runLogs.length === 0) return false;
+  let temporary: string | null = null;
   try {
     await mkdir(storageDirectory, { recursive: true, mode: 0o700 });
-    await writeFile(runLogArchivePath(runId), gzipSync(JSON.stringify(runLogs)), { mode: 0o600 });
+    // Write to a temp name, then atomically promote: a partial archive (e.g.
+    // ENOSPC mid-write) must never become the readable artifact.
+    temporary = `${runLogArchivePath(runId)}.${crypto.randomUUID()}.tmp`;
+    await writeFile(temporary, gzipSync(JSON.stringify(runLogs)), { mode: 0o600 });
+    await rename(temporary, runLogArchivePath(runId));
+    temporary = null;
   } catch (error: unknown) {
+    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => {});
+    recordFailure("runLogWrites");
     if (isDiskFullError(error)) markStorageDegraded("run log archives are failing (disk full)");
     throw error;
   }

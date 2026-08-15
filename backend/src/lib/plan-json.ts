@@ -45,13 +45,16 @@ function artifactPath(runId: string): string {
 }
 
 export async function writePlanJsonArtifact(runId: string, planJson: PlanJson): Promise<void> {
+  let temporary: string | null = null;
   try {
     await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
     const target = artifactPath(runId);
-    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    temporary = `${target}.${crypto.randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
     await rename(temporary, target);
+    temporary = null;
   } catch (error: unknown) {
+    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => {});
     if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
     throw error;
   }

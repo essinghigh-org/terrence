@@ -92,7 +92,10 @@ function confirmedRunRangeCondition(
     scheduledConds.push(sql`${runs.scheduledAt} <= ${end.ms}`);
     confirmedConds.push(sql`${jsonExtract(runs.statusTimestamps, '$."confirmed-at"')} <= ${end.iso}`);
   }
-  return sql`((${runs.scheduledAt} IS NOT NULL AND ${and(...scheduledConds)}) OR (${runs.scheduledAt} IS NULL AND ${and(...confirmedConds)}))`;
+  // scheduled_at semantics (kanban t_19f3556e): only FUTURE scheduled times
+  // range by scheduled_at; a run whose schedule has passed (or never had one)
+  // is ranged by its confirmation time, matching how the entry is rendered.
+  return sql`((${runs.scheduledAt} IS NOT NULL AND ${runs.scheduledAt} > ${Date.now()} AND ${and(...scheduledConds)}) OR ((${runs.scheduledAt} IS NULL OR ${runs.scheduledAt} <= ${Date.now()}) AND ${and(...confirmedConds)}))`;
 }
 
 type CalendarEntry = Readonly<{

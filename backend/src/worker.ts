@@ -2384,12 +2384,19 @@ export async function pollWorkerQueue(): Promise<string[]> {
   // while earlier runs are claimed and leave the pending set.
   const MAX_CLAIMS = 5;
   const SCAN_PAGE_SIZE = 50;
+  // Hard bound on pages per poll: a queue dominated by permanently ineligible
+  // runs (locked workspaces, agent-pool outages) must not turn one poll cycle
+  // into a full-table scan. Eligible runs beyond the budget wait for the next
+  // poll, which resumes from the same cursor position.
+  const MAX_SCAN_PAGES = 10;
   const claimedRunIds: string[] = [];
   const claimedWorkspaceIds = new Set<string>();
   let cursorCreatedAt = 0;
   let cursorId = "";
   let morePages = true;
-  while (claimedRunIds.length < MAX_CLAIMS && morePages) {
+  let scannedPages = 0;
+  while (claimedRunIds.length < MAX_CLAIMS && morePages && scannedPages < MAX_SCAN_PAGES) {
+    scannedPages += 1;
     const pendingRuns = await db.query.runs.findMany({
       where: and(
         eq(runs.status, "pending"),
@@ -2611,14 +2618,12 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
         scheduledBlockReasons.delete(`agent-pool:${run.id}`);
         // Claim (confirmed -> apply_queued) and job insert are ONE
         // transaction (kanban t_c5f59537): a crash cannot leave the run
-        // apply_queued without a job. Concurrent polls see zero rows.
+        // apply_queued without a job. Concurrent polls see zero rows. Any
+        // failure throws and rolls back the whole transaction; the outer
+        // catch keeps the run confirmed for the next poll.
         const job = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
           const tx = transaction as unknown as typeof db;
-          try {
-            return await insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
-          } catch {
-            return undefined;
-          }
+          return insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
         });
         if (job === undefined) continue;
         applied.push(run.id);
