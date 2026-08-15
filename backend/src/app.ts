@@ -13,7 +13,18 @@ import { requestFinished, requestStarted } from "./lib/process-metrics";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
+const FRONTEND_404 = join(FRONTEND_DIR, "404.html");
 const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX);
+
+// Branded server-level error page (built from frontend/public/404.html).
+// Loaded once at startup; unknown paths get a real 404 with this page instead
+// of a silent 200 empty body. Falls back to plain text when dist is missing.
+let frontend404Html: string | null = null;
+try {
+  frontend404Html = await Bun.file(FRONTEND_404).text();
+} catch {
+  frontend404Html = null;
+}
 
 // Import route plugins
 import { healthRoutes } from "./routes/health";
@@ -130,8 +141,8 @@ export function handleAppError({
   if (code === "NOT_FOUND") {
     if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
       mutableSet.status = 404;
-      mutableSet.headers["Content-Type"] = "text/plain";
-      return "Not Found";
+      mutableSet.headers["Content-Type"] = "text/html; charset=utf-8";
+      return frontend404Html ?? "Not Found";
     }
     mutableSet.headers["Content-Type"] = "application/vnd.api+json";
     mutableSet.status = 404;
@@ -591,11 +602,21 @@ export const app = new Elysia()
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (pathname === "/login" || pathname.startsWith("/app")) return;
+    if (pathname === "/login" || pathname === "/app" || pathname.startsWith("/app/")) {
+      return new Response(Bun.file(FRONTEND_INDEX));
+    }
     const filePath = join(FRONTEND_DIR, pathname);
     if (filePath.startsWith(FRONTEND_DIR) && await Bun.file(filePath).exists()) {
       return new Response(Bun.file(filePath));
     }
+    // Nothing matched: return a real 404 instead of a silent 200 empty body.
+    // Missing assets get a bare text 404; navigations get the branded page.
+    const mutableSet = set as { status: number; headers: Record<string, string | number> };
+    mutableSet.status = 404;
+    const isAssetPath = /^\/assets\/|\.[a-z0-9]{1,10}$/i.test(pathname);
+    const plainText = isAssetPath || frontend404Html === null;
+    mutableSet.headers["Content-Type"] = plainText ? "text/plain; charset=utf-8" : "text/html; charset=utf-8";
+    return new Response(plainText ? "Not Found" : frontend404Html, { status: 404 });
   })
   .options("/*", ({ set }: OptionsContext): Record<string, never> => {
     (set as { status: number }).status = 204;
