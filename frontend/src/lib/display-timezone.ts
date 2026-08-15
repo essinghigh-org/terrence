@@ -16,6 +16,7 @@ let currentTimezone: DisplayTimezone = readStoredTimezone();
 function readStoredTimezone(): DisplayTimezone {
   try {
     const stored = window.localStorage.getItem(TIMEZONE_STORAGE_KEY);
+    // SAFETY: the stored preference is validated by the fallback below.
     return stored !== null && STORED_TIMEZONES.has(stored)
       ? (stored as DisplayTimezone)
       : "local";

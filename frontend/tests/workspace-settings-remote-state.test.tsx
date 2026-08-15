@@ -86,6 +86,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
       return json({ data: [{ id: "ws-staging", type: "workspaces" }] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -104,7 +105,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
@@ -148,6 +149,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
   const workspacePatch = fetchMock.mock.calls.find(([input, init]): boolean =>
     getUrl(input) === "/api/v2/workspaces/ws-production" && init?.method === "PATCH");
   if (workspacePatch === undefined) throw new Error("Expected workspace settings PATCH");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   const workspacePayload = JSON.parse(workspacePatch[1]?.body as string) as {
     data: { attributes: Record<string, unknown> };
   };
@@ -158,6 +160,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
     && init?.method === "PATCH");
   if (relationshipPatch === undefined) throw new Error("Expected remote-state relationship PATCH");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(relationshipPatch[1]?.body as string)).toEqual({
     data: [{ id: "ws-application", type: "workspaces" }],
   });
@@ -196,6 +199,7 @@ test("reconciles general settings before reporting a remote-state replacement fa
       return json({ data: [] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -214,7 +218,7 @@ test("reconciles general settings before reporting a remote-state replacement fa
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <WorkspaceSettings orgName="acme" workspace={workspace} onSaved={onSaved} />,
@@ -276,6 +280,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
       return json({ data: [{ id: "ws-existing", type: "workspaces" }] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -288,7 +293,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>

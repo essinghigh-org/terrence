@@ -66,7 +66,7 @@ test("creates a project variable set from the project detail settings", async ()
       }, 201);
     },
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = renderProject("variable-sets");
 
@@ -80,11 +80,13 @@ test("creates a project variable set from the project detail settings", async ()
 
   const form = view.getByRole("button", { name: "Create variable set" }).closest("form");
   expect(form).not.toBeNull();
+  // SAFETY: closest("form") above resolved the form element for the dialog.
   fireEvent.submit(form as HTMLFormElement);
 
 await waitFor((): void => {
     expect(postedBody).toBeDefined();
   });
+// SAFETY: the captured call argument is a stringified JSON body.
   const posted = JSON.parse(postedBody as string) as { data?: { attributes?: { name?: string; "parent-project-id"?: string } } };
   expect(posted.data?.attributes?.name).toBe("Shared");
   expect(posted.data?.attributes?.["parent-project-id"]).toBe("prj-1");
@@ -99,7 +101,7 @@ test("deletes a project from the project detail settings", async () => {
       return new Response(null, { status: 204 });
     },
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const page = renderProject("settings");
 

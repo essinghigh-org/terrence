@@ -91,7 +91,7 @@ test("shows honest browser-session metadata and revokes a non-current session", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter>
@@ -128,6 +128,7 @@ test("shows honest browser-session metadata and revokes a non-current session", 
 
 test("keeps session load errors local and retries to an honest empty state", async () => {
   let sessionRequests = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();

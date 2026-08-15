@@ -159,6 +159,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
       setLoading(true);
       setLoadError("");
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi("/admin/operations-settings") as {
           data?: { attributes?: OperationsSettings };
         };
@@ -197,6 +198,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   useEffect((): void => {
     const loadCatalog = async (): Promise<void> => {
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi("/admin/operations-settings/explainer/providers") as {
           data?: { id: string; attributes?: { name?: string; "model-count"?: number } }[];
         };
@@ -223,6 +225,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
     let cancelled = false;
     const loadModels = async (): Promise<void> => {
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi(`/admin/operations-settings/explainer/models?provider=${encodeURIComponent(explainerProvider)}`) as {
           data?: { id: string; attributes?: { name?: string; reasoning?: boolean; context?: number | null } }[];
         };
@@ -277,6 +280,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
       "reasoning-effort": explainerReasoningEffort === "" ? null : explainerReasoningEffort,
     };
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/admin/operations-settings", {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes } }),
@@ -621,7 +625,13 @@ export function AdminOperationsSettings(): React.JSX.Element {
                     { id: "xhigh", label: "XHigh" },
                     { id: "max", label: "Max" },
                   ]}
-                  onSelect={(value: string): void => { setExplainerReasoningEffort(value as ReasoningEffort | ""); }}
+                  onSelect={(value: string): void => {
+
+                    // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                    setExplainerReasoningEffort(value as ReasoningEffort | "");
+
+                  }}
                   allowCustom={false}
                   inputClassName="h-9 bg-background"
                   aria-describedby="explainer-reasoning-effort-help"

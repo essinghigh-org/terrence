@@ -29,6 +29,7 @@ test("copies the canonical run permalink", async () => {
   const writeText = mock(async (): Promise<void> => undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-copy") {

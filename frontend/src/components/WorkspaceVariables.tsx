@@ -157,6 +157,7 @@ export function WorkspaceVariables({
     fetchApi(`/workspaces/${workspaceId}/vars?page[size]=100`)
       .then((response: unknown): void => {
         if (!active.value) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: WorkspaceVariable[] }).data;
         setVariables(Array.isArray(data) ? data : []);
       })
@@ -262,6 +263,7 @@ export function WorkspaceVariables({
     setSaving(true);
     setEditorError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/workspaces/${workspaceId}/vars${editing == null ? "" : `/${editing.id}`}`,
         {
@@ -569,7 +571,14 @@ export function WorkspaceVariables({
                   id="workspace-variable-category"
                   name="variable-category"
                   value={category}
-                  onValueChange={(next: string): void => { setCategory(next as VariableCategory); }}
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  onValueChange={(next: string): void => {
+
+                    // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                    setCategory(next as VariableCategory);
+
+                  }}
                 >
                   <SelectItem value="terraform">Terraform</SelectItem>
                   <SelectItem value="env">Environment</SelectItem>

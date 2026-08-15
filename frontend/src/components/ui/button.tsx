@@ -56,6 +56,7 @@ function Button({ className, variant = "default", size = "default", type = "butt
       type={type}
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      // SAFETY: DeepReadonly is a compile-time-only structural wrapper; the props object is the primitive's own shape at runtime.
       {...(props as React.ComponentProps<"button">)}
     />
   );

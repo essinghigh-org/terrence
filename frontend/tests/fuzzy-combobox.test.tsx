@@ -69,6 +69,7 @@ test("combobox shows the selected label when closed", () => {
   const view = render(
     <FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />,
   );
+// SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   expect(input.value).toBe("OpenAI");
 });
@@ -77,6 +78,7 @@ test("combobox keeps the selected label visible when focused", () => {
   const view = render(
     <FuzzyCombobox value="openai" options={OPTIONS} onSelect={noop} />,
   );
+// SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   fireEvent.focus(input);
   expect(input.value).toBe("OpenAI");
@@ -89,6 +91,7 @@ test("combobox exposes a stable labelled list relationship", () => {
       <FuzzyCombobox id="provider-picker" name="provider" value="" options={OPTIONS} onSelect={noop} />
     </>,
   );
+// SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("combobox") as HTMLInputElement;
   expect(input.id).toBe("provider-picker");
   expect(input.name).toBe("provider");

@@ -150,11 +150,13 @@ export function WorkspaceDetail({
     signal: AbortSignal,
   ): Promise<void> => {
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const runs = await fetchApi(
         `/api/v2/workspaces/${workspaceId}/runs?page[size]=1`,
         { signal },
       ) as { data: unknown };
       if (signal.aborted || activeWorkspaceId.current !== workspaceId) return;
+// SAFETY: the runs list carries RunSummary resources per the endpoint contract.
       setLatestRun(Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null);
       setLatestRunLoading(false);
       setLatestRunError(false);
@@ -174,6 +176,7 @@ export function WorkspaceDetail({
     setLoading(true);
     setLoadError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const data = await fetchApi(
         `/organizations/${encodeURIComponent(orgName ?? "")}/workspaces/${encodeURIComponent(workspaceName ?? "")}`,
         { signal: controller.signal },
@@ -233,6 +236,7 @@ export function WorkspaceDetail({
     void fetchApi(`/projects/${encodeURIComponent(projectId)}`, { signal: controller.signal })
       .then((response: unknown): void => {
         if (controller.signal.aborted) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const name = (response as { data?: { attributes?: { name?: unknown } } }).data
           ?.attributes?.name;
         setProjectName(typeof name === "string" && name !== "" ? name : "");

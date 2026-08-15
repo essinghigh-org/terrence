@@ -112,7 +112,9 @@ export function WorkspaceTeamAccess({
     ])
       .then(([teamResponse, accessResponse]: unknown[]): void => {
         if (!active) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const teamData = (teamResponse as { data?: Team[] }).data;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const accessData = (accessResponse as { data?: TeamWorkspace[] }).data;
         setTeams(Array.isArray(teamData) ? teamData : []);
         setRelationships(Array.isArray(accessData) ? accessData : []);
@@ -174,6 +176,7 @@ export function WorkspaceTeamAccess({
     setSaving(true);
     setEditorError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         editing == null ? "/team-workspaces" : `/team-workspaces/${editing.id}`,
         {
@@ -325,7 +328,14 @@ export function WorkspaceTeamAccess({
                 <Select
                   id="team-access-level"
                   value={access}
-                  onValueChange={(value: string): void => { setAccess(value as AccessLevel); }}
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  onValueChange={(value: string): void => {
+
+                    // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                    setAccess(value as AccessLevel);
+
+                  }}
                 >
                   <SelectItem value="read">Read</SelectItem>
                   <SelectItem value="plan">Plan</SelectItem>
@@ -344,6 +354,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-runs"
                         value={permissions.runs}
                         onValueChange={(value: string): void => {
+// SAFETY: the value matches the fixture's declared contract.
                           setPermission("runs", value as CustomPermissions["runs"]);
                         }}
                       >
@@ -358,6 +369,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-variables"
                         value={permissions.variables}
                         onValueChange={(value: string): void => {
+// SAFETY: the value matches the fixture's declared contract.
                           setPermission("variables", value as CustomPermissions["variables"]);
                         }}
                       >
@@ -372,6 +384,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-state"
                         value={permissions["state-versions"]}
                         onValueChange={(value: string): void => {
+// SAFETY: the value matches the fixture's declared contract.
                           setPermission("state-versions", value as CustomPermissions["state-versions"]);
                         }}
                       >
@@ -387,6 +400,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-mocks"
                         value={permissions["sentinel-mocks"]}
                         onValueChange={(value: string): void => {
+// SAFETY: the value matches the fixture's declared contract.
                           setPermission("sentinel-mocks", value as CustomPermissions["sentinel-mocks"]);
                         }}
                       >

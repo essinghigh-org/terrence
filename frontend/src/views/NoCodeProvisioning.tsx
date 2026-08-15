@@ -130,6 +130,7 @@ export function NoCodeProvisioning(): React.JSX.Element {
     setError("");
 
     const encodedOrg = encodeURIComponent(orgName);
+    // SAFETY: all three endpoints return the JSON:API envelope per contract.
     Promise.all([
       fetchApi(`/organizations/${encodedOrg}/no-code-modules`) as Promise<{ data?: NoCodeModule[] }>,
       fetchApi(`/organizations/${encodedOrg}/registry-modules`) as Promise<{ data?: RegistryModule[] }>,
@@ -185,6 +186,8 @@ export function NoCodeProvisioning(): React.JSX.Element {
     fetchApi(`/no-code-modules/${encodeURIComponent(selectedId)}/input-variables`)
       .then((response: unknown): void => {
         if (!active) return;
+        // SAFETY: the endpoint contract returns the JSON:API envelope; the
+        // data field is Array-checked by the component.
         const data = response !== null && typeof response === "object"
           ? (response as { data?: InputVariable[] }).data ?? []
           : [];

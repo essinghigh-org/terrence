@@ -36,6 +36,7 @@ afterEach((): void => {
 
 test("lists extensible light/dark themes and persists a selection", async () => {
   let updatedTheme = "";
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
@@ -44,6 +45,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     if (url === "/api/v2/account/update" && init?.method === "PATCH") {
       const body = typeof init.body === "string" ? init.body : "";
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       updatedTheme = JSON.parse(body).data.attributes.theme as string;
       return account(updatedTheme);
     }
@@ -51,6 +53,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
   }) as typeof fetch;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
+// SAFETY: the component renders this element type for the queried role/label.
   const select = await view.findByLabelText("Theme") as HTMLSelectElement;
 
   expect(select.querySelectorAll("optgroup")).toHaveLength(2);
@@ -78,9 +81,10 @@ test("changes the display timezone locally without an account update", async () 
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
+// SAFETY: the component renders this element type for the queried role/label.
   const select = await view.findByLabelText("Timezone") as HTMLSelectElement;
 
   expect(select.value).toBe("local");

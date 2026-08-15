@@ -121,6 +121,7 @@ export function HyokConfigurations(): React.JSX.Element {
       return;
     }
     try {
+      // SAFETY: both endpoints return the JSON:API list envelope per contract.
       const [configsResponse, oidcResponse] = await Promise.all([
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/hyok-configurations`) as Promise<{ data: Hyok[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/oidc-configurations`) as Promise<{ data: OidcConfig[] }>,
@@ -131,6 +132,7 @@ export function HyokConfigurations(): React.JSX.Element {
       // Agent pools are optional; a lack of read access to them should not
       // prevent the HYOK list (and the required OIDC options) from loading.
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const agentPoolsResponse = await fetchApi(
           `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
         ) as { data?: AgentPool[] };

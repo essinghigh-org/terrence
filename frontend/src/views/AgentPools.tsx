@@ -77,6 +77,7 @@ export function AgentPools(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const organizationResponse = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
       ) as {
@@ -88,6 +89,7 @@ export function AgentPools(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
       ) as { data?: AgentPool[] };
@@ -108,6 +110,7 @@ export function AgentPools(): React.JSX.Element {
     setCreatingPool(true);
     setPoolFormError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/agent-pools`, {
         method: "POST",
         body: JSON.stringify({
@@ -162,6 +165,7 @@ export function AgentPools(): React.JSX.Element {
     setTokensDialogOpen(true);
     setLoadingTokens(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(
         `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
       ) as { data?: AgentToken[] };
@@ -182,6 +186,7 @@ export function AgentPools(): React.JSX.Element {
     setCreatingToken(true);
     setCreatedSecret(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`, {
         method: "POST",
         body: JSON.stringify({
@@ -197,6 +202,7 @@ export function AgentPools(): React.JSX.Element {
       const attrs = res.data.attributes;
       setCreatedSecret(attrs.token ?? attrs.secret ?? "Token created successfully");
       setTokenDesc("");
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const tokensRes = await fetchApi(
         `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
       ) as { data?: AgentToken[] };

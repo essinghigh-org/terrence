@@ -85,6 +85,7 @@ export async function loadOrganizationVcsConnections(
   signal?: AbortSignal,
 ): Promise<VcsConnection[]> {
   const options = signal === undefined ? {} : { signal };
+  // SAFETY: both endpoints return the JSON:API envelope per contract.
   const [githubResponse, oauthResponse] = await Promise.all([
     fetchApi(`/organizations/${encodeURIComponent(orgName)}/github-app/installations`, options),
     fetchApi(`/organizations/${encodeURIComponent(orgName)}/oauth-clients`, options),
@@ -95,6 +96,7 @@ export async function loadOrganizationVcsConnections(
   const installations = Array.isArray(githubResponse.data) ? githubResponse.data : [];
   const clients = Array.isArray(oauthResponse.data) ? oauthResponse.data : [];
   const oauthConnections = await Promise.all(clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const response = await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, options) as {
       data?: OAuthToken[];
     };
@@ -201,6 +203,7 @@ export function WorkspaceVcs({
     )
       .then((res: unknown): void => {
         if (controller.signal.aborted) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
         if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
@@ -255,6 +258,7 @@ export function WorkspaceVcs({
     setSaved(false);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -300,6 +304,7 @@ export function WorkspaceVcs({
     setSaved(false);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({

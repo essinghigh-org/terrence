@@ -84,6 +84,7 @@ export function RegistryProviders(): React.JSX.Element {
       return;
     }
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/registry-providers`,
       ) as { data: RegistryProvider[] };

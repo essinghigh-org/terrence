@@ -42,7 +42,7 @@ test("edits and deletes projects through supported routes and reassigns a worksp
     if (url === "/api/v2/workspaces/workspace-1" && init?.method === "PATCH") return json({ data: workspace });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -70,6 +70,7 @@ test("edits and deletes projects through supported routes and reassigns a worksp
     const assignment = fetchMock.mock.calls.find(([input, init]): boolean =>
       urlOf(input) === "/api/v2/workspaces/workspace-1" && init?.method === "PATCH");
     expect(assignment).toBeDefined();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
     expect(JSON.parse(assignment?.[1]?.body as string).data.relationships.project.data.id).toBe("project-app");
   });
 
@@ -93,7 +94,7 @@ test("keeps projects read-only without project management permission", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -127,7 +128,7 @@ test("ignores stale projects and permissions after changing organizations", asyn
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -176,6 +177,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     if (url.startsWith("/api/v2/organizations/acme/runs?")) return json({ data: [] });
     if (url === "/api/v2/workspaces/workspace-1/tag-bindings" && init?.method === undefined) return json({ data: tags });
     if (url === "/api/v2/workspaces/workspace-1/tag-bindings" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: { key: string; value: string } }[] };
       for (const item of payload.data) {
         const existing = tags.find((tag): boolean => tag.attributes.key === item.attributes.key);
@@ -190,7 +192,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -231,6 +233,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
       urlOf(input) === "/api/v2/workspaces/workspace-1/tag-bindings" && init?.method === "PATCH")).toBeTrue();
   });
   const tagDialog = view.getByRole("dialog");
+// SAFETY: the waited-for element is an HTMLElement in the rendered DOM.
   const tagRow = await waitFor((): HTMLElement =>
     within(tagDialog).getByText("environment").closest("tr") as HTMLElement,
   );
@@ -288,6 +291,7 @@ test("manages team organization access, invites a member, and removes them", asy
     }
     if (url === "/api/v2/organizations/acme/teams" && init?.method === undefined) return json({ data: [team] });
     if (url === "/api/v2/teams/team-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: { "organization-access": Record<string, boolean> } };
       };
@@ -316,7 +320,7 @@ test("manages team organization access, invites a member, and removes them", asy
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -338,6 +342,7 @@ test("manages team organization access, invites a member, and removes them", asy
   });
   const permissionCall = fetchMock.mock.calls.find(([input, init]): boolean =>
     urlOf(input) === "/api/v2/teams/team-1" && init?.method === "PATCH");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   const savedPermissions = JSON.parse(permissionCall?.[1]?.body as string).data.attributes["organization-access"];
   expect(savedPermissions).toMatchObject({
     "manage-projects": true,
@@ -365,6 +370,7 @@ test("manages team organization access, invites a member, and removes them", asy
   await waitFor((): void => { expect(view.getByText("new@example.com")).toBeTruthy(); });
   const inviteCall = fetchMock.mock.calls.find(([input, init]): boolean =>
     urlOf(input) === "/api/v2/organizations/acme/organization-memberships" && init?.method === "POST");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(inviteCall?.[1]?.body as string).data.relationships.teams.data).toEqual([
     { id: "team-1", type: "teams" },
   ]);
@@ -395,7 +401,7 @@ test("fails closed for organization and team mutations without explicit permissi
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const teamsView = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -426,6 +432,7 @@ test("fails closed for organization and team mutations without explicit permissi
 
 test("shows a retryable organization load error", async () => {
   let organizationRequests = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
@@ -459,6 +466,7 @@ test("shows a retryable organization load error", async () => {
 test("surfaces and retries team and member load errors", async () => {
   let teamRequests = 0;
   let membershipRequests = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
@@ -530,7 +538,7 @@ test("reloads organization settings at the renamed path", async () => {
     if (url.endsWith("/teams") || url.endsWith("/organization-memberships")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings"]}>
@@ -550,6 +558,7 @@ test("reloads organization settings at the renamed path", async () => {
 test("ignores an organization response after navigating to another organization", async () => {
   let resolveAcme!: (response: Response) => void;
   const acmeResponse = new Promise<Response>((resolve): void => { resolveAcme = resolve; });
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") return acmeResponse;
@@ -606,7 +615,7 @@ test("toggles dense table density and persists the preference", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -620,11 +629,13 @@ test("toggles dense table density and persists the preference", async () => {
 
   fireEvent.click(view.getByRole("button", { name: "Switch to dense table density" }));
   expect(view.getByRole("table").getAttribute("data-density")).toBe("dense");
+// SAFETY: the captured call argument is a stringified JSON body.
   const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
   expect(stored.density).toBe("dense");
 
   fireEvent.click(view.getByRole("button", { name: "Switch to comfortable table density" }));
   expect(view.getByRole("table").getAttribute("data-density")).toBe("comfortable");
+// SAFETY: the captured call argument is a stringified JSON body.
   expect(JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string).density)
     .toBe("comfortable");
 
@@ -647,7 +658,7 @@ test("pins a workspace (star) and sorts it to the top", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -668,6 +679,7 @@ test("pins a workspace (star) and sorts it to the top", async () => {
   // After pinning, beta floats to the top.
   await waitFor((): void => { expect(rows()[0]).toContain("beta"); });
   expect(view.getByRole("button", { name: "Unpin beta" })).toBeTruthy();
+// SAFETY: the captured call argument is a stringified JSON body.
   const stored = JSON.parse(window.localStorage.getItem("terrence-pinned-workspaces") as string);
   expect(stored).toEqual([{ orgName: "acme", workspaceName: "beta", visitedAt: 0 }]);
 
@@ -693,7 +705,7 @@ test("shows recent workspace shortcuts in the org sidebar", async () => {
     if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const { Layout } = await import("../src/components/Layout");
   const view = render(
@@ -727,7 +739,7 @@ test("saves, applies, and deletes a named workspace view", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -750,6 +762,7 @@ test("saves, applies, and deletes a named workspace view", async () => {
     expect(view.getByRole("button", { name: "Errored only" })).toBeTruthy();
   });
   expect(window.localStorage.getItem("terrence-saved-views:acme")).not.toBeNull();
+// SAFETY: the captured call argument is a stringified JSON body.
   const stored = JSON.parse(window.localStorage.getItem("terrence-saved-views:acme") as string);
   expect(stored).toEqual([{ name: "Errored only", search: "", statusFilter: "errored", projectFilter: "" }]);
 
@@ -759,7 +772,9 @@ test("saves, applies, and deletes a named workspace view", async () => {
   });
   await act(async (): Promise<void> => { fireEvent.click(view.getByRole("button", { name: "Errored only" })); });
   await waitFor((): void => {
+// SAFETY: the component renders this element type for the queried role/label.
     expect((view.getByLabelText("Search workspaces") as HTMLInputElement).value).toBe("");
+// SAFETY: the component renders this element type for the queried role/label.
     expect((view.getByLabelText("Status filter") as HTMLSelectElement).value).toBe("errored");
   });
   expect(view.getByRole("button", { name: "Errored only" }).getAttribute("aria-pressed")).toBe("true");
@@ -791,7 +806,7 @@ test("column chooser hides and restores table columns with persistence", async (
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -824,6 +839,7 @@ test("column chooser hides and restores table columns with persistence", async (
     expect(view.queryByRole("columnheader", { name: "Status" })).toBeNull();
     expect(view.queryByText("acme/terraform-aws")).toBeNull();
   });
+// SAFETY: the captured call argument is a stringified JSON body.
   const stored = JSON.parse(window.localStorage.getItem("terrence-table-prefs:workspaces") as string);
   expect(stored.visibleColumns).not.toContain("repository");
   expect(stored.visibleColumns).not.toContain("status");

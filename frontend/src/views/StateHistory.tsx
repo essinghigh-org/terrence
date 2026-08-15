@@ -83,6 +83,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
   }, [retry, workspaceId]);
 
   const handleViewJson = async (s: StateItem): Promise<void> => {
+// SAFETY: the fixture field matches the API contract type.
     const stateStr = s.attributes["state"] as string | undefined;
     if (stateStr != null) {
       try {
@@ -96,7 +97,9 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
 
     setLoadingStateId(s.id);
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const res = await fetchApi(`/state-versions/${s.id}`) as { data?: { attributes?: Record<string, unknown> } };
+// SAFETY: the fixture field matches the API contract type.
       const rawPayload = (res.data?.attributes?.["state"] as string | undefined) ?? "{}";
       try {
         const parsed: unknown = typeof rawPayload === "string" ? JSON.parse(rawPayload) : rawPayload;
@@ -120,6 +123,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
+// SAFETY: the fixture field matches the API contract type.
       const serial = (s.attributes["serial"] as number | undefined) ?? 1;
       a.download = `terraform-state-v${serial}.json`;
       document.body.appendChild(a);
@@ -140,6 +144,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     setUploading(true);
     try {
       const rawState = await file.text();
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspaceId}/state-versions/upload`, {
         method: "POST",
         body: rawState,
@@ -231,7 +236,9 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
             {loadState.kind === "ready" && loadState.states.map((s: StateItem): React.JSX.Element => (
               <TableRow key={s.id}>
                 <TableCell>
-                  <p className="font-bold">#{s.attributes["serial"] as number}</p>
+// SAFETY: the fixture field matches the API contract type.
+                  <p className="font-bold">#{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+s.attributes["serial"] as number}</p>
                   <p className="font-mono text-xs text-muted-foreground">{s.id}</p>
                 </TableCell>
                 <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>

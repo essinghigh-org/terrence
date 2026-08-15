@@ -72,6 +72,7 @@ export function FuzzyCombobox({
   useEffect((): (() => void) => {
     if (!open) return (): void => undefined;
     const onPointerDown = (event: MouseEvent): void => {
+// SAFETY: the click target is a DOM node; contains() accepts Node.
       if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent): void => {

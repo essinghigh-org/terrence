@@ -37,7 +37,7 @@ test("loads every state-version page without showing a false empty state", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
 
@@ -75,7 +75,7 @@ test("shows a retryable error separately from the empty state", async () => {
       ? json({ errors: [{ status: "503", detail: "State service unavailable" }] }, 503)
       : json({ data: [], meta: { pagination: { "next-page": null } } });
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
 
@@ -105,7 +105,7 @@ test("uploads a Terraform state file and adds the new state version", async () =
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
   await waitFor((): void => {
@@ -134,7 +134,7 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
   await waitFor((): void => {

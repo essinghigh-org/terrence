@@ -59,6 +59,7 @@ export function ChangeRequests(): React.JSX.Element {
     setError("");
     const statusQuery = status === "" ? "" : `&filter%5Bstatus%5D=${encodeURIComponent(status)}`;
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgName)}/change-requests?page%5Bsize%5D=20&page%5Bnumber%5D=${page}${statusQuery}`,
         signal === undefined ? {} : { signal },

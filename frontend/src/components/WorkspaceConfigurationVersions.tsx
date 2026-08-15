@@ -14,6 +14,7 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const load = async (): Promise<void> => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const response = await fetchApi(`/workspaces/${workspaceId}/configuration-versions?page[size]=50`) as { data?: ConfigurationVersion[] };
     setVersions(Array.isArray(response.data) ? response.data : []);
   };
@@ -22,6 +23,7 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
   const createVersion = async (): Promise<void> => {
     setCreating(true); setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(`/workspaces/${workspaceId}/configuration-versions`, { method: "POST", body: JSON.stringify({ data: { type: "configuration-versions", attributes: { source: "tfe-api" } } }) }) as { data: ConfigurationVersion };
       setVersions((current) => [response.data, ...current]); toast.add({ title: "Configuration version created", description: "Upload configuration content with the API upload URL.", type: "success" });
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "Could not create configuration version"); } finally { setCreating(false); }

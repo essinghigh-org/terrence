@@ -16,6 +16,7 @@ const requestUrl = (input: string | URL | Request): string => (
 );
 
 const changeInput = (element: HTMLElement, value: string): void => {
+// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = Reflect.get(element, "_valueTracker") as { setValue: (nextValue: string) => void } | undefined;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
@@ -48,7 +49,7 @@ test("fails closed and deletes only after exact confirmation and a successful re
   const onDeleted = mock((): void => {
     // Callback assertion below.
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter>
@@ -119,16 +120,18 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/workspaces/ws%2F1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       patchBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
       return json({ data: { id: "ws/1", type: "workspaces" } });
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       runBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
       return json({ data: { id: "run/destroy", type: "runs" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   const onDeleted = mock((): void => {
     // Delete behavior is covered separately.
   });

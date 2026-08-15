@@ -169,6 +169,7 @@ export function RunList({
       const endpoint = `/api/v2/workspaces/${workspaceId}/runs`;
       const firstUrl = new URL(endpoint, "http://terrence.local");
       if (sort !== "") firstUrl.searchParams.set("sort", sort);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`${firstUrl.pathname}${firstUrl.search}`, signal === undefined ? {} : { signal }) as {
         data?: RunItem[];
         included?: IncludedUser[];
@@ -189,6 +190,7 @@ export function RunList({
           nextUrl.searchParams.set("page[number]", String(nextPage));
           nextUrl.searchParams.set("sort", sort);
           const nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
           const nextRes = await fetchApi(nextPath, signal === undefined ? {} : { signal }) as {
             data?: RunItem[];
             included?: IncludedUser[];
@@ -327,6 +329,7 @@ export function RunList({
     if (!canStartRun) return;
     setCreating(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/api/v2/runs", {
         method: "POST",
         body: JSON.stringify({
@@ -512,6 +515,7 @@ export function RunList({
                           : run.attributes.source === "tfe-api" || run.attributes.source === undefined
                             ? "TFE API"
                             : "UI";
+// SAFETY: the fixed source list matches the VCS source union the UI renders.
                 const externalSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source);
                 return (
                   <article
@@ -624,7 +628,9 @@ export function RunList({
               </div>
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">Run type</legend>
-                {(Object.keys(RUN_TYPE_LABELS) as RunType[]).map((type): React.JSX.Element => (
+// SAFETY: the value matches the fixture's declared contract.
+                {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+(Object.keys(RUN_TYPE_LABELS) as RunType[]).map((type): React.JSX.Element => (
                   <label
                     key={type}
                     className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${

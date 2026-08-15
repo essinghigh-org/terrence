@@ -119,12 +119,14 @@ function parseEventFrame(frame: string): SseEvent | null {
   if (dataLines.length === 0) return null;
   const raw = dataLines.join("\n");
   try {
+    // SAFETY: the parsed payload is validated field-by-field by the caller.
     const parsed = JSON.parse(raw) as unknown;
+    // SAFETY: the typeof-object guard is the boundary check; the data field
+    // is consumed as a record of string-typed values by the event handlers.
+    const data = parsed !== null && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
     return {
       name,
-      data: parsed !== null && typeof parsed === "object"
-        ? parsed as Record<string, unknown>
-        : {},
+      data,
     };
   } catch {
     return null;

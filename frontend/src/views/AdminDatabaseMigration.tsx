@@ -165,6 +165,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 
   const load = useCallback(async (): Promise<void> => {
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const body = (await fetchApi("/admin/db-migration/status")) as { data: StatusBody };
       setStatus(body.data);
       setError(null);
@@ -196,6 +197,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
     });
     if (!(response instanceof Response)) return response;
     if (!response.ok) {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const parsed = (await response.json().catch((): null => null)) as { errors?: { detail?: string }[] } | null;
       throw new Error(parsed?.errors?.[0]?.detail ?? `Request failed (${response.status})`);
     }
@@ -284,19 +286,22 @@ export function AdminDatabaseMigration(): React.JSX.Element {
               <div>
                 <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Steps</div>
                 <ul className="space-y-1">
-                  {wizard.steps.map((step): React.JSX.Element => (
+                  {wizard.steps.map((step): React.JSX.Element => {
+                    // SAFETY: unknown migration steps fall back to the raw step key below.
+                    const stepLabel = STEP_LABELS[step.key as keyof typeof STEP_LABELS] ?? step.key;
+                    return (
                     <li key={step.key} className="flex items-center gap-2 text-sm">
                       {stepSymbol(step.status)}
                       <span className={cn(step.status === "failed" && "text-destructive")}>
-                        {/* SAFETY: unknown migration steps fall back to the raw step key below. */}
-                        {STEP_LABELS[step.key as keyof typeof STEP_LABELS] ?? step.key}
+                        {stepLabel}
                       </span>
                       {step.detail !== null && (
                         <span className="truncate font-mono text-xs text-muted-foreground">{step.detail}</span>
                       )}
                       {step.error !== null && <span className="text-xs text-destructive">{step.error}</span>}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             )}
@@ -430,6 +435,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                     setTestResult(null);
                     act("test-connection", "POST", { data: { attributes: { url } } })
                       .then((body): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
                         const result = (body as { data: { ok?: boolean; detail?: string } }).data;
                         setTestResult(result.ok === false ? `Connection failed: ${result.detail ?? "unknown error"}` : "Connection OK");
                       })
@@ -450,6 +456,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                     setCompatResult(null);
                     act("compatibility", "POST", { data: { attributes: { url } } })
                       .then((body): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
                         setCompatResult((body as { data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } }).data);
                       })
                       .catch((err: unknown): void => {

@@ -247,6 +247,7 @@ export function Layout({
     ]).then(([accountResult, organizationsResult]): void => {
       if (controller.signal.aborted) return;
       if (accountResult.status === "fulfilled") {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const attributes = (accountResult.value as {
           data?: {
             attributes?: {
@@ -403,6 +404,7 @@ export function Layout({
       signal: controller.signal,
     }).then((response: unknown): void => {
       if (controller.signal.aborted) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const attributes = (response as {
         data?: { attributes?: { permissions?: OrganizationPermissions; capabilities?: Capabilities } };
       }).data?.attributes;
@@ -430,6 +432,7 @@ export function Layout({
       { signal: controller.signal },
     ).then((response: unknown): void => {
       if (controller.signal.aborted) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const permissions = (response as {
         data?: {
           attributes?: {
@@ -459,6 +462,7 @@ export function Layout({
       signal: controller.signal,
     }).then((response: unknown): void => {
       if (controller.signal.aborted) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const name = (response as {
         data?: { attributes?: { name?: unknown } };
       }).data?.attributes?.name;

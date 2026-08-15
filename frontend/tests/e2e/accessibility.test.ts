@@ -72,6 +72,7 @@ async function collectViolations(page: Page): Promise<string[]> {
     }
 
     for (const el of document.querySelectorAll("input, select, textarea")) {
+// SAFETY: the component renders this element type for the queried role/label.
       const input = el as HTMLInputElement;
       if (input.type === "hidden") continue;
       if (el.getAttribute("aria-hidden") !== null) continue;

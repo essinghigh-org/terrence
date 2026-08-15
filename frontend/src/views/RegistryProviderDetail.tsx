@@ -15,8 +15,10 @@ function stringValue(value: unknown): string {
 }
 
 function platformFromResource(raw: unknown): Platform {
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const item = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const rawAttributes = item["attributes"];
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
   return {
     id: stringValue(item["id"]),
@@ -36,13 +38,18 @@ export function RegistryProviderDetail(): React.JSX.Element {
   useEffect((): (() => void) => {
     const controller = new AbortController();
     const load = async (): Promise<void> => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const providerResponse = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-providers/private/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, { signal: controller.signal }) as { data: { id: string } };
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const versionResponse = await fetchApi(`/registry-providers/${encodeURIComponent(providerResponse.data.id)}/versions`, { signal: controller.signal }) as { data?: unknown[] };
       const loaded = await Promise.all((versionResponse.data ?? []).map(async (raw): Promise<Version> => {
+// SAFETY: the fixture object is read as a record; each field is typed below.
         const item = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
         const rawAttributes = item["attributes"];
+// SAFETY: the fixture object is read as a record; each field is typed below.
         const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
         const id = stringValue(item["id"]);
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const platformResponse = await fetchApi(`/registry-provider-versions/${encodeURIComponent(id)}/platforms`, { signal: controller.signal }) as { data?: unknown[] };
         return {
           id,

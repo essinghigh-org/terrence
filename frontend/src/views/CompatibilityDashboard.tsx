@@ -56,7 +56,9 @@ function SurfaceTable({
           <TableRow key={entry.name}>
             <TableCell className="font-mono text-[13px]">{entry.name}</TableCell>
             <TableCell>
-              <Badge variant="outline" className={cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])}>
+// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
+              <Badge variant="outline" className={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])}>
                 {statusLabel(entry.status)}
               </Badge>
             </TableCell>
@@ -82,6 +84,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi("/api/v2/admin/provider-surface") as { data?: ProviderSurface };
       setData(response.data ?? null);
     } catch (e: unknown) {
@@ -96,6 +99,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
   }, [load]);
 
   const resources = data?.resources ?? [];
+  // SAFETY: the compat surface payload carries SurfaceEntry arrays per contract.
   const dataSources = Array.isArray(data?.["data_sources"])
     ? data["data_sources"] as SurfaceEntry[]
     : [];

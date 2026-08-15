@@ -92,6 +92,7 @@ export function WorkspaceRunTasks({
       const taskRequest = canManage
         ? fetchApi(`/organizations/${encodeURIComponent(orgName)}/run-tasks`)
         : Promise.resolve({ data: [] });
+      // SAFETY: both endpoints return the JSON:API envelope per contract.
       const [taskResponse, bindingResponse] = await Promise.all([
         taskRequest,
         fetchApi(`/workspaces/${encodeURIComponent(workspaceId)}/run-tasks`),

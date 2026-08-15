@@ -16,6 +16,7 @@ afterEach((): void => {
 });
 
 test("falls back to local sign-in when the ping request fails", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => {
     throw new Error("ping unavailable");
   }) as typeof fetch;
@@ -41,6 +42,7 @@ test("falls back to local sign-in when the ping request fails", async (): Promis
 });
 
 test("renders SAML and OIDC single sign-on buttons when the providers are enabled", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,
     "local-auth-enabled": true,
@@ -64,6 +66,7 @@ test("renders SAML and OIDC single sign-on buttons when the providers are enable
 });
 
 test("shows the credential form for LDAP when local authentication is disabled", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,
     "local-auth-enabled": false,
@@ -88,6 +91,7 @@ test("shows the credential form for LDAP when local authentication is disabled",
 });
 
 test("warns when local authentication and LDAP are disabled", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,
     "local-auth-enabled": false,
@@ -112,6 +116,7 @@ test("warns when local authentication and LDAP are disabled", async (): Promise<
 });
 
 test("reports when every authentication method is disabled", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": false,
     "local-auth-enabled": false,
@@ -138,6 +143,7 @@ test("reports when every authentication method is disabled", async (): Promise<v
 });
 
 test("renders the password form when no SSO provider is enabled", async (): Promise<void> => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     "signup-enabled": true,
     "local-auth-enabled": true,

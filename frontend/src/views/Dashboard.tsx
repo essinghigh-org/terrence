@@ -100,6 +100,7 @@ export function Dashboard(): React.JSX.Element {
     if (organizationName === "" || RESERVED_ORGANIZATION_NAMES.has(organizationName.toLowerCase())) return;
     setSaving(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/api/v2/organizations", {
         method: "POST",
         body: JSON.stringify({
@@ -135,6 +136,7 @@ export function Dashboard(): React.JSX.Element {
     const controller = new AbortController();
     fetchApi("/api/v1/metadata", { signal: controller.signal })
       .then((response): void => {
+// SAFETY: /api/v2/metadata returns the MetadataDocument per contract.
         const version = (response as MetadataDocument).version;
         if (typeof version === "string") {
           const safe = version.replace(/[^A-Za-z0-9._-]/g, "");

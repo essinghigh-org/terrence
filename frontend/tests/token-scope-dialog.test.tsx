@@ -57,12 +57,13 @@ function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces
       });
     }
     if (url === "/api/v2/tokens" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       posted = JSON.parse(init.body as string);
       return json({ data: { id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } } });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  return { postedBody: (): PostedBody => posted, fetchMock: fetchMock as typeof fetch };
+  return { postedBody: (): PostedBody => posted, fetchMock };
 }
 
 /** Testid anchors the root group plus every nested group (see TokenScopeDialog). */
@@ -118,6 +119,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
 
   const dialog = await view.findByRole("dialog");
   fireEvent.click(within(dialog).getByText("Fine-grained"));
+// SAFETY: the component renders this element type for the queried role/label.
   const orgSelect = within(dialog).getByLabelText("Organization") as HTMLSelectElement;
   await waitFor((): void => {
     expect(orgSelect.options.length).toBe(2);
@@ -145,6 +147,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
@@ -167,6 +170,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
+// SAFETY: the component renders this element type for the queried role/label.
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
   const q = tagGroupQueries(dialog);
@@ -208,6 +212,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
@@ -231,6 +236,7 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
+// SAFETY: the component renders this element type for the queried role/label.
     expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
   });
   const q = tagGroupQueries(dialog);
@@ -264,6 +270,7 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
   await waitFor((): void => {
     expect(postedBody()).not.toBeNull();
   });
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const attributes = (postedBody() as { data: { attributes: Record<string, unknown> } }).data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,

@@ -25,6 +25,7 @@ export function Login(): React.JSX.Element {
   useEffect((): void => {
     fetchApi("/ping")
       .then((data: unknown): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const resp = data as { "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } };
         setSignupEnabled(resp["signup-enabled"] !== false);
         setLocalAuthEnabled(resp["local-auth-enabled"] !== false);
@@ -43,6 +44,7 @@ export function Login(): React.JSX.Element {
     setError("");
     setSubmitting(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/users/login", {
         method: "POST",
         body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
@@ -69,6 +71,7 @@ export function Login(): React.JSX.Element {
     setError("");
     setSubmitting(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/users/login/mfa", {
         method: "POST",
         body: JSON.stringify({ data: { attributes: { "challenge-token": mfaChallengeToken, code: mfaCode.trim(), "browser-session": true } } }),

@@ -27,7 +27,7 @@ test("creates an organization and opens the working destination", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app"]}>
@@ -53,6 +53,7 @@ test("creates an organization and opens the working destination", async () => {
   const createCall = fetchMock.mock.calls.find(([input, init]): boolean =>
     urlOf(input) === "/api/v2/organizations" && init?.method === "POST");
   expect(createCall).toBeDefined();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(createCall?.[1]?.body as string).data.attributes).toEqual({
     name: "acme",
     "default-iac-binary": "terraform",
@@ -60,6 +61,7 @@ test("creates an organization and opens the working destination", async () => {
 });
 
 test("resumes the last selected organization on a fresh page load", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations?page[size]=100") {
@@ -84,6 +86,7 @@ test("resumes the last selected organization on a fresh page load", async () => 
 });
 
 test("does not resume an organization that no longer exists", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations?page[size]=100") {

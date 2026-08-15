@@ -114,7 +114,7 @@ test("ignores an aborted workspace response after the route changes", async () =
     if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -177,7 +177,7 @@ test("renders before the latest run finishes and ignores an aborted run response
     if (url === "/api/v2/workspaces/ws-staging/runs?page[size]=1") return stagingRun.promise;
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -226,6 +226,7 @@ test("renders before the latest run finishes and ignores an aborted run response
 
 test("blocks update-only settings when can-update is false", async () => {
   const requestedUrls: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = typeof input === "string"
       ? input
@@ -277,6 +278,7 @@ test("blocks update-only settings when can-update is false", async () => {
 });
 
 test("fails closed when update permission is missing from readable settings", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = typeof input === "string"
       ? input
@@ -354,7 +356,7 @@ test("keeps workspace variables readable without mutation permission", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/variables"]}>
@@ -399,6 +401,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
       return json({ data: workspace });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -411,7 +414,7 @@ test("keeps the current settings route in sync after renaming a workspace", asyn
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general?from=test#advanced"]}>
@@ -500,7 +503,7 @@ test("renders controlled workspace sections with current resources and project c
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -555,7 +558,7 @@ test("passes workspace run-task permission into the routed settings section", as
     if (url === "/api/v2/workspaces/ws-1/run-tasks") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/tasks"]}>
@@ -603,7 +606,7 @@ test("returns to the organization workspace list after deleting a workspace", as
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/delete"]}>
@@ -650,7 +653,7 @@ test("project settings sidebar marks exactly one section active", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings"]}>
@@ -686,7 +689,7 @@ test("project settings variable sets section marks only variable sets active", a
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings/variable-sets"]}>
@@ -728,6 +731,7 @@ test("confirms workspace locking and unlocking before sending mutations", async 
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     if (url === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST") {
       locked = true;
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       reason = JSON.parse(init.body as string).reason as string;
       return json({ data: { id: "ws-1", attributes: { name: "production", locked: true } } });
     }
@@ -738,7 +742,7 @@ test("confirms workspace locking and unlocking before sending mutations", async 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -763,6 +767,7 @@ test("confirms workspace locking and unlocking before sending mutations", async 
   });
   const lockCall = fetchMock.mock.calls.find(([input, init]): boolean =>
     getUrl(input) === "/api/v2/workspaces/ws-1/actions/lock" && init?.method === "POST");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(lockCall?.[1]?.body as string).reason).toBe("Maintenance");
 
   await waitFor((): void => { expect(view.getByText("Locked")).toBeTruthy(); });

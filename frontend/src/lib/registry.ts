@@ -64,19 +64,25 @@ export type RegistryModule = Readonly<{
   permissions: Readonly<{ canDelete: boolean; canResync: boolean; canRetry: boolean }>;
 }>;
 
+/** View an unknown value as a record, or {} when it is not an object. */
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object") return {};
+  // SAFETY: the typeof-object guard is the boundary check; callers only read
+  // string-typed fields and validate each with typeof afterwards.
+  return value as Record<string, unknown>;
+}
+
 function attributes(resource: unknown): Record<string, unknown> {
-  if (resource === null || typeof resource !== "object") return {};
-  const raw = (resource as Record<string, unknown>)["attributes"];
-  return raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return asRecord(asRecord(resource)["attributes"]);
 }
 
 export function registryModuleFromResource(resource: unknown): RegistryModule {
-  const raw = resource !== null && typeof resource === "object" ? resource as Record<string, unknown> : {};
+  const raw = asRecord(resource);
   const value = attributes(resource);
   const rawVersions = Array.isArray(value["version-statuses"]) ? value["version-statuses"] : [];
   const rawVcsRepo = value["vcs-repo"];
-  const vcsRepo = rawVcsRepo !== null && typeof rawVcsRepo === "object" ? rawVcsRepo as Record<string, unknown> : null;
-  const rawPermissions = value["permissions"] !== null && typeof value["permissions"] === "object" ? value["permissions"] as Record<string, unknown> : {};
+  const vcsRepo = rawVcsRepo !== null && typeof rawVcsRepo === "object" ? asRecord(rawVcsRepo) : null;
+  const rawPermissions = value["permissions"] !== null && typeof value["permissions"] === "object" ? asRecord(value["permissions"]) : {};
   return {
     id: typeof raw["id"] === "string" ? raw["id"] : "",
     name: typeof value["name"] === "string" ? value["name"] : "",
@@ -90,7 +96,7 @@ export function registryModuleFromResource(resource: unknown): RegistryModule {
       : null,
     versions: rawVersions.flatMap((entry): RegistryModule["versions"][number][] => {
       if (entry === null || typeof entry !== "object") return [];
-      const version = entry as Record<string, unknown>;
+      const version = asRecord(entry);
       return typeof version["version"] === "string" ? [{
         version: version["version"],
         status: typeof version["status"] === "string" ? version["status"] : "pending",
@@ -120,7 +126,7 @@ export function registryModuleFromResource(resource: unknown): RegistryModule {
 }
 
 export function registryModuleVersionFromResource(resource: unknown): RegistryModuleVersion {
-  const raw = resource !== null && typeof resource === "object" ? resource as Record<string, unknown> : {};
+  const raw = asRecord(resource);
   const value = attributes(resource);
   return {
     id: typeof raw["id"] === "string" ? raw["id"] : "",
@@ -128,6 +134,8 @@ export function registryModuleVersionFromResource(resource: unknown): RegistryMo
     status: typeof value["status"] === "string" ? value["status"] : "pending",
     deprecated: value["deprecated"] === true,
     revoked: value["revoked"] === true,
+    // SAFETY: the typeof-object guard above is the boundary check; metadata is
+    // treated as opaque (the backend echoes it back on re-publish).
     metadata: value["metadata"] !== null && typeof value["metadata"] === "object" ? value["metadata"] as RegistryModuleMetadata : null,
     commitSha: typeof value["commit-sha"] === "string" ? value["commit-sha"] : null,
     tag: typeof value["tag"] === "string" ? value["tag"] : null,

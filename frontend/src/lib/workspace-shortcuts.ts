@@ -31,19 +31,27 @@ function notifyShortcutChange(): void {
   for (const listener of listeners) listener();
 }
 
+/** True when the localStorage entry carries the three WorkspaceVisit fields. */
+function isWorkspaceVisit(entry: unknown): entry is WorkspaceVisit {
+  if (typeof entry !== "object" || entry === null) return false;
+  // SAFETY: only the checked fields are read; the object may carry arbitrary
+  // extra fields written by older app versions or other tabs.
+  const visit = entry as { orgName?: unknown; workspaceName?: unknown; visitedAt?: unknown };
+  return typeof visit.orgName === "string"
+    && typeof visit.workspaceName === "string"
+    && typeof visit.visitedAt === "number";
+}
+
 export function getRecentWorkspaces(): WorkspaceVisit[] {
   try {
     const raw = window.localStorage.getItem(RECENT_KEY);
     if (raw === null || raw === "") return [];
+    // SAFETY: localStorage content is untrusted; Array.isArray plus
+    // isWorkspaceVisit validate the shape before any field is used.
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((entry): entry is WorkspaceVisit =>
-        typeof entry === "object"
-        && entry !== null
-        && typeof (entry as WorkspaceVisit).orgName === "string"
-        && typeof (entry as WorkspaceVisit).workspaceName === "string"
-        && typeof (entry as WorkspaceVisit).visitedAt === "number")
+      .filter(isWorkspaceVisit)
       .slice(0, MAX_RECENT);
   } catch {
     return [];
@@ -68,14 +76,12 @@ export function getPinnedWorkspaces(): WorkspaceVisit[] {
   try {
     const raw = window.localStorage.getItem(PINNED_KEY);
     if (raw === null || raw === "") return [];
+    // SAFETY: localStorage content is untrusted; Array.isArray plus
+    // isWorkspaceVisit validate the shape before any field is used.
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((entry): entry is WorkspaceVisit =>
-        typeof entry === "object"
-        && entry !== null
-        && typeof (entry as WorkspaceVisit).orgName === "string"
-        && typeof (entry as WorkspaceVisit).workspaceName === "string")
+      .filter(isWorkspaceVisit)
       .map((entry): WorkspaceVisit => ({ ...entry, visitedAt: 0 }));
   } catch {
     return [];

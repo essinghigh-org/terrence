@@ -33,7 +33,7 @@ test("loads workspace webhooks and creates a webhook using notification configur
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<WorkspaceNotifications mode="webhooks" workspaceId="ws-1" />);
   await waitFor((): void => { expect(view.getByText("Existing webhook")).toBeTruthy(); });
@@ -50,6 +50,7 @@ test("loads workspace webhooks and creates a webhook using notification configur
   expect(postCall).toBeTruthy();
   const postRequest = postCall?.[1];
   expect(postRequest).toBeTruthy();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(postRequest?.body as string)).toEqual({
     data: {
       type: "notification-configurations",
@@ -65,6 +66,7 @@ test("loads workspace webhooks and creates a webhook using notification configur
 });
 
 test("requires a name and URL before creating a webhook", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({ data: [] })) as typeof fetch;
   const view = render(<WorkspaceNotifications mode="webhooks" workspaceId="ws-1" />);
   await waitFor((): void => { expect(view.getByText("No webhooks have been added.")).toBeTruthy(); });

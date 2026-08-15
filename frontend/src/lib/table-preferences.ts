@@ -22,6 +22,8 @@ export function getTablePreferences(viewId: string): TablePreferences | null {
   try {
     const raw = window.localStorage.getItem(storeKey(viewId));
     if (raw === null || raw === "") return null;
+    // SAFETY: localStorage content is untrusted; the parsed object is
+    // field-validated below before any value is used.
     const parsed = JSON.parse(raw) as Partial<TablePreferences>;
     if (typeof parsed !== "object" || parsed === null) return null;
     const density: TableDensity = parsed.density === "dense" ? "dense" : "comfortable";

@@ -91,9 +91,7 @@ export function extractFieldErrors(rawErrors: readonly Readonly<Record<string, u
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];
-    const pointer = source !== null && typeof source === "object"
-      ? (source as Record<string, unknown>)["pointer"]
-      : undefined;
+    const pointer = asRecordOrNull(source)?.["pointer"];
     if (typeof pointer !== "string" || pointer === "") continue;
     const detail = typeof entry["detail"] === "string" ? entry["detail"] : "";
     if (detail === "") continue;
@@ -230,6 +228,8 @@ async function refreshAccessToken(force = false): Promise<string | null> {
       credentials: "same-origin",
     });
     if (!response.ok) return null;
+    // SAFETY: /users/refresh returns the JSON:API access-token document; its
+    // token and expired-at fields are typeof-checked below.
     const document = await readResponseBody(response) as AccessTokenDocument;
     const token = document.data?.attributes?.token;
     const expiresAt = document.data?.attributes?.["expired-at"];
@@ -253,6 +253,8 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     ? endpoint
     : `${API_BASE_URL}${endpoint}`;
   const send = async (accessToken: string | null): Promise<Response> => {
+    // SAFETY: Headers accepts record and tuple-array shapes; the readonly
+    // modifiers on the stored options are compile-time only.
     const headers = new Headers(options.headers as HeadersInit | undefined);
     if (!headers.has("Content-Type") && (options.body === undefined || options.body === null || typeof options.body === "string")) {
       headers.set("Content-Type", "application/vnd.api+json");
@@ -261,6 +263,8 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
       headers.set("Authorization", `Bearer ${accessToken}`);
     }
     return fetch(url, {
+      // SAFETY: ReadonlyRequestInit is RequestInit with readonly modifiers;
+      // spreading it is shape-identical at runtime.
       ...(options as RequestInit),
       headers,
     });
@@ -295,9 +299,7 @@ export async function fetchApi(endpoint: string, options: ReadonlyRequestInit = 
     if (response.status === 401 && token !== null && token !== "" && !url.endsWith("/users/login")) {
       expireAuthSession();
     }
-    const errorBody = (await response.json().catch((): null => null)) as Record<string, unknown> | null;
-    const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
-    const errors = Array.isArray(rawErrors) ? (rawErrors as Record<string, unknown>[]) : [];
+    const errors = await parseErrorBody(response);
     const firstErr = errors[0];
     const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
     const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
@@ -318,6 +320,8 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
 
   while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
     visited.add(pageEndpoint);
+    // SAFETY: list endpoints return the JSON:API collection envelope; the
+    // data array and pagination meta fields are checked below.
     const response = await fetchApi(
       pageEndpoint,
       signal === undefined ? {} : { signal },
@@ -342,6 +346,32 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
 
 export type ExplainKind = "plan" | "apply";
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+const REASONING_EFFORT_SET = new Set<string>(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/** View an unknown value as a string-keyed record, or null when it is not an object. */
+function asRecordOrNull(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object") return null;
+  // SAFETY: the typeof-object guard is the boundary check; callers validate
+  // individual fields with typeof before use.
+  return value as Record<string, unknown>;
+}
+
+/** Narrow a backend reasoning-effort value to the known union, or null. */
+function reasoningEffortValue(value: unknown): ReasoningEffort | null {
+  // SAFETY: the set membership check is the boundary validation; unknown
+  // backend values degrade to null so the UI renders the default effort.
+  return typeof value === "string" && REASONING_EFFORT_SET.has(value) ? value as ReasoningEffort : null;
+}
+
+/** Parse a JSON:API error document from a failed response, or [] when it is not JSON. */
+async function parseErrorBody(response: Response): Promise<readonly Record<string, unknown>[]> {
+  const errorBody = asRecordOrNull(await response.json().catch((): null => null));
+  const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
+  // SAFETY: Array.isArray is the boundary check; entries are only read via
+  // typeof-validated string fields in extractFieldErrors below.
+  return Array.isArray(rawErrors) ? rawErrors as Record<string, unknown>[] : [];
+}
 
 /**
  * SSE event emitted by the streaming run-explain endpoint. The backend relays
@@ -381,6 +411,8 @@ export async function streamExplain(
       "Content-Type": "application/vnd.api+json",
       ...(accessToken !== null ? { Authorization: `Bearer ${accessToken}` } : undefined),
     };
+    // SAFETY: the request object is the same shape as RequestInit; the
+    // as-assertion only drops the readonly modifiers for fetch's signature.
     return fetch(url, {
       method: "POST",
       headers,
@@ -418,9 +450,7 @@ export async function streamExplain(
     if (response.status === 401 && token !== null && token !== "") {
       expireAuthSession();
     }
-    const errorBody = (await response.json().catch((): null => null)) as Record<string, unknown> | null;
-    const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
-    const errors = Array.isArray(rawErrors) ? (rawErrors as Record<string, unknown>[]) : [];
+    const errors = await parseErrorBody(response);
     const firstErr = errors[0];
     const detail = typeof firstErr?.["detail"] === "string" ? firstErr["detail"] : null;
     const title = typeof firstErr?.["title"] === "string" ? firstErr["title"] : null;
@@ -438,15 +468,18 @@ export async function streamExplain(
   // its contract; surface it as an error event instead of hanging.
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
+    // SAFETY: this branch is the backend's non-stream error path, which
+    // returns a JSON:API error document; the explanation field is
+    // typeof-checked below before it is surfaced.
     const parsed = (await response.json().catch((): null => null)) as {
       data?: { attributes?: { explanation?: string; model?: string; "reasoning-effort"?: string | null } };
     } | null;
     const attributes = parsed?.data?.attributes;
     if (attributes?.explanation !== undefined && attributes.explanation !== "") {
-      const reasoningEffort = attributes["reasoning-effort"] ?? null;
-      onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort as ReasoningEffort | null } });
+      const reasoningEffort = reasoningEffortValue(attributes["reasoning-effort"]);
+      onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort } });
       onEvent({ name: "content", data: { text: attributes.explanation } });
-      onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort as ReasoningEffort | null, "generated-at": new Date().toISOString() } });
+      onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() } });
       return;
     }
     throw new Error("The explainer returned an unexpected response format.");
@@ -508,12 +541,12 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
   } catch {
     return null;
   }
-  const object = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const object = asRecordOrNull(payload);
   if (object === null) return null;
   switch (name) {
     case "meta": {
       const model = typeof object["model"] === "string" ? object["model"] : "";
-      const reasoningEffort = typeof object["reasoning-effort"] === "string" ? object["reasoning-effort"] as ReasoningEffort : null;
+      const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
       const kindValue = object["kind"];
       const kind: ExplainKind = kindValue === "apply" ? "apply" : "plan";
       return { name: "meta", data: { kind, model, "reasoning-effort": reasoningEffort } };
@@ -532,7 +565,7 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
     }
     case "done": {
       const model = typeof object["model"] === "string" ? object["model"] : "";
-      const reasoningEffort = typeof object["reasoning-effort"] === "string" ? object["reasoning-effort"] as ReasoningEffort : null;
+      const reasoningEffort = reasoningEffortValue(object["reasoning-effort"]);
       const generatedAt = typeof object["generated-at"] === "string" ? object["generated-at"] : new Date().toISOString();
       const cached = object["cached"] === true;
       return { name: "done", data: { model, "reasoning-effort": reasoningEffort, "generated-at": generatedAt, cached } };

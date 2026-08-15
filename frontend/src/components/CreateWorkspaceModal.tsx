@@ -62,6 +62,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     setVersionsLoading(true);
     void fetchApi(`/available-versions?tool=${encodeURIComponent(iacBinary)}`, { signal: controller.signal })
       .then((response: unknown): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const versions = (response as { data?: unknown }).data;
         if (!controller.signal.aborted && Array.isArray(versions)) {
           setAvailableVersions(versions.filter((version): version is string => typeof version === "string"));
@@ -113,6 +114,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     )
       .then((res: unknown): void => {
         if (controller.signal.aborted) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const list = (res as { data?: { attributes: { identifier: string; name: string; owner?: string } }[] }).data;
         if (Array.isArray(list)) {
           setVcsRepositories(list.map((item) => item.attributes));
@@ -156,6 +158,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           }
         : undefined;
 
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces`, {
         method: "POST",
         body: JSON.stringify({

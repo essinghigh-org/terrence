@@ -85,6 +85,7 @@ export function ChangeRequestDetail(): React.JSX.Element {
     const load = async (): Promise<void> => {
       setLoading(true);
       try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const response = await fetchApi(`/change-requests/${encodeURIComponent(id)}`) as { data?: ChangeRequest };
         const resource = response.data;
         if (cancelled || activeKey.current !== id) return;
@@ -98,6 +99,7 @@ export function ChangeRequestDetail(): React.JSX.Element {
           fetchApi(`/workspaces/${encodeURIComponent(workspaceId)}`)
             .then((workspaceResponse): void => {
               if (cancelled || activeKey.current !== id) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
               const name = (workspaceResponse as { data?: { attributes?: { name?: string } } }).data?.attributes?.name;
               if (name !== undefined && name !== "") setWorkspaceName(name);
             })
@@ -108,6 +110,7 @@ export function ChangeRequestDetail(): React.JSX.Element {
         fetchApi(`/organizations/${encodeURIComponent(orgName)}/audit-logs`)
           .then((auditResponse): void => {
             if (cancelled || activeKey.current !== id) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
             const entries = (auditResponse as { data?: AuditEntry[] }).data ?? [];
             setAuditEntries(entries.filter((entry): boolean =>
               entry.attributes["resource-type"] === "change-requests" && entry.attributes["resource-id"] === id));
@@ -130,6 +133,7 @@ export function ChangeRequestDetail(): React.JSX.Element {
     setActing(true);
     setConfirmAction(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/change-requests/${encodeURIComponent(id)}/actions/${action}`, {
         method: "POST",
         body: JSON.stringify({ data: { type: "workspace_change_requests" } }),
@@ -152,6 +156,7 @@ export function ChangeRequestDetail(): React.JSX.Element {
     setActing(true);
     setConfirmAction(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/change-requests/${encodeURIComponent(id)}`, {
         method: "PATCH",
         body: JSON.stringify({ data: { type: "workspace_change_requests" } }),

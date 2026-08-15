@@ -9,8 +9,11 @@ const win = jsdom.window;
 
 type MutableGlobal = Record<string, unknown>;
 
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["window"] = win;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["document"] = win.document;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["navigator"] = { userAgent: "node.js" };
 
 Object.defineProperty(win, "confirm", {
@@ -60,6 +63,7 @@ if (win.PointerEvent === undefined) {
     writable: true,
     configurable: true,
   });
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (globalThis as MutableGlobal)["PointerEvent"] = PointerEventPolyfill;
 }
 
@@ -76,25 +80,44 @@ elemProto["attachEvent"] = elemProto["attachEvent"] ?? noop;
 elemProto["detachEvent"] = elemProto["detachEvent"] ?? noop;
 elemProto["scrollIntoView"] = elemProto["scrollIntoView"] ?? noop;
 
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLElement"] = win.HTMLElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["Element"] = win.Element;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["Node"] = win.Node;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["NodeFilter"] = win.NodeFilter;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["Event"] = win.Event;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["CustomEvent"] = win.CustomEvent;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLInputElement"] = win.HTMLInputElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLButtonElement"] = win.HTMLButtonElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLSelectElement"] = win.HTMLSelectElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLTextAreaElement"] = win.HTMLTextAreaElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLAnchorElement"] = win.HTMLAnchorElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["HTMLFormElement"] = win.HTMLFormElement;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["getComputedStyle"] = win.getComputedStyle;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["localStorage"] = win.localStorage;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["sessionStorage"] = win.sessionStorage;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["confirm"] = win.confirm;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["alert"] = win.alert;
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["requestAnimationFrame"] = (callback: FrameRequestCallback): number =>
   win.setTimeout((): void => callback(Date.now()), 0);
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["cancelAnimationFrame"] = (handle: number): void => {
   win.clearTimeout(handle);
 };
@@ -123,6 +146,7 @@ class DummyResizeObserver {
   }
 }
 
+// SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["MutationObserver"] = win.MutationObserver ?? DummyMutationObserver;
 // SAFETY: jsdom may lack ResizeObserver at runtime; the dummy keeps tests
 // that observe elements from crashing when the browser would provide one.
@@ -146,6 +170,7 @@ const observer = new win.MutationObserver((mutations: ReadonlyMutations): void =
   }
   for (const mutation of mutations) {
     if (mutation.type === "attributes" && (mutation.attributeName === "aria-hidden" || mutation.attributeName === "data-aria-hidden")) {
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const target = mutation.target as HTMLElement;
       if (target.getAttribute("aria-hidden") === "true" && target.tagName !== "BODY" && target.closest('[role="dialog"]') === null) {
         target.removeAttribute("aria-hidden");
@@ -153,6 +178,7 @@ const observer = new win.MutationObserver((mutations: ReadonlyMutations): void =
       }
     }
     if (mutation.type === "attributes" && mutation.attributeName === "data-state") {
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const target = mutation.target as HTMLElement;
       if (target.getAttribute("data-state") === "closed") {
         target.dispatchEvent(new win.Event("animationend", { bubbles: true }));

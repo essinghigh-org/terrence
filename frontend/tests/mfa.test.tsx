@@ -25,6 +25,7 @@ afterEach((): void => {
 
 test("enrolls MFA after verifying an authenticator code", async () => {
   const calls: [string, RequestInit | undefined][] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);
@@ -49,6 +50,7 @@ test("enrolls MFA after verifying an authenticator code", async () => {
 
 test("completes an MFA login challenge without exposing the password again", async () => {
   const calls: [string, RequestInit | undefined][] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);
@@ -73,6 +75,7 @@ test("completes an MFA login challenge without exposing the password again", asy
 });
 
 test("disables MFA with a current authenticator code", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     if (requestUrl === "/api/v2/account/details") return account();

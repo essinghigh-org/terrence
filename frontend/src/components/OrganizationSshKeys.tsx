@@ -40,6 +40,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
     setLoading(true);
     setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(path) as { data?: SshKey[] };
       setKeys(Array.isArray(response.data) ? response.data : []);
     } catch (caught: unknown) {
@@ -66,6 +67,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
     setSaving(true);
     setFormError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(path, {
         method: "POST",
         body: JSON.stringify({

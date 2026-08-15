@@ -148,6 +148,7 @@ export function VcsIntegrations({
     try {
       if (currentOrgName === "") throw new Error("Organization not found.");
       const encodedOrgName = encodeURIComponent(currentOrgName);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const organizationResponse = await fetchApi(
         `/organizations/${encodedOrgName}`,
         { signal: controller.signal },
@@ -178,6 +179,7 @@ export function VcsIntegrations({
       const errors: string[] = [];
 
       if (installationResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (installationResult.value as { data?: GitHubAppInstallation[] }).data;
         setGhApps(Array.isArray(data) ? data : []);
       } else {
@@ -187,11 +189,13 @@ export function VcsIntegrations({
       if (clientResult.status === "rejected") {
         errors.push("Failed to load OAuth clients.");
       } else {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (clientResult.value as { data?: OAuthClient[] }).data;
         const loadedClients = Array.isArray(data) ? data : [];
         setClients(loadedClients);
         const tokenResults = await Promise.allSettled(loadedClients.map(async (client): Promise<readonly [string, readonly OAuthToken[]]> => {
           const related = client.relationships?.["oauth-tokens"]?.links?.related;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
           const response = await fetchApi(
             related ?? `/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`,
             { signal: controller.signal },
@@ -244,6 +248,7 @@ export function VcsIntegrations({
   }, [loadIntegrations]);
 
   const requestAuthorization = async (endpoint: string): Promise<string> => {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const response = await fetchApi(endpoint, {
       headers: { Accept: "application/vnd.api+json" },
     }) as AuthorizationDocument;
@@ -320,6 +325,7 @@ export function VcsIntegrations({
     setCreating(true);
     setFormError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/oauth-clients`, {
         method: "POST",
         body: JSON.stringify({
@@ -662,6 +668,7 @@ export function VcsIntegrations({
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={serviceProvider}
                 onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
                   const provider = event.target.value as ServiceProvider;
                   setServiceProvider(provider);
                   setHttpUrl(providerDefaults[provider].httpUrl);

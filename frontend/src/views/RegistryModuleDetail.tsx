@@ -79,7 +79,9 @@ export function RegistryModuleDetail(): React.JSX.Element {
     void fetchApi(path, { signal: controller.signal })
       .then(async (response): Promise<void> => {
         if (controller.signal.reason !== undefined) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const loadedModule = registryModuleFromResource((response as { data: unknown }).data);
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const versionResponse = await fetchApi(`/registry-modules/${encodeURIComponent(loadedModule.id)}/versions`, { signal: controller.signal }) as { data?: unknown[] };
         if (controller.signal.reason !== undefined) return;
         const loadedVersions = Array.isArray(versionResponse.data) ? versionResponse.data.map(registryModuleVersionFromResource) : [];
@@ -147,6 +149,20 @@ export function RegistryModuleDetail(): React.JSX.Element {
     setSectionPath(".");
   };
 
+  /** Arrow-left/right moves the active tab; the target is a sibling tab button. */
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number): void => {
+    const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (offset === 0) return;
+    event.preventDefault();
+    const targetIndex = (index + offset + tabs.length) % tabs.length;
+    const next = tabs[targetIndex];
+    if (next === undefined) return;
+    setTab(next.id);
+    // SAFETY: the tab buttons are the only children of the tablist; the
+    // sibling at the computed index is the button to focus.
+    (event.currentTarget.parentElement?.children[targetIndex] as HTMLElement | undefined)?.focus();
+  };
+
   const discardPendingVersion = (): void => {
     const versionId = pendingVersionId;
     setPendingVersionId(null);
@@ -166,6 +182,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
     try {
       let versionId = pendingVersionId;
       if (versionId === null) {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi(`/registry-modules/${encodeURIComponent(module.id)}/versions`, {
           method: "POST",
           body: JSON.stringify({ data: { type: "registry-module-versions", attributes: { version: newVersion.trim() } } }),
@@ -174,6 +191,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
         setPendingVersionId(versionId);
       }
       if (module.publishingMechanism === "manual") {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const uploadResponse = await fetchApi(`/registry-module-versions/${encodeURIComponent(versionId)}/upload`, {
           method: "PUT",
           headers: { "Content-Type": "application/octet-stream" },
@@ -231,7 +249,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
             {sections.length > 1 && <Field><FieldLabel htmlFor="module-section">Documentation section</FieldLabel><Select id="module-section" value={section?.path ?? "."} onValueChange={setSectionPath}>{sections.map((item): React.JSX.Element => <SelectItem value={item.path} key={item.path}>{item.path === "." ? "Root module" : item.path.startsWith("modules/") ? `Submodule · ${item.path.slice(8)}` : `Example · ${item.path.slice(9)}`}</SelectItem>)}</Select></Field>}
 
             <div role="tablist" aria-label="Module documentation" className="flex gap-1 overflow-x-auto border-b">
-              {tabs.map((item, index): React.JSX.Element => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} className={cn("-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring", tab === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} onClick={(): void => { setTab(item.id); }} onKeyDown={(event): void => { const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0; if (offset === 0) return; event.preventDefault(); const next = tabs[(index + offset + tabs.length) % tabs.length]; if (next === undefined) return; setTab(next.id); (event.currentTarget.parentElement?.children[(index + offset + tabs.length) % tabs.length] as HTMLElement | undefined)?.focus(); }}>{item.label}{item.count === undefined ? "" : ` (${item.count})`}</button>)}
+              {tabs.map((item, index): React.JSX.Element => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} className={cn("-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring", tab === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} onClick={(): void => { setTab(item.id); }} onKeyDown={(event): void => { handleTabKeyDown(event, index); }}>{item.label}{item.count === undefined ? "" : ` (${item.count})`}</button>)}
             </div>
 
             <div role="tabpanel" className="min-h-48">
@@ -260,7 +278,8 @@ export function RegistryModuleDetail(): React.JSX.Element {
         </div>
       </div>
 
-      <Dialog open={addVersionOpen} onOpenChange={(open): void => { setAddVersionOpen(open); if (!open && !busy) { discardPendingVersion(); setNewVersion(""); setNewArchive(null); } }}><DialogContent><DialogHeader><DialogTitle>Add module version</DialogTitle><DialogDescription>{module.publishingMechanism === "manual" ? "Upload a real archive for a new semantic version." : "Publish the current configured branch revision as a new semantic version."}</DialogDescription></DialogHeader><FieldGroup><Field><FieldLabel htmlFor="detail-new-version">Version</FieldLabel><Input id="detail-new-version" value={newVersion} onChange={(event): void => { setNewVersion(event.target.value); }} placeholder="1.1.0" disabled={pendingVersionId !== null} /></Field>{module.publishingMechanism === "manual" && <Field><FieldLabel htmlFor="detail-new-archive">Module archive</FieldLabel><Input id="detail-new-archive" type="file" accept=".tar.gz,application/gzip" onChange={(event): void => { setNewArchive(event.target.files?.[0] ?? null); }} /></Field>}</FieldGroup><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={(): void => { discardPendingVersion(); setAddVersionOpen(false); setNewVersion(""); setNewArchive(null); }}>Cancel</Button><Button type="button" disabled={busy} onClick={(): void => { void publishVersion(); }}>{busy ? "Publishing…" : pendingVersionId === null ? "Publish version" : "Retry upload"}</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={addVersionOpen} onOpenChange={(open): void => { setAddVersionOpen(open); if (!open && !busy) { discardPendingVersion(); setNewVersion(""); setNewArchive(null); } }}><DialogContent><DialogHeader><DialogTitle>Add module version</DialogTitle><DialogDescription>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+module.publishingMechanism === "manual" ? "Upload a real archive for a new semantic version." : "Publish the current configured branch revision as a new semantic version."}</DialogDescription></DialogHeader><FieldGroup><Field><FieldLabel htmlFor="detail-new-version">Version</FieldLabel><Input id="detail-new-version" value={newVersion} onChange={(event): void => { setNewVersion(event.target.value); }} placeholder="1.1.0" disabled={pendingVersionId !== null} /></Field>{module.publishingMechanism === "manual" && <Field><FieldLabel htmlFor="detail-new-archive">Module archive</FieldLabel><Input id="detail-new-archive" type="file" accept=".tar.gz,application/gzip" onChange={(event): void => { setNewArchive(event.target.files?.[0] ?? null); }} /></Field>}</FieldGroup><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={(): void => { discardPendingVersion(); setAddVersionOpen(false); setNewVersion(""); setNewArchive(null); }}>Cancel</Button><Button type="button" disabled={busy} onClick={(): void => { void publishVersion(); }}>{busy ? "Publishing…" : pendingVersionId === null ? "Publish version" : "Retry upload"}</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}><DialogContent><DialogHeader><DialogTitle>Publication settings</DialogTitle><DialogDescription>Workflow transitions are intentionally disabled because they change release semantics.</DialogDescription></DialogHeader><FieldGroup><Field><FieldLabel>VCS connection</FieldLabel><Input value={module.vcsRepo?.displayIdentifier ?? "Manual / API"} disabled /></Field><Field><FieldLabel htmlFor="detail-source-directory">Source directory</FieldLabel><Input id="detail-source-directory" value={sourceDirectory} onChange={(event): void => { setSourceDirectory(event.target.value); }} disabled={module.publishingMechanism !== "vcs"} /></Field>{module.publishingWorkflow === "tag" && <Field><FieldLabel htmlFor="detail-tag-prefix">Tag prefix</FieldLabel><Input id="detail-tag-prefix" value={tagPrefix} onChange={(event): void => { setTagPrefix(event.target.value); }} /></Field>}<FieldDescription>Last successful sync: {dateLabel(module.lastSuccessfulSyncAt)}</FieldDescription></FieldGroup><DialogFooter><Button type="button" variant="outline" onClick={(): void => { setSettingsOpen(false); }}>Cancel</Button><Button type="button" disabled={busy || module.publishingMechanism !== "vcs"} onClick={(): void => { void mutate(async (): Promise<void> => { await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules/private/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${encodeURIComponent(provider)}`, { method: "PATCH", body: JSON.stringify({ data: { type: "registry-modules", attributes: { "source-directory": sourceDirectory, "tag-prefix": tagPrefix } } }) }); setSettingsOpen(false); }, "Publication settings saved"); }}>Save</Button></DialogFooter></DialogContent></Dialog>
 

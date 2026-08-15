@@ -188,6 +188,7 @@ export function WorkspaceResources({
       setResourceError(resourceResult.reason instanceof Error ? resourceResult.reason.message : "Could not load resources");
     }
     if (outputResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (outputResult.value as { data?: Output[] }).data;
       setOutputs(Array.isArray(data) ? data : []);
     } else if (outputResult.reason instanceof ApiError && outputResult.reason.status === 404) {
@@ -196,10 +197,12 @@ export function WorkspaceResources({
       setOutputError(outputResult.reason instanceof Error ? outputResult.reason.message : "Could not load outputs");
     }
     if (dependencyGraphResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const attributes = (dependencyGraphResult.value as { data?: { attributes?: { nodes?: unknown } } }).data?.attributes;
       const nodes = Array.isArray(attributes?.nodes)
         ? attributes.nodes.flatMap((value): DependencyGraphResource[] => {
             if (value === null || typeof value !== "object") return [];
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
             const node = value as { address?: unknown; dependencies?: unknown };
             if (typeof node.address !== "string" || !Array.isArray(node.dependencies)) return [];
             return [{ address: node.address, dependencies: node.dependencies.filter((dependency): dependency is string => typeof dependency === "string") }];
@@ -216,6 +219,7 @@ export function WorkspaceResources({
     const resolvedReadme = await readmeResult;
     if (isAborted(signal)) return;
     if (resolvedReadme.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (resolvedReadme.value as { data?: { attributes?: Readme } }).data?.attributes;
       setReadme(data?.content !== undefined ? data : null);
     } else if (resolvedReadme.reason instanceof ApiError && resolvedReadme.reason.status === 404) {

@@ -12,6 +12,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function changeInput(element: HTMLElement, value: string): void {
+// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = Reflect.get(element, "_valueTracker") as { setValue: (next: string) => void } | undefined;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
@@ -47,7 +48,7 @@ test("polls a running plan from not-ready to structured output", async () => {
       }],
     });
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<PlanOutput runId="run-ready" status="planning" />);
 
@@ -59,6 +60,7 @@ test("polls a running plan from not-ready to structured output", async () => {
   }, { timeout: 2_000 });
 
   expect(fetchMock).toHaveBeenCalledTimes(2);
+// SAFETY: the fixture field is a string per the API contract.
   expect((fetchMock.mock.calls[0]?.[0] as string)).toBe("/api/v2/plans/plan-run-ready/json-output");
 });
 
@@ -108,7 +110,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
       },
     ],
   }));
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<PlanOutput runId="run-detail" status="planned" />);
   await waitFor((): void => {
@@ -156,6 +158,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
 
 test("keeps moves, imports, drift, and output values visible", async () => {
   const onSummaryChange = mock((): void => undefined);
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     action_invocations: [{
       address: "action.aws_lambda_invoke.deploy",
@@ -232,6 +235,7 @@ test("keeps moves, imports, drift, and output values visible", async () => {
 
 test("counts an imported resource's planned update as both import and change", async () => {
   const onSummaryChange = mock((): void => undefined);
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     resource_changes: [{
       address: "aws_instance.imported_and_changed",
@@ -265,6 +269,7 @@ test("counts an imported resource's planned update as both import and change", a
 });
 
 test("counts a moved resource's planned update as both move and change", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     resource_changes: [{
       address: "aws_instance.new_name",
@@ -312,7 +317,7 @@ test("keeps a ready artifact across status changes and hides it immediately for 
     }
     return await nextResponse;
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<PlanOutput runId="run-first" status="planned" />);
   await waitFor((): void => {
@@ -343,6 +348,7 @@ test("keeps a ready artifact across status changes and hides it immediately for 
 });
 
 test("rejects malformed structured plan resources", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     resource_changes: [{ address: 123, change: { actions: "create" } }],
   })) as typeof fetch;
@@ -354,6 +360,7 @@ test("rejects malformed structured plan resources", async () => {
 });
 
 test("rejects malformed structured plan action metadata", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     action_invocations: [{ address: 123 }],
     resource_changes: [],
@@ -367,7 +374,7 @@ test("rejects malformed structured plan action metadata", async () => {
 
 test("shows a neutral state when a terminal run never produced a plan artifact", async () => {
   const fetchMock = mock(async (): Promise<Response> => json({}, 404));
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <PlanOutput runId="run-pre-plan-canceled" status="canceled" planStatus="pending" />,
@@ -382,6 +389,7 @@ test("shows a neutral state when a terminal run never produced a plan artifact",
 });
 
 test("renders structured terraform-style diff lines for changed list elements", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (): Promise<Response> => json({
     terraform_version: "1.11.0",
     format_version: "1.2",

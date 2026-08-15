@@ -31,6 +31,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       savedBody = JSON.parse(init.body as string) as Record<string, unknown>;
       return json({ data: { attributes: settings } });
     }
@@ -44,7 +45,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
     if (url.startsWith("/api/v2/admin/operations-settings/explainer/models?provider=")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<AdminOperationsSettings />);
   await waitFor((): void => { expect(view.getByLabelText("Base URL (optional)")).toBeTruthy(); });
@@ -52,13 +53,16 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   fireEvent.focus(provider);
   fireEvent.input(provider, { target: { value: "openrouter" } });
   fireEvent.click(view.getByRole("option", { name: /OpenRouter/ }));
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Base URL (optional)") as HTMLInputElement).value).toBe("");
 
   fireEvent.input(view.getByLabelText("Base URL (optional)"), { target: { value: "https://api.example.com/v1" } });
   fireEvent.click(view.getByRole("button", { name: "Save operations settings" }));
   await waitFor((): void => { expect(savedBody).toBeDefined(); });
 
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = (savedBody?.data as Record<string, unknown>)?.attributes as Record<string, unknown>;
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const explainer = attributes["plan-explainer"] as Record<string, unknown>;
   expect(explainer["base-url"]).toBe("https://api.example.com/v1");
   expect(explainer["endpoint-url"]).toBeUndefined();

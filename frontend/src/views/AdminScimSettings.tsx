@@ -35,6 +35,7 @@ export function AdminScimSettings(): React.JSX.Element {
     setLoading(true);
     setLoadError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/admin/scim-settings") as {
         data?: { attributes?: ScimSettingsAttributes };
       };

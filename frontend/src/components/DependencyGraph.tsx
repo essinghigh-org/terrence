@@ -660,6 +660,7 @@ export function DependencyGraph({
             position="bottom-right"
             pannable
             zoomable
+// SAFETY: node.data carries ResourceNodeData per the graph construction above.
             nodeColor={(node): string => `hsl(${(node.data as ResourceNodeData).color} / 0.9)`}
             nodeStrokeWidth={2}
             maskColor={dark ? "rgba(0, 0, 0, 0.55)" : "rgba(255, 255, 255, 0.6)"}

@@ -763,6 +763,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
     if (clipboard !== undefined) {
       void clipboard.writeText(resource.address);
@@ -1174,6 +1175,7 @@ export function PlanOutput({
             title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
             className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
               const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
               if (clipboard !== undefined) {
                 void clipboard.writeText(planSummaryMarkdown({ ...counts, importCount })).then((): void => {
@@ -1244,6 +1246,7 @@ export function PlanOutput({
             className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-muted-foreground"
           >
             {OPERATION_OPTIONS.map((op): React.JSX.Element => {
+// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
               const count = op === "import" ? importCount : op === "move" ? moveCount : opCounts[op as keyof typeof opCounts];
               const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
               return (

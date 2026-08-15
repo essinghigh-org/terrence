@@ -158,10 +158,12 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
         const orgResponse = await fetchApi(`/organizations/${encodeURIComponent(requestedO)}`, { signal: controller.signal });
         const setResponse = await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(requestedS)}`, { signal: controller.signal });
         if (controller.signal.aborted || requestedOrg.current !== requestedO || requestedSet.current !== requestedS) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const permissions = (orgResponse as {
           data?: { attributes?: { permissions?: { "can-manage-policies"?: boolean } } };
         }).data?.attributes?.permissions;
         setCanManage(permissions?.["can-manage-policies"] === true);
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (setResponse as { data: PolicySet }).data;
         setPolicySet(data);
         setOverName(data.attributes.name);
@@ -192,8 +194,14 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
       fetchApi(`/api/v2/policy-sets/${encodeURIComponent(s)}/parameters`, { signal: controller.signal }),
     ]).then(([policyResult, paramResult]): void => {
       if (controller.signal.aborted || requestedOrg.current !== o || requestedSet.current !== s) return;
-      if (policyResult.status === "fulfilled") setPolicies((policyResult.value as { data?: Policy[] }).data ?? []);
-      if (paramResult.status === "fulfilled") setParams((paramResult.value as { data?: Param[] }).data ?? []);
+      if (policyResult.status === "fulfilled") {
+        // SAFETY: the settled promises carry the JSON:API envelope per endpoint contract.
+        setPolicies((policyResult.value as { data?: Policy[] }).data ?? []);
+      }
+      if (paramResult.status === "fulfilled") {
+        // SAFETY: the settled promises carry the JSON:API envelope per endpoint contract.
+        setParams((paramResult.value as { data?: Param[] }).data ?? []);
+      }
     });
     return (): void => { controller.abort(); };
   }, [orgName, setId, loadNonce]);
@@ -207,8 +215,14 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
       fetchApi(`/organizations/${encodeURIComponent(o)}/projects?page%5Bsize%5D=1000`, { signal: controller.signal }),
     ]).then(([wsResult, projResult]): void => {
       if (controller.signal.aborted || requestedOrg.current !== o) return;
-      if (wsResult.status === "fulfilled") setWorkspaces((wsResult.value as { data?: Workspace[] }).data ?? []);
-      if (projResult.status === "fulfilled") setProjects((projResult.value as { data?: Project[] }).data ?? []);
+      if (wsResult.status === "fulfilled") {
+        // SAFETY: the settled promises carry the JSON:API envelope per endpoint contract.
+        setWorkspaces((wsResult.value as { data?: Workspace[] }).data ?? []);
+      }
+      if (projResult.status === "fulfilled") {
+        // SAFETY: the settled promises carry the JSON:API envelope per endpoint contract.
+        setProjects((projResult.value as { data?: Project[] }).data ?? []);
+      }
     });
     return (): void => { controller.abort(); };
   }, [orgName, setId, loadNonce]);
@@ -922,6 +936,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     if (!canManage || policySet === null) return;
     setSavingOverview(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(setId)}`, {
         method: "PATCH",
         body: JSON.stringify({

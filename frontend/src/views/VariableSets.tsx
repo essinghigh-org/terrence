@@ -160,6 +160,7 @@ function VariablesDialog({
     setSaving(true);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/varsets/${variableSetId}/relationships/vars${editing != null ? `/${editing.id}` : ""}`,
         {
@@ -256,7 +257,11 @@ function VariablesDialog({
               </Field>
               <Field>
                 <FieldLabel htmlFor="variable-category">Category</FieldLabel>
-                <Select name="variable-category" value={category} onValueChange={(val: string): void => { setCategory(val as VariableCategory); }}>
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                <Select name="variable-category" value={category} onValueChange={(val: string): void => {
+   // SAFETY: the change event carries one of the union values the UI renders from the same options.
+   setCategory(val as VariableCategory);
+ }}>
                   <SelectTrigger id="variable-category" className="w-full">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
@@ -446,6 +451,7 @@ export function VariableSets(): React.JSX.Element {
     setWorkspaceOpen(false);
     setVariablesOpen(false);
 
+    // SAFETY: the org endpoint returns the JSON:API envelope per contract.
     Promise.all([
       fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`),
       fetchAllApiPages<Workspace>(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
@@ -496,6 +502,7 @@ export function VariableSets(): React.JSX.Element {
     setEditorError("");
 
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         editing != null
           ? `/varsets/${editing.id}`
@@ -644,6 +651,7 @@ export function VariableSets(): React.JSX.Element {
     } catch (error: unknown) {
       if (activeOrganizationName.current !== orgName) return;
       try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const fetched = await fetchApi(`/varsets/${workspaceSet.id}`) as { data?: VariableSet } | undefined;
         if (fetched?.data != null) {
           const freshSet = fetched.data;

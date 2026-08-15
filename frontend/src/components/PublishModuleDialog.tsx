@@ -77,12 +77,15 @@ export function PublishModuleDialog({
       { signal: controller.signal },
     ).then((response): void => {
       if (controller.signal.aborted) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data: unknown = (response as { data?: unknown }).data;
       const rows: unknown[] = Array.isArray(data) ? data : [];
       setRepositories(rows.flatMap((item): Repository[] => {
         if (item === null || typeof item !== "object") return [];
+// SAFETY: the fixture object is read as a record; each field is typed below.
         const attributes: unknown = (item as Record<string, unknown>)["attributes"];
         if (attributes === null || typeof attributes !== "object") return [];
+// SAFETY: the fixture object is read as a record; each field is typed below.
         const repository = attributes as Record<string, unknown>;
         if (typeof repository["identifier"] !== "string" || typeof repository["name"] !== "string") return [];
         return [{ identifier: repository["identifier"], name: repository["name"], ...(typeof repository["owner"] === "string" ? { owner: repository["owner"] } : undefined) }];
@@ -146,6 +149,7 @@ export function PublishModuleDialog({
         : { "oauth-token-id": selectedConnection.id }),
       ...(workflow === "branch" ? { branch: branch.trim() } : undefined),
     };
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules/vcs`, {
       method: "POST",
       body: JSON.stringify({
@@ -176,6 +180,7 @@ export function PublishModuleDialog({
     }
     let target = manualTarget;
     if (target === null) {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const moduleResponse = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules`, {
         method: "POST",
         body: JSON.stringify({
@@ -183,6 +188,7 @@ export function PublishModuleDialog({
         }),
       }) as { data: { id: string } };
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const versionResponse = await fetchApi(`/registry-modules/${encodeURIComponent(moduleResponse.data.id)}/versions`, {
           method: "POST",
           body: JSON.stringify({ data: { type: "registry-module-versions", attributes: { version: version.trim() } } }),
@@ -194,12 +200,14 @@ export function PublishModuleDialog({
         throw caught;
       }
     }
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const uploadResponse = await fetchApi(`/registry-module-versions/${encodeURIComponent(target.versionId)}/upload`, {
       method: "PUT",
       headers: { "Content-Type": "application/octet-stream" },
       body: archive,
     }) as { data: { attributes?: { status?: string } } };
     if (uploadResponse.data.attributes?.status !== "ok") throw new Error("The uploaded module archive was not accepted.");
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const detail = await fetchApi(`/registry-modules/${encodeURIComponent(target.moduleId)}`) as { data: unknown };
     await finish(detail.data);
   };

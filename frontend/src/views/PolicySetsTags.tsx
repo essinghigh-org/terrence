@@ -48,6 +48,7 @@ export function PolicySetsTags(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const organizationResponse = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
       ) as {
@@ -60,6 +61,7 @@ export function PolicySetsTags(): React.JSX.Element {
         setLoading(false);
         return;
       }
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/policy-sets`,
       ) as { data?: PolicyTagsSet[] };

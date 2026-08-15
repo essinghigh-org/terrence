@@ -31,6 +31,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
     void fetchApi(`/workspaces/${workspaceId}/relationships/data-retention-policy`)
       .then((response: unknown): void => {
         if (!active) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: Retention }).data;
         if (data === undefined) return;
         setPolicy(data);
@@ -52,6 +53,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
     setError("");
     setNotice("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspaceId}/relationships/data-retention-policy`, {
         method: "POST",
         body: JSON.stringify({

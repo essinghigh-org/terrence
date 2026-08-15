@@ -50,6 +50,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
     }
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     if (heading !== null) {
+// SAFETY: the markdown heading level is capped at 3 by the parsing regex above.
       blocks.push({ kind: "heading", level: (heading[1] ?? "").length as 1 | 2 | 3, text: heading[2] ?? "" });
       index += 1;
       continue;

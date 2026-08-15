@@ -69,6 +69,7 @@ async function selectRepository(view: ReturnType<typeof render>): Promise<void> 
   fireEvent.keyDown(repository, { key: "ArrowDown" });
   await waitFor((): void => { expect(repository.getAttribute("aria-activedescendant")).not.toBeNull(); });
   fireEvent.keyDown(repository, { key: "Enter" });
+// SAFETY: the component renders this element type for the queried role/label.
   expect((repository as HTMLInputElement).value).toBe("acme/terraform-network");
 }
 
@@ -79,11 +80,13 @@ afterEach((): void => {
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
   let payload: Record<string, unknown> | null = null;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
     if (url === "/api/v2/organizations/acme/registry-modules/vcs" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       payload = JSON.parse(init.body as string) as Record<string, unknown>;
       return json({ data: moduleResource("mod-vcs", "network", "aws") }, 201);
     }
@@ -100,6 +103,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
   fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
   await view.findByText("Module detail landing");
 
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = ((payload?.data as Record<string, unknown>).attributes as Record<string, unknown>);
   expect(attributes["module-name"]).toBe("network");
   expect(attributes["module-provider"]).toBe("aws");
@@ -114,11 +118,13 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
 
 test("publishes branch configuration with branch and initial version", async () => {
   let attributes: Record<string, unknown> | null = null;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
     if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       attributes = body.data.attributes;
       return json({ data: moduleResource("mod-branch", "network", "azurerm") }, 201);
@@ -139,6 +145,7 @@ test("publishes branch configuration with branch and initial version", async () 
   await view.findByText("Module detail landing");
   expect(attributes?.["source-directory"]).toBe("terraform/module");
   expect(attributes?.version).toBe("3.2.1");
+// SAFETY: the fixture object is read as a record; each field is typed below.
   expect((attributes?.["vcs-repo"] as Record<string, unknown>)["branch"]).toBe("release");
   expect(attributes?.["tag-prefix"]).toBe("");
 });
@@ -148,6 +155,7 @@ test("manual publication uploads the selected archive bytes and retries without 
   const uploadBodies: BodyInit[] = [];
   let moduleCreates = 0;
   let versionCreates = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
@@ -161,6 +169,7 @@ test("manual publication uploads the selected archive bytes and retries without 
       return json({ data: { id: "version-manual", attributes: { version: "1.0.0", status: "pending" } } }, 201);
     }
     if (url === "/api/v2/registry-module-versions/version-manual/upload" && init?.method === "PUT") {
+// SAFETY: the captured request body is a string per the request construction.
       uploadBodies.push(init.body as BodyInit);
       if (uploadBodies.length === 1) return json({ errors: [{ detail: "Archive traversal detected" }] }, 422);
       return json({ data: { id: "version-manual", attributes: { status: "ok" } } });
@@ -179,6 +188,7 @@ test("manual publication uploads the selected archive bytes and retries without 
   fireEvent.click(view.getByRole("button", { name: "Upload module" }));
   await view.findByText("Archive traversal detected");
   expect(uploadBodies[0]).toBe(archive);
+  // SAFETY: the captured upload body is the Blob the component constructed from the archive.
   expect([...new Uint8Array(await (uploadBodies[0] as Blob).arrayBuffer())]).toEqual([31, 139, 8, 1, 2, 3, 4]);
 
   fireEvent.click(view.getByRole("button", { name: "Retry upload" }));
@@ -190,6 +200,7 @@ test("manual publication uploads the selected archive bytes and retries without 
 
 test("cancelling after a failed manual upload removes the staged module", async () => {
   let deleted = false;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);

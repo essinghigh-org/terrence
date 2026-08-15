@@ -32,6 +32,7 @@ function token() {
 }
 
 test("deletes an API token and removes it from the list on success", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") {
@@ -61,6 +62,7 @@ const deleteButton = await view.findByRole("button", { name: "Delete token tkn-1
 });
 
 test("keeps the token when deleting it fails", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") {

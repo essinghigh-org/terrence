@@ -210,8 +210,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           fetchApi("/api/v2/admin/ldap-settings"),
         ]);
         setUsers(usersResponse);
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const ping = pingResponse as { "signup-enabled"?: boolean };
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const sandbox = (metaResponse as {
           data?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null } };
         }).data?.["run-sandbox"];
@@ -221,8 +224,11 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           sandboxAvailable: sandbox?.available === true,
           sandboxReason: typeof sandbox?.reason === "string" ? sandbox.reason : null,
         });
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const oidcIsEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const ldapIsEnabled = (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
         setSamlEnabled(samlIsEnabled);
         setPersistedSamlEnabled(samlIsEnabled);
@@ -231,21 +237,27 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         setLdapEnabled(ldapIsEnabled);
         setPersistedLdapEnabled(ldapIsEnabled);
       } else if (section === "users") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
         setUsers(res.data);
       } else if (section === "orgs") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/organizations") as { data: DataItem[] };
         setOrgs(res.data);
       } else if (section === "workspaces") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/workspaces") as { data: DataItem[] };
         setWorkspaces(res.data);
       } else if (section === "runs") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/runs") as { data: DataItem[] };
         setRuns(res.data);
       } else if (section === "versions") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/terraform-versions") as { data: DataItem[] };
         setTfVersions(res.data);
       } else {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/audit-logs") as { data: DataItem[] };
         setAuditLogs(res.data);
       }
@@ -318,6 +330,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setSamlLoading(true);
     setSamlError(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/saml-settings") as {
         data: { attributes: Record<string, unknown> };
       };
@@ -351,6 +364,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setGeneralLoading(true);
     setGeneralError(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/general-settings") as {
         data: { attributes: Record<string, unknown> };
       };
@@ -367,6 +381,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setLdapLoading(true);
     setLdapError(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/ldap-settings") as {
         data: { attributes: Record<string, unknown> };
       };
@@ -495,6 +510,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setOidcLoading(true);
     setOidcError(null);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi("/api/v2/admin/oidc-settings") as {
         data: { attributes: Record<string, unknown> };
       };

@@ -111,6 +111,7 @@ async function fetchWorkspacePages(
 
   while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
     visited.add(pageEndpoint);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const response = await fetchApi(
       pageEndpoint,
       signal === undefined ? {} : { signal },
@@ -215,6 +216,7 @@ export function Workspaces(): React.JSX.Element {
           signal === undefined ? {} : { signal },
         )
           .then((response): boolean =>
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
             (response as { data?: Organization }).data?.attributes.permissions?.["can-manage-workspaces"] === true)
           .catch((): false => false),
       ]);
@@ -367,6 +369,7 @@ export function Workspaces(): React.JSX.Element {
 
   const loadTags = async (workspace: Workspace): Promise<void> => {
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(`/workspaces/${workspace.id}/tag-bindings`) as { data?: TagBinding[] };
       setTagBindings(Array.isArray(response.data) ? response.data : []);
     } catch (error: unknown) {

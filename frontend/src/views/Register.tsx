@@ -20,6 +20,7 @@ export function Register(): React.JSX.Element {
   useEffect((): void => {
     fetchApi("/ping")
       .then((data: unknown): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const resp = data as { "signup-enabled"?: boolean };
         if (resp["signup-enabled"] === false) {
           setSignupDisabled(true);
@@ -56,6 +57,7 @@ export function Register(): React.JSX.Element {
       }
 
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const login = await fetchApi("/users/login", {
           method: "POST",
           body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),

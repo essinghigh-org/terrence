@@ -32,6 +32,7 @@ afterEach((): void => {
 });
 
 test("shows the latest run status instead of treating an unlocked workspace as a status", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("/workspaces?")) {
@@ -67,6 +68,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
 });
 
 test("fails closed when workspace management permission cannot be loaded", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
@@ -91,6 +93,7 @@ test("fails closed when workspace management permission cannot be loaded", async
 });
 
 test("keeps workspaces visible when project metadata cannot be loaded", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("/workspaces?")) {
@@ -124,6 +127,7 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
 });
 
 test("KPI totals stay org-wide when a status filter is active", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {
@@ -176,6 +180,7 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
 
 test("KPI totals degrade visibly when the org-wide count cannot be loaded", async () => {
   let failUnfiltered = false;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {

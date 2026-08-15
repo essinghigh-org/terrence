@@ -47,7 +47,7 @@ test("run list sort headers carry a visible focus style", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -155,7 +155,7 @@ function buildRunDetailMock(): ReturnType<typeof mock> {
 }
 
 function renderRunDetail(): ReturnType<typeof render> {
-  globalThis.fetch = buildRunDetailMock() as typeof fetch;
+  globalThis.fetch = buildRunDetailMock();
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>
@@ -175,9 +175,11 @@ test("run detail wrap toggle and plan error retry carry visible focus styles", a
     expect(view.getByText("Could not load plan output")).toBeTruthy();
   });
 
+// SAFETY: the component renders this element type for the queried role/label.
   const wrapToggle = view.getByRole("button", { name: /Wrap/ }) as HTMLButtonElement;
   expect(wrapToggle.className).toContain("focus-visible:ring-2");
 
+// SAFETY: the component renders this element type for the queried role/label.
   const retry = view.getByRole("button", { name: "Try again" }) as HTMLButtonElement;
   expect(retry.className).toContain("focus-visible:ring-2");
   expect(retry.className).toContain("focus-visible:outline-none");

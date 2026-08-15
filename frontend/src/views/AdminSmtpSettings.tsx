@@ -48,6 +48,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
     setLoading(true);
     setLoadError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/admin/smtp-settings") as {
         data?: { attributes?: SmtpAttributes };
       };

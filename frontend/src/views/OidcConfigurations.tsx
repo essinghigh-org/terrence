@@ -90,6 +90,7 @@ export function OidcConfigurations(): React.JSX.Element {
       return;
     }
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/oidc-configurations`,
       ) as { data: OidcConfig[] };
@@ -205,13 +206,15 @@ export function OidcConfigurations(): React.JSX.Element {
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : configs.map((config): React.JSX.Element => (
+              ) : configs.map((config): React.JSX.Element => {
+                // SAFETY: unknown config types fall back to the raw type string.
+                const typeLabel = TYPE_LABELS[config.type as keyof typeof TYPE_LABELS] ?? config.type;
+                return (
                 <TableRow key={config.id}>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
                       <Fingerprint className="h-4 w-4 text-muted-foreground" />
-                      {/* SAFETY: unknown config types fall back to the raw type string. */}
-                      {TYPE_LABELS[config.type as keyof typeof TYPE_LABELS] ?? config.type}
+                      {typeLabel}
                     </div>
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
@@ -223,7 +226,8 @@ export function OidcConfigurations(): React.JSX.Element {
                     )}
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>

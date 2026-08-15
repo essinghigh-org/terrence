@@ -33,7 +33,10 @@ function DatabaseStorageCard(): React.JSX.Element {
     let cancelled = false;
     void fetchApi("/api/v2/admin/database-metrics")
       .then((body: unknown): void => {
-        if (!cancelled) setMetrics((body as { data?: DatabaseMetrics | null }).data ?? null);
+        if (!cancelled) {
+          // SAFETY: the metrics endpoint returns the JSON:API envelope per contract.
+          setMetrics((body as { data?: DatabaseMetrics | null }).data ?? null);
+        }
       })
       .catch((): void => {
         // Admin-only page; a failed metrics fetch leaves the card empty.

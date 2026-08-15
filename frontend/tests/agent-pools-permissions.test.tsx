@@ -21,7 +21,7 @@ test("fails closed on the direct agent-pools route without management permission
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings/agents"]}>

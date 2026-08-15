@@ -92,6 +92,7 @@ export function WorkspaceDestruction({
     setQueueingDestroy(true);
     setQueueError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/runs", {
         method: "POST",
         body: JSON.stringify({

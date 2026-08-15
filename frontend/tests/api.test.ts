@@ -32,6 +32,7 @@ test("reads JSON, text, and empty API responses", async () => {
 test("collects paginated API data and stops on a repeated page", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     calls.push(url);
@@ -64,6 +65,7 @@ test("invalidates an authenticated session after a 401 response", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   setAuthToken("invalid-token");
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return Response.json(
@@ -91,6 +93,7 @@ test("invalidates an authenticated session after a 401 response", async () => {
 test("uses absolute /api/* endpoints verbatim instead of double-prefixing", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return Response.json({ version: "test", build: "unknown" });
@@ -107,6 +110,7 @@ test("uses absolute /api/* endpoints verbatim instead of double-prefixing", asyn
 test("lets fetch infer content types for binary bodies", async () => {
   const originalFetch = globalThis.fetch;
   const contentTypes: (string | null)[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     contentTypes.push(new Headers(init?.headers).get("Content-Type"));
     return Response.json({ data: {} });
@@ -126,6 +130,7 @@ test("rotates an expired browser session before sending the API request", async 
   const originalFetch = globalThis.fetch;
   const calls: { url: string; authorization: string | null; credentials?: RequestCredentials }[] = [];
   setAuthToken("expired-access", Date.now() - 1, true);
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     calls.push({
@@ -174,6 +179,7 @@ test("shares one refresh rotation across concurrent API retries", async () => {
     releaseRefresh = resolve;
   });
   setAuthToken("old-access", Date.now() + 60_000, true);
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const authorization = new Headers(init?.headers).get("Authorization");
@@ -213,6 +219,7 @@ test("shares one refresh rotation across concurrent API retries", async () => {
 test("logs out browser sessions server-side without treating API tokens as refreshable", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     calls.push(requestUrl(input));
     return new Response(null, { status: 204 });
@@ -236,6 +243,7 @@ test("logs out browser sessions server-side without treating API tokens as refre
 test("bootstrapAuth recovers a browser session through the refresh cookie", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     calls.push(url);
@@ -270,6 +278,7 @@ test("bootstrapAuth recovers a browser session through the refresh cookie", asyn
 test("bootstrapAuth adopts and deletes a legacy localStorage token exactly once", async () => {
   const originalFetch = globalThis.fetch;
   let refreshed = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url.endsWith("/users/refresh")) {
@@ -305,6 +314,7 @@ test("bootstrapAuth adopts and deletes a legacy localStorage token exactly once"
 test("bootstrapAuth returns null when no refresh session exists", async () => {
   const originalFetch = globalThis.fetch;
   let refreshed = 0;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url.endsWith("/users/refresh")) {
@@ -328,6 +338,7 @@ test("bootstrapAuth returns null when no refresh session exists", async () => {
 });
 
 test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)", () => {
+  // SAFETY: the fixture entries match the JSON:API error document shape.
   const rawErrors = [
     { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
     { status: "422", title: "Unprocessable Entity", detail: "URL must be valid", source: { pointer: "/data/attributes/url" } },
@@ -345,6 +356,7 @@ test("extractFieldErrors maps JSON:API source.pointer entries to fields (26.9)",
 });
 
 test("extractFieldErrors ignores malformed pointers and empty details", () => {
+  // SAFETY: the fixture entries match the JSON:API error document shape.
   expect(extractFieldErrors([
     { detail: "d", source: { pointer: "/data/attributes/ok" } },
     { detail: "", source: { pointer: "/data/attributes/empty" } },
@@ -354,6 +366,7 @@ test("extractFieldErrors ignores malformed pointers and empty details", () => {
 
 test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   const originalFetch = globalThis.fetch;
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (async (): Promise<Response> => new Response(
     JSON.stringify({
       errors: [
@@ -366,6 +379,7 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
 
   try {
     setAuthToken("tk", Date.now() + 60_000);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const caught = (await fetchApi("/notification-configurations").catch((e) => e)) as ApiError;
     expect(caught).toBeInstanceOf(ApiError);
     expect(caught.status).toBe(422);

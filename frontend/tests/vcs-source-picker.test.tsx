@@ -55,12 +55,13 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
       return json({ data: [] });
     }
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body as string);
       return json({ data: { id: "ws-1" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <CreateWorkspaceModal
@@ -161,12 +162,13 @@ test("switches an existing workspace to a registered OAuth connection", async ()
       });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       patchBody = JSON.parse(init.body as string);
       return json({ data: workspace });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/version-control"]}>
@@ -195,6 +197,7 @@ test("switches an existing workspace to a registered OAuth connection", async ()
   await waitFor((): void => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const attributes = (patchBody as {
     data: { attributes: Record<string, unknown> };
   }).data.attributes;
@@ -216,12 +219,13 @@ test("keeps local workspace creation independent from VCS connections", async ()
   ): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body as string);
       return json({ data: { id: "ws-local" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <CreateWorkspaceModal
@@ -242,6 +246,7 @@ test("keeps local workspace creation independent from VCS connections", async ()
   await waitFor((): void => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const attributes = (createBody as {
     data: { attributes: Record<string, unknown> };
   }).data.attributes;

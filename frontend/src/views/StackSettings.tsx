@@ -104,6 +104,7 @@ export function StackSettings(): React.JSX.Element {
       return;
     }
     try {
+      // SAFETY: both endpoints return the JSON:API list envelope per contract.
       const [stacksResponse, projectsResponse] = await Promise.all([
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/stacks`) as Promise<{ data: Stack[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data: Project[] }>,

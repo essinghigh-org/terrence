@@ -18,7 +18,7 @@ test("manages CIDR lists and ranges through the JSON API", async () => {
     if (url === "/api/v2/cidr-ranges/range-1" && init?.method === "DELETE") { ranges = []; return new Response(null, { status: 204 }); }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   const view = render(<OrganizationCidrRanges orgName="acme" />);
   await waitFor(() => { expect(view.getByText("10.0.0.0/8")).toBeTruthy(); });
   fireEvent.input(view.getByLabelText("CIDR range"), { target: { value: "192.168.0.0/16" } });
@@ -34,7 +34,7 @@ test("lists and creates workspace configuration versions", async () => {
     if (url.startsWith("/api/v2/workspaces/ws-1/configuration-versions")) return json({ data: [{ id: "cv-1", attributes: { status: "uploaded", source: "vcs" } }] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   const view = render(<WorkspaceConfigurationVersions workspaceId="ws-1" />);
   await waitFor(() => { expect(view.getByText("cv-1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New version" }));

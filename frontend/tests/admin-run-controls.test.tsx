@@ -49,7 +49,7 @@ test("renders and invokes only the advertised admin run actions", async () => {
     ) return json({ data: {} });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/runs"]}>
@@ -62,7 +62,9 @@ test("renders and invokes only the advertised admin run actions", async () => {
     </MemoryRouter>,
   );
 
+// SAFETY: closest() resolves to the row element that contains the queried text.
   const cancelRow = await waitFor((): HTMLElement => view.getByText("Cancel only").closest("tr") as HTMLElement);
+// SAFETY: closest() resolves to the row element that contains the queried text.
   const forceRow = view.getByText("Force only").closest("tr") as HTMLElement;
   expect(within(cancelRow).getByRole("button", { name: "Cancel" })).toBeTruthy();
   expect(within(cancelRow).queryByRole("button", { name: "Force Cancel" })).toBeNull();
@@ -113,7 +115,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/users"]}>
@@ -129,6 +131,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   await waitFor((): void => {
     expect(view.getByText("henry.essing")).toBeTruthy();
   });
+// SAFETY: closest() resolves to the row element that contains the queried text.
   const henryRow = view.getByText("henry.essing").closest("tr") as HTMLElement;
   fireEvent.click(within(henryRow).getByRole("button", { name: "Delete user" }));
 
@@ -154,6 +157,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   await waitFor((): void => {
     expect(versionsView.getByText("1.11.0")).toBeTruthy();
   });
+// SAFETY: closest() resolves to the row element that contains the queried text.
   const versionRow = versionsView.getByText("1.11.0").closest("tr") as HTMLElement;
   fireEvent.click(within(versionRow).getByRole("button", { name: "Delete version" }));
 

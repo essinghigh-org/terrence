@@ -71,6 +71,7 @@ export function VcsRepoSelector({
     const handleClick = (event: MouseEvent): void => {
       if (
         containerRef.current !== null &&
+// SAFETY: the click target is a DOM node; contains() accepts Node.
         !containerRef.current.contains(event.target as Node)
       ) {
         setOpen(false);
@@ -85,6 +86,7 @@ export function VcsRepoSelector({
   // Keep the highlighted item visible in the scrollable list
   useEffect((): void => {
     if (highlightedIndex >= 0 && listRef.current !== null) {
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const item = listRef.current.children[highlightedIndex] as HTMLElement | undefined;
       item?.scrollIntoView({ block: "nearest" });
     }

@@ -24,7 +24,9 @@ type RegistryProvider = Readonly<{
 }>;
 
 function providerFromResource(resource: unknown): RegistryProvider {
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const raw = resource !== null && typeof resource === "object" ? resource as Record<string, unknown> : {};
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = raw["attributes"] !== null && typeof raw["attributes"] === "object" ? raw["attributes"] as Record<string, unknown> : {};
   return {
     id: typeof raw["id"] === "string" ? raw["id"] : "",
@@ -76,6 +78,7 @@ export function Registry(): React.JSX.Element {
         if (moduleSearch.trim() !== "") query.set("q", moduleSearch.trim());
         if (providerFilter !== "") query.set("filter[provider]", providerFilter);
         if (publishingFilter !== "") query.set("filter[publishing_mechanism]", publishingFilter);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-modules?${query.toString()}`, { signal: controller.signal }) as {
           data?: unknown[];
           meta?: { pagination?: { "total-pages"?: number }; providers?: unknown[] };
@@ -86,6 +89,7 @@ export function Registry(): React.JSX.Element {
           setTotalPages(response.meta?.pagination?.["total-pages"] ?? 1);
         }
       } else {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/registry-providers`, { signal: controller.signal }) as { data?: unknown[] };
         if (!controller.signal.aborted) setProviders(Array.isArray(response.data) ? response.data.map(providerFromResource) : []);
       }

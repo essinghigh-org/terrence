@@ -49,6 +49,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
       });
     }
     if (url === "/api/v2/runs/run-polished/actions/apply" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       applyBody = typeof init.body === "string" ? JSON.parse(init.body) as unknown : undefined;
       applied = true;
       return new Response(null, { status: 202 });
@@ -195,7 +196,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     if (url.endsWith("/policy-checks")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-polished"]}>
@@ -216,23 +217,34 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   const applySection = view.getByRole("heading", { name: "Apply needs confirmation" }).closest("details");
   expect(planSection).not.toBeNull();
   expect(applySection).not.toBeNull();
+  // SAFETY: closest("details") above resolved the details elements for the headings.
   expect((planSection as HTMLDetailsElement).open).toBeTrue();
+  // SAFETY: closest("details") above resolved the details elements for the headings.
   expect((applySection as HTMLDetailsElement).open).toBeFalse();
+  // SAFETY: closest("details") above resolved the details elements for the headings.
   const planLog = (planSection as HTMLDetailsElement).querySelector("pre");
+  // SAFETY: closest("details") above resolved the details elements for the headings.
   const applyLog = (applySection as HTMLDetailsElement).querySelector("pre");
   expect(planLog?.textContent).toBe("PLAN_PHASE_ONLY\nPLAN_PHASE_SECOND");
   expect(applyLog?.textContent).toBe("APPLY_PHASE_ONLY\nAPPLY_PHASE_SECOND");
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("APPLY_PHASE_ONLY")).toBeNull();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByRole("link", { name: "Download raw log" })).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByText(/Started/)).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByText(/Finished/)).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(applySection as HTMLElement).queryByText("PLAN_PHASE_ONLY")).toBeNull();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(applySection as HTMLElement).getByText("Resources pending")).toBeTruthy();
   expect(view.getByText("Plan & apply duration")).toBeTruthy();
   expect(view.getByText("Less than a minute")).toBeTruthy();
   expect(view.getByText("Resources changed", { selector: "dt" })).toBeTruthy();
   expect(view.getByRole("heading", { name: "Please review the planned changes before continuing" }))
     .toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("&2 to import")).toBeNull();
   expect(view.getByText("Resources changed", { selector: "dt" }).closest("div")?.textContent).toContain("&2 to import");
   await waitFor((): void => {
@@ -250,14 +262,20 @@ test("separates phase logs and only renders backend-authorized run actions", asy
 
   const activitySection = view.getByRole("heading", { name: "Activity" }).closest("section");
   const commentsSection = view.getByRole("heading", { name: "Comments" }).closest("section");
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection as HTMLElement).getByText("Run confirmed")).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection as HTMLElement).getByText("Needs confirmation → Confirmed")).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection as HTMLElement).getByText("essinghigh")).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(commentsSection as HTMLElement).getByText("essinghigh")).toBeTruthy();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(commentsSection as HTMLElement).getByText("Approved for production")).toBeTruthy();
 
   fireEvent.click(view.getByRole("button", { name: "Review & apply" }));
   expect(view.getByRole("heading", { name: "Confirm apply" })).toBeTruthy();
+// SAFETY: the component renders this element type for the queried role/label.
   const actionComment = view.getByLabelText("Optional comment") as HTMLTextAreaElement;
   fireEvent.input(actionComment, {
     target: { value: "Approved after reviewing the dependency graph" },
@@ -283,12 +301,13 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
     if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     if (url === "/api/v2/runs" && init?.method === "POST") {
       if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-plan-only" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs?new-run=true"]}>
@@ -350,12 +369,13 @@ test("clones an existing run's settings into the new-run dialog", async () => {
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
       if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-cloned" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -382,10 +402,15 @@ test("clones an existing run's settings into the new-run dialog", async () => {
   });
   // The cloned run's message, plan-only radio, destroy checkbox and address
   // fields are prefilled from the source run.
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Run name") as HTMLInputElement).value).toBe("Targeted DB migration");
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByRole("radio", { name: "Plan only" }) as HTMLInputElement).checked).toBe(true);
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByRole("checkbox", { name: "Destroy infrastructure" }) as HTMLInputElement).checked).toBe(true);
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Target addresses") as HTMLInputElement).value).toBe("aws_instance.db");
+// SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Replace addresses") as HTMLInputElement).value)
     .toBe("aws_instance.web, aws_instance.api");
 
@@ -407,6 +432,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
 });
 
 test("closing a deep-linked new-run dialog clears the query", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
@@ -440,6 +466,7 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
 });
 
 test("does not offer run creation without workspace permission", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
@@ -463,6 +490,7 @@ test("does not offer run creation without workspace permission", async () => {
 });
 
 test("omits stages that cannot run for a finished plan-only run", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-speculative") {
@@ -519,6 +547,7 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
 });
 
 test("opens failed applies and presents their diagnostics", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-apply-error") {
@@ -589,10 +618,12 @@ test("opens failed applies and presents their diagnostics", async () => {
   );
 
   const applyHeading = await view.findByRole("heading", { name: "Apply errored" });
+  // SAFETY: the heading lives inside a details element; closest() resolves it.
   const applySection = applyHeading.closest("details") as HTMLDetailsElement;
   const diagnostics = within(applySection).getByRole("heading", { name: "Diagnostics" }).closest("section");
   expect(applySection.open).toBeTrue();
   expect(diagnostics).not.toBeNull();
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(diagnostics as HTMLElement).getByText(/resource name already exists/)).toBeTruthy();
   expect(within(applySection).getByText(/Errored/)).toBeTruthy();
 });
@@ -602,6 +633,7 @@ test("clears stale activity immediately when navigating to another run", async (
   const secondEvents = new Promise<Response>((resolve): void => {
     resolveSecondEvents = resolve;
   });
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     const runId = url.includes("run-activity-second") ? "run-activity-second" : "run-activity-first";
@@ -675,6 +707,7 @@ test("clears stale activity immediately when navigating to another run", async (
 });
 
 test("shows a slow-run indicator when duration exceeds the recent baseline", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-slow") {

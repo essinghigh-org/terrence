@@ -20,6 +20,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   const path = `/organizations/${encodeURIComponent(orgName)}/cidr-range-lists`;
 
   const load = async (): Promise<void> => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const response = await fetchApi(path) as { data?: CidrList[] };
     const next = Array.isArray(response.data) ? response.data : [];
     setLists(next);
@@ -27,6 +28,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   };
   const loadRanges = async (listId: string): Promise<void> => {
     if (listId === "") { setRanges([]); return; }
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const response = await fetchApi(`/cidr-ranges?filter[cidr-range-list][id]=${encodeURIComponent(listId)}`) as { data?: CidrRange[] };
     setRanges(Array.isArray(response.data) ? response.data : []);
   };
@@ -36,6 +38,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   const createList = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault(); if (listName.trim() === "") return; setSaving(true); setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(path, { method: "POST", body: JSON.stringify({ data: { attributes: { name: listName.trim() } } }) }) as { data: CidrList };
       setLists((current) => [response.data, ...current]); setSelectedListId(response.data.id); setListName("");
       toast.add({ title: "CIDR range list created", type: "success" });
@@ -44,6 +47,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   const addRange = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault(); if (selectedListId === "" || rangeValue.trim() === "") return; setSaving(true); setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi("/cidr-ranges", { method: "POST", body: JSON.stringify({ data: { attributes: { value: rangeValue.trim() }, relationships: { "cidr-range-list": { data: { id: selectedListId, type: "cidr-range-lists" } } } } }) }) as { data: CidrRange };
       setRanges((current) => [...current, response.data]); setRangeValue("");
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "Could not add CIDR range"); } finally { setSaving(false); }

@@ -98,7 +98,7 @@ test("renders workspace variables and attached variable sets as separate section
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(view.getByText("LOCAL_KEY")).toBeTruthy(); });
@@ -145,7 +145,7 @@ test("attaches and detaches variable sets from the workspace", async () => {
     }
     throw new Error(`Unexpected request: ${url} (${method})`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(view.getByText("github-provider")).toBeTruthy(); });
@@ -158,6 +158,7 @@ test("attaches and detaches variable sets from the workspace", async () => {
 
   const postCall = fetchMock.mock.calls.find(([, options]) => options?.method === "POST");
   expect(postCall).toBeTruthy();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({
     data: [{ type: "workspaces", id: "ws-1" }],
   });
@@ -167,6 +168,7 @@ test("attaches and detaches variable sets from the workspace", async () => {
   await waitFor((): void => { expect(view.queryByText("github-provider")).toBeNull(); });
   const deleteCall = fetchMock.mock.calls.find(([, options]) => options?.method === "DELETE");
   expect(deleteCall).toBeTruthy();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(deleteCall?.[1]?.body as string)).toEqual({
     data: [{ type: "workspaces", id: "ws-1" }],
   });

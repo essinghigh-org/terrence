@@ -65,6 +65,7 @@ export function Projects(): React.JSX.Element {
     setWorkspaces([]);
     setManageableOrganizationName("");
     try {
+      // SAFETY: all three endpoints return the JSON:API envelope per contract.
       const [projectResponse, workspaceResponse, organizationResponse] = await Promise.all([
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data?: Project[] }>,
         fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/workspaces?page%5Bsize%5D=100`) as Promise<{ data?: Workspace[] }>,

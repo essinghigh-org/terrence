@@ -23,6 +23,7 @@ afterEach((): void => {
 });
 
 function workspaceFetchMock(clipboard: { writeText: (text: string) => Promise<void> }): typeof fetch {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   return mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {

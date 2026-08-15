@@ -81,7 +81,7 @@ test("respects permissions and fully manages workspace run task bindings", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <WorkspaceRunTasks orgName="acme" workspaceId="ws-1" canManage={false} />,
@@ -108,6 +108,7 @@ test("respects permissions and fully manages workspace run task bindings", async
   const attachCall = fetchMock.mock.calls.find(([input, init]): boolean =>
     urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks" && init?.method === "POST");
   expect(attachCall).toBeDefined();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(attachCall?.[1]?.body as string)).toEqual({
     data: {
       type: "workspace-run-tasks",

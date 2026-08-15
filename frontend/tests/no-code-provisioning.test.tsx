@@ -25,6 +25,7 @@ function getUrl(input: unknown): string {
 }
 
 function changeInput(element: HTMLElement, value: string): void {
+// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = Reflect.get(element, "_valueTracker") as { setValue: (next: string) => void } | undefined;
   tracker?.setValue(value === "" ? "x" : "");
   Reflect.set(element, "value", value);
@@ -117,7 +118,7 @@ test("provisions an enabled no-code module and queues its initial run", async ()
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/no-code"]}>
@@ -152,6 +153,7 @@ test("provisions an enabled no-code module and queues its initial run", async ()
     getUrl(input) === "/api/v2/no-code-modules/nocode-1/workspaces" && init?.method === "POST",
   );
   if (workspaceCall === undefined) throw new Error("Expected workspace creation request");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(workspaceCall[1]!.body as string)).toEqual({
     data: {
       type: "workspaces",
@@ -212,7 +214,7 @@ test("explains when the organization has no enabled no-code modules", async () =
     if (url.endsWith("/projects")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/no-code"]}>
@@ -232,6 +234,7 @@ test("explains when the organization has no enabled no-code modules", async () =
 });
 
 test("keeps no-code provisioning available when projects are not readable", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrl(input);
     if (url.endsWith("/no-code-modules")) {

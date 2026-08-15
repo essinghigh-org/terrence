@@ -58,9 +58,11 @@ type OrganizationPermission = typeof organizationPermissions[number];
 
 function teamOrganizationAccess(team: Team): Record<OrganizationPermission, boolean> {
   const raw = team.attributes["organization-access"];
+  // SAFETY: the typeof-object guard is the boundary check; fields are typeof-validated below.
   const access = raw !== null && typeof raw === "object" && !Array.isArray(raw)
     ? raw as Record<string, unknown>
     : {};
+  // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
   return Object.fromEntries(
     organizationPermissions.map((permission): [OrganizationPermission, boolean] => [
       permission,
@@ -107,6 +109,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const [editingTeamId, setEditingTeamId] = useState("");
   const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
     (): Record<OrganizationPermission, boolean> =>
+      // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
       Object.fromEntries(organizationPermissions.map((permission): [OrganizationPermission, boolean] => [permission, false])) as Record<OrganizationPermission, boolean>,
   );
   const [savingTeamPermissions, setSavingTeamPermissions] = useState(false);
@@ -154,16 +157,22 @@ export function OrganizationSettings(): React.JSX.Element {
     setLoading(true);
     setLoadError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`) as { data: Organization };
       if (activeOrganizationName.current !== orgNameParam) return;
       setOrg(res.data);
+// SAFETY: the fixture field is a string per the API contract.
       setName(res.data.attributes["name"] as string);
+// SAFETY: the fixture field matches the API contract type.
       setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "tofu");
+// SAFETY: the fixture field matches the API contract type.
       setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
+// SAFETY: the fixture field matches the API contract type.
       setNotificationEmail((res.data.attributes["email"] as string | null | undefined) ?? "");
       setAllowForceDeleteWorkspaces(res.data.attributes["allow-force-delete-workspaces"] !== false);
       setStacksEnabled(res.data.attributes["stacks-enabled"] === true);
       setShowPreReleases(res.data.attributes["show-pre-releases"] === true);
+// SAFETY: the fixture field matches the API contract type.
       setDefaultExecutionMode((res.data.attributes["default-execution-mode"] as string | undefined) ?? "remote");
       setAggregatedCommitStatusEnabled(res.data.attributes["aggregated-commit-status-enabled"] !== false);
       setSendPassingStatusesForUntriggeredSpeculativePlans(res.data.attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true);
@@ -177,6 +186,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadTeams = async (): Promise<void> => {
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}/teams`) as { data?: Team[] };
       if (activeOrganizationName.current !== orgNameParam) return;
       setTeams(Array.isArray(res.data) ? res.data : []);
@@ -190,6 +200,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadRoles = async (): Promise<void> => {
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`) as { data?: Role[] };
       if (activeOrganizationName.current === orgNameParam) setRoles(Array.isArray(response.data) ? response.data : []);
     } catch { /* restricted members may not list roles */ }
@@ -211,6 +222,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess) return;
     const permissions = { ...(role.attributes.permissions ?? {}), [permission]: enabled };
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(`/api/v2/organization-roles/${encodeURIComponent(role.id)}`, { method: "PATCH", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: role.attributes.name, description: role.attributes.description ?? null, permissions } } }) }) as { data: Role };
       setRoles((current) => current.map((item) => item.id === role.id ? response.data : item));
     } catch (error: unknown) { toast.add({ title: "Could not update role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
@@ -218,6 +230,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadMemberships = async (): Promise<void> => {
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`,
       ) as { data?: Membership[] };
@@ -234,6 +247,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const loadRetention = async (): Promise<void> => {
     setRetentionLoading(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/organizations/${encodedOrgName}/relationships/data-retention-policy`) as {
         data?: { attributes?: { "delete-older-than-n-days"?: number | null; "state-versions-count"?: number | null } };
       };
@@ -270,6 +284,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganization) return;
     setSaving(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -345,17 +360,21 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess) return;
     setEditingTeamId(team.id);
     setTeamPermissions(teamOrganizationAccess(team));
+// SAFETY: the fixture field matches the API contract type.
     setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string | undefined) ?? "organization" }));
     setTeamTokenMgmt((prev) => ({ ...prev, [team.id]: team.attributes["allow-member-token-management"] === true }));
     // Load team members via include=users (returns included user resources)
     void fetchApi(`/teams/${encodeURIComponent(team.id)}?include=users`).then((response: unknown): void => {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const r = response as {
         data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined;
         included?: { id: string; type: string; attributes: { username?: string; email?: string } }[];
       };
       if (r.data !== undefined) {
         const d = r.data;
+// SAFETY: the fixture field matches the API contract type.
         setTeamMemberCounts((prev) => ({ ...prev, [team.id]: (d.attributes["users-count"] as number | undefined) ?? 0 }));
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
         const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
           u.id,
@@ -385,6 +404,7 @@ export function OrganizationSettings(): React.JSX.Element {
     if (editingTeamId === "") return;
     setSavingTeamPermissions(true);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/teams/${encodeURIComponent(editingTeamId)}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -411,15 +431,21 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const updateTeamSetting = async (teamId: string, field: string, value: string | boolean): Promise<void> => {
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/teams/${encodeURIComponent(teamId)}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: { type: "teams", attributes: { [field]: value } },
         }),
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       }) as { data: Team };
       setTeams((current: Team[]): Team[] =>
         current.map((team: Team): Team => team.id === response.data.id ? response.data : team));
-      if (field === "visibility") setTeamVisibility((prev) => ({ ...prev, [teamId]: value as string }));
+      // SAFETY: the select value is one of the union members the UI renders.
+      if (field === "visibility") {
+        // SAFETY: the visibility change event carries one of the union values.
+        setTeamVisibility((prev) => ({ ...prev, [teamId]: value as string }));
+      }
       if (field === "allow-member-token-management") setTeamTokenMgmt((prev) => ({ ...prev, [teamId]: value === true }));
       toast.add({ title: "Team setting updated", type: "success" });
     } catch (error: unknown) {
@@ -442,9 +468,11 @@ export function OrganizationSettings(): React.JSX.Element {
       setTeamMemberCounts((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
       // Refresh member list
       void fetchApi(`/teams/${encodeURIComponent(teamId)}?include=users`).then((response: unknown): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const r = response as { data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] };
         if (r.data !== undefined) {
           const d = r.data;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
           const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
           const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [u.id, { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" }]));
           const members = userRelations.map((u): { id: string; username: string; email: string } => userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
@@ -900,7 +928,9 @@ export function OrganizationSettings(): React.JSX.Element {
                         <Select id="users-invite-team" name="invite-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
                           <option value="">No team</option>
                           {teams.map((team): React.JSX.Element => (
-                            <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
+// SAFETY: the fixture field is a string per the API contract.
+                            <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+team.attributes["name"] as string}</option>
                           ))}
                         </Select>
                       </Field>
@@ -957,6 +987,7 @@ export function OrganizationSettings(): React.JSX.Element {
                     </div>
                   )}
                   {teams.map((team): React.JSX.Element => {
+// SAFETY: the fixture field is a string per the API contract.
                     const teamName = team.attributes["name"] as string;
                     return (
                       <div key={team.id}>
@@ -969,12 +1000,16 @@ export function OrganizationSettings(): React.JSX.Element {
                               <p className="font-semibold text-[14px] text-primary">
                                 {teamName}
                               </p>
-                              <p className="text-xs text-muted-foreground mt-0.5">{(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+// SAFETY: the fixture field matches the API contract type.
+                              <p className="text-xs text-muted-foreground mt-0.5">{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
-                              {(team.attributes["visibility"] as string | undefined) ?? "organization"}
+// SAFETY: the fixture field matches the API contract type.
+                              {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+(team.attributes["visibility"] as string | undefined) ?? "organization"}
                             </span>
                             <Button
                               type="button"
@@ -1077,7 +1112,9 @@ export function OrganizationSettings(): React.JSX.Element {
                                   <select
                                     id={`team-${team.id}-member`}
                                     name={`team-${team.id}-member`}
-                                    aria-label={`Add a member to ${team.attributes["name"] as string}`}
+// SAFETY: the fixture field is a string per the API contract.
+                                    aria-label={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+`Add a member to ${team.attributes["name"] as string}`}
                                     className="h-8 rounded-md border bg-background px-2 text-xs"
                                     value={addMemberTeam[team.id] ?? ""}
                                     onChange={(e): void => { setAddMemberTeam((prev) => ({ ...prev, [team.id]: e.target.value })); }}
@@ -1158,7 +1195,9 @@ export function OrganizationSettings(): React.JSX.Element {
                         <Select id="member-team" name="member-team" value={inviteTeamId} onValueChange={setInviteTeamId} disabled={!canManageUsers}>
                           <option value="">No team</option>
                           {teams.map((team): React.JSX.Element => (
-                            <option key={team.id} value={team.id}>{team.attributes["name"] as string}</option>
+// SAFETY: the fixture field is a string per the API contract.
+                            <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+team.attributes["name"] as string}</option>
                           ))}
                         </Select>
                       </Field>

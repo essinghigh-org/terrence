@@ -46,6 +46,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
     setLoading(true);
     setError("");
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(path) as { data?: ReservedTagKey[] };
       setTags(Array.isArray(response.data) ? response.data : []);
     } catch (caught: unknown) {
@@ -81,6 +82,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
     setSaving(true);
     setFormError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         editing !== null ? `/reserved-tags/${editing.id}` : path,
         {

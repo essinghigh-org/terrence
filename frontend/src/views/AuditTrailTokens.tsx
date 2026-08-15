@@ -73,6 +73,7 @@ export function AuditTrailTokens(): React.JSX.Element {
       return;
     }
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/authentication-token?token=audit-trails`,
       ) as { data: AuditTrailToken };
@@ -98,6 +99,7 @@ export function AuditTrailTokens(): React.JSX.Element {
       if (expiresIn.trim() !== "") {
         attributes["expired-at"] = expiresIn.trim();
       }
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgName)}/authentication-token?token=audit-trails`,
         {

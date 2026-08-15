@@ -144,6 +144,7 @@ export function WorkspaceSettings({
     setRemoteStateConsumerIds([]);
     setRemoteStateLoadState("loading");
     setRemoteStateLoadError("");
+    // SAFETY: the consumers endpoint returns the JSON:API envelope per contract.
     void Promise.all([
       fetchAllApiPages<RemoteStateWorkspace>(
         `/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`,
@@ -201,6 +202,7 @@ export function WorkspaceSettings({
     setError("");
     setSaved(false);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -315,7 +317,10 @@ export function WorkspaceSettings({
                 id="workspace-execution-mode"
                 name="execution-mode"
                 value={executionMode}
-                onValueChange={(value: string): void => { setExecutionMode(value as ExecutionMode); }}
+                onValueChange={(value: string): void => {
+                  // SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  setExecutionMode(value as ExecutionMode);
+                }}
                 disabled={!canUpdate}
               >
                 <SelectItem value="remote">Remote</SelectItem>
@@ -334,7 +339,14 @@ export function WorkspaceSettings({
                 id="workspace-iac-binary"
                 name="iac-binary"
                 value={iacBinary}
-                onValueChange={(value: string): void => { setIacBinary(value as IacBinary); }}
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                onValueChange={(value: string): void => {
+
+                  // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                  setIacBinary(value as IacBinary);
+
+                }}
                 disabled={!canUpdate}
               >
                 <SelectItem value="tofu">OpenTofu</SelectItem>
@@ -366,7 +378,14 @@ export function WorkspaceSettings({
                 id="workspace-remote-state-sharing"
                 name="remote-state-sharing"
                 value={remoteStateSharing}
-                onValueChange={(value: string): void => { setRemoteStateSharing(value as RemoteStateSharing); }}
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                onValueChange={(value: string): void => {
+
+                  // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                  setRemoteStateSharing(value as RemoteStateSharing);
+
+                }}
                 disabled={!canUpdate}
               >
                 <SelectItem value="specific">Specific approved workspaces</SelectItem>

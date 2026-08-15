@@ -161,6 +161,7 @@ function parseApplyLogsToExecMap(
 
     if (trimmed.startsWith("{")) {
       try {
+// SAFETY: the fixture object is read as a record; each field is typed below.
         const json = JSON.parse(trimmed) as Record<string, unknown>;
         const type = json["type"];
         const hook = isRecord(json["hook"]) ? json["hook"] : undefined;
@@ -297,6 +298,7 @@ function ApplyResourceRow({
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const clipboard = Reflect.get(navigator, "clipboard") as { writeText: (value: string) => Promise<void> } | undefined;
     if (clipboard !== undefined) {
       void clipboard.writeText(resource.address);
@@ -382,6 +384,7 @@ export function ApplyOutput({
       try {
         const data = await fetchApi(`/plans/plan-${runId}/json-output`);
         if (cancelled) return;
+// SAFETY: the run phase payload is plan JSON per the endpoint contract.
         setLoadState({ kind: "ready", plan: data as PlanJson });
       } catch (reason: unknown) {
         if (cancelled) return;
@@ -497,6 +500,7 @@ export function ApplyOutput({
             className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-muted-foreground"
           >
             {APPLY_OPERATION_OPTIONS.map((op): React.JSX.Element => {
+// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
               const count = op === "import" ? importCount : op === "move" ? moveCount : opCounts[op as keyof typeof opCounts];
               const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
               return (

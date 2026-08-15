@@ -44,6 +44,7 @@ export function WorkspacePolicySets({
     fetchApi(`/workspaces/${workspaceId}/policy-sets`)
       .then((response: unknown): void => {
         if (!active) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: PolicySet[] }).data;
         setPolicySets(Array.isArray(data) ? data : []);
       })

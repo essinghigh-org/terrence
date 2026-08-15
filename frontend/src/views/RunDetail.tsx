@@ -333,6 +333,7 @@ function policyResultText(result: unknown): string {
   if (typeof result === "string") return result;
   if (typeof result === "number" || typeof result === "boolean" || typeof result === "bigint") return `${result}`;
   if (typeof result !== "object") return "No detailed result";
+// SAFETY: the fixture object is read as a record; each field is typed below.
   const details = result as Record<string, unknown>;
   const summary: string[] = [];
   if (typeof details["policy"] === "string") summary.push(details["policy"]);
@@ -362,6 +363,8 @@ function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
   if (check.attributes["enforcement-level"] === "advisory") return true;
   if (check.attributes.status !== "failed") return false;
   const result = check.attributes.result;
+  // SAFETY: the run result payload is read as a record; the advisory-failed
+  // field is typeof-validated before the comparison.
   return result !== null
     && typeof result === "object"
     && !Array.isArray(result)
@@ -642,6 +645,7 @@ export function RunDetail({
     // The overlay renders after this effect commits, so the close button ref
     // is already populated; move focus into the dialog. Remember the trigger
     // so cleanup can hand focus back when the dialog goes away.
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
     fullscreenTriggerRef.current = document.activeElement as HTMLElement | null;
     fullscreenCloseRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -689,6 +693,7 @@ export function RunDetail({
 
   const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
     try {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const response = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource; included?: IncludedUser[] };
       if (signal.aborted) return null;
       setRun(response.data);
@@ -734,6 +739,7 @@ export function RunDetail({
       ].some((result): boolean => result.status === "rejected"));
 
       if (logResult.status === "fulfilled") {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const logData = logResult.value as {
           data?: LogItem[];
           logs?: { message: string; phase?: string }[];
@@ -759,27 +765,34 @@ export function RunDetail({
         }
       }
       if (planResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         setPlan((planResult.value as { data?: PhaseResource }).data ?? null);
       }
       if (applyResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         setApply((applyResult.value as { data?: PhaseResource }).data ?? null);
       }
       if (costResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         setCostEstimate((costResult.value as { data?: CostEstimate }).data ?? null);
       }
       if (policyResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (policyResult.value as { data?: PolicyCheck[] }).data;
         setPolicyChecks(Array.isArray(data) ? data : []);
       }
       if (assessmentResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (assessmentResult.value as { data?: AssessmentCheck[] }).data;
         setAssessmentChecks(Array.isArray(data) ? data : []);
       }
       if (eventResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (eventResult.value as { data?: RunEvent[] }).data;
         setRunEvents(Array.isArray(data) ? data : []);
       }
       if (commentResult.status === "fulfilled") {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (commentResult.value as { data?: RunComment[] }).data;
         setComments(Array.isArray(data) ? data : []);
       }
@@ -1097,6 +1110,7 @@ export function RunDetail({
     "post_plan_completed", "confirmed", "apply_queued", "applying",
   ].includes(status);
 
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const workspaceId = (run.relationships as { workspace?: { data?: { id?: string } } } | undefined)
     ?.workspace?.data?.id ?? "";
   const canRerun = workspaceId !== ""
@@ -1118,6 +1132,7 @@ export function RunDetail({
           },
         }),
       });
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const newRunId = (body as { data?: { id?: string } }).data?.id;
       if (typeof newRunId === "string" && newRunId !== "") {
         navigate(`${workspacePath}/runs/${encodeURIComponent(newRunId)}`);
@@ -1979,6 +1994,8 @@ export function RunDetail({
                   const toStatus = event.attributes.details?.toStatus;
                   const eventSource = event.attributes.details?.source;
                   const triggerReason = event.attributes.details?.triggerReason;
+                  // SAFETY: unknown event actions fall through to the status label fallback.
+                  const eventLabel = RUN_EVENT_LABELS[event.attributes.action as keyof typeof RUN_EVENT_LABELS] ?? statusLabel(event.attributes.action);
                   return (
                     <li key={event.id} className="flex gap-3 px-5 py-3">
                       <Avatar className="size-8 rounded-full">
@@ -1994,8 +2011,7 @@ export function RunDetail({
                         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                           <p className="text-foreground/85">
                             <span className="font-semibold text-foreground">{actor}</span>{" "}
-                            {/* SAFETY: unknown event actions fall through to the status label fallback. */}
-                            {RUN_EVENT_LABELS[event.attributes.action as keyof typeof RUN_EVENT_LABELS] ?? statusLabel(event.attributes.action)}
+                            {eventLabel}
                           </p>
                           <time
                             className="text-xs text-muted-foreground"

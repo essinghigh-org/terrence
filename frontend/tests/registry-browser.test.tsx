@@ -93,6 +93,7 @@ afterEach((): void => {
 
 test("browses and filters registry cards with distinct module permissions", async () => {
   const requests: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     requests.push(url);
@@ -130,6 +131,7 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
   let attempts = 0;
   let resolveFirst!: (response: Response) => void;
   const first = new Promise<Response>((resolve): void => { resolveFirst = resolve; });
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true } } } });
@@ -152,6 +154,7 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
 
 test("renders version-specific module documentation, usage, lifecycle, and keyboard tabs", async () => {
   const requests: Readonly<{ method: string; url: string }>[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const method = init?.method ?? "GET";
@@ -196,6 +199,7 @@ test("renders version-specific module documentation, usage, lifecycle, and keybo
 });
 
 test("keeps module management hidden from a read-only detail viewer", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.endsWith("/organizations/acme/registry-modules/private/acme/network/aws")) return json({ data: moduleResource(false) });

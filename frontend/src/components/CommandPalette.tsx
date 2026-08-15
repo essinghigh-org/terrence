@@ -237,6 +237,7 @@ export function CommandPalette({
                   perform: () => {
                     void (async (): Promise<void> => {
                       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
                         const response = await fetchApi(
                           `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
                         ) as { data?: { id?: string } };
@@ -264,11 +265,13 @@ export function CommandPalette({
                         // /api/v2/workspaces/:workspace_id/runs), so resolve the
                         // workspace ID from its org/name path first, then fetch
                         // the newest run (sort=-created-at, page[size]=1).
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
                         const wsResponse = await fetchApi(
                           `/organizations/${encodeURIComponent(currentOrgName)}/workspaces/${encodeURIComponent(currentWorkspaceName)}`,
                         ) as { data?: { id?: string } };
                         const wsId = wsResponse.data?.id;
                         if (wsId === undefined) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
                         const runsResponse = await fetchApi(
                           `/workspaces/${encodeURIComponent(wsId)}/runs?page[size]=1&sort=-created-at`,
                         ) as { data?: { id?: string }[] };

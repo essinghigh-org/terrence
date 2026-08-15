@@ -30,6 +30,7 @@ test("renders the provider surface catalog with counts and filters", async () =>
       { name: "tfe_workspace", status: "covered" },
     ],
   };
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/provider-surface") return json({ data: surface });

@@ -112,7 +112,7 @@ function buildFetchMock(): ReturnType<typeof mock> {
 }
 
 function renderRunDetail(fetchMock: ReturnType<typeof mock>): ReturnType<typeof render> {
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>
@@ -132,6 +132,7 @@ test("fullscreen log dialog returns focus to its trigger button on close", async
     expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
   });
 
+// SAFETY: the component renders this element type for the queried role/label.
   const trigger = view.getByRole("button", { name: "Open raw plan log fullscreen" }) as HTMLButtonElement;
   trigger.focus();
   fireEvent.click(trigger);
@@ -139,6 +140,7 @@ test("fullscreen log dialog returns focus to its trigger button on close", async
   await waitFor((): void => {
     expect(view.getByRole("dialog", { name: "Raw plan log" })).toBeTruthy();
   });
+// SAFETY: the component renders this element type for the queried role/label.
   const closeButton = view.getByRole("button", { name: "Close fullscreen log" }) as HTMLButtonElement;
 
   // Focus moved into the dialog, away from the trigger.
@@ -160,6 +162,7 @@ test("fullscreen log dialog restores focus when closed with Escape", async () =>
     expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
   });
 
+// SAFETY: the component renders this element type for the queried role/label.
   const trigger = view.getByRole("button", { name: "Open raw plan log fullscreen" }) as HTMLButtonElement;
   trigger.focus();
   fireEvent.click(trigger);

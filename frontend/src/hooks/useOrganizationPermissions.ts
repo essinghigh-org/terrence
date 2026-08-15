@@ -63,6 +63,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       { signal: controller.signal },
     ).then((result) => {
       if (controller.signal.aborted) return;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const attributes = (result as {
         data?: { attributes?: { permissions?: Record<string, boolean> } };
       }).data?.attributes;

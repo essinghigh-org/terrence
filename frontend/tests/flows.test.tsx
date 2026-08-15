@@ -40,9 +40,11 @@ function getUrlString(input: unknown): string {
   return "";
 }
 
+// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
 const asElement = (el: unknown): HTMLElement => el as HTMLElement;
 
 const changeInput = (element: HTMLElement, value: string): void => {
+// SAFETY: React attaches the _valueTracker to controlled inputs in the test renderer.
   const tracker = Reflect.get(element, "_valueTracker") as { setValue: (v: string) => void } | undefined;
   if (tracker !== undefined) {
     tracker.setValue(value === "" ? "x" : "");
@@ -61,7 +63,7 @@ test("logs in without persisting the access token and navigates home", async () 
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -88,7 +90,9 @@ test("logs in without persisting the access token and navigates home", async () 
   const loginCall = fetchMock.mock.calls.find(([input]: [string | URL | Request]): boolean =>
     getUrlString(input) === "/api/v2/users/login");
   expect(loginCall).toBeDefined();
+// SAFETY: the captured call init is the RequestInit the component passed to fetch.
   const loginOptions = loginCall![1] as RequestInit;
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(loginOptions.body as string)).toEqual({
     data: { attributes: { username: "alice", password: "correct horse", "browser-session": true } },
   });
@@ -109,7 +113,7 @@ test("creates a workspace from the modal", async () => {
   const onCreated = mock((): void => {
     // Intentional callback mock
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   const view = render(
     <CreateWorkspaceModal
       orgName="acme"
@@ -141,6 +145,7 @@ test("creates a workspace from the modal", async () => {
   if (workspaceCall === undefined) throw new Error("Expected workspace create request");
   const [workspaceUrl, workspaceOptions] = workspaceCall;
   expect(getUrlString(workspaceUrl)).toBe("/api/v2/organizations/acme/workspaces");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(workspaceOptions!.body as string)).toEqual({
     data: {
       attributes: {
@@ -162,6 +167,7 @@ test("creates a workspace from the modal", async () => {
 });
 
 test("opens workspace creation from the workspace list", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     if (getUrlString(input) === "/api/v2/organizations/acme") {
       return json({
@@ -197,7 +203,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   const view = render(
     <>
       <CreateWorkspaceModal
@@ -228,6 +234,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
 });
 
 test("does not report a successful latest run for a workspace with no runs", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: unknown): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -280,6 +287,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
       });
     }
     if (url.endsWith("/workspaces/ws-1/vars") && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       const variable = { id: "var-1", attributes: payload.data.attributes };
       variables.push(variable);
@@ -287,6 +295,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
     }
     if (url.includes("/workspaces/ws-1/vars?") && init?.method === undefined) return json({ data: variables });
     if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       variables[0] = { id: "var-1", attributes: payload.data.attributes };
       return json({ data: variables[0] });
@@ -297,7 +306,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -326,6 +335,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
   });
 
   const createdRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("region").closest("tr") as HTMLElement,
   );
   expect(within(createdRow).getByText("eu-west-2")).toBeTruthy();
@@ -340,6 +350,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
   });
 
   const editedRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("region").closest("tr") as HTMLElement,
   );
   expect(within(editedRow).getByText("Sensitive — write only")).toBeTruthy();
@@ -377,6 +388,7 @@ test("updates workspace execution and auto-apply settings", async () => {
       return json({ data: workspace });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -389,7 +401,7 @@ test("updates workspace execution and auto-apply settings", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -420,6 +432,7 @@ test("updates workspace execution and auto-apply settings", async () => {
   );
   expect(patchCall).toBeDefined();
   if (patchCall === undefined) throw new Error("Expected workspace settings PATCH request");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(patchCall[1]!.body as string)).toEqual({
     data: {
       id: "ws-1",
@@ -461,6 +474,7 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
       return json({ data: { id: "ws-1", relationships: { "ssh-key": { data: { id: "ssh-1", type: "ssh-keys" } } } } });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       return json({
         data: {
@@ -471,7 +485,7 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -516,14 +530,17 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
   if (assignPatch === undefined || removePatch === undefined) {
     throw new Error("Expected SSH key assignment and removal PATCH requests");
   }
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(assignPatch[1]!.body as string)).toEqual({
     data: { id: "ssh-1", type: "ssh-keys" },
   });
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(removePatch[1]!.body as string)).toEqual({ data: null });
   const healthPatch = fetchMock.mock.calls.find(([input]): boolean =>
     getUrlString(input) === "/api/v2/workspaces/ws-1"
   );
   if (healthPatch === undefined) throw new Error("Expected health assessment PATCH request");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(healthPatch[1]!.body as string).data.attributes).toEqual({
     "assessments-enabled": true,
   });
@@ -578,6 +595,7 @@ test("manages workspace run triggers and custom team access", async () => {
     }
     if (url.includes("/api/v2/team-workspaces?")) return json({ data: teamAccess });
     if (url === "/api/v2/team-workspaces" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: {
           attributes: Record<string, unknown>;
@@ -593,6 +611,7 @@ test("manages workspace run triggers and custom team access", async () => {
       return json({ data: relationship });
     }
     if (url === "/api/v2/team-workspaces/tw-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       teamAccess[0] = {
         ...teamAccess[0]!,
@@ -606,7 +625,7 @@ test("manages workspace run triggers and custom team access", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -622,6 +641,7 @@ test("manages workspace run triggers and custom team access", async () => {
   await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
   fireEvent.change(view.getByLabelText("Source workspace"), { target: { value: "ws-source" } });
   fireEvent.click(view.getByRole("button", { name: "Add trigger" }));
+// SAFETY: the waited-for element is an HTMLElement in the rendered DOM.
   const triggerRow = await waitFor((): HTMLElement =>
     view.getByRole("cell", { name: "networking" }).closest("tr") as HTMLElement,
   );
@@ -642,6 +662,7 @@ test("manages workspace run triggers and custom team access", async () => {
   });
 
   const teamRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByRole("cell", { name: "Platform" }).closest("tr") as HTMLElement,
   );
   expect(within(teamRow).getByText("custom")).toBeTruthy();
@@ -651,6 +672,7 @@ test("manages workspace run triggers and custom team access", async () => {
     const form = view.getByRole("button", { name: "Save team access" }).closest("form");
     if (form !== null) fireEvent.submit(form);
   });
+// SAFETY: the waited-for element is an HTMLElement in the rendered DOM.
   const adminRow = await waitFor((): HTMLElement =>
     view.getByRole("cell", { name: "Platform" }).closest("tr") as HTMLElement,
   );
@@ -662,6 +684,7 @@ test("manages workspace run triggers and custom team access", async () => {
     getUrlString(input) === "/api/v2/team-workspaces" && init?.method === "POST"
   );
   if (customCreate === undefined) throw new Error("Expected custom team access POST request");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   const customAttributes = JSON.parse(customCreate[1]!.body as string).data.attributes;
   expect(customAttributes.access).toBe("custom");
   expect(customAttributes.permissions).toMatchObject({
@@ -694,6 +717,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
       return json({ data: configurations });
     }
     if (url === "/api/v2/workspaces/ws-1/notification-configurations" && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       const configuration = { id: "nc-1", attributes: payload.data.attributes };
       configurations.push(configuration);
@@ -703,6 +727,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
       return json({ status: "verification_sent" });
     }
     if (url === "/api/v2/notification-configurations/nc-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       configurations[0] = { id: "nc-1", attributes: payload.data.attributes };
       return json({ data: configurations[0] });
@@ -713,7 +738,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -739,6 +764,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
   });
 
   let notificationRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("Deploy alerts").closest("tr") as HTMLElement,
   );
   expect(within(notificationRow).getByText("slack")).toBeTruthy();
@@ -753,6 +779,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
     if (form !== null) fireEvent.submit(form);
   });
   notificationRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("Deploy alerts").closest("tr") as HTMLElement,
   );
   expect(within(notificationRow).getByText("Disabled")).toBeTruthy();
@@ -805,6 +832,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
       });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: Record<string, unknown> };
       };
@@ -815,12 +843,17 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
           ...workspace.attributes,
           ...payload.data.attributes,
           "vcs-repo": vcsRepo === null ? null : {
+// SAFETY: the fixture field is a string per the API contract.
             identifier: (vcsRepo as Record<string, unknown>)["identifier"] as string,
+// SAFETY: the fixture field matches the API contract type.
             branch: ((vcsRepo as Record<string, unknown>)["branch"] as string | null) ?? undefined,
             githubAppInstallationId: (
+// SAFETY: the fixture field matches the API contract type.
               (vcsRepo as Record<string, unknown>)["github-app-installation-id"] as string | null
             ) ?? undefined,
+// SAFETY: the fixture field matches the API contract type.
             ingressSubmodules: (vcsRepo as Record<string, unknown>)["ingress-submodules"] as boolean,
+// SAFETY: the fixture field matches the API contract type.
             tagsRegex: ((vcsRepo as Record<string, unknown>)["tags-regex"] as string | null) ?? undefined,
           },
         },
@@ -829,7 +862,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -843,6 +876,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "policy sets" }));
   const policyRow = await waitFor((): HTMLElement =>
+// SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("Production guardrails").closest("tr") as HTMLElement,
   );
   expect(within(policyRow).getByText("global")).toBeTruthy();
@@ -866,10 +900,12 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
 
   const saveCall = fetchMock.mock.calls.find(([input, init]): boolean => {
     if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
     const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
     return body.data.attributes["vcs-repo"] !== null;
   });
   if (saveCall === undefined) throw new Error("Expected VCS settings PATCH request");
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(saveCall[1]!.body as string).data.attributes).toEqual({
     "vcs-repo": {
       identifier: "acme/infrastructure",
@@ -891,6 +927,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   await waitFor((): void => { expect(view.getByText("Not connected")).toBeTruthy(); });
   const disconnectCall = fetchMock.mock.calls.find(([input, init]): boolean => {
     if (getUrlString(input) !== "/api/v2/workspaces/ws-1" || init?.method !== "PATCH") return false;
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
     const body = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
     return body.data.attributes["vcs-repo"] === null;
   });
@@ -946,7 +983,7 @@ test("displays run cost and policy check results", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-policy"]}>
@@ -972,6 +1009,7 @@ test("displays run cost and policy check results", async () => {
 });
 
 test("keeps advisory policy failures non-blocking and names the policy", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/runs/run-advisory") {
@@ -1101,7 +1139,7 @@ test("queues a run, displays its logs, and applies it", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const list = render(
     <MemoryRouter>
@@ -1222,6 +1260,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       url.endsWith("/varsets/varset-shared/relationships/vars") &&
       init?.method === "POST"
     ) {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       const newVar = {
         id: "var-database",
@@ -1235,6 +1274,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       url.endsWith("/varsets/varset-shared/relationships/vars/var-token") &&
       init?.method === "PATCH"
     ) {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: Record<string, unknown> } };
       const updatedToken = {
         ...apiToken,
@@ -1257,6 +1297,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       return new Response(null, { status: 204 });
     }
     if (url.endsWith("/organizations/acme/varsets") && init?.method === "POST") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: { name: string; global: boolean; description: string | null } } };
       const newSet = variableSet(
         "varset-global",
@@ -1269,6 +1310,7 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
       return json({ data: newSet });
     }
     if (url.endsWith("/varsets/varset-global") && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as { data: { attributes: { name: string; global: boolean; description: string | null } } };
       const updated = variableSet(
         "varset-global",
@@ -1338,7 +1380,7 @@ test("keeps variable sets readable without workspace management permission", asy
     }
     throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1365,7 +1407,7 @@ test("keeps variable sets readable without workspace management permission", asy
 
 test("creates variable sets and toggles global scope", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1394,6 +1436,7 @@ test("creates variable sets and toggles global scope", async () => {
       init?.method === "POST",
   );
   expect(createCall).toBeDefined();
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse((createCall![1]!).body as string)).toEqual({
     data: {
       type: "varsets",
@@ -1428,7 +1471,7 @@ test("creates variable sets and toggles global scope", async () => {
 
 test("manages workspace attachments for variable sets", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1464,7 +1507,7 @@ test("manages workspace attachments for variable sets", async () => {
 
 test("manages variables inside a variable set", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1494,6 +1537,7 @@ test("manages variables inside a variable set", async () => {
       within(asElement(tokenRow)).getByRole("button", { name: "Edit" }),
     );
   }
+// SAFETY: the component renders this element type for the queried role/label.
   expect((getBody().getByLabelText("Value") as HTMLInputElement).value).toBe("");
   changeInput(asElement(getBody().getByLabelText("Description")), "Rotated secret");
   await act(async () => {
@@ -1506,8 +1550,11 @@ test("manages variables inside a variable set", async () => {
 
   fireEvent.click(getBody().getByRole("button", { name: "Add variable" }));
   await waitFor((): void => { expect(window.document.getElementById("variable-key")).not.toBeNull(); });
+// SAFETY: the component renders this element type for the queried role/label.
   const k = window.document.getElementById("variable-key") as HTMLInputElement;
+// SAFETY: the component renders this element type for the queried role/label.
   const v = window.document.getElementById("variable-value") as HTMLInputElement;
+// SAFETY: the component renders this element type for the queried role/label.
   const d = window.document.getElementById("variable-description") as HTMLInputElement;
   changeInput(k, "DATABASE_URL");
   changeInput(v, "postgres://database");
@@ -1543,7 +1590,7 @@ test("manages variables inside a variable set", async () => {
 
 test("deletes variable sets", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>

@@ -19,20 +19,27 @@ function storeKey(orgName: string): string {
   return `${SAVED_VIEWS_PREFIX}${orgName}`;
 }
 
+/** True when the localStorage entry carries the SavedView fields. */
+function isSavedView(view: unknown): view is SavedView {
+  if (typeof view !== "object" || view === null) return false;
+  // SAFETY: only the checked fields are read; the object may carry arbitrary
+  // extra fields written by older app versions or other tabs.
+  const candidate = view as { name?: unknown; search?: unknown; statusFilter?: unknown; projectFilter?: unknown };
+  return typeof candidate.name === "string"
+    && typeof candidate.search === "string"
+    && typeof candidate.statusFilter === "string"
+    && typeof candidate.projectFilter === "string";
+}
+
 export function getSavedViews(orgName: string): SavedView[] {
   try {
     const raw = window.localStorage.getItem(storeKey(orgName));
     if (raw === null || raw === "") return [];
+    // SAFETY: localStorage content is untrusted; Array.isArray plus
+    // isSavedView validate the shape before any field is used.
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((view): view is SavedView =>
-        typeof view === "object"
-        && view !== null
-        && typeof (view as SavedView).name === "string"
-        && typeof (view as SavedView).search === "string"
-        && typeof (view as SavedView).statusFilter === "string"
-        && typeof (view as SavedView).projectFilter === "string");
+    return parsed.filter(isSavedView);
   } catch {
     return [];
   }

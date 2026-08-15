@@ -24,6 +24,7 @@ export function Badge({ className = "", variant = "default", ...props }: BadgePr
   const styleClass = variantStyles[variant];
 
   return (
+// SAFETY: DeepReadonly is a compile-time-only structural wrapper; the props object is the primitive's own shape at runtime.
     <span className={`${baseStyle} ${styleClass} ${className}`} {...(props as HTMLAttributes<HTMLSpanElement>)} />
   );
 }

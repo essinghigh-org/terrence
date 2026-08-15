@@ -6,6 +6,7 @@ import { useUnsavedChangesWarning } from "../src/lib/use-unsaved-changes";
 
 afterEach((): void => {
   cleanup();
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (window as { confirm?: unknown }).confirm = undefined;
   window.history.replaceState(null, "", "/");
 });
@@ -31,6 +32,7 @@ function renderWithBrowserRouter(routes: {
 
 test("route navigation away from a dirty form asks for confirmation (kanban 26.18)", async () => {
   const confirmMock = mock((): boolean => false);
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (window as { confirm?: unknown }).confirm = confirmMock;
 
   function DirtyForm(): React.JSX.Element {
@@ -59,6 +61,7 @@ test("route navigation away from a dirty form asks for confirmation (kanban 26.1
 
 test("clean form navigates without confirmation (kanban 26.18)", async () => {
   const confirmMock = mock((): boolean => true);
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (window as { confirm?: unknown }).confirm = confirmMock;
 
   function CleanForm(): React.JSX.Element {
@@ -83,6 +86,7 @@ test("clean form navigates without confirmation (kanban 26.18)", async () => {
 });
 
 test("browser unload with unsaved changes registers a beforeunload guard (kanban 26.18)", async () => {
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (window as { confirm?: unknown }).confirm = mock((): boolean => true);
 
   function WithGuard(): React.JSX.Element {
@@ -108,6 +112,7 @@ test("browser unload with unsaved changes registers a beforeunload guard (kanban
 
 test("confirmed navigation proceeds to the destination (kanban 26.18)", async () => {
   const confirmMock = mock((): boolean => true);
+// SAFETY: the test stubs the global with a mock before exercising the component.
   (window as { confirm?: unknown }).confirm = confirmMock;
 
   function DirtyForm(): React.JSX.Element {

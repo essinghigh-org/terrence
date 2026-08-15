@@ -16,6 +16,7 @@ afterEach((): void => {
 });
 
 test("shows searchable resources and redacts sensitive outputs", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
@@ -127,6 +128,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
 });
 
 test("paginates resources and outputs independently", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {

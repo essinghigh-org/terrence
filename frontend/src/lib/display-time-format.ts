@@ -17,6 +17,7 @@ let currentFormat: DisplayTimeFormat = readStoredFormat();
 function readStoredFormat(): DisplayTimeFormat {
   try {
     const stored = window.localStorage.getItem(TIME_FORMAT_STORAGE_KEY);
+    // SAFETY: the stored preference is validated by the fallback below.
     return stored !== null && STORED_FORMATS.has(stored)
       ? (stored as DisplayTimeFormat)
       : "24";

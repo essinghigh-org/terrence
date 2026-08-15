@@ -30,6 +30,16 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi } from "@/lib/api";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 
+/** Read the data array from a JSON:API list envelope, or [] when absent. */
+function dataArray<T>(response: unknown): T[] {
+  // SAFETY: JSON:API list endpoints return { data: [...] }; Array.isArray
+  // guards the shape and non-array payloads degrade to [].
+  const data = (response as { data?: unknown }).data;
+  // SAFETY: guarded by Array.isArray above; elements are consumed through
+  // the typed caller contract.
+  return Array.isArray(data) ? data as T[] : [];
+}
+
 export type ProjectSection = "overview" | "workspaces" | "settings" | "variable-sets";
 
 type Project = Readonly<{
@@ -133,25 +143,19 @@ export function ProjectDetail({
           signal === undefined ? {} : { signal },
         ),
         fetchApi(`/organizations/${encodeURIComponent(orgName)}/runs?page%5Bsize%5D=100`, signal === undefined ? {} : { signal })
-          .then((response): RunSummary[] => {
-            const data = (response as { data?: unknown }).data;
-            return Array.isArray(data) ? data as RunSummary[] : [];
-          })
+          .then((response): RunSummary[] => dataArray<RunSummary>(response))
           .catch((): RunSummary[] => []),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}/varsets?filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
           signal === undefined ? {} : { signal },
         )
-          .then((response): VariableSet[] => {
-            const data = (response as { data?: unknown }).data;
-            return Array.isArray(data) ? data as VariableSet[] : [];
-          })
+          .then((response): VariableSet[] => dataArray<VariableSet>(response))
           .catch((): VariableSet[] => []),
       ]);
       if (signal?.aborted === true) return;
+      // SAFETY: the project endpoint returns { data: Project } per contract.
       setProject((projectResponse as { data?: Project }).data ?? null);
-      const wsData = (workspaceResponse as { data?: unknown }).data;
-      setWorkspaces(Array.isArray(wsData) ? wsData as Workspace[] : []);
+      setWorkspaces(dataArray<Workspace>(workspaceResponse));
       setVariableSets(varsetResponse);
       const byWorkspace = new Map<string, RunSummary>();
       for (const run of runResponse) {
@@ -191,6 +195,7 @@ export function ProjectDetail({
     setSaving(true);
     setFormError("");
     try {
+      // SAFETY: the endpoint contract returns { data: Project } on success.
       const response = await fetchApi(`/projects/${encodeURIComponent(projectId)}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -239,6 +244,7 @@ export function ProjectDetail({
     setSavingVs(true);
     setVsError("");
     try {
+      // SAFETY: the endpoint contract returns { data: VariableSet } on success.
       const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/varsets`, {
         method: "POST",
         body: JSON.stringify({

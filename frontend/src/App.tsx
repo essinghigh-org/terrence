@@ -33,6 +33,7 @@ function lazyView(
     if (typeof component !== "function") {
       throw new Error(`View ${name} is missing from its chunk`);
     }
+// SAFETY: the typeof-function check above narrows the chunk export to a component.
     return { default: component as ComponentType<Record<string, unknown>> };
   };
   return lazy(async (): Promise<{ default: ComponentType<Record<string, unknown>> }> => {

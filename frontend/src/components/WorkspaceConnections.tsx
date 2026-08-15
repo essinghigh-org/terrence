@@ -61,6 +61,7 @@ export function WorkspaceSshKey({
     fetchApi(`/organizations/${encodeURIComponent(orgName)}/ssh-keys`)
       .then((response: unknown): void => {
         if (!active) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: SshKey[] }).data;
         setKeys(Array.isArray(data) ? data : []);
       })
@@ -168,6 +169,7 @@ export function WorkspaceRunTriggers({
   const [error, setError] = useState("");
 
   const load = useCallback(async (): Promise<void> => {
+    // SAFETY: both endpoints return the JSON:API envelope per contract.
     const [workspaceResponse, triggerResponse] = await Promise.all([
       fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`),
       fetchApi(`/workspaces/${workspaceId}/run-triggers`),
@@ -370,6 +372,7 @@ export function WorkspaceHealth({
     setError("");
     setSaved(false);
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({

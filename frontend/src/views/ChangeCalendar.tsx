@@ -95,6 +95,7 @@ export function ChangeCalendar(): React.JSX.Element {
     const loadCalendar = async (): Promise<void> => {
       setLoading(true);
       try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const response = await fetchApi(
           `/organizations/${encodeURIComponent(orgName)}/change-calendar?page%5Bsize%5D=20`,
         ) as CalendarPage;
@@ -120,6 +121,7 @@ export function ChangeCalendar(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(orgName)}/change-calendar?page%5Bsize%5D=20&page%5Bnumber%5D=${page}`,
       ) as CalendarPage;

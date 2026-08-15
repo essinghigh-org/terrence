@@ -12,6 +12,7 @@ async function fetchRunSandboxStatus(): Promise<RunSandboxStatus | null> {
   try {
     const response = await fetch("/api/v2/meta", { credentials: "same-origin" });
     if (!response.ok) return null;
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const payload = (await response.json()) as {
       data?: { "run-sandbox"?: RunSandboxStatus };
     };

@@ -107,6 +107,7 @@ export function TokenTTLPolicies(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const organizationResponse = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
       ) as {
@@ -120,6 +121,7 @@ export function TokenTTLPolicies(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/token-ttl-policies`,
       ) as { data: TokenTTLPolicy[] };

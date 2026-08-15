@@ -51,6 +51,7 @@ export function ModuleSharing(): React.JSX.Element {
       // The endpoint is site-admin authority (admin/organizations/...), so gate
       // on the caller's account flag — org-level can-manage-policies is not
       // sufficient and would misrepresent who may use this view.
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const accountResponse = await fetchApi("/api/v2/account/details") as {
         data?: { attributes?: { "is-site-admin"?: boolean } };
       };
@@ -61,6 +62,7 @@ export function ModuleSharing(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
+      // SAFETY: both endpoints return the JSON:API list envelope per contract.
       const [consumersResponse, orgsResponse] = await Promise.all([
         fetchApi(
           `/admin/organizations/${encodeURIComponent(requestedOrganizationName)}/relationships/module-consumers`,
@@ -92,6 +94,7 @@ export function ModuleSharing(): React.JSX.Element {
   // Re-read the current list before applying a change so a concurrent edit
   // elsewhere isn't silently clobbered by the full-list PATCH.
   const patchConsumers = async (mutate: (current: string[]) => string[]): Promise<string[]> => {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const fresh = await fetchApi(
       `/admin/organizations/${encodeURIComponent(orgName)}/relationships/module-consumers`,
     ) as { data: ConsumerResource[] };

@@ -260,6 +260,7 @@ export function TokenScopeDialog({
     if (!open) return;
     setError("");
     void fetchApi("/organizations?page[size]=100").then((response: unknown): void => {
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       const parsed = data
         .map((item): OrgOption => ({
@@ -284,11 +285,13 @@ export function TokenScopeDialog({
     setWorkspaces([]);
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/projects?page[size]=100`).then((response: unknown): void => {
       if (cancelled) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       setProjects(resourceOptions(data));
     }).catch((): void => { /* org may not expose projects */ });
     void fetchApi(`/organizations/${encodeURIComponent(orgName)}/workspaces?page[size]=100`).then((response: unknown): void => {
       if (cancelled) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const data = (response as { data?: { id: string; attributes?: Record<string, unknown> }[] }).data ?? [];
       setWorkspaces(resourceOptions(data));
     }).catch((): void => { /* workspaces may not be listable */ });
@@ -425,6 +428,7 @@ export function TokenScopeDialog({
             }
           : undefined),
       };
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),
@@ -482,7 +486,10 @@ export function TokenScopeDialog({
             aria-label="Combine with"
             className="h-8 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
             value={node.combinator}
-            onChange={(e): void => { setCombinator(path, e.target.value as "AND" | "OR"); }}
+            onChange={(e): void => {
+              // SAFETY: the select options are the two combinators; the change event carries one of them.
+              setCombinator(path, e.target.value as "AND" | "OR");
+            }}
           >
             <option value="AND">AND</option>
             <option value="OR">OR</option>

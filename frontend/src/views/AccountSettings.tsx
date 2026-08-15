@@ -106,6 +106,7 @@ export function AccountSettings(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const details = await fetchApi("/account/details") as { data: Account };
       const me = details.data;
       setAccount(me);
@@ -120,6 +121,7 @@ export function AccountSettings(): React.JSX.Element {
 
       if (!requiresChange) {
         void loadSessions();
+        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
         setTokens(tokensRes.data);
         await loadMfa();
@@ -134,6 +136,7 @@ export function AccountSettings(): React.JSX.Element {
 
   async function loadMfa(): Promise<void> {
     try {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/account/mfa") as { data?: { attributes?: { enabled?: boolean } } };
       setMfaEnabled(response.data?.attributes?.enabled === true);
     } catch (err: unknown) {
@@ -160,6 +163,7 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/account/mfa/enroll", { method: "POST" }) as {
         data: { attributes: { secret: string; "otpauth-url"?: string } };
       };
@@ -217,6 +221,7 @@ export function AccountSettings(): React.JSX.Element {
     setSessionsLoading(true);
     setSessionsError("");
     try {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi("/account/sessions") as { data?: BrowserSession[] };
       setSessions(Array.isArray(response.data) ? response.data : []);
     } catch (err: unknown) {
@@ -233,6 +238,7 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
+      // SAFETY: the endpoint contract returns the updated account envelope.
       const response = await fetchApi("/account/update", {
         method: "PATCH",
         body: JSON.stringify({
@@ -259,6 +265,7 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     setSuccessMsg("");
     try {
+      // SAFETY: the endpoint contract returns the updated account envelope.
       const response = await fetchApi("/account/update", {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { theme: selectedTheme } } }),
@@ -322,6 +329,7 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     setCreatedTokenSecret(typeof created.attributes["token"] === "string" ? created.attributes["token"] : null);
     if (account !== null) {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: Record<string, unknown> }[] };
       setTokens(tokensRes.data);
     }
@@ -819,6 +827,7 @@ export function AccountSettings(): React.JSX.Element {
                           if (isTestEnv) {
                             void handleDeleteToken(token.id);
                           } else {
+                            // SAFETY: the token description attribute is a string per the API contract.
                             setTokenToDelete({ id: token.id, desc: (token.attributes["description"] as string) ?? token.id });
                           }
                         }}

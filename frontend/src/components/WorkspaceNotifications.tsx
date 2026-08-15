@@ -102,6 +102,7 @@ export function WorkspaceNotifications({
     fetchApi(`/workspaces/${workspaceId}/notification-configurations`)
       .then((response: unknown): void => {
         if (!active) return;
+// SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: NotificationConfiguration[] }).data;
         setConfigurations(Array.isArray(data) ? data : []);
       })
@@ -161,6 +162,7 @@ export function WorkspaceNotifications({
     setSaving(true);
     setEditorError("");
     try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(
         editing == null
           ? `/workspaces/${workspaceId}/notification-configurations`
@@ -338,7 +340,14 @@ export function WorkspaceNotifications({
                   id="notification-destination"
                   name="destination-type"
                   value={destinationType}
-                  onValueChange={(value: string): void => { setDestinationType(value as DestinationType); }}
+// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  onValueChange={(value: string): void => {
+
+                    // SAFETY: the change event carries one of the union values the UI renders from the same options.
+
+                    setDestinationType(value as DestinationType);
+
+                  }}
                 >
                   <SelectItem value="generic">Generic webhook</SelectItem>
                   <SelectItem value="slack">Slack</SelectItem>
