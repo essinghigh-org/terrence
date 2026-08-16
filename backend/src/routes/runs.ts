@@ -14,6 +14,7 @@ import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { enqueueAgentApplyJob } from "../lib/agent-jobs";
 import { publish } from "../lib/event-bus";
+import { isPlanIncompleteRunStatus } from "../lib/run-status";
 import { AvatarService } from "../lib/avatars";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -242,6 +243,31 @@ function validateRunInputs(
     ) return invalidRunInput(set, "variables contains an invalid variable value");
   }
   return null;
+}
+
+/**
+ * Persist a run comment and publish `comment.created` so SSE clients can
+ * refresh the comment list without refetching the whole run. All run comment
+ * inserts route through here so the event can never be missed. Returns the
+ * persisted id and timestamp (callers that echo them in a response).
+ */
+async function createRunComment(input: Readonly<{
+  runId: string;
+  userId: string | null;
+  body: string;
+  workspaceId: string;
+  orgId: string;
+}>): Promise<Readonly<{ id: string; createdAt: number }>> {
+  const id = `rc-${crypto.randomUUID()}`;
+  const createdAt = Date.now();
+  await db.insert(runComments).values({ id, runId: input.runId, userId: input.userId, body: input.body, createdAt });
+  publish("comment.created", {
+    "run-id": input.runId,
+    "workspace-id": input.workspaceId,
+    "org-id": input.orgId,
+    "comment-id": id,
+  });
+  return { id, createdAt };
 }
 
 function actionComment(body: unknown): string {
@@ -735,7 +761,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     const commentStr = actionComment(body);
-    if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
+    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     if (agentPoolId !== null) {
       const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
       if (job === undefined) {
@@ -812,7 +838,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     // Match the manual apply action: an optional comment is persisted with
     // the confirmation.
     const commentStr = actionComment(body);
-    if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
+    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     publish("run.status", {
       "run-id": runId,
       "workspace-id": authorized.workspace.id,
@@ -831,7 +857,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
     const commentStr = actionComment(body);
-    if (commentStr !== "") await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: user?.id ?? null, body: commentStr, createdAt: Date.now() });
+    if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
       fromStatus: authorized.run.status,
@@ -961,9 +987,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const textVal = attrs.body ?? payload.body;
     const text = typeof textVal === "string" ? textVal : "";
     if (text === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = `rc-${crypto.randomUUID()}`;
-    const createdAt = Date.now();
-    await db.insert(runComments).values({ id, runId, userId: user?.id ?? null, body: text, createdAt });
+    const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     (set as { status: number }).status = 201;
     return {
       data: {
@@ -997,6 +1021,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) {
+      if (isPlanIncompleteRunStatus(run.status)) {
+        // TFE contract: 204 means "plan JSON supported, but the plan has not
+        // completed yet". The artifact will arrive when planning finishes.
+        (set as { status: number }).status = 204;
+        return null;
+      }
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "Plan JSON output is unavailable" }] };
     }

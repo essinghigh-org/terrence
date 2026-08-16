@@ -99,4 +99,39 @@ describe("authenticated SSE event stream (10.20)", () => {
     expect(streamed).not.toContain("run-sse-foreign");
     expect(streamed).toContain('"run-id":"run-sse-local"');
   });
+
+  it("relays plan.output.ready with run and plan identifiers", async () => {
+    const reader = await openStream(headers);
+
+    publish("plan.output.ready", {
+      "run-id": "run-sse-plan",
+      "workspace-id": "ws-sse-3",
+      "org-id": seed.orgId,
+      "plan-id": "plan-run-sse-plan",
+    });
+    const streamed = await readUntil(reader, "plan.output.ready");
+    expect(streamed).toContain('"run-id":"run-sse-plan"');
+    expect(streamed).toContain('"plan-id":"plan-run-sse-plan"');
+  });
+
+  it("relays comment.created but filters foreign-org comments", async () => {
+    const reader = await openStream(headers);
+
+    publish("comment.created", {
+      "run-id": "run-sse-comment",
+      "workspace-id": "ws-sse-4",
+      "org-id": seed.orgId,
+      "comment-id": "rc-sse-1",
+    });
+    publish("comment.created", {
+      "run-id": "run-sse-comment-foreign",
+      "workspace-id": "ws-sse-foreign-2",
+      "org-id": "org-not-mine",
+      "comment-id": "rc-sse-foreign",
+    });
+    const streamed = await readUntil(reader, "rc-sse-1");
+    expect(streamed).toContain("comment.created");
+    expect(streamed).toContain('"comment-id":"rc-sse-1"');
+    expect(streamed).not.toContain("rc-sse-foreign");
+  });
 });

@@ -16,6 +16,10 @@ type ParamCtx = Readonly<{
 const HEARTBEAT_MS = 15_000;
 const MAX_CONNECTIONS = 50;
 const MAX_CONNECTIONS_PER_USER = 5;
+// Topics relayed to browser streams. Each payload must carry "org-id" (and
+// ideally "workspace-id"/"run-id") so the connect-time permission snapshot
+// can filter it in memory.
+const RELAYED_TOPICS = ["run.status", "plan.output.ready", "comment.created"] as const;
 let activeConnections = 0;
 const activeConnectionsByUser = new Map<string, number>();
 
@@ -92,11 +96,11 @@ export const eventsRoutes = new Elysia({ name: "events" })
     }
 
     // Shared across start()/cancel(): the stream's lifecycle must release
-    // the subscription and the connection slot exactly once from either the
+    // the subscriptions and the connection slot exactly once from either the
     // request abort signal, a client-side reader cancel, an enqueue failure,
     // or the one-hour lifetime cap (permissions are re-resolved on
     // reconnect).
-    let unsubscribe: () => void = (): void => {};
+    let disposeSubscriptions: () => void = (): void => {};
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let cleanup: () => void = (): void => {};
 
@@ -106,7 +110,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
         const baseCleanup = (): void => {
           if (cleanedUp) return;
           cleanedUp = true;
-          unsubscribe();
+          disposeSubscriptions();
           if (heartbeat !== undefined) clearInterval(heartbeat);
           releaseSlot();
           try {
@@ -138,11 +142,25 @@ export const eventsRoutes = new Elysia({ name: "events" })
         };
         enqueue("connected", { heartbeatMs: HEARTBEAT_MS });
 
-        unsubscribe = subscribe("run.status", (payload: Readonly<Record<string, unknown>>): void => {
-          const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
-          if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
-          enqueue("run.status", payload);
-        });
+        // One subscription per relayed topic; all are disposed by the
+        // shared cleanup path so a dead connection can never leak a
+        // listener on the bus.
+        const disposers: Array<() => void> = [];
+        disposeSubscriptions = (): void => {
+          for (const dispose of disposers) dispose();
+          disposers.length = 0;
+        };
+        // The connected frame may already have failed (backpressure) and
+        // run cleanup: registering listeners now would leave them on the
+        // bus forever because cleanup can never run again.
+        if (cleanedUp) return;
+        for (const topic of RELAYED_TOPICS) {
+          disposers.push(subscribe(topic, (payload: Readonly<Record<string, unknown>>): void => {
+            const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
+            if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
+            enqueue(topic, payload);
+          }));
+        }
 
         heartbeat = setInterval((): void => {
           enqueue("ping", { at: new Date().toISOString() });

@@ -1248,6 +1248,14 @@ export async function executeRun(runId: string): Promise<void> {
       : await readPlanJson(executionDir, resolved?.binaryPath);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
+      // The structured plan is persisted: tell SSE clients to fetch it once
+      // instead of polling /json-output while the run is still planning.
+      publish("plan.output.ready", {
+        "run-id": runId,
+        "workspace-id": workspace.id,
+        "org-id": workspace.orgId,
+        "plan-id": `plan-${runId}`,
+      });
       const checks = await storePlanCheckResults(workspace.id, planJson, { runId });
       await writeLog(
         runId,

@@ -76,6 +76,28 @@ export function isTerminalRunStatus(status: string): boolean {
   return TERMINAL_SET.has(status);
 }
 
+/**
+ * Statuses in which the plan has not yet completed. The plan JSON artifact
+ * may still be produced, so a missing artifact is "not ready yet" (TFE
+ * /plans/:id/json-output 204) rather than "never will be" (404).
+ */
+const PLAN_INCOMPLETE_SET: ReadonlySet<RunStatus> = new Set([
+  "pending",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "queuing",
+  "plan_queued",
+  "planning",
+]);
+
+export function isPlanIncompleteRunStatus(status: string): boolean {
+  // SAFETY: the set members are all RunStatus values; any other string just
+  // misses, which is the desired default for unknown statuses.
+  return PLAN_INCOMPLETE_SET.has(status as RunStatus);
+}
+
 const EDGES: Readonly<Record<string, readonly string[]>> = {
   pending: ["fetching", "errored", "canceled", "discarded", "force_canceled", "unreachable"],
   fetching: ["fetching_completed", "errored", "canceled", "discarded", "force_canceled"],
