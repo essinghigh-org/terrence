@@ -611,6 +611,9 @@ export const app = new Elysia()
       pathname === "/api/webhooks/github"
       || pathname === "/api/webhooks/bitbucket"
       || pathname === "/api/v2/webhooks/run-approval"
+      // Agent log chunks are raw stream text (never JSON); a JSON-flavored
+      // content-type would make Elysia consume the stream and drop the body.
+      || /^\/api\/agent\/jobs\/[^/]+\/log$/.test(pathname)
     ) {
       return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
     }

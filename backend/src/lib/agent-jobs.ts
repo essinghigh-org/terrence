@@ -574,6 +574,14 @@ export async function claimAgentJob(agent: Agent): Promise<ClaimedAgentJob | und
   return undefined;
 }
 
+/** ANSI escape sequences: CSI (colors/cursor), OSC (titles/hyperlinks), Fe escapes. */
+const ANSI_ESCAPE_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+
+/** Strip ANSI escape sequences so stored run logs render as plain text. */
+export function stripAnsiEscape(text: string): string {
+  return text.replace(ANSI_ESCAPE_RE, "");
+}
+
 export async function appendAgentJobLog(
   agentId: string,
   jobId: string,
@@ -587,7 +595,7 @@ export async function appendAgentJobLog(
     ),
   });
   if (job === undefined) return false;
-  await insertAgentJobLog(db, job, outputText, Date.now());
+  await insertAgentJobLog(db, job, stripAnsiEscape(outputText), Date.now());
   return true;
 }
 

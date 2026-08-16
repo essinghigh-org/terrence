@@ -44,6 +44,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       agentPools,
       agents,
       configurationVersions,
+      logs,
       organizations,
       runs,
       workspaceVariables,
@@ -229,9 +230,11 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/log\`, {
       method: "PATCH",
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
-      body: "Terraform v1.9.5\\nInitializing...",
+      body: "\\u001b[1m\\u001b[32mTerraform v1.9.5\\u001b[0m\\nInitializing...\\n\\u001b[33mWarning: deprecated\\u001b[0m",
     }));
     out.logPatchStatus = res.status;
+    const storedLog = await db.query.logs.findFirst({ where: eq(logs.runId, "run1") });
+    out.logStoredText = storedLog?.outputText ?? "";
 
     // configuration version download (no archive file yet -> 404)
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/configuration-version\`, {
@@ -331,6 +334,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.redactedPutStatus).toBe(200);
   expect(result.schemasPutStatus).toBe(200);
   expect(result.logPatchStatus).toBe(200);
+  expect(result.logStoredText).toBe("Terraform v1.9.5\nInitializing...\nWarning: deprecated");
   expect(result.completeStatus).toBe(200);
   expect(result.runStatusAfterComplete).toBe("planned");
   expect(result.runHasChanges).toBe(true);
