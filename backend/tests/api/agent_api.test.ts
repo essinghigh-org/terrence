@@ -221,15 +221,24 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     }));
     out.configVersionStatus = res.status;
 
-    // write the CV archive, then it serves
+    // write a VCS-style archive (single top-level repo dir), then it serves
+    // flattened (repo dir stripped)
     const cvDir = join(process.env.TEST_DIR, "storage", "cv");
     await mkdir(cvDir, { recursive: true });
-    await writeFile(join(cvDir, "config-cv1.tar.gz"), "archive-bytes");
+    const vcsDir = join(process.env.TEST_DIR, "vcs-repo");
+    await mkdir(join(vcsDir, "my-repo-abc123"), { recursive: true });
+    await writeFile(join(vcsDir, "my-repo-abc123", "main.tf"), 'output "x" { value = "1" }');
+    const archiveProc = Bun.spawnSync(["tar", "-czf", join(cvDir, "config-cv1.tar.gz"), "-C", vcsDir, "."]);
+    if (archiveProc.exitCode !== 0) throw new Error("tar failed");
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/configuration-version\`, {
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id },
     }));
     out.configVersionServedStatus = res.status;
-    out.configVersionBytes = await res.text();
+    const flattenedDir = join(process.env.TEST_DIR, "flattened-check");
+    await mkdir(flattenedDir, { recursive: true });
+    await writeFile(join(process.env.TEST_DIR, "served-archive.tar.gz"), Buffer.from(await res.arrayBuffer()));
+    const listProc = Bun.spawnSync(["tar", "-tzf", join(process.env.TEST_DIR, "served-archive.tar.gz")]);
+    out.configVersionMembers = listProc.stdout.toString();
 
     // filesystem round-trip
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/filesystem\`, {
@@ -308,7 +317,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.jobStatusAfterComplete).toBe("completed");
   expect(result.configVersionStatus).toBe(404);
   expect(result.configVersionServedStatus).toBe(200);
-  expect(result.configVersionBytes).toBe("archive-bytes");
+  expect(result.configVersionMembers).toContain("./main.tf");
+  expect(result.configVersionMembers).not.toContain("my-repo-abc123/");
   expect(result.fsPutStatus).toBe(200);
   expect(result.fsGetStatus).toBe(200);
   expect(result.fsGetBytes).toBe("fs-archive-bytes");

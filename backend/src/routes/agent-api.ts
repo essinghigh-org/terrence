@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
@@ -129,7 +129,7 @@ function sideArtifactPath(runId: string, kind: string, ext: string): string {
 }
 
 async function configurationArchivePath(cvId: string): Promise<string> {
-  // VCS-ingested archives live under configuration_versions/cv-<id>.tar.gz;
+  // VCS-ingested archives live under configuration_versions/<cvId>.tar.gz;
   // API-uploaded archives under cv/config-<id>.tar.gz. Check both.
   const root = storageRoot();
   const candidates = [
@@ -148,6 +148,47 @@ async function configurationArchivePath(cvId: string): Promise<string> {
     }
   }
   return candidates[0] ?? join(root, "cv", `config-${cvId}.tar.gz`);
+}
+
+/**
+ * The tfc-agent expects a flat source bundle (TFC slugs are flat). VCS
+ * archives carry a top-level repo directory (git archive layout), so flatten
+ * the archive once and cache it under storage/agent-cv/<cvId>.tar.gz.
+ */
+async function flattenedConfigurationArchive(cvId: string): Promise<string> {
+  const cacheDir = join(storageRoot(), "agent-cv");
+  const cached = join(cacheDir, `${cvId}.tar.gz`);
+  try {
+    await readFile(cached);
+    return cached;
+  } catch {
+    // not cached yet
+  }
+  const source = await configurationArchivePath(cvId);
+  const tmp = await mkdtemp(join(storageRoot(), ".agent-cv-"));
+  try {
+    const extract = Bun.spawnSync(["tar", "-xzf", source, "-C", tmp]);
+    if (extract.exitCode !== 0) throw new Error("tar extract failed");
+    const entries = await readdir(tmp, { withFileTypes: true });
+    const hasTfInRoot = entries.some(
+      (e): boolean => e.isFile() && (e.name.endsWith(".tf") || e.name.endsWith(".tf.json")),
+    );
+    const singleDir = entries.length === 1 && entries[0] !== undefined && entries[0].isDirectory() ? entries[0] : null;
+    if (!hasTfInRoot && singleDir !== null) {
+      // Move the single top-level directory's contents up (git archive layout).
+      const inner = join(tmp, singleDir.name);
+      for (const entry of await readdir(inner)) {
+        await rename(join(inner, entry), join(tmp, entry));
+      }
+      await rm(inner, { recursive: true, force: true });
+    }
+    await mkdir(cacheDir, { recursive: true });
+    const pack = Bun.spawnSync(["tar", "-czf", cached, "-C", tmp, "."]);
+    if (pack.exitCode !== 0) throw new Error("tar pack failed");
+    return cached;
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -338,7 +379,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     try {
-      const data = await readFile(await configurationArchivePath(cvId));
+      const data = await readFile(await flattenedConfigurationArchive(cvId));
       set.headers = { "content-type": "application/gzip", "content-length": String(data.byteLength) };
       return new Response(data);
     } catch {
