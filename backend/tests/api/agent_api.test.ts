@@ -146,7 +146,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-accept": "plan,apply" },
     }));
     out.claimStatus = res.status;
-    const job = (await res.json()).data;
+    const job = await res.json();
     out.jobType = job.type;
     out.jobId = job.job_id;
     out.operation = job.data.operation;
@@ -169,7 +169,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-accept": "plan,apply" },
     }));
     out.secondClaimStatus = res.status;
-    out.secondClaimJobId = (await res.json()).data.job_id;
+    out.secondClaimJobId = (await res.json()).job_id;
 
     // run is now planning
     const runAfterClaim = await db.query.runs.findFirst({ where: eq(runs.id, "run1") });
@@ -352,7 +352,7 @@ test("modern agent protocol: errored completion and apply job payload", async ()
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs\`, {
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-accept": "plan,apply" },
     }));
-    const job = (await res.json()).data;
+    const job = await res.json();
     out.applyContainerAbsent = job.apply === undefined;
     out.planContainerPresent = job.plan !== undefined;
 
