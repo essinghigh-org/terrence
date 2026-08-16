@@ -153,6 +153,9 @@ export async function buildAgentJobPayload(
     operation: phase,
     plan_id: run.id,
     run_id: run.id,
+    // The binary the agent must execute for this job. tfc-agent ignores it
+    // and always runs terraform; terrence-agent uses it to pick tofu.
+    iac_binary: job.iacBinary,
     working_directory: workspace.workingDirectory ?? "",
     parallelism: 10,
     configuration_version_url: configurationUrl,

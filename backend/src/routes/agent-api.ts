@@ -222,6 +222,22 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const name = typeof body.name === "string" && body.name !== "" ? body.name : "agent";
     const arch = typeof body.arch === "string" ? body.arch : null;
     const version = ctx.request.headers.get("tfc-agent-version");
+    // tfc-agent never sends iac-binaries; terrence-agent declares it so the
+    // claim path only hands it matching jobs. Absent means terraform-only,
+    // preserving the pre-capability contract.
+    let iacBinaries: string[] = ["terraform"];
+    if (body.iac_binaries !== undefined) {
+      if (
+        !Array.isArray(body.iac_binaries)
+        || body.iac_binaries.length === 0
+        || body.iac_binaries.some((binary: unknown): boolean =>
+          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+      ) {
+        set.status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
+      }
+      iacBinaries = [...new Set(body.iac_binaries as string[])];
+    }
 
     const now = Date.now();
     const existing = await db.query.agents.findFirst({
@@ -233,6 +249,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       await db.update(agents).set({
         architecture: arch,
         version,
+        iacBinaries,
         status: "idle",
         lastPingAt: now,
       }).where(eq(agents.id, existing.id));
@@ -244,6 +261,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         name,
         architecture: arch,
         version,
+        iacBinaries,
         status: "idle",
         lastPingAt: now,
       });

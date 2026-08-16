@@ -135,6 +135,14 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const reg2 = await res.json();
     out.upsertSameId = reg2.id === reg.id;
 
+    // register with bad iac-binaries -> 422
+    res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
+      method: "POST",
+      headers: { authorization: \`Bearer \${agentToken}\`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "bad-cap", iac_binaries: ["ansible"] }),
+    }));
+    out.badIacStatus = res.status;
+
     // register with bad token -> 401
     res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
       method: "POST",
@@ -169,6 +177,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     out.jobId = job.job_id;
     out.operation = job.data.operation;
     out.runId = job.data.run_id;
+    out.iacBinary = job.data.iac_binary;
     out.workspaceName = job.data.workspace_name;
     out.organizationName = job.data.organization_name;
     out.workingDirectory = job.data.working_directory;
@@ -300,6 +309,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   `);
 
   expect(result.registerStatus).toBe(200);
+  expect(result.badIacStatus).toBe(422);
   expect(result.agentId).toContain("agent-");
   expect(result.agentPoolId).toBe("apool");
   expect(result.upsertSameId).toBe(true);
@@ -311,6 +321,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.jobType).toBe("plan");
   expect(result.jobId).toBe("ajob1");
   expect(result.operation).toBe("plan");
+  expect(result.iacBinary).toBe("terraform");
   expect(result.runId).toBe("run1");
   expect(result.workspaceName).toBe("ws");
   expect(result.organizationName).toBe("org");
