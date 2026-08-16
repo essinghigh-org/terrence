@@ -133,7 +133,10 @@ async function configurationArchivePath(cvId: string): Promise<string> {
   // API-uploaded archives under cv/config-<id>.tar.gz. Check both.
   const root = storageRoot();
   const candidates = [
-    join(root, "configuration_versions", `cv-${cvId}.tar.gz`),
+    // VCS-ingested archives: configuration_versions/<cvId>.tar.gz (the id
+    // already carries the cv- prefix).
+    join(root, "configuration_versions", `${cvId}.tar.gz`),
+    // API-uploaded archives: cv/config-<cvId>.tar.gz.
     join(root, "cv", `config-${cvId}.tar.gz`),
   ];
   for (const candidate of candidates) {
