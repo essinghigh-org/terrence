@@ -27,11 +27,11 @@
 # terraform-config-inspect is feature-complete but does not publish release
 # binaries, so build the pinned upstream revision once and keep Go out of the
 # runtime image.
-FROM golang:1.26-bookworm AS config-inspect-builder
+FROM golang:1.26-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS config-inspect-builder
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
 
 # ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
-FROM oven/bun:1 AS builder
+FROM oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS builder
 WORKDIR /app
 
 # Copy the entire monorepo
