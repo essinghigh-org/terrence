@@ -96,6 +96,7 @@ COPY backend/drizzle.config.ts ./backend/
 COPY backend/drizzle ./backend/drizzle
 COPY backend/index.ts ./backend/
 COPY backend/src ./backend/src
+COPY backend/docs ./backend/docs
 
 # landlock-runner is compiled to a static glibc binary in the builder stage.
 COPY --from=builder /app/backend/bin/landlock-runner ./backend/bin/landlock-runner
