@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Button } from "./ui/button";
 
 /**
@@ -36,16 +37,24 @@ export function EmptyState(props: Readonly<{
               {actionLabel}
             </Button>
           )}
-          {docsHref !== undefined && (
-            <a
-              href={docsHref}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-            >
-              Read the docs
-            </a>
-          )}
+          {docsHref !== undefined &&
+            (docsHref.startsWith("/app/") ? (
+              <Link
+                to={docsHref}
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Read the docs
+              </Link>
+            ) : (
+              <a
+                href={docsHref}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Read the docs
+              </a>
+            ))}
         </div>
       )}
     </div>

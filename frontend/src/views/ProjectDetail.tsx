@@ -444,7 +444,7 @@ export function ProjectDetail({
                     compact
                     title="No workspaces in this project yet"
                     description="Create a workspace in this project to manage its infrastructure."
-                    docsHref="https://developer.hashicorp.com/terraform/cloud-docs/workspaces"
+                    docsHref="/app/docs/workspaces"
                   />
                 ) : (
                   <Table>
@@ -506,7 +506,7 @@ export function ProjectDetail({
                   compact
                   title="No workspaces in this project yet"
                   description="Create a workspace in this project to manage its infrastructure."
-                  docsHref="https://developer.hashicorp.com/terraform/cloud-docs/workspaces"
+                  docsHref="/app/docs/workspaces"
                 />
               ) : (
                 <Table>

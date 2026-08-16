@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { render } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { EmptyState } from "../src/components/EmptyState";
 
 describe("EmptyState (kanban 14.11)", () => {
@@ -40,5 +41,16 @@ describe("EmptyState (kanban 14.11)", () => {
     const link = getByText("Read the docs");
     expect(link.getAttribute("href")).toBe("https://example.com/docs/runs");
     expect(link.getAttribute("target")).toBe("_blank");
+  });
+
+  it("renders internal docs links as in-app navigation", () => {
+    const { getByText } = render(
+      <MemoryRouter>
+        <EmptyState title="No runs yet" docsHref="/app/docs/runs" />
+      </MemoryRouter>,
+    );
+    const link = getByText("Read the docs");
+    expect(link.getAttribute("href")).toBe("/app/docs/runs");
+    expect(link.getAttribute("target")).toBeNull();
   });
 });

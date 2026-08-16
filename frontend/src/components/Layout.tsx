@@ -24,6 +24,7 @@ import {
   KeyRound,
   Keyboard,
   LayoutDashboard,
+  LifeBuoy,
   ListChecks,
   ListTodo,
   Lock,
@@ -1296,19 +1297,22 @@ export function Layout({
                     Keyboard shortcuts (?)
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  {[
-                    ["Documentation", "https://developer.hashicorp.com/terraform/cloud-docs"],
-                    ["Tutorials", "https://developer.hashicorp.com/terraform/tutorials/cloud"],
-                    ["Support", "https://support.hashicorp.com/"],
-                    ["Status", "https://status.hashicorp.com/"],
-                  ].map(([label, href]): JSX.Element => (
-                    <DropdownMenuItem
-                      key={href}
-                      render={<a href={href} target="_blank" rel="noreferrer" />}
-                    >
-                      {label}
-                    </DropdownMenuItem>
-                  ))}
+                  <DropdownMenuItem onClick={() => { navigate("/app/docs"); }}>
+                    <BookOpen className="mr-2 size-4 text-muted-foreground" />
+                    Documentation
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    render={(
+                      <a
+                        href="https://github.com/essinghigh-org/terrence/issues"
+                        target="_blank"
+                        rel="noreferrer"
+                      />
+                    )}
+                  >
+                    <LifeBuoy className="mr-2 size-4 text-muted-foreground" />
+                    Support
+                  </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>

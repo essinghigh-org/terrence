@@ -675,7 +675,7 @@ export function Workspaces(): React.JSX.Element {
                       : canManageWorkspaces
                         ? "Create your first workspace to get started."
                         : "No workspaces are available in this organization."}
-                    {...(!hasFilters ? { docsHref: "https://developer.hashicorp.com/terraform/cloud-docs/workspaces" } : {})}
+                    {...(!hasFilters ? { docsHref: "/app/docs/workspaces" } : {})}
                   />
                 </TableCell>
               </TableRow>

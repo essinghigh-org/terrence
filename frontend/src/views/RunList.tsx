@@ -467,7 +467,7 @@ export function RunList({
               ? "There is no run history for this workspace."
               : "There is no run history for this workspace, and you do not have permission to start one."}
             {...(canStartRun ? { actionLabel: "Start new run", onAction: openNewRunDialog } : {})}
-            docsHref="https://developer.hashicorp.com/terraform/cloud-docs/run"
+            docsHref="/app/docs/runs"
           />
         ) : filteredRuns.length === 0 ? (
           <EmptyState

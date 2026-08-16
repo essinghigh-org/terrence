@@ -73,11 +73,13 @@ test("uses a persisted, route-aware workspace settings sidebar", async () => {
     .toBe("/app/acme/workspaces/production/settings/delete");
   fireEvent.click(view.getByRole("button", { name: "Help and support" }));
   await waitFor((): void => {
-    expect(view.getByRole("menuitem", { name: "Documentation" }).getAttribute("target"))
+    expect(view.getByRole("menuitem", { name: "Documentation" })).toBeTruthy();
+    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("href"))
+      .toBe("https://github.com/essinghigh-org/terrence/issues");
+    expect(view.getByRole("menuitem", { name: "Support" }).getAttribute("target"))
       .toBe("_blank");
-    expect(view.getByRole("menuitem", { name: "Tutorials" })).toBeTruthy();
-    expect(view.getByRole("menuitem", { name: "Support" })).toBeTruthy();
-    expect(view.getByRole("menuitem", { name: "Status" })).toBeTruthy();
+    expect(view.queryByRole("menuitem", { name: "Tutorials" })).toBeNull();
+    expect(view.queryByRole("menuitem", { name: "Status" })).toBeNull();
   });
 
   const collapse = view.getByRole("button", { name: "Collapse sidebar" });
