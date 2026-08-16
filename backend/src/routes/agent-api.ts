@@ -194,6 +194,18 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+/** Parse a JSON state string carried by a modern agent completion. */
+function jsonStringOrNull(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length > MAX_AGENT_BODY_BYTES) return undefined;
+  try {
+    JSON.parse(value);
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 async function jsonBody(ctx: AgentCtx): Promise<Record<string, unknown> | undefined> {
   return jsonBodyValue(ctx);
 }
@@ -315,14 +327,21 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
             if (jobData[key] !== undefined) result[key] = jobData[key];
           }
         }
+        const statePayload = jsonStringOrNull(jobData?.state);
+        const jsonState = jsonStringOrNull(jobData?.json_state);
+        const jsonStateOutputs = jsonStringOrNull(jobData?.json_state_outputs);
+        if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
+          set.status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
+        }
         const completion: AgentJobCompletion = {
           status: jobStatus === "finished" ? "completed" : "errored",
           errorMessage,
           result,
           planJson: null,
-          statePayload: null,
-          jsonState: null,
-          jsonStateOutputs: null,
+          statePayload,
+          jsonState,
+          jsonStateOutputs,
           resourceAdditions: numberOrNull(result.resource_additions),
           resourceChanges: numberOrNull(result.resource_changes),
           resourceDestructions: numberOrNull(result.resource_destructions),

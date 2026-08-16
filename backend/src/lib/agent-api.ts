@@ -179,6 +179,12 @@ export async function buildAgentJobPayload(
     current_operation: phase,
     terraform_version: terraformInfo.version,
     variables: terraformVariables,
+    parallelism: 10,
+    destroy: isDestroy,
+    refresh_only: run.refreshOnly === true,
+    target_addrs: run.targetAddrs ?? [],
+    replace_addrs: run.replaceAddrs ?? [],
+    api_address: baseUrl,
     tfvars: {},
   };
 
