@@ -19,6 +19,7 @@ import {
 import { writePlanJsonArtifact } from "../lib/plan-json";
 import {
   agentApiBaseUrl,
+  agentEnvironment,
   agentFilesystemPath,
   agentRunToken,
   agentTerraformVariables,
@@ -295,12 +296,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "503", title: "Service Unavailable", detail: "Unable to resolve Terraform release" }] };
     }
     const variables = await agentTerraformVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
+    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
     const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
     // The agent decodes `type`, `job_id` and the per-phase container from the
     // response top level; `data` is the run attribute map. (Verified against
     // tfc-agent 1.30.1: a payload nested under a single `data` key decodes
     // with an empty job type and is not dispatchable.)
-    return buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, variables);
+    return buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, variables, environment);
   })
 
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------

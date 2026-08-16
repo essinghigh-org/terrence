@@ -139,6 +139,7 @@ export async function buildAgentJobPayload(
   runToken: string,
   terraformInfo: { version: string; url: string; checksum: string },
   terraformVariables: Record<string, string>,
+  environment: Record<string, string>,
 ): Promise<Record<string, unknown>> {
   const { job, run, workspace, organizationName } = details;
   const phase = job.phase;
@@ -165,6 +166,10 @@ export async function buildAgentJobPayload(
     sanitized_plan_url: `${baseUrl}${jobPath}/plan-json-sanitized`,
     token: runToken,
     timeout: "1h",
+    // Process environment for the agent's terraform invocation (env-category
+    // workspace variables, e.g. TFE_TOKEN). Verified against tfc-agent
+    // 1.30.1: data.environment is a map applied to the run environment.
+    environment,
   };
 
   const commonContainer: Record<string, unknown> = {
@@ -224,6 +229,21 @@ export async function agentTerraformVariables(
   for (const variable of variables) {
     if (variable.category !== "terraform") continue;
     out[variable.key] = variable.hcl === true ? variable.value : JSON.stringify(variable.value);
+  }
+  return out;
+}
+
+/** Resolve env-category variables for the agent run's process environment. */
+export async function agentEnvironment(
+  workspaceId: string,
+  orgId: string,
+  projectId: string | null,
+): Promise<Record<string, string>> {
+  const variables = await executionVariables(workspaceId, orgId, projectId);
+  const out: Record<string, string> = {};
+  for (const variable of variables) {
+    if (variable.category !== "env") continue;
+    out[variable.key] = variable.value;
   }
   return out;
 }
