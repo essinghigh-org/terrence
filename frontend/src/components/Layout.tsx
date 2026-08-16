@@ -1,4 +1,4 @@
-import { createElement, useEffect, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 import {
   Link,
   matchPath,
@@ -14,7 +14,6 @@ import {
   Box,
   Building2,
   ChevronDown,
-  ChevronRight,
   Database,
   FolderGit2,
   GitBranch,
@@ -56,7 +55,6 @@ import {
   SlidersHorizontal,
   UserCog,
   Share2,
-  type LucideIcon,
 } from "lucide-react";
 
 import {
@@ -77,7 +75,9 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button, buttonVariants } from "./ui/button";
 import { CommandPalette } from "./CommandPalette";
+import { DocsSidebarNav } from "./DocsSidebarNav";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
+import { SidebarNavLink } from "./SidebarNavLink";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
@@ -85,6 +85,7 @@ import { setLastOrganization } from "../lib/lastOrganization";
 import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
+import { useDocsIndex } from "../lib/docs-index";
 import { isString } from "../lib/type-guards";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
@@ -104,16 +105,6 @@ type OrganizationPermissions = Readonly<{
   "can-manage-policies"?: boolean;
   "can-read-policies"?: boolean;
   "can-manage-modules"?: boolean;
-}>;
-
-type SidebarNavLinkProps = Readonly<{
-  active: boolean;
-  collapsed: boolean;
-  icon: LucideIcon;
-  label: string;
-  onNavigate: () => void;
-  to: string;
-  trailing?: boolean;
 }>;
 
 function readSidebarCollapsed(): boolean {
@@ -147,43 +138,6 @@ function isActivePath(pathname: string, path: string, exact = false): boolean {
     : pathname === path || pathname.startsWith(`${path}/`);
 }
 
-function SidebarNavLink({
-  active,
-  collapsed,
-  icon,
-  label,
-  onNavigate,
-  to,
-  trailing = false,
-}: SidebarNavLinkProps): JSX.Element {
-  return (
-    <Link
-      to={to}
-      onClick={onNavigate}
-      aria-current={active ? "page" : undefined}
-      title={collapsed ? label : undefined}
-      className={cn(
-        "group flex min-h-9 items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
-      )}
-    >
-      {createElement(icon, {
-        "aria-hidden": true,
-        className: "size-4 shrink-0",
-      })}
-      <span className={cn("truncate", collapsed && "lg:sr-only")}>{label}</span>
-      {trailing && (
-        <ChevronRight
-          aria-hidden="true"
-          className={cn("ml-auto size-4", collapsed && "lg:hidden")}
-        />
-      )}
-    </Link>
-  );
-}
-
 export function Layout({
   children,
 }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
@@ -208,6 +162,7 @@ export function Layout({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [visitsRevision, setVisitsRevision] = useState(0);
+  const docsIndex = useDocsIndex();
 
   useEffect(() => {
     applyTheme();
@@ -317,6 +272,14 @@ export function Layout({
   const inAccountSettings = location.pathname === "/app/account";
   const inSiteAdministration =
     location.pathname === "/app/admin" || location.pathname.startsWith("/app/admin/");
+  const inDocs =
+    location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/");
+  // The docs sidebar mirrors the view's default: the first document of the
+  // index is highlighted when the route has no slug yet.
+  const docsSlug = inDocs && location.pathname.startsWith("/app/docs/")
+    ? readableRouteParam(location.pathname.slice("/app/docs/".length).split("/")[0]) || undefined
+    : undefined;
+  const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
 
   // Remember the last organization the operator worked in so a fresh page
@@ -1125,6 +1088,17 @@ export function Layout({
       );
     }
 
+    if (inDocs) {
+      return (
+        <DocsSidebarNav
+          index={docsIndex.index}
+          selectedSlug={selectedDocsSlug}
+          collapsed={sidebarCollapsed}
+          onNavigate={closeMobileNavigation}
+        />
+      );
+    }
+
     return (
       <>
         <SidebarNavLink
@@ -1134,14 +1108,6 @@ export function Layout({
           label="Organizations"
           onNavigate={closeMobileNavigation}
           to="/app"
-        />
-        <SidebarNavLink
-          active={location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/")}
-          collapsed={sidebarCollapsed}
-          icon={BookOpen}
-          label="Documentation"
-          onNavigate={closeMobileNavigation}
-          to="/app/docs"
         />
       </>
     );
