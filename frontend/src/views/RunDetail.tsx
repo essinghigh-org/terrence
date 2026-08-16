@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -21,6 +21,8 @@ import { PlanOutput, type PlanOutputSummary } from "../components/PlanOutput";
 import { MarkdownContent } from "../components/MarkdownContent";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { DegradedBanner } from "../components/DegradedBanner";
+import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
+import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -1147,6 +1149,18 @@ export function RunDetail({
     "You have an unsaved comment draft. Are you sure you want to leave this page?",
   );
 
+  // Terraform warnings embedded in the phase logs surface as amber bubbles;
+  // they do not affect run or phase status. Declared before the early
+  // returns so the hook count stays stable across loading states.
+  const planWarnings = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(planLogs).filter((diag) => diag.severity === "warning"),
+    [planLogs],
+  );
+  const applyWarnings = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs).filter((diag) => diag.severity === "warning"),
+    [applyLogs],
+  );
+
   if (run !== null && run.id !== runId) return <div className="p-8 text-muted-foreground">Loading run…</div>;
   if (loading && run === null) return (
     <div role="status" aria-label="Loading run" className="flex flex-col gap-5">
@@ -1675,6 +1689,10 @@ export function RunDetail({
               onSummaryChange={handlePlanSummaryChange}
             />
 
+            {planWarnings.length > 0 && (
+              <DiagnosticsBanner severity="warning" diagnostics={planWarnings} />
+            )}
+
             <details
               className="group border-t border-border"
             >
@@ -1915,6 +1933,10 @@ export function RunDetail({
                 applyStatus={applyStatus}
                 applyLogs={applyLogs}
               />
+            )}
+
+            {applyWarnings.length > 0 && (
+              <DiagnosticsBanner severity="warning" diagnostics={applyWarnings} />
             )}
 
             {["errored", "unreachable"].includes(applyStatus) && (
