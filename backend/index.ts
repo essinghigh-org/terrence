@@ -2,6 +2,7 @@ import { app } from "./src/app";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
+import { reconcileInterruptedLocalRuns, stopWorkerQueue, waitForWorkerDrain } from "./src/worker";
 
 const rawPort = process.env.PORT;
 const port = rawPort !== undefined && rawPort !== "" ? Number(rawPort) : 3000;
@@ -22,6 +23,25 @@ if (isPostgres) {
   await applyPgMigrations();
 }
 
+// Startup reconciliation: local runs interrupted by a previous crash or
+// restart (SIGKILL, power loss) keep transient statuses that block their
+// workspace queues forever. Pre-execution states are requeued; anything that
+// may have had side effects (planning, applying) is errored and never
+// replayed. Agent-mode runs are left to recoverStaleAgentJobs.
+try {
+  const reconciled = await reconcileInterruptedLocalRuns();
+  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0) {
+    console.log(
+      `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, `
+      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored`,
+    );
+  }
+} catch (error: unknown) {
+  // A DB hiccup at boot must not take the whole instance down; the next
+  // restart reconciles again (the pass is idempotent).
+  console.error("[terrence] Startup reconciliation failed; runs from before the restart may still be blocked", error);
+}
+
 app
   .listen({
     port,
@@ -34,15 +54,35 @@ console.log(
   `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`
 );
 
+if (isPostgres) {
+  // PostgreSQL makes a multi-replica deployment look plausible (shared DB),
+  // but the event bus, the worker queue, and the run sandbox are all
+  // in-process. Warn loudly so nobody mistakes Postgres for HA.
+  console.warn(
+    "[terrence] Multiple control-plane replicas are not currently supported. "
+    + "Run exactly one Terrence control-plane instance; remote agent pools may be scaled independently.",
+  );
+}
+
 // Graceful shutdown: Docker/systemd send SIGTERM; a WAL checkpoint here
 // means the main DB file is complete the moment the process exits, so a
 // backup taken right after stop never misses -wal tail pages (kanban 4.17).
+// Order matters: stop claiming NEW work first (drain flag), stop HTTP, wait
+// for in-flight local executions up to a bounded grace, then checkpoint.
 import { checkpointWal } from "./src/db";
 
 async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
-  console.log(`[terrence] ${signal} received; stopping server and checkpointing WAL before shutdown`);
+  console.log(`[terrence] ${signal} received; draining worker, stopping server, checkpointing WAL before shutdown`);
+  stopWorkerQueue();
   let checkpointFailed = false;
   try {
+    const drainGraceMs = ((): number => {
+      const raw = process.env.TERRENCE_DRAIN_GRACE_MS;
+      if (raw === undefined || raw === "") return 6000;
+      const parsed = Number(raw);
+      return Number.isSafeInteger(parsed) && parsed >= 0 ? Math.min(parsed, 25_000) : 6000;
+    })();
+    const drain = waitForWorkerDrain(drainGraceMs);
     const server = app.server;
     if (server !== null && server !== undefined) {
       // Stop accepting new connections and wait for in-flight handlers so the
@@ -60,6 +100,13 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
         console.warn("[terrence] Graceful stop timed out; forcing connection close");
         await server.stop(true);
       }
+    }
+    // Wait for local Terraform/OpenTofu executions to finish so the
+    // checkpoint cannot race a run writing its result. On timeout the
+    // process exits anyway; startup reconciliation repairs the aftermath.
+    const drained = await drain;
+    if (!drained) {
+      console.warn("[terrence] Worker drain deadline exceeded; in-flight executions will be terminated by exit");
     }
     checkpointWal();
   } catch (error: unknown) {

@@ -10,6 +10,7 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-poli
 import { createHash } from "node:crypto";
 import type { ParamCtx } from "./types";
 import { type UserItem, adminUserResource } from "./helpers";
+import { publish } from "../../lib/event-bus";
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -104,6 +105,9 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(users).where(eq(users.id, userId));
+    // Close the user's event streams; the browser session's token is dead
+    // with the user row, but the open SSE connection would otherwise linger.
+    publish("authz.changed", { "user-id": userId });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -115,6 +119,9 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
     await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+    // A suspended user must lose live event access immediately, not after
+    // the SSE connection's one-hour permission-snapshot lifetime.
+    publish("authz.changed", { "user-id": userId });
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     return { data: adminUserResource(updated) };
@@ -148,6 +155,10 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.isSiteAdmin !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site admin" }] }; }
     await db.update(users).set({ isSiteAdmin: false }).where(eq(users.id, userId));
+    // A demoted admin's SSE snapshot grants every org (allowedOrgIds = null);
+    // close the stream so they re-resolve memberships immediately instead of
+    // keeping all-org event delivery for the one-hour lifetime cap.
+    publish("authz.changed", { "user-id": userId });
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     return { data: adminUserResource(updated) };

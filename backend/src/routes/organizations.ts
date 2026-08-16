@@ -9,6 +9,7 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { invalidateOrganizationName } from "../lib/metadata-cache";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { publish } from "../lib/event-bus";
 import { getSiteCapabilities } from "../lib/settings";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -590,6 +591,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     for (const workspace of organizationWorkspaces) {
       await deleteWorkspaceData(workspace.id);
     }
+    const membershipsToClose = await db.query.organizationMemberships.findMany({
+      where: eq(organizationMemberships.orgId, org.id),
+      columns: { userId: true },
+    });
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       const orgWsList = await t.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id) });
@@ -612,6 +617,12 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       await t.delete(organizations).where(eq(organizations.id, org.id));
     });
     invalidateOrganizationName(org.id);
+    // Members lose the org in one shot; close their event streams so their
+    // permission snapshot cannot keep the org's metadata for an hour. The
+    // member list is captured BEFORE the delete above, which removes it.
+    for (const userId of new Set(membershipsToClose.map((mem): string => mem.userId))) {
+      publish("authz.changed", { "user-id": userId, "org-id": org.id });
+    }
     (set as { status: number }).status = 204;
     return {};
   })

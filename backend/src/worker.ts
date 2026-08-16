@@ -1000,7 +1000,12 @@ async function waitForVcsConfigurationDownload(
   return current;
 }
 
-export async function executeRun(runId: string): Promise<void> {
+/** Tracked wrapper: shutdown drain waits for in-flight run executions. */
+export function executeRun(runId: string): Promise<void> {
+  return trackLocalExecution(executeRunImpl(runId));
+}
+
+async function executeRunImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
@@ -1449,7 +1454,12 @@ async function finalizeNoCodeUpgrade(
   });
 }
 
-export async function executeApply(runId: string): Promise<void> {
+/** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
+export function executeApply(runId: string): Promise<void> {
+  return trackLocalExecution(executeApplyImpl(runId));
+}
+
+async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
@@ -1933,6 +1943,7 @@ function autoDestroyDurationMs(value: string | null): number | undefined {
 
 export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
   const [allWorkspaces, allRuns, finalizedStates, configurations] = await Promise.all([
     db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
     db.query.runs.findMany({ orderBy: [desc(runs.createdAt)] }),
@@ -2004,6 +2015,7 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
 
 export async function enqueueDueAssessments(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
   // ponytail: a per-workspace scan is sufficient for a homelab scheduler; use one ranked SQL query if scale demands it.
   const [allWorkspaces, allOrganizations] = await Promise.all([
     db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
@@ -2094,7 +2106,12 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
   return enqueued;
 }
 
-async function executeAssessment(assessmentResultId: string): Promise<void> {
+/** Tracked wrapper: shutdown drain waits for in-flight assessments. */
+function executeAssessment(assessmentResultId: string): Promise<void> {
+  return trackLocalExecution(executeAssessmentImpl(assessmentResultId));
+}
+
+async function executeAssessmentImpl(assessmentResultId: string): Promise<void> {
   assertRunSandboxAvailable();
   const assessment = await db.query.assessmentResults.findFirst({
     where: eq(assessmentResults.id, assessmentResultId),
@@ -2347,6 +2364,7 @@ function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise<T>): 
 export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
   const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
@@ -2384,6 +2402,7 @@ let isWorkerLoopRunning = false;
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
   if (isStorageDegraded()) return [];
   await recoverStaleAgentJobs();
   // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
@@ -2562,6 +2581,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
  */
 export async function applyDueScheduledRuns(): Promise<string[]> {
   if (isMaintenanceActive()) return [];
+  if (workerQueueDraining()) return [];
   if (isStorageDegraded()) return [];
   const now = Date.now();
   const dueRuns = await db.query.runs.findMany({
@@ -2667,18 +2687,102 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
 const scheduledBlockReasons = new Map<string, string>();
 
 /**
- * Worker queue poll interval. The queue loop (startWorkerQueue) claims
- * pending runs and drains assessment/auto-destroy queues on this cadence.
- * Configurable for low-power homelab installs that want a gentler query
- * load; invalid, empty, or sub-100ms values fall back to 1500ms so a
- * misconfiguration cannot hot-loop the DB (kanban 3.7).
+ * Parse a poll-interval override. Invalid, empty, or sub-minimum values
+ * fall back to the default so a misconfiguration cannot hot-loop the DB
+ * (kanban 3.7 pattern).
  */
-const WORKER_POLL_INTERVAL_MS = ((): number => {
-  const raw = process.env.TERRENCE_WORKER_POLL_MS;
-  if (raw === undefined || raw === "") return 1500;
+function pollIntervalMs(raw: string | undefined, fallback: number, minimum: number): number {
+  if (raw === undefined || raw === "") return fallback;
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 100 ? parsed : 1500;
-})();
+  return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
+}
+
+/**
+ * Run queue poll interval (startWorkerQueue claims pending runs and drains
+ * the apply schedule on this cadence). Configurable for low-power homelab
+ * installs that want a gentler query load.
+ */
+const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_WORKER_POLL_MS, 1500, 100);
+
+/**
+ * Auto-destroy scan cadence, independent of the run-queue poll. The sweep
+ * reads all workspaces/runs/finalized states/configurations, so it only
+ * makes sense to run it while auto-destroy matters (default 30s, scratch
+ * review: full-table sweep per 1.5s tick is O(all history) even with zero
+ * workspaces using auto-destroy).
+ */
+const AUTO_DESTROY_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_AUTO_DESTROY_POLL_MS, 30_000, 5_000);
+
+/**
+ * Health-assessment discovery cadence. Assessments become due in minutes to
+ * days; discovering them every 1.5s reloads every workspace and organization
+ * for nothing. Default 60s (scratch review).
+ */
+const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_ASSESSMENT_POLL_MS, 60_000, 5_000);
+
+// --- Graceful-drain state (shutdown) ---
+// SIGTERM sets the draining flag: the pollers stop claiming new work while
+// in-flight executeRun/executeApply/executeAssessment calls finish
+// naturally, then the shutdown path checkpoints the DB once idle (or after a
+// bounded grace). Startup reconciliation (reconcileInterruptedLocalRuns) is
+// the safety net for executions that could NOT finish (SIGKILL, power loss).
+let draining = false;
+let activeLocalExecutions = 0;
+let executionIdleCallback: (() => void) | null = null;
+
+/** Stop the background scheduler from claiming new work (graceful shutdown).
+ * Terminal for the process: poll cycles stop re-arming and startWorkerQueue
+ * cannot be restarted (isWorkerLoopRunning stays set), which is the intended
+ * contract for the shutdown path in index.ts. */
+export function stopWorkerQueue(): void {
+  draining = true;
+}
+
+export function workerQueueDraining(): boolean {
+  return draining;
+}
+
+/**
+ * Resolve when every locally executing run/assessment has finished, or after
+ * graceMs elapses (returns false). Callers wait on this before checkpointing
+ * the DB so no execution can write after the checkpoint.
+ */
+export function waitForWorkerDrain(graceMs: number): Promise<boolean> {
+  if (activeLocalExecutions === 0) return Promise.resolve(true);
+  return new Promise((resolve): void => {
+    const timer = setTimeout((): void => {
+      executionIdleCallback = null;
+      resolve(false);
+    }, graceMs);
+    executionIdleCallback = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+  });
+}
+
+/** Count a local execution so shutdown can wait for it (drain mode). */
+function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
+  activeLocalExecutions += 1;
+  const settle = (): void => {
+    activeLocalExecutions -= 1;
+    if (activeLocalExecutions === 0 && executionIdleCallback !== null) {
+      const callback = executionIdleCallback;
+      executionIdleCallback = null;
+      callback();
+    }
+  };
+  return promise.then(
+    (value: T): T => {
+      settle();
+      return value;
+    },
+    (error: unknown): never => {
+      settle();
+      throw error;
+    },
+  );
+}
 
 /**
  * Ephemeral per-run credentials (TFE run-token model). Runs execute with a
@@ -2728,6 +2832,136 @@ async function cleanupRunToken(runId: string): Promise<void> {
   }
 }
 
+/**
+ * Startup reconciliation for runs interrupted by a process restart (SIGKILL,
+ * power loss, crash). Local executions die with the process, but their runs
+ * keep transient statuses that block the workspace queue forever.
+ *
+ * Execution states are NEVER resumed automatically: we do not know how far a
+ * plan/apply got. States in which no side effect can have fired (archive
+ * fetch, queueing) are requeued to pending; everything after pre-plan tasks
+ * began is errored with an explanatory log line — applies in particular are
+ * never replayed. Agent-mode workspaces are skipped entirely:
+ * recoverStaleAgentJobs owns those transitions via heartbeat leases.
+ */
+const REQUEUE_AFTER_RESTART = new Set(["fetching", "fetching_completed", "queuing", "plan_queued"]);
+const ERROR_AFTER_RESTART = new Set([
+  "pre_plan_running",
+  "pre_plan_completed",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "apply_queued",
+  "applying",
+]);
+
+export async function reconcileInterruptedLocalRuns(): Promise<{
+  requeued: number;
+  errored: number;
+  assessmentsErrored: number;
+}> {
+  const pendingAt = new Date().toISOString();
+  const candidates = await db.query.runs.findMany({
+    where: or(
+      inArray(runs.status, [...REQUEUE_AFTER_RESTART]),
+      inArray(runs.status, [...ERROR_AFTER_RESTART]),
+    ),
+    columns: { id: true, workspaceId: true, status: true, statusTimestamps: true },
+  });
+
+  const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];
+  const executionModes = workspaceIds.length === 0
+    ? []
+    : await db.query.workspaces.findMany({
+        where: inArray(workspaces.id, workspaceIds),
+        columns: { id: true, executionMode: true },
+      });
+  const agentWorkspaceIds = new Set(
+    executionModes.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
+  );
+
+  let requeued = 0;
+  let errored = 0;
+  for (const run of candidates) {
+    // Agent-mode runs are owned by recoverStaleAgentJobs; only running local
+    // (or workspace-deleted, which can never execute again) runs are
+    // reconciled here.
+    if (agentWorkspaceIds.has(run.workspaceId)) {
+      continue;
+    }
+
+    if (REQUEUE_AFTER_RESTART.has(run.status)) {
+      const updated = await db.update(runs).set({
+        status: "pending",
+        statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
+      }).where(and(eq(runs.id, run.id), eq(runs.status, run.status))).returning({ id: runs.id });
+      if (updated.length === 0) continue;
+      requeued += 1;
+      await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
+    } else {
+      const applySide = run.status === "apply_queued" || run.status === "applying";
+      const message = applySide
+        ? run.status === "applying"
+          ? "Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically."
+          : "Terrence restarted before this apply began; the run was confirmed but never executed. Discard it or start a new run."
+        : run.status === "pre_plan_running" || run.status === "pre_plan_completed"
+          ? "Terrence restarted while running pre-plan tasks, which may already have executed. This run was marked errored."
+          : "Terrence restarted during the plan phase. This run was marked errored.";
+      await writeLog(run.id, applySide ? "apply" : "plan", `[terrence ERROR] ${message}`);
+      // Mirrors the executeRun/executeApply error path: publishes the
+      // transition, reports VCS status, revokes the run token, notifies.
+      await updateRunStatus(run.id, "errored");
+      try {
+        if (runSandbox !== null) {
+          await removeSandboxWorkDir(run.id);
+        } else {
+          await rm(runWorkDir(run.id), { recursive: true, force: true });
+        }
+      } catch {
+        // best-effort: a leftover workdir is reclaimed with the tempdir
+      }
+      errored += 1;
+    }
+  }
+
+  // Running assessments die with the process too; they count against the
+  // assessment concurrency budget, so error them and let the next discovery
+  // cycle create a fresh pending result.
+  const runningAssessments = await db.query.assessmentResults.findMany({
+    where: eq(assessmentResults.status, "running"),
+    columns: { id: true },
+  });
+  let assessmentsErrored = 0;
+  for (const assessment of runningAssessments) {
+    const updated = await db.update(assessmentResults).set({
+      status: "errored",
+      errorMessage: "Terrence restarted during this health assessment",
+      completedAt: Date.now(),
+    }).where(and(
+      eq(assessmentResults.id, assessment.id),
+      eq(assessmentResults.status, "running"),
+    )).returning({ id: assessmentResults.id });
+    if (updated.length === 0) continue;
+    assessmentsErrored += 1;
+    try {
+      if (runSandbox !== null) {
+        await removeSandboxWorkDir(`assessment-${assessment.id}`);
+      } else {
+        await rm(join(tmpdir(), "terrence", "assessments", assessment.id), { recursive: true, force: true });
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  return { requeued, errored, assessmentsErrored };
+}
+
 export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
@@ -2736,7 +2970,12 @@ export function startWorkerQueue(): void {
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
 
-  const poll = async (): Promise<void> => {
+  const arm = (cycle: () => Promise<void>, interval: number): void => {
+    if (workerQueueDraining()) return;
+    setTimeout((): void => { void cycle(); }, interval);
+  };
+
+  const fastCycle = async (): Promise<void> => {
     const pollCycleStarted = Date.now();
     workerPollStarted();
     try {
@@ -2746,10 +2985,6 @@ export function startWorkerQueue(): void {
       // /metrics worker gauges.
       const pollers: ReadonlyArray<readonly [string, Promise<unknown>]> = [
         ["pollWorkerQueue", pollWorkerQueue()],
-        ["enqueueDueAutoDestroyRuns", enqueueDueAutoDestroyRuns()],
-        ["enqueueDueAssessments", enqueueDueAssessments().then(async (): Promise<void> => {
-          await pollAssessmentQueue();
-        })],
         ["applyDueScheduledRuns", applyDueScheduledRuns()],
       ];
       await Promise.all(pollers.map(([name, poller]): Promise<unknown> => {
@@ -2769,9 +3004,46 @@ export function startWorkerQueue(): void {
       log.error("Queue error", { error: err });
       workerPollFinished(false, pollCycleStarted);
     } finally {
-      setTimeout((): void => { void poll(); }, WORKER_POLL_INTERVAL_MS);
+      arm(fastCycle, WORKER_POLL_INTERVAL_MS);
     }
   };
 
-  void poll();
+  const slowCycle = (name: string, poller: () => Promise<unknown>, interval: number): void => {
+    const cycle = async (): Promise<void> => {
+      const started = Date.now();
+      try {
+        await poller();
+        workerPollerFinished(name, true, started);
+      } catch (error: unknown) {
+        workerPollerFinished(name, false, started);
+        log.error("Queue poller failed", { error });
+      } finally {
+        arm(cycle, interval);
+      }
+    };
+    void cycle();
+  };
+
+  void fastCycle();
+  // Auto-destroy and assessment discovery run on their own slow cadences:
+  // the fast poll must not sweep full tables on every 1.5s tick.
+  slowCycle(
+    "enqueueDueAutoDestroyRuns",
+    (): Promise<unknown> => enqueueDueAutoDestroyRuns(),
+    AUTO_DESTROY_POLL_INTERVAL_MS,
+  );
+  slowCycle(
+    "enqueueDueAssessments",
+    async (): Promise<void> => {
+      try {
+        await enqueueDueAssessments();
+      } finally {
+        // Discovery failures must not strand already-pending assessments:
+        // the claim pass runs regardless, and the discovery error still
+        // surfaces to slowCycle's catch for logging + metrics.
+        await pollAssessmentQueue();
+      }
+    },
+    ASSESSMENT_POLL_INTERVAL_MS,
+  );
 }

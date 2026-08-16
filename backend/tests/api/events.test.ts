@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { publish } from "../../src/lib/event-bus";
+import { db } from "../../src/db";
+import { organizationMemberships } from "../../src/db/schema";
+import { eq } from "drizzle-orm";
 import {
   cleanupSeed,
   jsonHeaders,
@@ -133,5 +136,67 @@ describe("authenticated SSE event stream (10.20)", () => {
     expect(streamed).toContain("comment.created");
     expect(streamed).toContain('"comment-id":"rc-sse-1"');
     expect(streamed).not.toContain("rc-sse-foreign");
+  });
+
+  it("closes the stream when authz.changed targets the connected user", async () => {
+    const reader = await openStream(headers);
+
+    publish("authz.changed", { "user-id": seed.userId, "org-id": seed.orgId });
+    const result = await Promise.race([
+      reader.read(),
+      new Promise<{ done: false; timedOut: true }>((resolve): void => {
+        setTimeout((): void => resolve({ done: false, timedOut: true }), 500);
+      }),
+    ]);
+    expect(result.done).toBe(true);
+    await reader.cancel().catch((): void => {});
+    reader.releaseLock();
+  });
+
+  it("keeps the stream open when authz.changed targets another user", async () => {
+    const reader = await openStream(headers);
+
+    publish("authz.changed", { "user-id": "user-someone-else", "org-id": seed.orgId });
+    publish("run.status", {
+      "run-id": "run-sse-after-authz",
+      "workspace-id": "ws-sse-5",
+      "org-id": seed.orgId,
+      status: "planning",
+      at: new Date().toISOString(),
+    });
+    const streamed = await readUntil(reader, "run-sse-after-authz");
+    // The stream survived the unrelated authz change and still relays events.
+    expect(streamed).toContain('"run-id":"run-sse-after-authz"');
+    // authz.changed is a control topic: it must never be relayed to clients.
+    expect(streamed).not.toContain("authz.changed");
+  });
+
+  it("closes the stream when the user's org membership is deleted via the API", async () => {
+    const extraMembershipId = `membership-events-${crypto.randomUUID()}`;
+    await db.insert(organizationMemberships).values({
+      id: extraMembershipId,
+      userId: seed.userId,
+      orgId: seed.orgId,
+      role: "viewer",
+    });
+    try {
+      const reader = await openStream(headers);
+      const response = await app.handle(new Request(
+        `http://localhost/api/v2/organization-memberships/${extraMembershipId}`,
+        { method: "DELETE", headers },
+      ));
+      expect(response.status).toBe(204);
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: false; timedOut: true }>((resolve): void => {
+          setTimeout((): void => resolve({ done: false, timedOut: true }), 500);
+        }),
+      ]);
+      expect(result.done).toBe(true);
+      await reader.cancel().catch((): void => {});
+      reader.releaseLock();
+    } finally {
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, extraMembershipId)).catch((): void => {});
+    }
   });
 });

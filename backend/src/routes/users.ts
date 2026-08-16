@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
+import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -276,6 +277,9 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
+    // Immediate SSE revocation: close the user's event streams so their
+    // permission snapshot cannot linger for the one-hour reconnect cap.
+    publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
     (set as { status: number }).status = 204;
     return {};
   })

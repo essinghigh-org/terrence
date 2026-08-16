@@ -161,6 +161,14 @@ export const eventsRoutes = new Elysia({ name: "events" })
             enqueue(topic, payload);
           }));
         }
+        // Control topic, never relayed: membership revocation or user
+        // suspension closes this user's stream so the browser reconnects and
+        // re-resolves its permission snapshot immediately instead of after
+        // the one-hour reconnect cap (scratch review: authorization lag).
+        disposers.push(subscribe("authz.changed", (payload: Readonly<Record<string, unknown>>): void => {
+          const targetUserId = typeof payload["user-id"] === "string" ? payload["user-id"] : "";
+          if (targetUserId !== "" && targetUserId === user.id) cleanup();
+        }));
 
         heartbeat = setInterval((): void => {
           enqueue("ping", { at: new Date().toISOString() });
