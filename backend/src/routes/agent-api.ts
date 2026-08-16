@@ -87,12 +87,36 @@ async function agentFromRequest(ctx: AgentCtx): Promise<Agent | undefined> {
   return authenticateAgent(agentId, ctx.request.headers.get("authorization"));
 }
 
-async function claimedJobFor(
-  agent: Agent | undefined,
+/**
+ * Artifact auth for the modern protocol. The tfc-agent fetches and uploads
+ * job artifacts with NO credentials (verified against 1.30.1); TFC protects
+ * them with signed expiring URLs. Terrence mirrors the same trust model:
+ * the job id is a random UUID, and artifact endpoints accept either a valid
+ * agent token for the job's pool or no credentials at all, scoped strictly
+ * to a job that is currently claimed.
+ */
+async function claimedJobForArtifact(
+  ctx: AgentCtx,
   jobId: string,
 ): Promise<ClaimedAgentJob | undefined> {
-  if (agent === undefined || jobId === "") return undefined;
-  return findClaimedAgentJob(agent.id, jobId);
+  if (jobId === "") return undefined;
+  const auth = ctx.request.headers.get("authorization");
+  if (typeof auth === "string" && auth.startsWith("Bearer agent-")) {
+    const pool = await poolForToken(bearerToken(auth) ?? "");
+    if (pool === undefined) return undefined;
+    const job = await db.query.agentJobs.findFirst({
+      where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+    });
+    if (job?.agentId === null || job?.agentId === undefined) return undefined;
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
+    if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
+    return findClaimedAgentJob(agent.id, jobId);
+  }
+  const job = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+  });
+  if (job?.agentId === null || job?.agentId === undefined) return undefined;
+  return findClaimedAgentJob(job.agentId, jobId);
 }
 
 function storageRoot(): string {
@@ -282,8 +306,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------
   .get("/api/agent/jobs/:job_id/configuration-version", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
-    const agent = await agentFromRequest(ctx);
-    const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -306,8 +329,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .get("/api/agent/jobs/:job_id/filesystem", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
-    const agent = await agentFromRequest(ctx);
-    const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -324,8 +346,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .put("/api/agent/jobs/:job_id/filesystem", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number };
-    const agent = await agentFromRequest(ctx);
-    const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -350,8 +371,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .put("/api/agent/jobs/:job_id/plan-json", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number };
-    const agent = await agentFromRequest(ctx);
-    const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
     if (details === undefined || details.job.phase !== "plan") {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -402,8 +422,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
 async function appendLog(ctx: AgentCtx): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  const agent = await agentFromRequest(ctx);
-  const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+  const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
   if (details === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -411,16 +430,15 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
   const raw = (await rawBody(ctx)).toString("utf8");
   // The agent streams log chunks; \x02 flushes the buffer and \x03 ends it.
   const text = raw.replace(/\u0002/g, "").replace(/\u0003/g, "");
-  if (text.trim() !== "" && agent !== undefined) {
-    await appendAgentJobLog(agent.id, details.job.id, text.slice(0, 1024 * 1024));
+  if (text.trim() !== "") {
+    await appendAgentJobLog(details.job.agentId ?? "", details.job.id, text.slice(0, 1024 * 1024));
   }
   return {};
 }
 
 async function storeSideArtifact(ctx: AgentCtx, kind: string, ext: string): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  const agent = await agentFromRequest(ctx);
-  const details = await claimedJobFor(agent, ctx.params.job_id ?? "");
+  const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
   if (details === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };

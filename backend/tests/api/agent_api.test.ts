@@ -175,7 +175,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const runAfterClaim = await db.query.runs.findFirst({ where: eq(runs.id, "run1") });
     out.runStatusAfterClaim = runAfterClaim.status;
 
-    // artifact uploads (unauth -> 401; authed -> stored)
+    // artifact uploads (no agent credentials -> URL-secrecy model, job must be claimed)
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json\`, {
       method: "PUT",
       headers: { authorization: "Bearer nope", "content-type": "application/json" },
@@ -297,7 +297,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.secondClaimStatus).toBe(200);
   expect(result.secondClaimJobId).toBe("ajob1");
   expect(result.runStatusAfterClaim).toBe("planning");
-  expect(result.artifactUnauthStatus).toBe(401);
+  expect(result.artifactUnauthStatus).toBe(200);
   expect(result.planJsonPutStatus).toBe(200);
   expect(result.redactedPutStatus).toBe(200);
   expect(result.schemasPutStatus).toBe(200);
