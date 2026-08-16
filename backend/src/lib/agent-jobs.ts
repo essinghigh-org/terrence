@@ -780,6 +780,7 @@ export async function completeAgentJob(
     const updatedRuns = await tx.update(runs).set({
       status: runStatus,
       statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
+      ...(job.phase === "apply" && completion.status === "completed" ? { appliedAt: now } : {}),
       ...(job.phase === "plan"
         ? {
             planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
