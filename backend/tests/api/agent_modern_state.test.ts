@@ -77,6 +77,7 @@ test("modern agent completion persists apply state payloads", async () => {
     console.log(JSON.stringify({
       responseStatus: response.status,
       runStatus: run?.status,
+      applyResourceAdditions: run?.applyResourceAdditions,
       stateSerial: stateVersion?.serial,
       statePayload: stateVersion?.statePayload,
       jsonState: stateVersion?.jsonState,
@@ -88,6 +89,7 @@ test("modern agent completion persists apply state payloads", async () => {
   expect(result).toEqual({
     responseStatus: 200,
     runStatus: "applied",
+    applyResourceAdditions: 1,
     stateSerial: 1,
     statePayload: JSON.stringify({ version: 4, serial: 1, outputs: { answer: { value: 42 } } }),
     jsonState: JSON.stringify({ version: 4, serial: 1, outputs: { answer: { value: 42 } } }),
