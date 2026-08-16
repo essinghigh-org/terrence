@@ -621,6 +621,7 @@ export function runResource(
       source: origin?.source ?? "tfe-api",
       status: run.status,
       "status-timestamps": run.statusTimestamps ?? null,
+      "applied-at": run.appliedAt === null || run.appliedAt === undefined ? null : new Date(run.appliedAt).toISOString(),
       "target-addrs": run.targetAddrs,
       "terraform-version": run.terraformVersion,
       "debugging-mode": run.debuggingMode,
