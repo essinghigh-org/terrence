@@ -93,6 +93,7 @@ type ParamCtx = Readonly<{
   readonly user?: Readonly<typeof users.$inferSelect> | null;
   readonly orgId?: string | null;
   readonly teamId?: string | null;
+  readonly run?: { runId: string; workspaceId: string; organizationId: string } | null;
   readonly request: Readonly<{ readonly url: string; readonly headers: Readonly<{ readonly get: (h: string) => string | null }> }>;
   readonly set: SetObj;
 }>;
@@ -606,6 +607,18 @@ export const runRoutes = new Elysia({ name: "runs" })
     await db.delete(runs).where(eq(runs.id, runId));
     (set as { status: number }).status = 204;
     return {};
+  })
+  .post("/api/v2/runs/:run_id/modules", async ({ params, run, set }: ParamCtx): Promise<unknown> => {
+    // Module artifacts callback from the terraform CLI (cloud protocol). The
+    // run's own token may post module metadata; the payload is informational
+    // only, so Terrence acknowledges and discards it.
+    const runId = params.run_id ?? "";
+    if ((run === undefined || run === null || run.runId !== runId)) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    (set as { status: number }).status = 200;
+    return { data: { modules: [] } };
   })
   .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

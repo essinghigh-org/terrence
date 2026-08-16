@@ -595,7 +595,7 @@ type ExecutionVariable = {
   priority: boolean;
 };
 
-async function executionVariables(
+export async function executionVariables(
   workspaceId: string,
   orgId: string,
   projectId: string | null,

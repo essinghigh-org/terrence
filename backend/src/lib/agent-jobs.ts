@@ -22,6 +22,7 @@ import { queueRunNotification } from "./notifications";
 import { reportRunVcsStatus } from "./webhooks";
 import {
   planJsonResourceCounts,
+  readPlanJsonArtifact,
   writePlanJsonArtifact,
   type PlanJson,
 } from "./plan-json";
@@ -42,7 +43,7 @@ export type AgentJobCompletion = Readonly<{
 }>;
 
 
-type Agent = DeepReadonly<typeof agents.$inferSelect>;
+export type Agent = DeepReadonly<typeof agents.$inferSelect>;
 export type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
 type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
 type Database = Readonly<typeof db>;
@@ -703,8 +704,14 @@ export async function completeAgentJob(
     if (completion.planJson !== null) {
       await writePlanJsonArtifact(run.id, completion.planJson);
     }
-    const structuredPlanCounts = job.phase === "plan" && completion.planJson !== null
-      ? planJsonResourceCounts(completion.planJson)
+    // Modern agent protocol uploads the plan JSON separately (PUT to the job's
+    // plan-json URL) before completing; fall back to the stored artifact so
+    // resource counts are still derived from the real plan.
+    const effectivePlanJson = completion.planJson !== null
+      ? completion.planJson
+      : await readPlanJsonArtifact(run.id);
+    const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
+      ? planJsonResourceCounts(effectivePlanJson)
       : undefined;
 
     const now = Date.now();

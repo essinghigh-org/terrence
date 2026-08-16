@@ -20,6 +20,7 @@ type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId?: string | null;
   teamId?: string | null;
+  run?: { runId: string; workspaceId: string; organizationId: string } | null;
   request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
@@ -347,10 +348,11 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     return { data: await organizationResourceForPrincipal(org, user?.id, orgId, teamId) };
   })
-  .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, run, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
+    const runScoped = run !== undefined && run !== null && org !== undefined && run.organizationId === org.id;
+    if (org === undefined || (!runScoped && !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read")))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

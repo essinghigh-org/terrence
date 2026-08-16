@@ -30,6 +30,7 @@ type ParamCtx = Readonly<{
   readonly user?: DeepReadonly<typeof users.$inferSelect> | null;
   readonly orgId?: string | null;
   readonly teamId?: string | null;
+  readonly run?: { runId: string; workspaceId: string; organizationId: string } | null;
   readonly request: Readonly<{
     readonly url: string;
     readonly headers: Readonly<{ get(name: string): string | null }>;
@@ -842,13 +843,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       ),
     };
   })
-  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const runScoped = run !== undefined && run !== null && ws !== undefined && run.workspaceId === ws.id;
+    if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read")))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const data = await workspaceResource(
       ws,
       org.defaultIacBinary,
@@ -900,9 +902,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
+    const runScoped = run !== undefined && run !== null && run.workspaceId === workspaceId;
+    const ws = runScoped
+      ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
+      : await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await cachedOrgById(ws.orgId);
     const data = await workspaceResource(
