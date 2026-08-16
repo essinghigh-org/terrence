@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
+import { useTerrenceEvent } from "../lib/event-provider";
 import { Spinner } from "./ui/spinner";
 import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -88,7 +89,9 @@ type LoadState =
 
 export type PlanOutputSummary = Readonly<{ actionCount: number; importCount: number }>;
 
-const POLL_INTERVAL_MS = 1_000;
+// Degraded-mode cadence: plan readiness normally arrives over the SSE
+// `plan.output.ready` event; this slow poll only covers a dead stream.
+const DEGRADED_POLL_INTERVAL_MS = 30_000;
 const PLAN_PENDING_STATUSES = new Set([
   "pending",
   "fetching",
@@ -990,10 +993,13 @@ export function PlanOutput({
   const [summaryCopied, setSummaryCopied] = useState(false);
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
+  const degradedTimerRef = useRef<number | undefined>(undefined);
+  // The latest effect's load, so the SSE handler always reloads the current
+  // run even while the effect is mid-commit.
+  const loadRef = useRef<() => void>(() => {});
 
   useEffect((): (() => void) => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const shouldPoll = PLAN_PENDING_STATUSES.has(status);
 
     const runChanged = activeRunId.current !== runId;
@@ -1005,10 +1011,36 @@ export function PlanOutput({
       setSelectedOps(new Set(DEFAULT_SELECTED_OPS));
     }
 
+    const scheduleDegraded = (): void => {
+      if (degradedTimerRef.current !== undefined) window.clearTimeout(degradedTimerRef.current);
+      degradedTimerRef.current = window.setTimeout((): void => {
+        degradedTimerRef.current = undefined;
+        if (!cancelled) void load();
+      }, DEGRADED_POLL_INTERVAL_MS);
+    };
+
     const load = async (): Promise<void> => {
+      // A load supersedes any pending degraded retry: its result decides the
+      // next schedule, so a stale timer must not double-fetch afterwards.
+      if (degradedTimerRef.current !== undefined) {
+        window.clearTimeout(degradedTimerRef.current);
+        degradedTimerRef.current = undefined;
+      }
       try {
         const data = await fetchApi(`/plans/plan-${runId}/json-output`);
         if (cancelled) return;
+        if (data === null) {
+          // 204: plan JSON supported but the plan has not completed (TFE
+          // contract). Wait for the SSE event; the degraded timer is the
+          // safety net if the stream is down.
+          if (shouldPoll) {
+            setLoadState({ kind: "waiting" });
+            scheduleDegraded();
+          } else {
+            setLoadState({ kind: "unavailable" });
+          }
+          return;
+        }
         const plan = parsePlanJson(data);
         if (plan === null) throw new Error("The structured plan response was invalid.");
         readyRunId.current = runId;
@@ -1017,9 +1049,7 @@ export function PlanOutput({
         if (cancelled) return;
         if (reason instanceof ApiError && reason.status === 404 && shouldPoll) {
           setLoadState({ kind: "waiting" });
-          timer = setTimeout((): void => {
-            void load();
-          }, POLL_INTERVAL_MS);
+          scheduleDegraded();
           return;
         }
         if (reason instanceof ApiError
@@ -1039,13 +1069,24 @@ export function PlanOutput({
         });
       }
     };
+    loadRef.current = load;
 
     if (readyRunId.current !== runId) void load();
     return (): void => {
       cancelled = true;
-      if (timer !== undefined) clearTimeout(timer);
+      if (degradedTimerRef.current !== undefined) {
+        window.clearTimeout(degradedTimerRef.current);
+        degradedTimerRef.current = undefined;
+      }
     };
   }, [planStatus, retry, runId, status]);
+
+  // The worker publishes plan.output.ready once the artifact is persisted:
+  // fetch it once instead of polling every second while planning runs.
+  useTerrenceEvent("plan.output.ready", (data): boolean => data["run-id"] === runId, (): void => {
+    if (readyRunId.current === runId) return;
+    loadRef.current();
+  });
 
   useEffect((): void => {
     const ready = activeRunId.current === runId

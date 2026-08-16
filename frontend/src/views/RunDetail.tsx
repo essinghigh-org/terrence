@@ -43,7 +43,7 @@ import {
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
 import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
-import { subscribeEvents, type SseEvent } from "../lib/events";
+import { useTerrenceEvent } from "../lib/event-provider";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
@@ -216,6 +216,31 @@ const TERMINAL_STATUSES = new Set([
   "planned_and_finished",
   "unreachable",
 ]);
+
+// Statuses whose transitions change the plan-side derived sections (plan,
+// policy checks, cost estimate, assessments) and the apply-side sections
+// (apply phase, logs). Used to refetch only what an SSE transition
+// announced instead of the whole run.
+const PLAN_PHASE_STATUSES = new Set([
+  "planned",
+  "planned_and_saved",
+  "planned_and_finished",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "policy_soft_failed",
+]);
+
+const APPLY_PHASE_STATUSES = new Set([
+  "applying",
+  "applied",
+]);
+
+/** Run sections that can be refetched independently (see reloadAuxiliaries). */
+type AuxKind = "logs" | "plan" | "apply" | "cost" | "policy" | "assessments" | "events" | "comments";
+const ALL_AUX_KINDS: readonly AuxKind[] = ["logs", "plan", "apply", "cost", "policy", "assessments", "events", "comments"];
 
 const STATUS_LABELS = {
   pending: "Pending",
@@ -621,6 +646,10 @@ export function RunDetail({
     summary: PlanOutputSummary;
   }> | null>(null);
   const activeRunId = useRef<string | null>(null);
+  // Latest effect's SSE dispatchers: the event handlers (registered once via
+  // the provider) must reach the current run's refresh machinery.
+  const eventDispatchRef = useRef<(status: string) => void>(() => {});
+  const commentDispatchRef = useRef<() => void>(() => {});
   const handlePlanSummaryChange = useCallback((summary: PlanOutputSummary | null): void => {
     setPlanSummary(summary === null ? null : { runId, summary });
   }, [runId]);
@@ -717,32 +746,49 @@ export function RunDetail({
         setCreatorUsername(response.data.attributes["triggered-by"] ?? "");
         setCreatorAvatarUrl(response.data.attributes["triggered-by-avatar-url"] ?? "");
       }
+      return response.data.attributes.status;
+    } catch (error: unknown) {
+      if (signal.aborted) return null;
+      setFresh(false);
+      setLoadError(error instanceof Error ? error.message : "Could not load run");
+      if (error instanceof ApiError && error.status === 404) {
+        setRun(null);
+        return "not_found";
+      }
+      return null;
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  }, [runId]);
 
-      const [logResult, planResult, applyResult, costResult, policyResult, assessmentResult, eventResult, commentResult] = await Promise.allSettled([
-        fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
-        fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
-        fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
-      ]);
-      signal.throwIfAborted();
-      setAuxiliaryError([
-        logResult,
-        planResult,
-        applyResult,
-        costResult,
-        policyResult,
-        assessmentResult,
-        eventResult,
-        commentResult,
-      ].some((result): boolean => result.status === "rejected"));
-
-      if (logResult.status === "fulfilled") {
+  // Reload only the run sections that changed: SSE events refetch what they
+  // announce instead of invalidating the whole run (every status transition
+  // used to refetch all nine endpoints).
+  const reloadAuxiliaries = useCallback(async (kinds: readonly AuxKind[], signal: AbortSignal): Promise<void> => {
+    const fetchers: Record<AuxKind, () => Promise<unknown>> = {
+      logs: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
+      plan: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
+      apply: (): Promise<unknown> => fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
+      cost: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
+      policy: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
+      assessments: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
+      events: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
+      comments: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
+    };
+    const results = await Promise.allSettled(kinds.map((kind: AuxKind): Promise<unknown> => fetchers[kind]()));
+    if (signal.aborted) return;
+    let failed = false;
+    for (let index = 0; index < kinds.length; index += 1) {
+      const kind = kinds[index];
+      const result = results[index];
+      if (result === undefined || result.status === "rejected") {
+        failed = true;
+        continue;
+      }
+      const value = result.value;
+      if (kind === "logs") {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const logData = logResult.value as {
+        const logData = value as {
           data?: LogItem[];
           logs?: { message: string; phase?: string }[];
         };
@@ -765,52 +811,34 @@ export function RunDetail({
             .map((entry): string => entry.message)
             .join("\n"));
         }
-      }
-      if (planResult.status === "fulfilled") {
+      } else if (kind === "plan") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setPlan((planResult.value as { data?: PhaseResource }).data ?? null);
-      }
-      if (applyResult.status === "fulfilled") {
+        setPlan((value as { data?: PhaseResource }).data ?? null);
+      } else if (kind === "apply") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setApply((applyResult.value as { data?: PhaseResource }).data ?? null);
-      }
-      if (costResult.status === "fulfilled") {
+        setApply((value as { data?: PhaseResource }).data ?? null);
+      } else if (kind === "cost") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setCostEstimate((costResult.value as { data?: CostEstimate }).data ?? null);
-      }
-      if (policyResult.status === "fulfilled") {
+        setCostEstimate((value as { data?: CostEstimate }).data ?? null);
+      } else if (kind === "policy") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (policyResult.value as { data?: PolicyCheck[] }).data;
+        const data = (value as { data?: PolicyCheck[] }).data;
         setPolicyChecks(Array.isArray(data) ? data : []);
-      }
-      if (assessmentResult.status === "fulfilled") {
+      } else if (kind === "assessments") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (assessmentResult.value as { data?: AssessmentCheck[] }).data;
+        const data = (value as { data?: AssessmentCheck[] }).data;
         setAssessmentChecks(Array.isArray(data) ? data : []);
-      }
-      if (eventResult.status === "fulfilled") {
+      } else if (kind === "events") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (eventResult.value as { data?: RunEvent[] }).data;
+        const data = (value as { data?: RunEvent[] }).data;
         setRunEvents(Array.isArray(data) ? data : []);
-      }
-      if (commentResult.status === "fulfilled") {
+      } else if (kind === "comments") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (commentResult.value as { data?: RunComment[] }).data;
+        const data = (value as { data?: RunComment[] }).data;
         setComments(Array.isArray(data) ? data : []);
       }
-      return response.data.attributes.status;
-    } catch (error: unknown) {
-      if (signal.aborted) return null;
-      setFresh(false);
-      setLoadError(error instanceof Error ? error.message : "Could not load run");
-      if (error instanceof ApiError && error.status === 404) {
-        setRun(null);
-        return "not_found";
-      }
-      return null;
-    } finally {
-      if (!signal.aborted) setLoading(false);
     }
+    setAuxiliaryError(failed);
   }, [runId]);
 
   useEffect((): (() => void) => {
@@ -841,19 +869,52 @@ export function RunDetail({
     setLoadError("");
     setFresh(false);
 
-    const refresh = async (): Promise<void> => {
+    const armTimer = (): void => {
+      if (stopped || controller.signal.aborted || document.hidden) return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout((): void => { void refreshFull(); }, 30000);
+    };
+    const refreshFull = async (): Promise<void> => {
       // Guard against overlapping loops: a visibility-triggered refresh can
       // fire while a timer refresh is still awaiting loadRun.
-      if (stopped || controller.signal.aborted || refreshing) return;
+      if (stopped || controller.signal.aborted) return;
+      if (refreshing) {
+        // The 30s tick fired while an SSE-triggered refresh is in flight.
+        // The fired timer is consumed; re-arm it now, or the degraded-mode
+        // chain stops permanently for this run.
+        armTimer();
+        return;
+      }
       refreshing = true;
       try {
         const status = await loadRun(controller.signal);
-        if (!stopped && !controller.signal.aborted && status !== "not_found"
-          && (status === null || !TERMINAL_STATUSES.has(status))) {
-          // Pause polling while the tab is hidden; visibilitychange resumes it.
-          if (document.hidden) return;
-          timer = window.setTimeout((): void => { void refresh(); }, 30000);
+        if (!stopped && !controller.signal.aborted && status !== "not_found") {
+          await reloadAuxiliaries(ALL_AUX_KINDS, controller.signal);
+          if (status === null || !TERMINAL_STATUSES.has(status)) armTimer();
         }
+      } finally {
+        refreshing = false;
+      }
+    };
+    // Light refresh: status moved but no derived section completed. Logs and
+    // the run event timeline change with every transition; the rest is
+    // refetched when a phase completes or the 30s safety net fires.
+    const refreshLight = async (): Promise<void> => {
+      if (stopped || controller.signal.aborted || refreshing) return;
+      refreshing = true;
+      try {
+        await loadRun(controller.signal);
+        await reloadAuxiliaries(["logs", "events"], controller.signal);
+      } finally {
+        refreshing = false;
+      }
+    };
+    const refreshPhase = async (kinds: readonly AuxKind[]): Promise<void> => {
+      if (stopped || controller.signal.aborted || refreshing) return;
+      refreshing = true;
+      try {
+        await loadRun(controller.signal);
+        await reloadAuxiliaries(kinds, controller.signal);
       } finally {
         refreshing = false;
       }
@@ -871,41 +932,63 @@ export function RunDetail({
         // fresh refresh instead of stacking on the scheduled one.
         if (timer !== undefined) window.clearTimeout(timer);
         timer = undefined;
-        void refresh();
+        void refreshFull();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
-    void refresh();
+    void refreshFull();
 
-    // Authenticated SSE replaces the fast poll (10.20): status transitions
-    // for this run trigger a trailing-debounced refresh (the final
-    // transition of a burst wins), while the timer above degrades to a slow
-    // safety net for streams that fail.
+    // The app-global SSE stream (EventProvider, 10.20) delivers run status
+    // transitions; a trailing debounce lets the final transition of a burst
+    // win. Only the sections the transition announced are refetched; the
+    // 30s timer above remains the degraded-mode safety net.
     let debounceTimer: number | undefined;
-    const stream = subscribeEvents((event: SseEvent): void => {
-      if (event.name !== "run.status") return;
-      const data = event.data;
-      if (data["run-id"] !== runId) return;
+    let latestStatus: string | null = null;
+    eventDispatchRef.current = (status: string): void => {
+      latestStatus = status;
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout((): void => {
         debounceTimer = undefined;
-        // Drop the armed poll timer: an SSE-triggered refresh supersedes it,
-        // so the two cannot chain duplicate refreshes.
-        if (timer !== undefined) window.clearTimeout(timer);
-        timer = undefined;
-        if (!stopped && !controller.signal.aborted) void refresh();
+        if (stopped || controller.signal.aborted) return;
+        const statusNow = latestStatus ?? "";
+        if (statusNow === "" || TERMINAL_STATUSES.has(statusNow)) {
+          void refreshFull();
+        } else if (PLAN_PHASE_STATUSES.has(statusNow)) {
+          void refreshPhase(["plan", "policy", "cost", "assessments"]);
+        } else if (APPLY_PHASE_STATUSES.has(statusNow)) {
+          void refreshPhase(["apply", "logs"]);
+        } else {
+          void refreshLight();
+        }
       }, 500);
-    }, controller.signal);
+    };
+    commentDispatchRef.current = (): void => {
+      if (!stopped && !controller.signal.aborted) {
+        void reloadAuxiliaries(["comments"], controller.signal);
+      }
+    };
 
     return (): void => {
       stopped = true;
       controller.abort();
-      stream.close();
+      eventDispatchRef.current = (): void => {};
+      commentDispatchRef.current = (): void => {};
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loadRun, refreshVersion, runId]);
+  }, [loadRun, reloadAuxiliaries, refreshVersion, runId]);
+
+  // One app-global SSE stream serves every view (EventProvider): status
+  // transitions and new comments for this run dispatch into the effect's
+  // refresh machinery above.
+  useTerrenceEvent("run.status", (data): boolean => data["run-id"] === runId, (data): void => {
+    const status = data["status"];
+    eventDispatchRef.current(typeof status === "string" ? status : "");
+  });
+  useTerrenceEvent("comment.created", (data): boolean => data["run-id"] === runId, (): void => {
+    commentDispatchRef.current();
+  });
 
   async function performRunAction(
     action: "apply" | "cancel" | "discard" | "force-cancel" | "override-policy",

@@ -16,6 +16,7 @@ import {
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { RunSandboxGate } from "./components/RunSandboxGate";
+import { EventProvider } from "./lib/event-provider";
 import { Toaster, toast } from "./components/ui/toast";
 import { useDisplayTimezone } from "./lib/useDisplayTimezone";
 import type { JsonObject } from "./lib/json";
@@ -181,7 +182,7 @@ function App(): JSX.Element {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/" element={<Navigate to="/app" replace />} />
-            <Route path="/app" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+            <Route path="/app" element={<ProtectedRoute><EventProvider><Layout /></EventProvider></ProtectedRoute>}>
               <Route index element={<Dashboard />} />
               <Route path="admin" element={<AdminDashboard section="security" />} />
               <Route path="admin/users" element={<AdminDashboard section="users" />} />

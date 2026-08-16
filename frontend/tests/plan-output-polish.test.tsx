@@ -1,7 +1,9 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { PlanOutput } from "../src/components/PlanOutput";
+import { EventProvider, type EventStreamFactory } from "../src/lib/event-provider";
 import { isString } from "../src/lib/type-guards";
+import type { JsonObject } from "../src/lib/json";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
@@ -11,6 +13,27 @@ function json(data: JsonValue, status = 200): Response {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
   });
+}
+
+/** Controllable SSE stream for EventProvider tests. */
+function createFakeStream(): {
+  factory: EventStreamFactory;
+  emit: (name: string, data: Readonly<JsonObject>) => void;
+} {
+  const listeners = new Set<(event: { name: string; data: Readonly<JsonObject> }) => void>();
+  return {
+    factory: (onEvent): { close: () => void } => {
+      listeners.add(onEvent);
+      return {
+        close: (): void => {
+          listeners.delete(onEvent);
+        },
+      };
+    },
+    emit: (name, data): void => {
+      for (const listener of [...listeners]) listener({ name, data });
+    },
+  };
 }
 
 function changeInput(element: HTMLElement, value: string): void {
@@ -28,7 +51,7 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
-test("polls a running plan from not-ready to structured output", async () => {
+test("loads a running plan when plan.output.ready arrives over SSE", async () => {
   let request = 0;
   const fetchMock = mock(async (): Promise<Response> => {
     request++;
@@ -52,19 +75,34 @@ test("polls a running plan from not-ready to structured output", async () => {
     });
   });
   globalThis.fetch = fetchMock;
+  const stream = createFakeStream();
 
-  const view = render(<PlanOutput runId="run-ready" status="planning" />);
+  const view = render(
+    <EventProvider streamFactory={stream.factory}>
+      <PlanOutput runId="run-ready" status="planning" />
+    </EventProvider>,
+  );
 
+  // First fetch 404s: the plan is still running. The view waits instead of
+  // polling every second (degraded poll is 30s and never fires here).
   await waitFor((): void => {
     expect(view.getByText("Preparing structured plan output…")).toBeTruthy();
   });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  // The worker's plan.output.ready event triggers exactly one more fetch.
+  act((): void => {
+    stream.emit("plan.output.ready", { "run-id": "run-ready" });
+  });
   await waitFor((): void => {
     expect(view.getByText("aws_instance.ready")).toBeTruthy();
-  }, { timeout: 2_000 });
+  });
 
   expect(fetchMock).toHaveBeenCalledTimes(2);
 // SAFETY: the fixture field is a string per the API contract.
   expect((fetchMock.mock.calls[0]?.[0] as string)).toBe("/api/v2/plans/plan-run-ready/json-output");
+  // The event-triggered fetch targets the same endpoint (no extra polling).
+  expect((fetchMock.mock.calls[1]?.[0] as string)).toBe("/api/v2/plans/plan-run-ready/json-output");
 });
 
 test("renders replacement and nested safe diffs and filters resources", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
@@ -24,7 +24,7 @@ import { Input } from "../components/ui/input";
 import { StatusBadge } from "../components/ui/status-badge";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
-import { subscribeEvents, type SseEvent } from "../lib/events";
+import { useTerrenceEvent } from "../lib/event-provider";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -155,6 +155,8 @@ export function RunList({
   const [usersMap, setUsersMap] = useState<ReadonlyMap<string, IncludedUser>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Latest effect's SSE dispatcher (see the refresh effect below).
+  const runStatusDispatchRef = useRef<() => void>(() => {});
   const [filter, setFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [runMessage, setRunMessage] = useState("");
@@ -234,10 +236,10 @@ export function RunList({
     };
     void refresh();
 
-    // Authenticated SSE: any run status transition in this workspace
-    // reloads the list (debounced so bursts coalesce into one fetch).
-    // An in-flight guard prevents a slow timer refresh from racing an
-    // SSE-triggered load and writing stale results last.
+    // App-global SSE (EventProvider): any run status transition in this
+    // workspace reloads the list (debounced so bursts coalesce into one
+    // fetch). An in-flight guard prevents a slow timer refresh from racing
+    // an SSE-triggered load and writing stale results last.
     let inFlight = false;
     let debounceTimer: number | undefined;
     const reload = (): void => {
@@ -247,24 +249,28 @@ export function RunList({
         inFlight = false;
       });
     };
-    const stream = subscribeEvents((event: SseEvent): void => {
-      if (event.name !== "run.status") return;
-      if (event.data["workspace-id"] !== workspaceId) return;
+    runStatusDispatchRef.current = (): void => {
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout((): void => {
         debounceTimer = undefined;
         reload();
       }, 500);
-    }, controller.signal);
+    };
 
     return (): void => {
       stopped = true;
       controller.abort();
-      stream.close();
+      runStatusDispatchRef.current = (): void => {};
       if (timer !== undefined) window.clearTimeout(timer);
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };
   }, [loadRuns, refreshVersion, workspaceId]);
+
+  // App-global SSE (EventProvider): any status transition in this workspace
+  // reloads the list through the effect's debounced dispatcher.
+  useTerrenceEvent("run.status", (data): boolean => data["workspace-id"] === workspaceId, (): void => {
+    runStatusDispatchRef.current();
+  });
 
   useEffect((): void => {
     if (canStartRun && searchParams.get("new-run") === "true") {
