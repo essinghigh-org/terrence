@@ -185,7 +185,19 @@ For GitHub commit statuses, the GitHub App also needs repository **Commit status
 
 ## API
 
-The API follows the **Terraform Enterprise** (TFE) JSON:API spec, the self-hosted product, not Terraform Cloud. Where TFE and Terraform Cloud disagree, Terrence implements the TFE behavior; endpoints, attributes, and error shapes are kept compatible with `go-tfe` so existing TFE tooling works unchanged. The full specification is documented in [SPEC.md](./SPEC.md).
+The API follows the **Terraform Enterprise** (TFE) JSON:API spec, the self-hosted product, not Terraform Cloud. Where TFE and Terraform Cloud disagree, Terrence implements the TFE behavior; endpoints, attributes, and error shapes are kept compatible with `go-tfe` so existing TFE tooling works unchanged.
+
+## Documentation
+
+Terrence ships its own documentation instead of linking to external vendor docs. The documents live in `backend/docs/` as markdown files and are bundled into the container image.
+
+In the running product:
+
+- Open the Documentation section in the sidebar, or press Ctrl+K and search.
+- `GET /api/v2/docs` lists the index; `GET /api/v2/docs/:slug` returns one document.
+- Both endpoints require authentication.
+
+When adding a document, give it frontmatter with `title`, `category`, `order`, and `description`, and keep the plain technical style used by the existing documents.
 
 ## Testing
 
