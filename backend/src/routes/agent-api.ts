@@ -2,9 +2,9 @@ import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
-import { agentPoolTokens, agents, agentJobs, organizations, runs } from "../db/schema";
+import { agentPoolTokens, agents, agentJobs, logs, organizations, runs } from "../db/schema";
 import { authPlugin } from "../auth";
 import {
   appendAgentJobLog,
@@ -431,7 +431,15 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
   // The agent streams log chunks; \x02 flushes the buffer and \x03 ends it.
   const text = raw.replace(/\u0002/g, "").replace(/\u0003/g, "");
   if (text.trim() !== "") {
-    await appendAgentJobLog(details.job.agentId ?? "", details.job.id, text.slice(0, 1024 * 1024));
+    // The final PUT repeats the last PATCHed chunk; skip exact duplicates so
+    // the run log does not double up every line.
+    const last = await db.query.logs.findFirst({
+      where: and(eq(logs.runId, details.job.runId), eq(logs.phase, details.job.phase)),
+      orderBy: [desc(logs.createdAt)],
+    });
+    if (last === undefined || last.outputText !== text) {
+      await appendAgentJobLog(details.job.agentId ?? "", details.job.id, text.slice(0, 1024 * 1024));
+    }
   }
   return {};
 }

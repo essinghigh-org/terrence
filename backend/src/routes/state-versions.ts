@@ -115,12 +115,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stateOutputResources(sv) };
   })
-  .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params.state_version_id ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const runScoped = run !== undefined && run !== null && ws !== undefined && checkRunStateAccess(run, ws.id);
+    if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-read")))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(sv.status ?? "")) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
