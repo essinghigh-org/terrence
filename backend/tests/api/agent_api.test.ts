@@ -46,6 +46,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       configurationVersions,
       organizations,
       runs,
+      workspaceVariables,
       workspaces,
     } = await import("./src/db/schema.ts");
 
@@ -68,6 +69,22 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       executionMode: "agent",
       agentPoolId: "apool",
       terraformVersion: "1.9.5",
+      createdAt: Date.now(),
+    });
+    await db.insert(workspaceVariables).values({
+      id: "wv1",
+      workspaceId: "ws",
+      key: "OPENCODE_API_KEY",
+      value: "secret-key-123",
+      category: "terraform",
+      createdAt: Date.now(),
+    });
+    await db.insert(workspaceVariables).values({
+      id: "wv2",
+      workspaceId: "ws",
+      key: "TFE_TOKEN",
+      value: "trun-something",
+      category: "env",
       createdAt: Date.now(),
     });
     await db.insert(configurationVersions).values({
@@ -162,6 +179,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     out.planCurrentOperation = job.plan.current_operation;
     out.planTerraformVersion = job.plan.terraform_version;
     out.planVariables = JSON.stringify(job.plan.variables);
+    out.environment = JSON.stringify(job.data.environment);
     out.hasPlanJsonUrl = String(job.data.json_plan_url).includes("/api/agent/jobs/ajob1/plan-json");
 
     // re-claim returns the same claimed job (idempotent re-claim)
@@ -302,6 +320,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.planCurrentOperation).toBe("plan");
   expect(result.planTerraformVersion).toBe("1.9.5");
   expect(result.planVariables).toBe("{}");
+  expect(result.environment).toContain("\"TF_VAR_OPENCODE_API_KEY\":\"secret-key-123\"");
+  expect(result.environment).toContain("\"TFE_TOKEN\":\"trun-something\"");
   expect(result.hasPlanJsonUrl).toBe(true);
   expect(result.secondClaimStatus).toBe(200);
   expect(result.secondClaimJobId).toBe("ajob1");
@@ -337,6 +357,7 @@ test("modern agent protocol: errored completion and apply job payload", async ()
       agents,
       organizations,
       runs,
+      workspaceVariables,
       workspaces,
     } = await import("./src/db/schema.ts");
 

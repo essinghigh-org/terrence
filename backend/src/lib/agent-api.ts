@@ -218,21 +218,6 @@ export async function buildAgentJobPayload(
   return { type: phase, job_id: job.id, data, [phase]: container };
 }
 
-/** Resolve the workspace's effective terraform variables as a flat key -> value object. */
-export async function agentTerraformVariables(
-  workspaceId: string,
-  orgId: string,
-  projectId: string | null,
-): Promise<Record<string, string>> {
-  const variables = await executionVariables(workspaceId, orgId, projectId);
-  const out: Record<string, string> = {};
-  for (const variable of variables) {
-    if (variable.category !== "terraform") continue;
-    out[variable.key] = variable.hcl === true ? variable.value : JSON.stringify(variable.value);
-  }
-  return out;
-}
-
 /** Resolve env-category variables for the agent run's process environment. */
 export async function agentEnvironment(
   workspaceId: string,
@@ -242,8 +227,14 @@ export async function agentEnvironment(
   const variables = await executionVariables(workspaceId, orgId, projectId);
   const out: Record<string, string> = {};
   for (const variable of variables) {
-    if (variable.category !== "env") continue;
-    out[variable.key] = variable.value;
+    if (variable.category === "env") {
+      out[variable.key] = variable.value;
+    } else if (variable.category === "terraform") {
+      // Terraform variables travel as TF_VAR_* environment variables
+      // (verified against tfc-agent 1.30.1: the plan container's
+      // `variables` key is not consumed; TF_VAR_ overrides are).
+      out[`TF_VAR_${variable.key}`] = variable.value;
+    }
   }
   return out;
 }
