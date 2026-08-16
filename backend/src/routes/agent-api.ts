@@ -129,7 +129,22 @@ function sideArtifactPath(runId: string, kind: string, ext: string): string {
 }
 
 async function configurationArchivePath(cvId: string): Promise<string> {
-  return join(storageRoot(), "cv", `config-${cvId}.tar.gz`);
+  // VCS-ingested archives live under configuration_versions/cv-<id>.tar.gz;
+  // API-uploaded archives under cv/config-<id>.tar.gz. Check both.
+  const root = storageRoot();
+  const candidates = [
+    join(root, "configuration_versions", `cv-${cvId}.tar.gz`),
+    join(root, "cv", `config-${cvId}.tar.gz`),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await readFile(candidate);
+      return candidate;
+    } catch {
+      // try next
+    }
+  }
+  return candidates[0] ?? join(root, "cv", `config-${cvId}.tar.gz`);
 }
 
 function numberOrNull(value: unknown): number | null {
