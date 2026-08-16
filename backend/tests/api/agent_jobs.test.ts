@@ -854,3 +854,159 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
     completedAgentStatus: "idle",
   });
 }, 30_000);
+
+test("routes agent jobs by declared iac-binaries capability", async () => {
+  const result = await runAgentProtocolScript(`
+    const { createHash } = await import("node:crypto");
+    const { asc, eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const {
+      agentJobs,
+      agentPoolTokens,
+      agentPools,
+      agents,
+      organizations,
+      runs,
+      workspaces,
+    } = await import("./src/db/schema.ts");
+    const { pollWorkerQueue } = await import("./src/worker.ts");
+
+    const poolToken = "agent-capability-token";
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({
+      id: "pool",
+      orgId: "org",
+      name: "pool",
+      organizationScoped: true,
+    });
+    await db.insert(agentPoolTokens).values({
+      id: "pool-token",
+      agentPoolId: "pool",
+      token: createHash("sha256").update(poolToken).digest("hex"),
+    });
+    await db.insert(agents).values([
+      {
+        id: "tf-agent",
+        agentPoolId: "pool",
+        name: "tf-agent",
+        status: "idle",
+        iacBinaries: ["terraform"],
+      },
+      {
+        id: "tf-agent-2",
+        agentPoolId: "pool",
+        name: "tf-agent-2",
+        status: "idle",
+        iacBinaries: ["terraform"],
+      },
+      {
+        id: "tofu-agent",
+        agentPoolId: "pool",
+        name: "tofu-agent",
+        status: "idle",
+        iacBinaries: ["tofu"],
+      },
+    ]);
+    await db.insert(workspaces).values([
+      {
+        id: "tf-workspace",
+        orgId: "org",
+        name: "tf-workspace",
+        executionMode: "agent",
+        agentPoolId: "pool",
+        iacBinary: "terraform",
+      },
+      {
+        id: "tofu-workspace",
+        orgId: "org",
+        name: "tofu-workspace",
+        executionMode: "agent",
+        agentPoolId: "pool",
+        iacBinary: "tofu",
+      },
+    ]);
+    await db.insert(runs).values([
+      {
+        id: "tf-run",
+        workspaceId: "tf-workspace",
+        agentPoolId: "pool",
+        status: "pending",
+        createdAt: 1,
+      },
+      {
+        id: "tofu-run",
+        workspaceId: "tofu-workspace",
+        agentPoolId: "pool",
+        status: "pending",
+        createdAt: 2,
+      },
+    ]);
+
+    await pollWorkerQueue();
+    const jobs = await db.query.agentJobs.findMany({ orderBy: [asc(agentJobs.createdAt)] });
+
+    const poll = (agentId) => app.handle(new Request(
+      "http://terrence.test/api/v2/agents/" + agentId + "/jobs/poll",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer " + poolToken },
+      },
+    ));
+
+    // The terraform-only agent can only see the terraform job.
+    const tfClaim = await poll("tf-agent");
+    const tfClaimData = tfClaim.status === 200 ? (await tfClaim.json()).data : null;
+    // An agent re-polling while holding a claimed job resumes its in-flight
+    // job (protocol contract), so the tofu job's invisibility is proven with
+    // a second terraform-only agent: it must get 204.
+    const tfResumePoll = await poll("tf-agent");
+    const tfResumeData = tfResumePoll.status === 200 ? (await tfResumePoll.json()).data : null;
+    const tfAgent2Poll = await poll("tf-agent-2");
+
+    // The tofu-capable agent claims the tofu job.
+    const tofuClaim = await poll("tofu-agent");
+    const tofuClaimData = (await tofuClaim.json()).data;
+
+    const [tfRun, tofuRun, claimedTfJob, claimedTofuJob] = await Promise.all([
+      db.query.runs.findFirst({ where: eq(runs.id, "tf-run") }),
+      db.query.runs.findFirst({ where: eq(runs.id, "tofu-run") }),
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, tfClaimData?.id ?? "") }),
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, tofuClaimData?.id ?? "") }),
+    ]);
+
+    console.log(JSON.stringify({
+      queuedJobBinaries: jobs.map((job) => [job.runId, job.iacBinary]).sort((a, b) => a[0].localeCompare(b[0])),
+      tfClaimStatus: tfClaim.status,
+      tfClaimRunId: tfClaimData?.relationships?.run?.data?.id ?? null,
+      tfResumePoll: tfResumePoll.status,
+      tfResumeRunId: tfResumeData?.relationships?.run?.data?.id ?? null,
+      tfAgent2Poll: tfAgent2Poll.status,
+      tofuClaimStatus: tofuClaim.status,
+      tofuClaimRunId: tofuClaimData?.relationships?.run?.data?.id ?? null,
+      claimedTfBy: claimedTfJob?.agentId,
+      claimedTofuBy: claimedTofuJob?.agentId,
+      tfRunStatus: tfRun?.status,
+      tofuRunStatus: tofuRun?.status,
+    }));
+    process.exit(0);
+  `);
+
+  expect(result).toEqual({
+    queuedJobBinaries: [
+      ["tf-run", "terraform"],
+      ["tofu-run", "tofu"],
+    ],
+    tfClaimStatus: 200,
+    tfClaimRunId: "tf-run",
+    tfResumePoll: 200,
+    tfResumeRunId: "tf-run",
+    tfAgent2Poll: 204,
+    tofuClaimStatus: 200,
+    tofuClaimRunId: "tofu-run",
+    claimedTfBy: "tf-agent",
+    claimedTofuBy: "tofu-agent",
+    tfRunStatus: "planning",
+    tofuRunStatus: "planning",
+  });
+}, 30_000);

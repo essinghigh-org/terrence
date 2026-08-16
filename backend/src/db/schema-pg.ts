@@ -74,6 +74,7 @@ export const agentJobs = pgTable("agent_jobs", {
     agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     phase: text("phase").notNull(),
+    iacBinary: text("iac_binary").notNull().default("terraform"),
     status: text("status").notNull().default("queued"),
     result: jsonb("result"),
     errorMessage: text("error_message"),
@@ -134,6 +135,7 @@ export const agents = pgTable("agents", {
     ipAddress: text("ip_address"),
     version: text("version"),
     architecture: text("architecture"),
+    iacBinaries: jsonb("iac_binaries").notNull().default(["terraform"]),
     lastPingAt: bigint("last_ping_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agents.createdAt.defaultFn!()),
 });

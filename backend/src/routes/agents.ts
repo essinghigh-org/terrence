@@ -132,6 +132,7 @@ type AgentItem = Readonly<{
   readonly ipAddress: string | null;
   readonly version: string | null;
   readonly architecture: string | null;
+  readonly iacBinaries: readonly string[];
   readonly lastPingAt: number | null;
 }>;
 
@@ -592,7 +593,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, poolId) });
-    return { data: agentList.map((a: AgentItem): Record<string, unknown> => ({ id: a.id, type: "agents", attributes: { name: a.name, status: a.status, "ip-address": a.ipAddress, version: a.version, architecture: a.architecture, "last-ping-at": a.lastPingAt !== null ? new Date(a.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } })) };
+    return { data: agentList.map((a: AgentItem): Record<string, unknown> => ({ id: a.id, type: "agents", attributes: { name: a.name, status: a.status, "ip-address": a.ipAddress, version: a.version, architecture: a.architecture, "iac-binaries": a.iacBinaries, "last-ping-at": a.lastPingAt !== null ? new Date(a.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } })) };
   })
   .post("/api/v2/agent-pools/:pool_id/agents", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
     const poolId = params.pool_id ?? "";
@@ -607,9 +608,26 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const ipAddress = typeof attrs["ip-address"] === "string" ? attrs["ip-address"] : null;
     const version = typeof attrs.version === "string" ? attrs.version : null;
     const architecture = typeof attrs.architecture === "string" ? attrs.architecture : null;
-    await db.insert(agents).values({ id: agentId, agentPoolId: pool.id, name, status, ipAddress, version, architecture, lastPingAt: now, createdAt: now });
+    // tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
+    // declares it so the claim path only hands it matching jobs. Absent means
+    // terraform-only, preserving the pre-capability contract.
+    const rawIacBinaries = attrs["iac-binaries"];
+    let iacBinaries: string[] = ["terraform"];
+    if (rawIacBinaries !== undefined) {
+      if (
+        !Array.isArray(rawIacBinaries)
+        || rawIacBinaries.length === 0
+        || rawIacBinaries.some((binary: unknown): boolean =>
+          typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+      ) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
+      }
+      iacBinaries = [...new Set(rawIacBinaries as string[])];
+    }
+    await db.insert(agents).values({ id: agentId, agentPoolId: pool.id, name, status, ipAddress, version, architecture, iacBinaries, lastPingAt: now, createdAt: now });
     (set as { status: number }).status = 201;
-    return { data: { id: agentId, type: "agents", attributes: { name, status, "ip-address": ipAddress, version, architecture, "last-ping-at": new Date(now).toISOString() }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
+    return { data: { id: agentId, type: "agents", attributes: { name, status, "ip-address": ipAddress, version, architecture, "iac-binaries": iacBinaries, "last-ping-at": new Date(now).toISOString() }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
   })
   .get("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const agentId = params.agent_id ?? "";
@@ -617,7 +635,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (agent === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: agent.id, type: "agents", attributes: { name: agent.name, status: agent.status, "ip-address": agent.ipAddress, version: agent.version, architecture: agent.architecture, "last-ping-at": agent.lastPingAt !== null ? new Date(agent.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
+    return { data: { id: agent.id, type: "agents", attributes: { name: agent.name, status: agent.status, "ip-address": agent.ipAddress, version: agent.version, architecture: agent.architecture, "iac-binaries": agent.iacBinaries, "last-ping-at": agent.lastPingAt !== null ? new Date(agent.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
   })
   .delete("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const agentId = params.agent_id ?? "";

@@ -240,6 +240,8 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
     expect(body.data.attributes.name).toBe("worker-node-1");
     expect(body.data.attributes.status).toBe("idle");
     expect(body.data.attributes["ip-address"]).toBe("192.168.1.50");
+    // tfc-agent sends no iac-binaries: defaults to terraform-only.
+    expect(body.data.attributes["iac-binaries"]).toEqual(["terraform"]);
     agentId = body.data.id;
 
     const tokensResponse = await app.handle(
@@ -349,5 +351,137 @@ describe("TFE API v2 - Agent Pools & Agents", () => {
       })
     );
     expect(fetchRes.status).toBe(404);
+  });
+
+  test("agent registration accepts declared iac-binaries capabilities", async () => {
+    const poolRes = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/agent-pools`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: { attributes: { name: `capability-pool-${crypto.randomUUID().slice(0, 8)}` } },
+        }),
+      })
+    );
+    expect(poolRes.status).toBe(201);
+    const capabilityPoolId = (await poolRes.json()).data.id as string;
+
+    const tokenRes = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${capabilityPoolId}/authentication-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { description: "capability registration" } } }),
+      })
+    );
+    expect(tokenRes.status).toBe(201);
+    const poolToken = (await tokenRes.json()).data.attributes.token as string;
+
+    const register = async (attributes: Record<string, unknown>): Promise<Response> =>
+      app.handle(
+        new Request(`http://localhost/api/v2/agent-pools/${capabilityPoolId}/agents`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${poolToken}`,
+            "Content-Type": "application/vnd.api+json",
+          },
+          body: JSON.stringify({ data: { attributes } }),
+        })
+      );
+
+    const tofuAgent = await register({
+      name: "tofu-node",
+      "iac-binaries": ["tofu", "terraform"],
+    });
+    expect(tofuAgent.status).toBe(201);
+    expect((await tofuAgent.json()).data.attributes["iac-binaries"]).toEqual(["tofu", "terraform"]);
+
+    const tofuOnly = await register({
+      name: "tofu-only",
+      "iac-binaries": ["tofu"],
+    });
+    expect(tofuOnly.status).toBe(201);
+    expect((await tofuOnly.json()).data.attributes["iac-binaries"]).toEqual(["tofu"]);
+
+    // The stored capabilities are echoed on list and single-agent reads.
+    const listRes = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${capabilityPoolId}/agents`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    );
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()).data as Array<{ id: string; attributes: Record<string, unknown> }>;
+    expect(listed.map((a) => a.attributes["iac-binaries"])).toEqual(expect.arrayContaining([
+      ["tofu", "terraform"],
+      ["tofu"],
+    ]));
+    expect(listed.length).toBeGreaterThanOrEqual(2);
+    const bothBinaryAgent = listed.find((a): boolean =>
+      Array.isArray(a.attributes["iac-binaries"])
+      && (a.attributes["iac-binaries"] as readonly string[]).includes("tofu")
+      && (a.attributes["iac-binaries"] as readonly string[]).includes("terraform"));
+    if (bothBinaryAgent === undefined) throw new Error("Expected a tofu+terraform agent to be listed");
+
+    const showRes = await app.handle(
+      new Request(`http://localhost/api/v2/agents/${bothBinaryAgent.id}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    );
+    expect(showRes.status).toBe(200);
+    expect((await showRes.json()).data.attributes["iac-binaries"]).toEqual(["tofu", "terraform"]);
+  });
+
+  test("agent registration rejects invalid iac-binaries", async () => {
+    const poolRes = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/agent-pools`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: { attributes: { name: `invalid-pool-${crypto.randomUUID().slice(0, 8)}` } },
+        }),
+      })
+    );
+    expect(poolRes.status).toBe(201);
+    const invalidPoolId = (await poolRes.json()).data.id as string;
+
+    const tokenRes = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${invalidPoolId}/authentication-tokens`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { description: "invalid registration" } } }),
+      })
+    );
+    const poolToken = (await tokenRes.json()).data.attributes.token as string;
+
+    const invalidPayloads: Array<Record<string, unknown>> = [
+      { name: "bad-value", "iac-binaries": ["golang"] },
+      { name: "mixed-bad", "iac-binaries": ["tofu", "golang"] },
+      { name: "empty", "iac-binaries": [] },
+      { name: "not-array", "iac-binaries": "tofu" },
+    ];
+    for (const attributes of invalidPayloads) {
+      const res = await app.handle(
+        new Request(`http://localhost/api/v2/agent-pools/${invalidPoolId}/agents`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${poolToken}`,
+            "Content-Type": "application/vnd.api+json",
+          },
+          body: JSON.stringify({ data: { attributes } }),
+        })
+      );
+      expect(res.status).toBe(422);
+    }
   });
 });

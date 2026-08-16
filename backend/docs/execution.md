@@ -40,6 +40,10 @@ Agent pools connect external machines to Terrence:
 
 Agent-mode workspaces reference an agent pool. Pool scoping restricts which projects and workspaces a pool can serve.
 
+### Agent capabilities
+
+An agent declares which IaC binaries it can execute at registration (`iac-binaries`: `tofu`, `terraform`, or both). Agents that omit the attribute default to `["terraform"]`, which matches `tfc-agent`. The server resolves each run's binary from the workspace (`iac-binary`, unset means `terraform` for agent execution) and only offers a job to agents that declared the matching binary. A workspace set to `tofu` waits for an agent that declared `tofu`; a plain `tfc-agent` can never claim it.
+
 ### Agent lifecycle
 
 - The agent polls for jobs and claims one at a time.

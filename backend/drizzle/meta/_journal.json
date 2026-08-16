@@ -57,6 +57,13 @@
       "when": 1786751716181,
       "tag": "0007_overconfident_demogoblin",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786880506029,
+      "tag": "0008_massive_frightful_four",
+      "breakpoints": true
     }
   ]
 }

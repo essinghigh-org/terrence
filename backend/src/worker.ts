@@ -2536,6 +2536,11 @@ export async function pollWorkerQueue(): Promise<string[]> {
           runId: run.id,
           agentPoolId: pool.id,
           phase: "plan",
+          // Resolve the IaC binary now so claimAgentJob can route by
+          // capability. Unset workspace binary means terraform for agent
+          // execution (the tfc-agent contract); the org default only
+          // applies to locally executed runs.
+          iacBinary: workspace.iacBinary ?? "terraform",
           status: "queued",
           createdAt: Date.now(),
         });

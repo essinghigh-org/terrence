@@ -1056,6 +1056,7 @@ export const agents = sqliteTable("agents", {
   ipAddress: text("ip_address"),
   version: text("version"),
   architecture: text("architecture"),
+  iacBinaries: text("iac_binaries", { mode: "json" }).$type<string[]>().notNull().default(["terraform"]),
   lastPingAt: integer("last_ping_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
@@ -1066,6 +1067,12 @@ export const agentJobs = sqliteTable("agent_jobs", {
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
   agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
   phase: text("phase").notNull(), // 'plan' or 'apply'
+  // Resolved IaC binary for this job (workspace.iac_binary ?? 'terraform' at
+  // queue time). Capability filtering in claimAgentJob matches against the
+  // claiming agent's declared iac_binaries. The 'terraform' default preserves
+  // pre-capability behavior: jobs created before this column existed (or by
+  // direct inserts) stay claimable by plain tfc-agents.
+  iacBinary: text("iac_binary").notNull().default("terraform"),
   status: text("status").notNull().default("queued"), // 'queued', 'claimed', 'completed', 'errored'
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
   errorMessage: text("error_message"),

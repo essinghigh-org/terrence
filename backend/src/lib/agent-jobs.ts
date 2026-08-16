@@ -501,11 +501,21 @@ export async function claimAgentJob(agent: Agent): Promise<ClaimedAgentJob | und
   });
   if (existing !== undefined) return claimedJobDetails(existing);
 
+  // Capability routing: only jobs whose resolved IaC binary the agent
+  // declared at registration are claimable. A plain tfc-agent (default
+  // ["terraform"]) can never claim a tofu job; it waits for an agent that
+  // declared tofu. Fall back to terraform-only for rows predating the
+  // column default (defensive; the DDL default covers new rows).
+  const agentBinaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0
+    ? agent.iacBinaries
+    : ["terraform"];
+
   for (let attempts = 0; attempts < 10; attempts += 1) {
     const candidate = await db.query.agentJobs.findFirst({
       where: and(
         eq(agentJobs.agentPoolId, agent.agentPoolId),
         eq(agentJobs.status, "queued"),
+        inArray(agentJobs.iacBinary, agentBinaries),
       ),
       orderBy: [asc(agentJobs.createdAt)],
     });
@@ -625,12 +635,19 @@ export async function insertAgentApplyJobTx(
   agentPoolId: string,
   statusTimestamps: Readonly<Record<string, string>> | null,
 ): Promise<AgentJob> {
+  const run = await database.query.runs.findFirst({ where: eq(runs.id, runId) });
+  if (run === undefined) throw new Error("Run disappeared while its agent apply job was queued");
+  const workspace = await database.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+  // Same resolution as the plan job: unset workspace binary means terraform
+  // for agent execution (tfc-agent contract), never the org default.
+  const iacBinary = workspace?.iacBinary ?? "terraform";
   const job: AgentJob = {
     id: `ajob-${crypto.randomUUID()}`,
     runId,
     agentPoolId,
     agentId: null,
     phase: "apply",
+    iacBinary,
     status: "queued",
     result: null,
     errorMessage: null,
