@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
+  BookOpen,
   Building2,
   Clipboard,
   FolderGit2,
@@ -29,7 +30,7 @@ import { getRecentWorkspaces, subscribeWorkspaceShortcuts } from "../lib/workspa
 
 type CommandItemType = {
   id: string;
-  category: "Navigation" | "Organizations" | "Workspaces" | "Actions" | "Recent";
+  category: "Navigation" | "Organizations" | "Workspaces" | "Actions" | "Recent" | "Documentation";
   icon: typeof Box;
   title: string;
   subtitle?: string | undefined;
@@ -53,6 +54,7 @@ export function CommandPalette({
   const [search, setSearch] = useState("");
   const [orgs, setOrgs] = useState<{ name: string }[]>([]);
   const [workspaces, setWorkspaces] = useState<{ name: string }[]>([]);
+  const [docs, setDocs] = useState<{ slug: string; title: string; category: string }[]>([]);
   const [, setRecentRevision] = useState(0);
   // 14.18: keep the Recent list live while the palette is open (a visit made
   // elsewhere in the sidebar bumps the revision through the shortcut bus).
@@ -87,6 +89,22 @@ export function CommandPalette({
         }
       }).catch(() => {});
     }
+
+    // Bundled documentation index: every doc page is reachable from the
+    // palette so cmd+k works as the product-wide search surface.
+    void fetchApi<{ data?: unknown }>("/docs", { signal: controller.signal })
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        const records = (result as { data?: unknown }).data;
+        if (!Array.isArray(records)) return;
+        setDocs(records.flatMap((record): { slug: string; title: string; category: string }[] => {
+          const attributes = (record as { attributes?: unknown }).attributes;
+          if (typeof attributes !== "object" || attributes === null) return [];
+          const entry = attributes as { slug?: unknown; title?: unknown; category?: unknown };
+          if (typeof entry.slug !== "string" || typeof entry.title !== "string" || typeof entry.category !== "string") return [];
+          return [{ slug: entry.slug, title: entry.title, category: entry.category }];
+        }));
+      }).catch(() => {});
 
     return () => {
       controller.abort();
@@ -195,6 +213,17 @@ export function CommandPalette({
           },
         }))
       : []),
+    ...docs.map((doc) => ({
+      id: `doc-${doc.slug}`,
+      category: "Documentation" as const,
+      icon: BookOpen,
+      title: doc.title,
+      subtitle: doc.category,
+      perform: () => {
+        navigate(`/app/docs/${encodeURIComponent(doc.slug)}`);
+        onOpenChange(false);
+      },
+    })),
     // 14.17: permission-aware actions. Workspace-scoped actions are only shown
     // when a workspace is on screen; the "New workspace" action is gated on the
     // can-manage-workspaces permission.
@@ -372,7 +401,7 @@ export function CommandPalette({
                   list.push(item);
                   grouped.set(item.category, list);
                 }
-                const categoryOrder = ["Recent", "Actions", "Navigation", "Workspaces", "Organizations"];
+                const categoryOrder = ["Recent", "Actions", "Navigation", "Workspaces", "Organizations", "Documentation"];
                 const rows: React.JSX.Element[] = [];
                 for (const category of categoryOrder) {
                   const list = grouped.get(category);

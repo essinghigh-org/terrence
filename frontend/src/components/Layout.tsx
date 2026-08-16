@@ -10,6 +10,7 @@ import {
   Activity,
   ArrowLeft,
   Bell,
+  BookOpen,
   Box,
   Building2,
   ChevronDown,
@@ -304,7 +305,7 @@ export function Layout({
     matchPath({ path: "/app/:orgName", end: true }, location.pathname);
   const routeOrgName = readableRouteParam(organizationMatch?.params.orgName);
   const orgName =
-    routeOrgName === "account" || routeOrgName === "admin"
+    routeOrgName === "account" || routeOrgName === "admin" || routeOrgName === "docs"
       ? undefined
       : routeOrgName;
   const workspaceName = readableRouteParam(workspaceMatch?.params.workspaceName);
@@ -371,7 +372,9 @@ export function Layout({
         ? "Account Settings"
         : inSiteAdministration
           ? "Site Administration"
-          : "Organizations";
+          : location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/")
+            ? "Documentation"
+            : "Organizations";
 
   usePageTitle(computedTitle);
 
@@ -1122,14 +1125,24 @@ export function Layout({
     }
 
     return (
-      <SidebarNavLink
-        active={location.pathname === "/app"}
-        collapsed={sidebarCollapsed}
-        icon={Building2}
-        label="Organizations"
-        onNavigate={closeMobileNavigation}
-        to="/app"
-      />
+      <>
+        <SidebarNavLink
+          active={location.pathname === "/app"}
+          collapsed={sidebarCollapsed}
+          icon={Building2}
+          label="Organizations"
+          onNavigate={closeMobileNavigation}
+          to="/app"
+        />
+        <SidebarNavLink
+          active={location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/")}
+          collapsed={sidebarCollapsed}
+          icon={BookOpen}
+          label="Documentation"
+          onNavigate={closeMobileNavigation}
+          to="/app/docs"
+        />
+      </>
     );
   };
 

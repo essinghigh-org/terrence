@@ -96,6 +96,7 @@ const ChangeRequests = lazyView(() => import("./views/ChangeRequests"), "ChangeR
 const ChangeRequestDetail = lazyView(() => import("./views/ChangeRequestDetail"), "ChangeRequestDetail");
 const AdminOperationsSettings = lazyView(() => import("./views/AdminOperationsSettings"), "AdminOperationsSettings");
 const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
+const Docs = lazyView(() => import("./views/Docs"), "Docs");
 const NotFound = lazyView(() => import("./views/NotFound"), "NotFound");
 
 export function RegistrySettingsRedirect({ tab }: Readonly<{ tab: "modules" | "providers" }>): JSX.Element {
@@ -198,6 +199,8 @@ function App(): JSX.Element {
               <Route path="admin/operations" element={<AdminOperationsSettings />} />
               <Route path="admin/database" element={<AdminDatabaseMigration />} />
               <Route path="account" element={<AccountSettings />} />
+              <Route path="docs" element={<Docs />} />
+              <Route path="docs/:slug" element={<Docs />} />
               <Route path=":orgName" element={<Workspaces />} />
               <Route path=":orgName/workspaces" element={<Workspaces />} />
               <Route path=":orgName/registry" element={<Registry />} />

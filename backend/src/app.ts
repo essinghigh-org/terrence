@@ -70,6 +70,7 @@ import { assessmentRoutes } from "./routes/assessments";
 import { changeRequestRoutes } from "./routes/change-requests";
 import { eventsRoutes } from "./routes/events";
 import { policyEvaluationRoutes } from "./routes/policy-evaluations";
+import { docsRoutes } from "./routes/docs";
 import { workspaceTransferRoutes } from "./routes/workspace-transfers";
 import { planExportRoutes } from "./routes/plan-exports";
 import { cidrRangeRoutes } from "./routes/cidr-ranges";
@@ -726,7 +727,8 @@ export const app = new Elysia()
   .use(organizationRoleRoutes)
   .use(samlRoutes)
   .use(oidcRoutes)
-  .use(policyEvaluationRoutes);
+  .use(policyEvaluationRoutes)
+  .use(docsRoutes);
 
 // Start the background worker queue. Deferred out of module evaluation:
 // ./db/index.ts is a top-level-await module, and the dynamic import weave
