@@ -76,6 +76,8 @@ Failed attempts are rate limited. See [Security](security).
 - `GET /api/v2/admin/auth` (current configuration)
 - `POST /api/v2/oidc/authorize`
 - `POST /api/v2/saml/authorize`
-- `POST /api/v2/login`
+- `POST /api/v2/users/login`
+- `POST /api/v2/users/login/mfa`
+- `POST /api/v2/users/refresh`
 - `POST /api/v2/signup`
 - SCIM: `POST /scim/v2/Users`, `POST /scim/v2/Groups`
