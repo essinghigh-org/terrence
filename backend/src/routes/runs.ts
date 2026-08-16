@@ -611,13 +611,14 @@ export const runRoutes = new Elysia({ name: "runs" })
   .post("/api/v2/runs/:run_id/modules", async ({ params, run, set }: ParamCtx): Promise<unknown> => {
     // Module artifacts callback from the terraform CLI (cloud protocol). The
     // run's own token may post module metadata; the payload is informational
-    // only, so Terrence acknowledges and discards it.
+    // only, so Terrence acknowledges and discards it. tfc-agent 1.30.1 fails
+    // the run unless the response status is 201 (verified in traffic capture).
     const runId = params.run_id ?? "";
     if ((run === undefined || run === null || run.runId !== runId)) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    (set as { status: number }).status = 200;
+    (set as { status: number }).status = 201;
     return { data: { modules: [] } };
   })
   .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
