@@ -25,6 +25,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
+import { useAgentPools } from "@/hooks/useAgentPools";
+import type { AgentPoolResource } from "@/hooks/useAgentPools";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 
 type WorkspaceSettingsResource = {
@@ -34,21 +36,71 @@ type WorkspaceSettingsResource = {
     description?: string | null;
     "auto-apply"?: boolean;
     "auto-apply-run-trigger"?: boolean;
+    "agent-pool-id"?: string | null;
     "execution-mode"?: string;
     "global-remote-state"?: boolean;
     "iac-binary"?: string;
     "project-remote-state"?: boolean;
+    "setting-overwrites"?: Readonly<Record<string, boolean>>;
     "terraform-version"?: string;
     "working-directory"?: string | null;
     permissions?: { "can-update"?: boolean };
     [key: string]: JsonValue;
   };
+  relationships?: {
+    project?: { data: { id: string; type: string } | null };
+  };
 };
 
 type IacBinary = "tofu" | "terraform";
 type ExecutionMode = "agent" | "local" | "remote";
+type ExecutionModeSetting = ExecutionMode | "inherit";
 type RemoteStateSharing = "global" | "project" | "specific";
 type RemoteStateLoadState = "error" | "idle" | "loading" | "ready";
+
+type ProjectSettingsResource = {
+  attributes?: {
+    "default-execution-mode"?: string;
+  };
+};
+
+type ProjectSettingsResponse = {
+  data?: ProjectSettingsResource;
+};
+
+type WorkspaceSettingsUpdate = {
+  name: string;
+  description: string | null;
+  "working-directory": string;
+  "global-remote-state": boolean;
+  "project-remote-state": boolean;
+  "iac-binary": IacBinary;
+  "terraform-version": string;
+  "auto-apply": boolean;
+  "auto-apply-run-trigger": boolean;
+  "setting-overwrites": {
+    "execution-mode": boolean;
+    "agent-pool": boolean;
+  };
+  "execution-mode"?: ExecutionMode;
+  "agent-pool-id"?: string;
+};
+
+function parseExecutionMode(value: string | undefined): ExecutionMode {
+  return value === "agent" || value === "local" ? value : "remote";
+}
+
+function executionModeSetting(resource: WorkspaceSettingsResource): ExecutionModeSetting {
+  return resource.attributes["setting-overwrites"]?.["execution-mode"] === true
+    ? parseExecutionMode(resource.attributes["execution-mode"])
+    : "inherit";
+}
+
+function agentPoolSetting(resource: WorkspaceSettingsResource): string {
+  return resource.attributes["setting-overwrites"]?.["agent-pool"] === true
+    ? resource.attributes["agent-pool-id"] ?? ""
+    : "";
+}
 
 type RemoteStateWorkspace = {
   id: string;
@@ -67,6 +119,7 @@ export function WorkspaceSettings({
   onSaved: (workspace: WorkspaceSettingsResource) => void;
 }>): React.JSX.Element {
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
+  const workspaceExecutionMode = parseExecutionMode(workspace.attributes["execution-mode"]);
   const [iacBinary, setIacBinary] = useState<IacBinary>(
     workspace.attributes["iac-binary"] === "terraform" ? "terraform" : "tofu",
   );
@@ -75,11 +128,9 @@ export function WorkspaceSettings({
   );
   const [name, setName] = useState(workspace.attributes.name);
   const [description, setDescription] = useState(workspace.attributes.description ?? "");
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>(
-    workspace.attributes["execution-mode"] === "agent"
-      ? "agent"
-      : workspace.attributes["execution-mode"] === "local" ? "local" : "remote",
-  );
+  const [executionMode, setExecutionMode] = useState<ExecutionModeSetting>(executionModeSetting(workspace));
+  const [agentPoolId, setAgentPoolId] = useState(agentPoolSetting(workspace));
+  const [projectExecutionMode, setProjectExecutionMode] = useState<ExecutionMode>(workspaceExecutionMode);
   const [workingDirectory, setWorkingDirectory] = useState(
     workspace.attributes["working-directory"] ?? "",
   );
@@ -105,6 +156,10 @@ export function WorkspaceSettings({
   const [savedSnapshot, setSavedSnapshot] = useState<WorkspaceSettingsResource>(workspace);
   const [savedConsumerKeys, setSavedConsumerKeys] = useState("");
 
+  const projectId = workspace.relationships?.project?.data?.id ?? "";
+  const effectiveExecutionMode = executionMode === "inherit" ? projectExecutionMode : executionMode;
+  const agentPoolsState = useAgentPools(orgName, canUpdate && effectiveExecutionMode === "agent");
+
   const normalizedName = name.trim();
   const invalidName = normalizedName === "" || !/^[A-Za-z0-9_-]+$/.test(normalizedName);
 
@@ -113,11 +168,8 @@ export function WorkspaceSettings({
     || description !== (savedSnapshot.attributes.description ?? "")
     || iacBinary !== (savedSnapshot.attributes["iac-binary"] === "terraform" ? "terraform" : "tofu")
     || terraformVersion !== (savedSnapshot.attributes["terraform-version"] ?? "latest")
-    || executionMode !== (
-      savedSnapshot.attributes["execution-mode"] === "agent"
-        ? "agent"
-        : savedSnapshot.attributes["execution-mode"] === "local" ? "local" : "remote"
-    )
+    || executionMode !== executionModeSetting(savedSnapshot)
+    || agentPoolId !== agentPoolSetting(savedSnapshot)
     || workingDirectory !== (savedSnapshot.attributes["working-directory"] ?? "")
     || remoteStateSharing !== (
       savedSnapshot.attributes["global-remote-state"] === true
@@ -130,6 +182,17 @@ export function WorkspaceSettings({
       && [...remoteStateConsumerIds].sort().join(",") !== savedConsumerKeys);
 
   useUnsavedChangesWarning(dirty);
+
+  const agentPoolOptions: AgentPoolResource[] = agentPoolId !== ""
+    && !agentPoolsState.pools.some((pool): boolean => pool.id === agentPoolId)
+    ? [
+        {
+          id: agentPoolId,
+          attributes: { name: `Configured pool (${agentPoolId})` },
+        },
+        ...agentPoolsState.pools,
+      ]
+    : agentPoolsState.pools;
 
   useEffect((): (() => void) | undefined => {
     if (!canUpdate) {
@@ -195,10 +258,49 @@ export function WorkspaceSettings({
     return (): void => { controller.abort(); };
   }, [canUpdate, orgName, remoteStateReload, workspace.id]);
 
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setProjectExecutionMode(workspaceExecutionMode);
+    if (projectId === "") {
+      return (): void => { controller.abort(); };
+    }
+
+    void fetchApi<ProjectSettingsResponse>(`/projects/${encodeURIComponent(projectId)}`, { signal: controller.signal })
+      .then((response): void => {
+        if (controller.signal.aborted) return;
+        setProjectExecutionMode(parseExecutionMode(response.data?.attributes?.["default-execution-mode"]));
+      })
+      .catch((): void => {
+        // The workspace's effective mode remains a safe fallback when the
+        // project document cannot be read by the current principal.
+      });
+
+    return (): void => { controller.abort(); };
+  }, [projectId, workspace.id, workspaceExecutionMode]);
+
   const saveSettings = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
     if (!canUpdate || invalidName) return;
     const normalizedVersion = terraformVersion.trim() === "" ? "latest" : terraformVersion.trim();
+    const attributes: WorkspaceSettingsUpdate = {
+      name: normalizedName,
+      description: description.trim() === "" ? null : description.trim(),
+      "working-directory": workingDirectory.trim(),
+      "global-remote-state": remoteStateSharing === "global",
+      "project-remote-state": remoteStateSharing === "project",
+      "iac-binary": iacBinary,
+      "terraform-version": normalizedVersion,
+      "auto-apply": autoApply,
+      "auto-apply-run-trigger": autoApplyRunTrigger,
+      "setting-overwrites": {
+        "execution-mode": executionMode !== "inherit",
+        "agent-pool": effectiveExecutionMode === "agent" && agentPoolId !== "",
+      },
+    };
+    if (executionMode !== "inherit") attributes["execution-mode"] = executionMode;
+    if (effectiveExecutionMode === "agent" && agentPoolId !== "") {
+      attributes["agent-pool-id"] = agentPoolId;
+    }
     setSaving(true);
     setError("");
     setSaved(false);
@@ -210,18 +312,7 @@ export function WorkspaceSettings({
           data: {
             id: workspace.id,
             type: "workspaces",
-            attributes: {
-              name: normalizedName,
-              description: description.trim() === "" ? null : description.trim(),
-              "execution-mode": executionMode,
-              "working-directory": workingDirectory.trim(),
-              "global-remote-state": remoteStateSharing === "global",
-              "project-remote-state": remoteStateSharing === "project",
-              "iac-binary": iacBinary,
-              "terraform-version": normalizedVersion,
-              "auto-apply": autoApply,
-              "auto-apply-run-trigger": autoApplyRunTrigger,
-            },
+            attributes,
           },
         }),
       }) as { data: WorkspaceSettingsResource };
@@ -229,11 +320,9 @@ export function WorkspaceSettings({
       setSavedSnapshot(response.data);
       setName(response.data.attributes.name);
       setDescription(response.data.attributes.description ?? "");
-      setExecutionMode(
-        response.data.attributes["execution-mode"] === "agent"
-          ? "agent"
-          : response.data.attributes["execution-mode"] === "local" ? "local" : "remote",
-      );
+      setExecutionMode(executionModeSetting(response.data));
+      setAgentPoolId(agentPoolSetting(response.data));
+      setProjectExecutionMode(parseExecutionMode(response.data.attributes["execution-mode"]));
       setWorkingDirectory(response.data.attributes["working-directory"] ?? "");
       setRemoteStateSharing(
         response.data.attributes["global-remote-state"] === true
@@ -319,21 +408,46 @@ export function WorkspaceSettings({
                 name="execution-mode"
                 value={executionMode}
                 onValueChange={(value: string): void => {
-                  // SAFETY: the select options are generated from the same union; the change event carries one of them.
-                  setExecutionMode(value as ExecutionMode);
+                  const nextMode: ExecutionModeSetting = value === "agent" || value === "local" || value === "remote"
+                    ? value
+                    : "inherit";
+                  setExecutionMode(nextMode);
+                  const nextEffectiveMode = nextMode === "inherit" ? projectExecutionMode : nextMode;
+                  if (nextEffectiveMode !== "agent") setAgentPoolId("");
                 }}
                 disabled={!canUpdate}
               >
+                <SelectItem value="inherit">Use project default</SelectItem>
                 <SelectItem value="remote">Remote</SelectItem>
                 <SelectItem value="local">Local</SelectItem>
-                {workspace.attributes["execution-mode"] === "agent" && (
-                  <SelectItem value="agent">Agent</SelectItem>
-                )}
+                <SelectItem value="agent">Agent</SelectItem>
               </Select>
               <FieldDescription>
-                Remote executes runs here. Local stores state here while execution happens outside this service.
+                Use the project default, or override execution for this workspace.
               </FieldDescription>
             </Field>
+            {effectiveExecutionMode === "agent" && (
+              <Field data-disabled={!canUpdate}>
+                <FieldLabel htmlFor="workspace-agent-pool">Agent pool</FieldLabel>
+                <Select
+                  id="workspace-agent-pool"
+                  name="agent-pool"
+                  value={agentPoolId}
+                  onValueChange={setAgentPoolId}
+                  disabled={!canUpdate || agentPoolsState.loading}
+                >
+                  <SelectItem value="">Use project default</SelectItem>
+                  {agentPoolOptions.map((pool): React.JSX.Element => (
+                    <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
+                  ))}
+                </Select>
+                <FieldDescription>
+                  Use the project&apos;s pool, or select a workspace-specific pool.
+                </FieldDescription>
+                {agentPoolsState.loading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
+                {agentPoolsState.error !== "" && <FieldError>{agentPoolsState.error}</FieldError>}
+              </Field>
+            )}
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
               <Select

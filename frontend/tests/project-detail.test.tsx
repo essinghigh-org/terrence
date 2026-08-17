@@ -35,12 +35,12 @@ const baseFetchMock = (overrides: Readonly<Record<string, (init?: RequestInit) =
   mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const method = init?.method ?? "GET";
+    const override = overrides[`${method} ${url}`];
+    if (override !== undefined) return override(init);
     if (url === "/api/v2/projects/prj-1" && method === "GET") return json({ data: project });
     if (url.startsWith("/api/v2/organizations/acme/workspaces") && method === "GET") return json({ data: [] });
     if (url.startsWith("/api/v2/organizations/acme/runs") && method === "GET") return json({ data: [] });
     if (url.startsWith("/api/v2/organizations/acme/varsets") && method === "GET") return json({ data: [] });
-    const override = overrides[`${method} ${url}`];
-    if (override !== undefined) return override(init);
     throw new Error(`Unexpected request: ${method} ${url}`);
   });
 
@@ -93,6 +93,62 @@ await waitFor((): void => {
   expect(posted.data?.attributes?.name).toBe("Shared");
   expect(posted.data?.attributes?.["parent-project-id"]).toBe("prj-1");
   await waitFor((): void => { expect(view.getByText("Shared")).toBeTruthy(); });
+});
+
+test("saves a project default execution mode and agent pool", async () => {
+  let postedBody: string | undefined;
+  const projectWithSettings = {
+    ...project,
+    attributes: {
+      ...project.attributes,
+      "default-execution-mode": "remote",
+      "setting-overwrites": { "execution-mode": false },
+    },
+    relationships: { "default-agent-pool": { data: null } },
+  };
+  const fetchMock = baseFetchMock({
+    "GET /api/v2/projects/prj-1": () => json({ data: projectWithSettings }),
+    "GET /api/v2/organizations/acme/agent-pools": () => json({
+      data: [{ id: "apool-build", attributes: { name: "Build pool" } }],
+    }),
+    "PATCH /api/v2/projects/prj-1": (init) => {
+      // SAFETY: this component sends the PATCH body through JSON.stringify.
+      postedBody = init?.body as string;
+      return json({
+        data: {
+          ...projectWithSettings,
+          attributes: { ...projectWithSettings.attributes, "default-execution-mode": "agent" },
+          relationships: { "default-agent-pool": { data: { id: "apool-build", type: "agent-pools" } } },
+        },
+      });
+    },
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = renderProject("settings");
+  const executionMode = await view.findByLabelText("Default execution mode");
+  fireEvent.change(executionMode, { target: { value: "agent" } });
+  await view.findByRole("option", { name: "Build pool" });
+  fireEvent.change(view.getByLabelText("Default agent pool"), {
+    target: { value: "apool-build" },
+  });
+
+  const form = view.getByRole("button", { name: "Save changes" }).closest("form");
+  expect(form).not.toBeNull();
+  // SAFETY: the form is present because the preceding role query found its submit button.
+  fireEvent.submit(form as HTMLFormElement);
+
+  await waitFor((): void => { expect(postedBody).toBeDefined(); });
+  if (postedBody === undefined) throw new Error("Expected a serialized project PATCH body");
+  // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
+  const posted = JSON.parse(postedBody) as {
+    data?: {
+      attributes?: { "default-execution-mode"?: string };
+      relationships?: { "default-agent-pool"?: { data?: { id?: string } | null } };
+    };
+  };
+  expect(posted.data?.attributes?.["default-execution-mode"]).toBe("agent");
+  expect(posted.data?.relationships?.["default-agent-pool"]?.data?.id).toBe("apool-build");
 });
 
 test("deletes a project from the project detail settings", async () => {

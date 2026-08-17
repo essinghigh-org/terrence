@@ -20,8 +20,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -29,6 +30,8 @@ import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi } from "@/lib/api";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
+import { useAgentPools } from "@/hooks/useAgentPools";
+import type { AgentPoolResource } from "@/hooks/useAgentPools";
 
 /** Read the data array from a JSON:API list envelope, or [] when absent. */
 function dataArray<T>(response: unknown): T[] {
@@ -49,10 +52,25 @@ type Project = Readonly<{
     description?: string | null;
     "workspace-count"?: number;
     "team-count"?: number;
+    "default-execution-mode"?: string;
+    "setting-overwrites"?: Readonly<Record<string, boolean>>;
     "created-at"?: string;
     permissions?: Readonly<{ "can-update"?: boolean; "can-destroy"?: boolean }>;
   }>;
+  relationships?: Readonly<{
+    "default-agent-pool"?: Readonly<{ data?: Readonly<{ id: string }> | null }>;
+  }>;
 }>;
+
+type ExecutionMode = "agent" | "local" | "remote";
+
+function parseExecutionMode(value: string | undefined): ExecutionMode {
+  return value === "agent" || value === "local" ? value : "remote";
+}
+
+function projectAgentPoolId(project: Project | null): string {
+  return project?.relationships?.["default-agent-pool"]?.data?.id ?? "";
+}
 
 type Workspace = Readonly<{
   id: string;
@@ -119,6 +137,8 @@ export function ProjectDetail({
   const [editOpen, setEditOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [defaultExecutionMode, setDefaultExecutionMode] = useState<ExecutionMode>("remote");
+  const [defaultAgentPoolId, setDefaultAgentPoolId] = useState("");
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -137,7 +157,7 @@ export function ProjectDetail({
     setLoadError("");
     try {
       const [projectResponse, workspaceResponse, runResponse, varsetResponse] = await Promise.all([
-        fetchApi(`/projects/${encodeURIComponent(projectId)}`, signal === undefined ? {} : { signal }),
+        fetchApi<{ data?: Project }>(`/projects/${encodeURIComponent(projectId)}`, signal === undefined ? {} : { signal }),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
           signal === undefined ? {} : { signal },
@@ -153,8 +173,15 @@ export function ProjectDetail({
           .catch((): VariableSet[] => []),
       ]);
       if (signal?.aborted === true) return;
-      // SAFETY: the project endpoint returns { data: Project } per contract.
-      setProject((projectResponse as { data?: Project }).data ?? null);
+      // SAFETY: the project endpoint returns the JSON:API project envelope.
+      const loadedProject = projectResponse.data ?? null;
+      setProject(loadedProject);
+      if (loadedProject !== null) {
+        setName(loadedProject.attributes.name);
+        setDescription(loadedProject.attributes.description ?? "");
+        setDefaultExecutionMode(parseExecutionMode(loadedProject.attributes["default-execution-mode"]));
+        setDefaultAgentPoolId(projectAgentPoolId(loadedProject));
+      }
       setWorkspaces(dataArray<Workspace>(workspaceResponse));
       setVariableSets(varsetResponse);
       const byWorkspace = new Map<string, RunSummary>();
@@ -184,12 +211,17 @@ export function ProjectDetail({
 
   const canUpdate = project?.attributes.permissions?.["can-update"] === true;
   const canDestroy = project?.attributes.permissions?.["can-destroy"] === true;
+  const agentPoolsState = useAgentPools(orgName, canUpdate === true && defaultExecutionMode === "agent");
 
   const saveProject = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (project === null || projectId === undefined) return;
+    if (!canUpdate || project === null || projectId === undefined) return;
     if (name.trim() === "") {
       setFormError("Name is required");
+      return;
+    }
+    if (defaultExecutionMode === "agent" && defaultAgentPoolId === "") {
+      setFormError("Select an agent pool for agent execution mode");
       return;
     }
     setSaving(true);
@@ -205,11 +237,22 @@ export function ProjectDetail({
             attributes: {
               name: name.trim(),
               description: description.trim() === "" ? null : description.trim(),
+              "default-execution-mode": defaultExecutionMode,
+            },
+            relationships: {
+              "default-agent-pool": {
+                data: defaultExecutionMode === "agent"
+                  ? { id: defaultAgentPoolId, type: "agent-pools" }
+                  : null,
+              },
             },
           },
         }),
       }) as { data?: Project };
-      setProject(response.data ?? project);
+      const savedProject = response.data ?? project;
+      setProject(savedProject);
+      setDefaultExecutionMode(parseExecutionMode(savedProject.attributes["default-execution-mode"]));
+      setDefaultAgentPoolId(projectAgentPoolId(savedProject));
       setEditOpen(false);
       toast.add({ title: "Project updated", type: "success" });
     } catch (error: unknown) {
@@ -291,6 +334,16 @@ export function ProjectDetail({
     { id: "settings", label: "Settings" },
   ];
   const isSettings = activeSection === "settings" || activeSection === "variable-sets";
+  const agentPoolOptions: AgentPoolResource[] = defaultAgentPoolId !== ""
+    && !agentPoolsState.pools.some((pool): boolean => pool.id === defaultAgentPoolId)
+    ? [
+        {
+          id: defaultAgentPoolId,
+          attributes: { name: `Configured pool (${defaultAgentPoolId})` },
+        },
+        ...agentPoolsState.pools,
+      ]
+    : agentPoolsState.pools;
 
   return (
     <div className="w-full max-w-full">
@@ -622,7 +675,9 @@ export function ProjectDetail({
           <Card>
             <CardHeader>
               <CardTitle>General settings</CardTitle>
-              <CardDescription>Edit project name and description.</CardDescription>
+              <CardDescription>
+                Set the default execution mode and agent pool for workspaces in this project. Workspaces can override these defaults.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={saveProject} className="flex flex-col gap-4">
@@ -651,6 +706,49 @@ export function ProjectDetail({
                       placeholder="What is this project for?"
                     />
                   </Field>
+                  <Field data-disabled={!canUpdate}>
+                    <FieldLabel htmlFor="project-default-execution-mode">Default execution mode</FieldLabel>
+                    <Select
+                      id="project-default-execution-mode"
+                      name="default-execution-mode"
+                      value={defaultExecutionMode}
+                      onValueChange={(value: string): void => {
+                        const mode = parseExecutionMode(value);
+                        setDefaultExecutionMode(mode);
+                        if (mode !== "agent") setDefaultAgentPoolId("");
+                      }}
+                      disabled={!canUpdate}
+                    >
+                      <SelectItem value="remote">Remote</SelectItem>
+                      <SelectItem value="local">Local</SelectItem>
+                      <SelectItem value="agent">Agent</SelectItem>
+                    </Select>
+                    <FieldDescription>
+                      Workspaces inherit this mode unless they explicitly override execution settings.
+                    </FieldDescription>
+                  </Field>
+                  {defaultExecutionMode === "agent" && (
+                    <Field data-disabled={!canUpdate} data-invalid={formError !== "" && defaultAgentPoolId === ""}>
+                      <FieldLabel htmlFor="project-default-agent-pool">Default agent pool</FieldLabel>
+                      <Select
+                        id="project-default-agent-pool"
+                        name="default-agent-pool"
+                        value={defaultAgentPoolId}
+                        onValueChange={setDefaultAgentPoolId}
+                        disabled={!canUpdate || agentPoolsState.loading}
+                      >
+                        <SelectItem value="">Select an agent pool</SelectItem>
+                        {agentPoolOptions.map((pool): React.JSX.Element => (
+                          <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
+                        ))}
+                      </Select>
+                      <FieldDescription>
+                        Agent-mode workspaces use an available agent from this pool unless they override the pool.
+                      </FieldDescription>
+                      {agentPoolsState.loading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
+                      {agentPoolsState.error !== "" && <FieldError>{agentPoolsState.error}</FieldError>}
+                    </Field>
+                  )}
                 </FieldGroup>
                 {formError !== "" && <FieldError>{formError}</FieldError>}
                 <div className="flex gap-2">

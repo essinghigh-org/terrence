@@ -331,3 +331,97 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
     && init?.method === "PATCH")).toBe(false);
 });
+
+test("configures a workspace-specific agent pool override", async () => {
+  let workspaceBody: string | undefined;
+  const workspace = {
+    id: "ws-production",
+    attributes: {
+      name: "production",
+      "execution-mode": "remote",
+      "setting-overwrites": { "execution-mode": false, "agent-pool": false },
+      "global-remote-state": false,
+      "project-remote-state": false,
+      permissions: { "can-update": true },
+    },
+    relationships: { project: { data: { id: "prj-1", type: "projects" } } },
+  };
+  const fetchMock = mock(async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = getUrl(input);
+    if (url === "/api/v2/projects/prj-1" && init?.method === undefined) {
+      return json({ data: { attributes: { "default-execution-mode": "agent" } } });
+    }
+    if (url === "/api/v2/organizations/acme/agent-pools" && init?.method === undefined) {
+      return json({ data: [{ id: "apool-workspace", attributes: { name: "Workspace pool" } }] });
+    }
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?") && init?.method === undefined) {
+      return json({ data: [] });
+    }
+    if (
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
+      && init?.method === undefined
+    ) {
+      return json({ data: [] });
+    }
+    if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
+      // SAFETY: this component sends the PATCH body through JSON.stringify.
+      workspaceBody = init.body as string;
+      // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
+      const payload = JSON.parse(workspaceBody) as { data: { attributes: JsonObject } };
+      return json({
+        data: {
+          ...workspace,
+          attributes: { ...workspace.attributes, ...payload.data.attributes },
+        },
+      });
+    }
+    if (
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
+      && init?.method === "PATCH"
+    ) {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = render(
+    <WorkspaceSettings
+      orgName="acme"
+      workspace={workspace}
+      onSaved={(): void => { /* asserted through the request body */ }}
+    />,
+  );
+
+  await view.findByRole("option", { name: "Workspace pool" });
+  // SAFETY: these labels resolve the native selects rendered by the Select component.
+  const executionModeSelect = view.getByLabelText("Execution mode") as HTMLSelectElement;
+  // SAFETY: this label resolves the native select rendered by the Select component.
+  const agentPoolSelect = view.getByLabelText("Agent pool") as HTMLSelectElement;
+  expect(executionModeSelect.value).toBe("inherit");
+  expect(agentPoolSelect.value).toBe("");
+  fireEvent.change(view.getByLabelText("Execution mode"), { target: { value: "agent" } });
+  fireEvent.change(view.getByLabelText("Agent pool"), {
+    target: { value: "apool-workspace" },
+  });
+  const form = view.getByRole("button", { name: "Save settings" }).closest("form");
+  expect(form).not.toBeNull();
+  // SAFETY: the form is present because the preceding role query found its submit button.
+  fireEvent.submit(form as HTMLFormElement);
+
+  await waitFor((): void => { expect(workspaceBody).toBeDefined(); });
+  if (workspaceBody === undefined) throw new Error("Expected a serialized workspace PATCH body");
+  // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
+  const payload = JSON.parse(workspaceBody) as {
+    data?: { attributes?: JsonObject };
+  };
+  expect(payload.data?.attributes?.["execution-mode"]).toBe("agent");
+  expect(payload.data?.attributes?.["agent-pool-id"]).toBe("apool-workspace");
+  expect(payload.data?.attributes?.["setting-overwrites"]).toEqual({
+    "execution-mode": true,
+    "agent-pool": true,
+  });
+});
