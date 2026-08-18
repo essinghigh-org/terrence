@@ -1,0 +1,10 @@
+.git
+.github
+.agents
+references
+**/node_modules
+**/dist
+**/*.db*
+backend/storage
+.env*
+coverage

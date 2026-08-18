@@ -1,0 +1,1 @@
+ALTER TABLE `registry_module_versions` ADD `source` text;

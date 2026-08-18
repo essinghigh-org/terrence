@@ -1,0 +1,181 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786467199718,
+      "tag": "0000_squashed_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786546588198,
+      "tag": "0001_repair_run_explanations",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786627258431,
+      "tag": "0002_add_runs_scheduled_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786730764093,
+      "tag": "0003_omniscient_the_enforcers",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786734579669,
+      "tag": "0004_useful_black_crow",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786736549303,
+      "tag": "0005_lively_prowler",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786739418669,
+      "tag": "0006_registry-module-publishing",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786751716181,
+      "tag": "0007_overconfident_demogoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786880506029,
+      "tag": "0008_massive_frightful_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786964547741,
+      "tag": "0009_simple_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786964842866,
+      "tag": "0010_dazzling_silver_samurai",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786965456270,
+      "tag": "0011_overrated_jimmy_woo",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786965796830,
+      "tag": "0012_funny_turbo",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786965866061,
+      "tag": "0013_dapper_outlaw_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1786969337911,
+      "tag": "0014_empty_gambit",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1786981651924,
+      "tag": "0015_windy_the_renegades",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1786982906666,
+      "tag": "0016_busy_shadow_king",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1786984464685,
+      "tag": "0017_sad_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786986416388,
+      "tag": "0018_new_nehzno",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786987094771,
+      "tag": "0019_fair_ghost_rider",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786989244541,
+      "tag": "0020_wooden_selene",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786995799623,
+      "tag": "0021_fair_maggott",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786997491985,
+      "tag": "0022_uneven_rick_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1786998926787,
+      "tag": "0023_wakeful_talon",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1787008368960,
+      "tag": "0024_remarkable_doctor_spectrum",
+      "breakpoints": true
+    }
+  ]
+}

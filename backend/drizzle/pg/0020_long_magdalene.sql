@@ -1,0 +1,2 @@
+ALTER TABLE "team_projects" ADD CONSTRAINT "team_projects_team_org_fk" FOREIGN KEY ("team_id","organization_id") REFERENCES "public"."teams"("id","org_id") MATCH FULL ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "team_projects" ADD CONSTRAINT "team_projects_project_org_fk" FOREIGN KEY ("project_id","organization_id") REFERENCES "public"."projects"("id","org_id") MATCH FULL ON DELETE no action ON UPDATE no action;

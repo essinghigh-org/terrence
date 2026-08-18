@@ -1,0 +1,1 @@
+ALTER TABLE `stack_state_locks` ADD `lease_expires_at` integer;

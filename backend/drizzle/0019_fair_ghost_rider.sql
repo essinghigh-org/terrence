@@ -1,0 +1,1 @@
+ALTER TABLE `explorer_catalog_memberships` ADD `workspace_name` text NOT NULL;

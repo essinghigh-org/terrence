@@ -1,0 +1,1 @@
+ALTER TABLE "explorer_workspace_inventory" ADD COLUMN "source_module_id" text;

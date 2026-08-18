@@ -1,0 +1,200 @@
+// Shared helpers for SAML flow tests: build and sign SAMLResponse documents
+// with the same xml-crypto pipeline the service provider uses for
+// verification, guaranteeing byte-compatible canonicalization.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
+import { SignedXml } from "xml-crypto";
+
+export const IDP_CERT = readFileSync(join(import.meta.dir, "../fixtures/idp-cert.pem"), "utf8");
+export const IDP_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-key.pem"), "utf8");
+export const IDP_OLD_CERT = readFileSync(join(import.meta.dir, "../fixtures/idp-old-cert.pem"), "utf8");
+export const IDP_OLD_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-old-key.pem"), "utf8");
+
+export const ACS_URL = "http://terrence.test/users/saml/auth";
+export const SLO_URL = "http://terrence.test/users/saml/slo";
+export const ENTITY_ID = "http://terrence.test/users/saml/metadata";
+export const IDP_ENTITY_ID = "http://idp.example.test/metadata";
+// Attribute names the SP and the mock IdP agree on; the flow suite must
+// configure the same names or attribute mapping silently stops working.
+export const ATTR_USERNAME = "Username";
+export const ATTR_EMAIL = "email";
+export const ATTR_GROUPS = "MemberOf";
+export const ATTR_SITE_ADMIN = "SiteAdmin";
+
+export type SamlResponseOptions = Readonly<{
+  /** Destination attribute on the Response element. */
+  destination?: string;
+  recipient?: string;
+  audience?: string;
+  inResponseTo?: string;
+  issuer?: string;
+  nameId?: string;
+  username?: string;
+  email?: string;
+  groups?: string[];
+  notBefore?: string;
+  notOnOrAfter?: string;
+  siteAdmin?: string;
+  privateKey?: string;
+  publicCert?: string;
+  assertionId?: string;
+  signatureTarget?: "assertion" | "response";
+  /** Attribute map merged into the AttributeStatement. */
+  attributes?: Record<string, string | string[]>;
+}>;
+
+function iso(offsetSeconds: number): string {
+  return new Date(Date.now() + offsetSeconds * 1000).toISOString();
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function serializedAttribute(name: string, values: string | string[]): string {
+  const list = Array.isArray(values) ? values : [values];
+  const rendered = list
+    .map((value): string => `<saml:AttributeValue>${escapeXml(value)}</saml:AttributeValue>`)
+    .join("");
+  return `<saml:Attribute Name="${escapeXml(name)}">${rendered}</saml:Attribute>`;
+}
+
+/** Build a self-consistent, signed SAMLResponse as base64. */
+export function buildSignedSamlResponse(options: SamlResponseOptions = {}): string {
+  const {
+    destination = ACS_URL,
+    recipient = ACS_URL,
+    audience = ENTITY_ID,
+    inResponseTo,
+    issuer = IDP_ENTITY_ID,
+    nameId = options.username ?? "alice",
+    username = "alice",
+    email = "alice@example.com",
+    groups = [],
+    notBefore = iso(-60),
+    notOnOrAfter = iso(600),
+    siteAdmin,
+    privateKey = IDP_KEY,
+    publicCert = IDP_CERT,
+    assertionId = `_assertion_${crypto.randomUUID().replaceAll("-", "")}`,
+    signatureTarget = "assertion",
+    attributes = {},
+  } = options;
+
+  const now = iso(0);
+  const responseId = `_response_${crypto.randomUUID().replaceAll("-", "")}`;
+  const attributeXml = [
+    serializedAttribute(ATTR_USERNAME, username),
+    serializedAttribute(ATTR_EMAIL, email),
+    ...(groups.length > 0 ? [serializedAttribute(ATTR_GROUPS, groups)] : []),
+    ...(siteAdmin !== undefined ? [serializedAttribute(ATTR_SITE_ADMIN, siteAdmin)] : []),
+    ...Object.entries(attributes).map(([name, values]): string => serializedAttribute(name, values)),
+  ].join("");
+
+  const responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${responseId}" Version="2.0" IssueInstant="${now}" Destination="${escapeXml(destination)}">
+  <saml:Issuer>${escapeXml(issuer)}</saml:Issuer>
+  <samlp:Status>
+  <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
+  </samlp:Status>
+  <saml:Assertion Version="2.0" ID="${assertionId}" IssueInstant="${now}">
+    <saml:Issuer>${escapeXml(issuer)}</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID>${escapeXml(nameId)}</saml:NameID>
+      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+        <saml:SubjectConfirmationData Recipient="${escapeXml(recipient)}" NotOnOrAfter="${escapeXml(notOnOrAfter)}"${inResponseTo === undefined ? "" : ` InResponseTo="${escapeXml(inResponseTo)}"`}/>
+      </saml:SubjectConfirmation>
+    </saml:Subject>
+    <saml:Conditions NotBefore="${escapeXml(notBefore)}" NotOnOrAfter="${escapeXml(notOnOrAfter)}">
+      <saml:AudienceRestriction>
+        <saml:Audience>${escapeXml(audience)}</saml:Audience>
+      </saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AttributeStatement>
+      ${attributeXml}
+    </saml:AttributeStatement>
+  </saml:Assertion>
+</samlp:Response>
+`;
+
+  const signed = new SignedXml({
+    privateKey,
+    publicCert,
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  const signatureXPath = signatureTarget === "response" ? "//*[local-name()='Response']" : "//*[local-name()='Assertion']";
+  const signatureLocationXPath = signatureTarget === "response"
+    ? "//*[local-name()='Response']/*[local-name()='Issuer']"
+    : "//*[local-name()='Assertion']/*[local-name()='Issuer']";
+  signed.addReference({
+    xpath: signatureXPath,
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+    uri: `#${signatureTarget === "response" ? responseId : assertionId}`,
+  });
+  signed.computeSignature(responseXml, {
+    location: { reference: signatureLocationXPath, action: "after" },
+  });
+  return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
+}
+
+/** Build a signed IdP-initiated LogoutRequest as base64. */
+export function buildSignedLogoutRequest(
+  nameId = "slo-user",
+  signing: Readonly<{ privateKey?: string; publicCert?: string }> = {},
+): string {
+  const now = new Date().toISOString();
+  const requestId = `_logout_${crypto.randomUUID().replaceAll("-", "")}`;
+  const logoutXml = `<?xml version="1.0" encoding="UTF-8"?>
+<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="${requestId}" Version="2.0" IssueInstant="${now}" Destination="${escapeXml(SLO_URL)}">
+  <saml:Issuer>${escapeXml(IDP_ENTITY_ID)}</saml:Issuer>
+  <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${escapeXml(nameId)}</saml:NameID>
+</samlp:LogoutRequest>
+`;
+  const signed = new SignedXml({
+    privateKey: signing.privateKey ?? IDP_KEY,
+    publicCert: signing.publicCert ?? IDP_CERT,
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  signed.addReference({
+    xpath: "//*[local-name()='LogoutRequest']",
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+    uri: `#${requestId}`,
+  });
+  signed.computeSignature(logoutXml, {
+    location: { reference: "//*[local-name()='LogoutRequest']", action: "append" },
+  });
+  return Buffer.from(signed.getSignedXml(), "utf8").toString("base64");
+}
+
+/** Inflate a base64 DEFLATE-encoded SAMLRequest from the redirect binding. */
+export function inflateAndDecode(value: string): string {
+  const compressed = Buffer.from(value.replaceAll(" ", "+"), "base64");
+  return inflateRawSync(compressed).toString("utf8");
+}
+
+/** Build a form-encoded POST request to the ACS endpoint. */
+export function samlAcsRequest(samlResponse: string, relayState?: string, extraHeaders: Record<string, string> = {}): Request {
+  const params = new URLSearchParams({ SAMLResponse: samlResponse });
+  if (relayState !== undefined) params.set("RelayState", relayState);
+  return new Request("http://terrence.test/users/saml/auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", ...extraHeaders },
+    body: params.toString(),
+  });
+}

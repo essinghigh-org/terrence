@@ -1,0 +1,39 @@
+{
+  "name": "terrence",
+  "version": "1.0.0",
+  "description": "Self-hosted platform for OpenTofu and Terraform remote workflows", 
+  "scripts": {
+    "dev:backend": "cd backend && bun run --watch index.ts",
+    "dev:frontend": "cd frontend && bun run dev",
+    "dev": "bun run dev:backend & bun run dev:frontend",
+    "build": "cd frontend && bun run build",
+    "start": "cd backend && bun run index.ts",
+    "test:backend": "cd backend && bun test --parallel=8",
+    "test:frontend": "cd frontend && bun test --parallel=8",
+    "test": "bun run test:backend && bun run test:frontend",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "bun run --cwd backend typecheck && bun run --cwd frontend typecheck",
+    "tfectl": "bun run --cwd backend scripts/tfectl.ts",
+    "knip": "knip"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "esbuild": "0.28.1",
+    "fast-uri": "3.1.5",
+    "hono": "4.12.34",
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.17"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "eslint": "^10.7.0",
+    "knip": "^6.29.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.65.0"
+  }
+}

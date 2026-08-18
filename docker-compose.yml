@@ -1,0 +1,41 @@
+services:
+  terrence:
+    image: ghcr.io/essinghigh-org/terrence:latest
+    build:
+      context: .
+      args:
+        TARGETARCH: ${TARGETARCH:-amd64}
+    ports:
+      - "3000:3000"
+      # System API is bound to loopback by the app (SYSTEM_API_HOST=127.0.0.1
+      # default). Publish only on the loopback interface so its administrative
+      # surface (diagnostics, support bundles) is never exposed to the LAN.
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - terrence-storage:/app/backend/storage
+    environment:
+      - PORT=3000
+      - SYSTEM_API_PORT=8443
+      - STORAGE_DIR=/app/backend/storage
+      # The run sandbox is FAIL-CLOSED by default (TERRENCE_RUN_SANDBOX unset
+      # now means "sandbox required"). Only disable it when the host kernel
+      # cannot provide Landlock (CONFIG_SECURITY_LANDLOCK, Linux >= 5.13) —
+      # running IaC without isolation lets provider code execute with the
+      # backend service identity, so this opt-out must be explicit.
+      - TERRENCE_RUN_SANDBOX=false
+      - NODE_ENV=production
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+    # Sane resource limits for a self-hosted instance. Terraform plans and
+    # applies can be memory-hungry, so size mem_limit for your largest
+    # expected configuration and leave headroom for the worker. cpus is a
+    # hard cap on the number of host CPUs available to the container
+    # (Compose v2 cpu_limit semantics; not a relative share — use cpu_shares
+    # for relative weighting). Omit or raise both for large configurations.
+    mem_limit: 4g
+    cpus: "2.0"
+    # No healthcheck override: the image's own Bun-based HEALTHCHECK (Dockerfile)
+    # is authoritative. This image ships no curl binary.
+
+
+volumes:
+  terrence-storage:

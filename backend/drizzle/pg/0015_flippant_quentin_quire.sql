@@ -1,0 +1,1 @@
+ALTER TABLE "explorer_catalog_memberships" ADD COLUMN "workspace_name" text NOT NULL;

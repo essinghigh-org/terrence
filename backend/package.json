@@ -1,0 +1,34 @@
+{
+  "name": "backend",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "coverage": "bun run scripts/coverage-report.ts",
+    "tfectl": "bun run scripts/tfectl.ts",
+    "db:generate": "drizzle-kit generate"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/jsonwebtoken": "^9.0.10",
+    "drizzle-kit": "^0.31.10",
+    "ldapjs": "3.0.7"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@elysiajs/static": "^1.4.10",
+    "@xmldom/xmldom": "^0.9.10",
+    "drizzle-orm": "^0.45.2",
+    "elysia": "^1.4.29",
+    "elysia-rate-limit": "3.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "ldapts": "^9.0.0",
+    "postgres": "^3",
+    "xml-crypto": "^6.1.2"
+  }
+}

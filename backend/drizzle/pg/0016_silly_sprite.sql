@@ -1,0 +1,1 @@
+ALTER TABLE "stack_state_locks" ADD COLUMN "lease_expires_at" bigint;

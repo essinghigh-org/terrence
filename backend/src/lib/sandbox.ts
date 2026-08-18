@@ -1,0 +1,313 @@
+import { isAbsolute, join, dirname, resolve } from "path";
+import { mkdir, rm } from "fs/promises";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "os";
+import type { Subprocess } from "bun";
+
+/**
+ * Landlock-based run sandbox for Terraform/OpenTofu execution.
+ *
+ * Instead of chroot (which requires root / CAP_SYS_CHROOT and device nodes),
+ * Terrence executes IaC through `landlock-runner` — a tiny static helper that
+ * applies a Linux Landlock filesystem allow-list to itself and then execs the
+ * target. The restrictions are inherited by provider plugins and local-exec
+ * provisioner shells, so untrusted IaC code can only reach:
+ *
+ *   - the run work directory            (read/write/execute — where tfstate,
+ *     tfplan, .terraform and injected tfvars live)
+ *   - the terraform/tofu binary dir     (read/execute)
+ *   - system libraries and /bin,/usr/bin (read/execute, for the shell used by
+ *     local-exec provisioners)
+ *   - /etc (read-only: resolv.conf, CA certs), the resolv.conf realpath dir
+ *     (systemd-resolved stub), /dev (read/write for /dev/null etc.)
+ *
+ * Everything else — including STORAGE_DIR (the database, .encryption-key,
+ * configuration archives and other workspaces' state) — is unreachable.
+ *
+ * Requirements: Linux kernel >= 5.13 with Landlock enabled (CONFIG_SECURITY_LANDLOCK).
+ * No privileges, no capabilities, no Docker seccomp/capability changes needed.
+ * Fail-closed: the sandbox is REQUIRED by default (TERRENCE_RUN_SANDBOX unset
+ * means sandboxed); disable it explicitly with TERRENCE_RUN_SANDBOX=false.
+ */
+
+const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
+  (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase(),
+);
+
+/**
+ * Whether the run sandbox is required on this deployment. Single source of
+ * truth shared by worker.ts (fail-closed guard) and health.ts (meta endpoint).
+ * Fail-closed: the sandbox is required unless TERRENCE_RUN_SANDBOX is
+ * explicitly set to false (the insecure opt-out).
+ */
+export function runSandboxRequired(): boolean {
+  return !SANDBOX_DISABLED;
+}
+
+/** Candidate locations for the landlock-runner helper binary. */
+function runnerCandidates(): string[] {
+  const candidates: string[] = [];
+  const envPath = process.env.TERRENCE_LANDLOCK_RUNNER;
+  if (typeof envPath === "string" && envPath !== "") candidates.push(envPath);
+  candidates.push(join(import.meta.dir, "../../bin/landlock-runner"));
+  candidates.push("/usr/local/bin/landlock-runner");
+  candidates.push("/usr/bin/landlock-runner");
+  return candidates;
+}
+
+function findRunner(): string | null {
+  for (const candidate of runnerCandidates()) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Resolve a bare command name to an absolute regular executable file via
+ * PATH. Returns null if not found, a directory, or not executable. */
+function findExecutable(name: string): string | null {
+  if (name === "") return null;
+  if (isAbsolute(name)) return (existsSync(name) && statIsExecutable(name)) ? name : null;
+  if (name.includes("/")) return null;
+  const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+  for (const dir of pathDirs) {
+    if (dir === "") continue;
+    const candidate = join(resolve(dir), name);
+    if (existsSync(candidate) && statIsExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
+const EXECUTABLE_BITS = 0o111;
+function statIsExecutable(path: string): boolean {
+  try {
+    const stat = statSync(path);
+    return stat.isFile() && (stat.mode & EXECUTABLE_BITS) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+let cachedAbi: number | null = null;
+
+/** Query the Landlock ABI via the runner's --probe mode (0 = unavailable). */
+export function probeLandlockAbi(): number {
+  if (cachedAbi !== null) return cachedAbi;
+  cachedAbi = 0;
+  try {
+    const runner = findRunner();
+    if (runner === null) return 0;
+    const proc = Bun.spawnSync([runner, "--probe"], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode === 0) {
+      const parsed = Number.parseInt(proc.stdout.toString().trim(), 10);
+      if (Number.isSafeInteger(parsed) && parsed >= 1) cachedAbi = parsed;
+    }
+  } catch {
+    cachedAbi = 0;
+  }
+  return cachedAbi;
+}
+
+/** Test hook: drop the cached ABI so a swapped TERRENCE_LANDLOCK_RUNNER takes effect. */
+export function resetLandlockAbiCache(): void {
+  cachedAbi = null;
+}
+
+/**
+ * Mirror of landlock-runner.c's `abi_mask`: which filesystem access bits the
+ * kernel accepts at a given Landlock ABI. REFER (rename/link between
+ * hierarchies) requires ABI >= 2; TRUNCATE requires ABI >= 3. The C source
+ * masks both the ruleset attr and every rule by probed ABI; this pure
+ * function pins that truth table in unit tests without a kernel farm.
+ */
+export function landlockAccessFlagsForAbi(abi: number): {
+  refer: boolean;
+  truncate: boolean;
+  ioctlDevice: boolean;
+  scopedIpc: boolean;
+  resolveUnix: boolean;
+} {
+  return {
+    refer: abi >= 2,
+    truncate: abi >= 3,
+    ioctlDevice: abi >= 5,
+    scopedIpc: abi >= 6,
+    resolveUnix: abi >= 9,
+  };
+}
+
+/** Directories that must be traversable/readable for any dynamically linked
+ *  binary or provisioner shell. */
+function systemRuleArgs(): string[] {
+  return [
+    "/bin",
+    "/usr/bin",
+    "/sbin",
+    "/usr/sbin",
+    "/lib",
+    "/lib64",
+    "/usr/lib",
+    "/usr/lib64",
+  ].filter(existsSync).map((path): string => `--rx=${path}`);
+}
+
+/**
+ * Landlock run sandbox. Instance methods mirror the chroot-era API so the
+ * worker's call sites stay stable.
+ */
+export class RunSandbox {
+  public readonly runner: string | null;
+  public readonly abi: number;
+
+  constructor() {
+    this.runner = findRunner();
+    this.abi = probeLandlockAbi();
+  }
+
+  /** True when the sandbox can be used on this host. */
+  public static isUsable(): boolean {
+    if (SANDBOX_DISABLED) return false;
+    return probeLandlockAbi() >= 1;
+  }
+
+  /** True when the runner helper binary is present. */
+  public static hasRunner(): boolean {
+    return findRunner() !== null;
+  }
+
+  /** Host path for a run's working directory. Runs live under tmpdir (the
+   *  same layout as the pre-sandbox worker). */
+  public workDirFor(runId: string): string {
+    return join(tmpdir(), "terrence", "runs", runId);
+  }
+
+  /**
+   * No-op in the Landlock design: the binary is executed in place (its
+   * directory is allow-listed per spawn), so no copy into a rootfs is needed.
+   */
+  public async ensureTool(_tool: string, _version: string, hostBinaryPath: string): Promise<string> {
+    return hostBinaryPath;
+  }
+
+  /** Create the run workdir (writable by the sandboxed process — same user). */
+  public async prepareWorkDir(runId: string): Promise<string> {
+    const workDir = this.workDirFor(runId);
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
+    // TMPDIR points inside the workdir (the sandbox only allows writes there).
+    await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
+    return workDir;
+  }
+
+  /** Spawn a generic command (sentinel, etc.) under the Landlock allow-list.
+     * Uses the same rules as terraform/tofu but with a custom binary. */
+    public spawnGeneric(
+      args: readonly string[],
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+    ): Subprocess<"ignore", "pipe", "pipe"> {
+      let binaryPath = args[0] ?? "";
+      if (this.runner === null) {
+        throw new Error("landlock-runner binary not found; cannot sandbox run");
+      }
+
+      // Resolve bare commands (e.g. "sentinel") to absolute paths before
+      // constructing Landlock rules. If unresolved, fail fast instead of
+      // treating as current directory.
+      if (binaryPath === "" || !isAbsolute(binaryPath)) {
+        const found = findExecutable(binaryPath);
+        if (found === null) {
+          throw new Error(`executable not found: ${binaryPath}`);
+        }
+        binaryPath = found;
+      }
+      const resolvedArgs = [binaryPath, ...args.slice(1)];
+
+      const workDir = this.workDirForRunCwd(opts.cwd);
+      const binaryDir = dirname(binaryPath);
+      const resolvDir = resolvConfDir();
+
+      const env: Record<string, string> = {
+        ...opts.env,
+        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: workDir,
+        TMPDIR: join(workDir, "tmp"),
+        USER: process.env.USER ?? "nobody",
+      };
+
+      const runnerArgs = [
+        this.runner,
+        `--rwx=${workDir}`,
+        `--rx=${binaryDir}`,
+        ...systemRuleArgs(),
+        "--ro=/etc",
+        `--rw-files=/dev`,
+        ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
+        ...extraRwArgs(),
+        `--cwd=${opts.cwd}`,
+        "--",
+        ...resolvedArgs,
+      ];
+
+      return Bun.spawn(runnerArgs, { env, stdout: "pipe", stderr: "pipe", detached: true });
+    }
+
+    /** Spawn a terraform/tofu command under the Landlock allow-list.
+     * `args[0]` is the host binary path; `opts.cwd` is the host execution dir
+     * (inside the run workdir). The helper applies the rules to itself, chdirs,
+     * then execs — restrictions flow to provider and provisioner children.
+     */
+    public spawn(
+      args: readonly string[],
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+    ): Subprocess<"ignore", "pipe", "pipe"> {
+      return this.spawnGeneric(args, opts);
+    }
+
+  /** Resolve the run workdir containing a cwd (execution dir). */
+  private workDirForRunCwd(cwd: string): string {
+    // The run workdir is the tmpdir/terrence/runs/<runId> ancestor of cwd.
+    const runsBase = join(tmpdir(), "terrence", "runs");
+    if (cwd.startsWith(runsBase + "/")) {
+      const rest = cwd.slice(runsBase.length + 1);
+      const runId = rest.split("/")[0] ?? "";
+      return join(runsBase, runId);
+    }
+    // Fallback: use the cwd itself (e.g. assessment dirs under tmpdir).
+    return cwd;
+  }
+}
+
+let cachedResolvDir: string | null | undefined;
+
+/**
+ * Extra read-write paths for the sandbox allow-list, from
+ * TERRENCE_SANDBOX_EXTRA_RW_PATHS (colon-separated). TEST-ONLY: lets the
+ * sandboxed fake-tofu write observability files outside the run workdir.
+ *
+ * SECURITY: this widens the sandbox boundary. It is honoured only when the
+ * explicit opt-in TERRENCE_SANDBOX_EXTRA_RW_ALLOWED=true is set, so a
+ * misconfigured deployment cannot silently enlarge the allow-list by setting
+ * only the paths variable.
+ */
+function extraRwArgs(): string[] {
+  if (process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED !== "true") return [];
+  const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
+  if (raw === undefined || raw === "") return [];
+  return raw.split(":").filter((p): boolean => p !== "").map((p): string => `--rw=${p}`);
+}
+
+/** Directory holding the real resolv.conf (follows systemd-resolved symlinks). */
+function resolvConfDir(): string | null {
+  if (cachedResolvDir !== undefined) return cachedResolvDir;
+  cachedResolvDir = null;
+  try {
+    const path = realpathSync("/etc/resolv.conf");
+    if (path !== "/etc/resolv.conf") cachedResolvDir = dirname(path);
+  } catch {
+    cachedResolvDir = null;
+  }
+  return cachedResolvDir;
+}
+
+/** Delete a run workdir (worker cleanup). */
+export async function removeSandboxWorkDir(runId: string): Promise<void> {
+  await rm(join(tmpdir(), "terrence", "runs", runId), { recursive: true, force: true });
+}
