@@ -196,9 +196,18 @@ if (!isPostgres) {
   // for the migration run and restore it afterwards, mirroring the
   // db-transfer pattern.
   client.run("PRAGMA foreign_keys = OFF;");
+  // SQLite's table-rebuild migrations (CREATE __new_x → copy → DROP x →
+  // RENAME __new_x TO x) collide with drizzle-generated FK-enforcement
+  // triggers whose bodies reference the original table. On DROP, SQLite
+  // rewrites those trigger bodies to point at a now-missing table, so the
+  // subsequent RENAME fails with "no such table". legacy_alter_table=ON
+  // suppresses that trigger-body rewrite during ALTER, letting upgraded
+  // databases migrate cleanly. It is reset before any real query runs.
+  client.run("PRAGMA legacy_alter_table = ON;");
   try {
     sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
   } finally {
+    client.run("PRAGMA legacy_alter_table = OFF;");
     client.run("PRAGMA foreign_keys = ON;");
   }
 
