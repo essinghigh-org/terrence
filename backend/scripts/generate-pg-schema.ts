@@ -58,9 +58,23 @@ for (const [key, value] of Object.entries(schema)) {
   }
 }
 
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Tables and columns come from the sqlite schema module (a build-time input),
+// but their names are interpolated into generated TypeScript identifiers.
+// Reject anything that is not a safe identifier before emitting it.
+function assertIdent(label: string, value: string): void {
+  if (!IDENT.test(value)) {
+    throw new Error(`Refusing to emit non-identifier ${label} "${value}" into generated schema`);
+  }
+}
+
 const varFor = (table: Table): string => {
   for (const [key, candidate] of tables) {
-    if (candidate === table) return key;
+    if (candidate === table) {
+      assertIdent("table var", key);
+      return key;
+    }
   }
   throw new Error(`Table not found for ${String(table[NAME])}`);
 };
@@ -126,9 +140,11 @@ function fksByColumn(table: Table): Map<string, { targetVar: string; foreignProp
     }
     const targetVar = varFor(ref.foreignTable);
     const foreignProps = propByDbName(ref.foreignTable);
+    const foreignProp = foreignProps.get(foreign.name) ?? foreign.name;
+    assertIdent("foreign prop", foreignProp);
     map.set(local.name, {
       targetVar,
-      foreignProp: foreignProps.get(foreign.name) ?? foreign.name,
+      foreignProp,
       onDelete: fk.onDelete,
       onUpdate: fk.onUpdate,
     });

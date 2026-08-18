@@ -229,7 +229,11 @@ function printHuman(): void {
     const maxNameWidth = checks.reduce((acc, c) => Math.max(acc, c.name.length), 0);
     for (const c of checks) {
         const label = c.name.padEnd(maxNameWidth);
-        console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${c.detail}`);
+        // Strip control characters and neutralise any leading markup so a
+        // detail string (which may carry subprocess stderr or DB errors)
+        // cannot forge log lines or inject terminal escape sequences.
+        const cleanDetail = c.detail.replace(/[-]/g, "").replace(/^</, "\\<");
+        console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${cleanDetail}`);
     }
     const fails = checks.filter((c) => c.status === "fail").length;
     const warns = checks.filter((c) => c.status === "warn").length;

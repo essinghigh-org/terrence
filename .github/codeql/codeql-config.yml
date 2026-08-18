@@ -1,0 +1,11 @@
+name: "Terrence CodeQL config"
+
+# Keep scanning production + build-time scripts. Drop pure test scaffolding,
+# which raises a large volume of benign CodeQL findings (insecure temp files,
+# weak password hashes in fixtures, fuzz-test substrings, TOCTOU in test
+# harnesses) that obscure real production signal.
+paths-ignore:
+  - "**/tests/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"

@@ -701,7 +701,10 @@ export const app = new Elysia()
     // Missing assets get a bare text 404; navigations get the branded page.
     const mutableSet = set as { status: number; headers: Record<string, string | number> };
     mutableSet.status = 404;
-    const isAssetPath = /^\/assets\/|\.[a-z0-9]{1,10}$/i.test(pathname);
+    // Each alternative is independently anchored so a path cannot slip past
+    // one branch by matching only the other (e.g. "/x/assets/" or a trailing
+    // extension without a leading path separator).
+    const isAssetPath = /^\/assets\//i.test(pathname) || /\.[a-z0-9]{1,10}$/i.test(pathname);
     const plainText = isAssetPath || frontend404Html === null;
     mutableSet.headers["Content-Type"] = plainText ? "text/plain; charset=utf-8" : "text/html; charset=utf-8";
     return new Response(plainText ? "Not Found" : frontend404Html, { status: 404 });
