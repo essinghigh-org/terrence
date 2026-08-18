@@ -1,0 +1,48 @@
+#!/bin/sh
+# Pre-commit hook: keep the drizzle schema and its migrations in lockstep.
+#
+# If a change to the backend DB schema (backend/src/db/**) is being committed,
+# drizzle-kit generate is run. Any migration it produces is staged so the
+# schema change and its migration land in the same commit. Pure frontend /
+# unrelated commits are skipped. Bypass with --no-verify.
+#
+# Note: drizzle-kit diffs the schema against the migrations on disk, so this
+# catches the case where a schema edit is committed without its migration. It
+# cannot detect drift that already exists between schema.ts and an applied
+# production database; that is covered by the migration-upgrade tests.
+#
+# Installed via: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+BACKEND_DIR="$REPO_ROOT/backend"
+
+cd "$REPO_ROOT"
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if ! echo "$STAGED" | grep -qE '^backend/src/db/|^backend/drizzle/'; then
+  exit 0
+fi
+
+# Keep generate from creating a stray database file under the repo.
+export STORAGE_DIR="${TMPDIR:-/tmp}/drizzle-gen-$$"
+
+# Run generate from the backend dir (where drizzle.config.ts lives).
+if ! (cd "$BACKEND_DIR" && npm run db:generate >/dev/null 2>&1); then
+  echo "pre-commit: drizzle-kit generate failed; aborting commit." >&2
+  exit 1
+fi
+
+# Stage any migration artifacts generate produced so they ride along. From the
+# repo root the paths are repo-root-relative (e.g. backend/drizzle/0025_x.sql).
+CHANGES=$(git status --porcelain backend/drizzle/ 2>/dev/null || true)
+if [ -n "$CHANGES" ]; then
+  echo "pre-commit: staging generated drizzle migration:" >&2
+  echo "$CHANGES" | awk '{print $2}' | while read -r f; do
+    git add "$f"
+    echo "  + $f" >&2
+  done
+  echo "pre-commit: review the generated SQL before pushing." >&2
+fi
+
+exit 0
