@@ -2,7 +2,7 @@
 
 Terrence is a self-hosted platform for running OpenTofu and Terraform workflows, written in TypeScript and running on Bun, Elysia, and React.
 
-> **Not an official product.** Terrence is an independent, open-source project. It is not affiliated with, endorsed by, or sponsored by HashiCorp or any of its products (Terraform, Terraform Cloud, or Terraform Enterprise). "Terraform" is used here only to describe compatibility with the open configuration language and the JSON:API request/response format that the Terraform CLI and related open-source tooling speak. Terrence implements that format clean-room, from public documentation, and does not reuse any vendor source code, trademarks, or proprietary assets.
+> **Not an official product.** Terrence is an independent, open-source project. It is not affiliated with, endorsed by, or sponsored by HashiCorp or any of its products (Terraform, Terraform Cloud, or Terraform Enterprise). "Terraform" is used here only to describe compatibility with the open configuration language and the JSON:API request/response format that the Terraform CLI and related open-source tooling speak. Terrence implements that format independently from publicly available specifications, and does not reuse any vendor source code, trademarks, or proprietary assets.
 
 ## Architecture
 

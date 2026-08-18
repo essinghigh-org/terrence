@@ -26,7 +26,7 @@ This constant drives every compatibility-discovery header emitted by the server:
 
 All three headers must carry the same value derived from `COMPATIBILITY_VERSION`. Do not hardcode release strings in route handlers. The header names above are part of the wire format Terrence reproduces so that existing tooling behaves unchanged; they are preserved for interoperability, not as an affiliation or endorsement.
 
-> **Note on naming:** these header and constant names are carry-over identifiers from the open format Terrence reproduces. Terrence is an independent, clean-room implementation and is not affiliated with HashiCorp or its products. The names are kept only because clients read them.
+> **Note on naming:** these header and constant names are carry-over identifiers from the open format Terrence reproduces. Terrence is an independent implementation and is not affiliated with HashiCorp or its products. The names are kept only because clients read them.
 
 ## Baseline
 

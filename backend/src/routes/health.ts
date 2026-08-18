@@ -601,9 +601,9 @@ export const healthRoutes = new Elysia({ name: "health" })
     // value ("Terraform Enterprise") is a vendor trademark string some clients
     // read to distinguish HCP Terraform from Terraform Enterprise. It is not
     // required by the run/plan/apply or registry flows, and the documented
-    // format states not all TFE releases include it. Omitting it keeps the
+    // format states not all releases of the documented format include it. Omitting it keeps the
     // response free of vendor branding while preserving every functional
-    // header. Terrence is an independent, clean-room implementation and is not
+    // header. Terrence is an independent implementation and is not
     // affiliated with HashiCorp or its products.
     headers["TFE-Version"] = COMPATIBILITY_VERSION;
     headers["X-TFE-Version"] = COMPATIBILITY_VERSION;
