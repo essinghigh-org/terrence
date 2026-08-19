@@ -400,7 +400,11 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     try {
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
-        for (const u of updates) await t.update(variableSetVariables).set(u.values).where(eq(variableSetVariables.id, u.variable.id));
+        // Independent same-shaped updates: run them concurrently inside the
+        // transaction so a single queue tick is one round-trip, not N.
+        await Promise.all(updates.map(
+          async (u): Promise<unknown> => t.update(variableSetVariables).set(u.values).where(eq(variableSetVariables.id, u.variable.id)),
+        ));
       });
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
