@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { writeFile, mkdir, rm, symlink } from "fs/promises";
+import { writeFile, mkdir, mkdtemp, rm, symlink } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -8,6 +8,14 @@ import { ensureBinary } from "../../src/binaryManager";
 
 const abi = probeLandlockAbi();
 const usable = abi >= 1 && RunSandbox.isUsable();
+
+
+async function createTestWorkDir(prefix: string): Promise<string> {
+  const baseDir = await mkdtemp(join(tmpdir(), "terrence-test-"));
+  const workDir = join(baseDir, prefix);
+  await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
+  return workDir;
+}
 
 /** Resolve a real tofu binary the same way the worker does. */
 async function resolveTofu(): Promise<string | null> {
@@ -34,8 +42,7 @@ describe("landlock run sandbox", () => {
       return;
     }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-1");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
+    const workDir = await createTestWorkDir("ll-test-1");
     try {
       const proc = sandbox.spawn([hostTofu, "version"], { cwd: workDir, env: {} });
       const [exitCode, stdout, stderr] = await Promise.all([
@@ -58,10 +65,9 @@ describe("landlock run sandbox", () => {
       return;
     }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-2");
+    const workDir = await createTestWorkDir("ll-test-2");
     const secretDir = join(process.cwd(), "..", "storage");
     const secretPath = join(secretDir, "sandbox-test-secret.txt");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(secretDir, { recursive: true });
     await writeFile(secretPath, "terrence-sandbox-test-secret\n", { mode: 0o600 });
     try {
@@ -95,10 +101,9 @@ describe("landlock run sandbox", () => {
   it("denies access to .encryption-key in the storage directory", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-enckey");
+    const workDir = await createTestWorkDir("ll-test-enckey");
     const storageDir = join(process.cwd(), "..", "storage");
     const keyFile = join(storageDir, ".encryption-key");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(storageDir, { recursive: true });
     await writeFile(keyFile, "terrence-test-encryption-key\n", { mode: 0o600 });
     try {
@@ -117,12 +122,9 @@ describe("landlock run sandbox", () => {
   it("denies access to another run's work directory", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-victim");
-    const attackerDir = join(runsBase, "ll-test-attacker");
+    const workDir = await createTestWorkDir("ll-test-victim");
+    const attackerDir = await createTestWorkDir("ll-test-attacker");
     const targetFile = join(workDir, "terraform.tfstate");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
-    await mkdir(join(attackerDir, "tmp"), { recursive: true });
     await writeFile(targetFile, '{"version":1}\n');
     try {
       const script = join(attackerDir, "probe.sh");
@@ -140,12 +142,10 @@ describe("landlock run sandbox", () => {
   it("denies access via symlink from workdir into storage", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-symlink");
+    const workDir = await createTestWorkDir("ll-test-symlink");
     const storageDir = join(process.cwd(), "..", "storage");
     const secretFile = join(storageDir, "symlink-secret.txt");
     const linkPath = join(workDir, "evil-link");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(storageDir, { recursive: true });
     await writeFile(secretFile, "symlink-secret-content\n");
     await symlink(storageDir, linkPath);
@@ -166,9 +166,7 @@ describe("landlock run sandbox", () => {
   it("denies reading /proc/<pid>/environ of another process", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-proc");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
+    const workDir = await createTestWorkDir("ll-test-proc");
     try {
       const ppid = process.pid;
       const script = join(workDir, "probe.sh");
@@ -185,9 +183,7 @@ describe("landlock run sandbox", () => {
   it("checks network connectivity under Landlock (documented: Landlock does not restrict network)", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-net");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
+    const workDir = await createTestWorkDir("ll-test-net");
     try {
       const script = join(workDir, "probe.sh");
       // Use a timeout /dev/tcp probe through the shell
@@ -207,9 +203,7 @@ describe("landlock run sandbox", () => {
   it("denies signals to processes outside the sandbox on Landlock ABI 6+", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-signal");
-    await mkdir(join(workDir, "tmp"), { recursive: true });
+    const workDir = await createTestWorkDir("ll-test-signal");
     try {
       const targetPid = process.pid;
       const script = join(workDir, "probe.sh");

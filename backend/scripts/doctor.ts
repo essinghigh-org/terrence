@@ -232,7 +232,7 @@ function printHuman(): void {
         // Strip control characters and neutralise any leading markup so a
         // detail string (which may carry subprocess stderr or DB errors)
         // cannot forge log lines or inject terminal escape sequences.
-        const cleanDetail = c.detail.replace(/[-]/g, "").replace(/^</, "\\<");
+        const cleanDetail = c.detail.replace(/[\x00-\x1F\x7F]/g, "").replace(/^</, "\\<");
         console.log(`  [${c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "FAIL"}] ${label}  ${cleanDetail}`);
     }
     const fails = checks.filter((c) => c.status === "fail").length;
