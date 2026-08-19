@@ -67,6 +67,7 @@ export const notificationWorkspaceCounters = pg[dbNameOf(sqliteSchema.notificati
 export const oauthClientProjects = pg[dbNameOf(sqliteSchema.oauthClientProjects)];
 export const oauthClients = pg[dbNameOf(sqliteSchema.oauthClients)];
 export const oauthDeviceCodes = pg[dbNameOf(sqliteSchema.oauthDeviceCodes)];
+export const oauthHandshakeStates = pg[dbNameOf(sqliteSchema.oauthHandshakeStates)];
 export const oauthTokens = pg[dbNameOf(sqliteSchema.oauthTokens)];
 export const oidcConfigs = pg[dbNameOf(sqliteSchema.oidcConfigs)];
 export const orgTokenTTLPolicies = pg[dbNameOf(sqliteSchema.orgTokenTTLPolicies)];

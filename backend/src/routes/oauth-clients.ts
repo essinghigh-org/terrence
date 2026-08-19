@@ -10,6 +10,11 @@ import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { forwardFetch } from "../lib/agent-forwarding";
+import {
+  pruneExpiredOAuthHandshakeStates,
+  putOAuthHandshakeState,
+  takeOAuthHandshakeState,
+} from "../lib/oauth-handshake";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -80,8 +85,10 @@ type OAuthHandshakeState = OAuthHandshakeStateBase & (
 );
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-// ponytail: handshake state is in-memory; use shared TTL storage before multi-instance deployment.
-const oauthHandshakeStates = new Map<string, OAuthHandshakeState>();
+// ponytail (resolved): handshake state is now persisted in the database
+// (oauth_handshake_states) via src/lib/oauth-handshake.ts, so a callback can
+// land on any replica in a multi-instance deployment. The in-memory Map this
+// supersedes was replica-local.
 
 const SERVICE_PROVIDERS = new Set([
   "github",
@@ -276,10 +283,8 @@ async function oauth1ProviderUser(
   return username ?? (text !== "" && !text.startsWith("{") ? text : null);
 }
 
-function pruneOAuthStates(now = Date.now()): void {
-  for (const [state, value] of oauthHandshakeStates) {
-    if (value.expiresAt <= now) oauthHandshakeStates.delete(state);
-  }
+async function pruneOAuthStates(now = Date.now()): Promise<void> {
+  await pruneExpiredOAuthHandshakeStates(now);
 }
 
 async function validHandshakeProjectScope(oc: OcItem, projectId: string | null): Promise<boolean> {
@@ -716,7 +721,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       return unprocessable(set, "OAuth client key and secret are required");
     }
 
-    pruneOAuthStates();
+    await pruneOAuthStates();
     const state = crypto.randomUUID();
     const redirectUri = apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`);
     if (oauth1 !== null) {
@@ -733,9 +738,8 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       if (requestToken?.callbackConfirmed !== true) {
         return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
       }
-      oauthHandshakeStates.set(state, {
+      await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
         clientId: oc.id,
-        expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
         flow: "oauth1",
         projectId,
         redirectUri: callback.toString(),
@@ -750,9 +754,8 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     }
     if (oauth2 === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
-    oauthHandshakeStates.set(state, {
+    await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
       clientId: oc.id,
-      expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
       flow: "oauth2",
       projectId,
       redirectUri,
@@ -768,13 +771,12 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return authorizationResponse(request, state, oauth2.authorization.toString());
   })
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
-    pruneOAuthStates();
+    await pruneOAuthStates();
     const stateId = stringQuery(query, "state");
-    const state = oauthHandshakeStates.get(stateId);
+    const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
     if (state?.clientId !== (params.oc_id ?? "")) {
       return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid");
     }
-    oauthHandshakeStates.delete(stateId);
     if (stringQuery(query, "error") !== "") {
       return oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection");
     }

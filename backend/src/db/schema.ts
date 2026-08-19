@@ -213,6 +213,10 @@ export const oauthDeviceCodes: typeof sqliteSchema.oauthDeviceCodes = pgTables =
   ? sqliteSchema.oauthDeviceCodes
   : (pgTables[dbNameOf(sqliteSchema.oauthDeviceCodes)] as unknown as typeof sqliteSchema.oauthDeviceCodes);
 
+export const oauthHandshakeStates: typeof sqliteSchema.oauthHandshakeStates = pgTables === null
+  ? sqliteSchema.oauthHandshakeStates
+  : (pgTables[dbNameOf(sqliteSchema.oauthHandshakeStates)] as unknown as typeof sqliteSchema.oauthHandshakeStates);
+
 export const oauthTokens: typeof sqliteSchema.oauthTokens = pgTables === null
   ? sqliteSchema.oauthTokens
   : (pgTables[dbNameOf(sqliteSchema.oauthTokens)] as unknown as typeof sqliteSchema.oauthTokens);

@@ -638,6 +638,14 @@ export const oauthDeviceCodes = pgTable("oauth_device_codes", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oauthDeviceCodes.createdAt.defaultFn!()),
 });
 
+export const oauthHandshakeStates = pgTable("oauth_handshake_states", {
+    id: text("id").notNull().primaryKey(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    payload: jsonb("payload").notNull(),
+}, (table) => [
+    index("oauth_handshake_states_expires_idx").on(table.expiresAt),
+  ]);
+
 export const oauthTokens = pgTable("oauth_tokens", {
     id: text("id").notNull().primaryKey(),
     oauthClientId: text("oauth_client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),

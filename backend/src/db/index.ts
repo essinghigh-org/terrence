@@ -241,6 +241,21 @@ if (!isPostgres) {
       ON run_explanations (run_id, kind)
   `);
 
+  // OAuth handshake state (the `state` exchanged during VCS provider flows).
+  // Persisted so a multi-instance deployment can read/consume it from any
+  // replica; the in-process Map this replaced was replica-local. Created
+  // idempotently at boot (like run_explanations) rather than via a generated
+  // migration, so a sparse/legacy journal that re-applies the boot path never
+  // collides with an already-created table.
+  client.run(`
+    CREATE TABLE IF NOT EXISTS oauth_handshake_states (
+      id TEXT PRIMARY KEY NOT NULL,
+      expires_at INTEGER NOT NULL,
+      payload TEXT NOT NULL
+    )
+  `);
+  client.run("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
   // predate the schema definitions, so create them idempotently at boot.
@@ -641,6 +656,16 @@ export function applyPgMigrations(): Promise<void> {
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
     // every poll; keep it off a full table scan as agent volume grows.
     await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+    // OAuth handshake state (see sqlite boot path): persisted so any replica
+    // can read/consume it. Idempotent so a re-applied boot path is safe.
+    await pg.unsafe(`
+      CREATE TABLE IF NOT EXISTS oauth_handshake_states (
+        id TEXT PRIMARY KEY NOT NULL,
+        expires_at BIGINT NOT NULL,
+        payload JSONB NOT NULL
+      )
+    `);
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
   })();
   return pgMigrationsPromise;
 }

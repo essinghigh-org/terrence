@@ -894,6 +894,21 @@ export const oauthTokens = sqliteTable("oauth_tokens", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
+// OAuth handshake state (the `state` value exchanged during the VCS provider
+// authorization-code / OAuth1 flows). Previously an in-process Map, which
+// broke under multi-instance deployment: a callback landing on a different
+// replica than the one that started the flow would find no state. Persisted
+// here so any replica can read and consume it. `payload` is the full
+// OAuthHandshakeState (a discriminated union); `expiresAt` enforces the TTL
+// and lets a periodic sweep drop stale rows.
+export const oauthHandshakeStates = sqliteTable("oauth_handshake_states", {
+  id: text("id").primaryKey(),
+  expiresAt: integer("expires_at").notNull(),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+}, (table) => [
+  index("oauth_handshake_states_expires_idx").on(table.expiresAt),
+]);
+
 export const policySets = sqliteTable("policy_sets", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
