@@ -265,8 +265,7 @@ describe("LDAP authentication", () => {
   });
 
   test("uses LDAP for Terraform CLI authorization when local auth is disabled", async () => {
-    const verifier = "ldap-cli-verifier-012345678901234567890123456789";
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ldap-cli-verifier-012345678901234567890123456789"));
     const parameters = new URLSearchParams({
       client_id: "terraform-cli",
       code_challenge: Buffer.from(digest).toString("base64url"),
@@ -274,25 +273,33 @@ describe("LDAP authentication", () => {
       redirect_uri: "http://localhost:10000/login",
       response_type: "code",
       state: `ldap-cli-${suffix}`,
-      username: ldapUsername,
-      password: VALID_USER_PASSWORD,
     });
     await setLocalAuth(false);
     try {
-      // With LDAP enabled, the authorizer still presents the username/password
-      // form even though local authentication is disabled: the directory
-      // accepts those credentials on the POST path.
-      const page = await oauthApp.handle(new Request(`http://localhost/oauth/authorization?${parameters.toString()}`));
-      const html = await page.text();
-      expect(html).toContain('id="username"');
-      expect(html).toContain('id="password"');
-      const authorization = await oauthApp.handle(new Request("http://localhost/oauth/authorization", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: parameters,
-      }));
-      expect(authorization.status).toBe(302);
-      const callback = new URL(authorization.headers.get("Location") ?? "");
+      // With LDAP enabled and local auth disabled, the authorization endpoint
+      // hands off to the SPA login page (which still accepts LDAP credentials).
+      const begin = await oauthApp.handle(new Request(`http://localhost/oauth/authorization?${parameters.toString()}`));
+      expect(begin.status).toBe(302);
+      const location = begin.headers.get("Location") ?? "";
+      expect(location).toContain("/login?oauth_state=");
+      const stateMatch = /oauth_state=([^&]+)/.exec(location);
+      expect(stateMatch).not.toBeNull();
+      const oauthState = stateMatch![1];
+      const setCookie = begin.headers.get("Set-Cookie") ?? "";
+      expect(setCookie.toLowerCase()).toContain("terraform_oauth_state=");
+
+      // Establish a browser session the way the SPA would: LDAP credentials,
+      // browser-session requested. The directory accepts them.
+      const ldapLogin = await login(ldapUsername, VALID_USER_PASSWORD, true);
+      expect(ldapLogin.status).toBe(200);
+      const refreshCookie = ldapLogin.headers.get("Set-Cookie") ?? "";
+
+      const complete = await oauthApp.handle(new Request(
+        `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
+        { headers: { Cookie: `terraform_oauth_state=${oauthState}; ${refreshCookie}` } },
+      ));
+      expect(complete.status).toBe(302);
+      const callback = new URL(complete.headers.get("Location") ?? "");
       const token = await oauthApp.handle(new Request("http://localhost/oauth/token", {
         method: "POST",
         headers: {
@@ -302,7 +309,7 @@ describe("LDAP authentication", () => {
         body: new URLSearchParams({
           client_id: "terraform-cli",
           code: callback.searchParams.get("code") ?? "",
-          code_verifier: verifier,
+          code_verifier: "ldap-cli-verifier-012345678901234567890123456789",
           grant_type: "authorization_code",
           redirect_uri: "http://localhost:10000/login",
         }),

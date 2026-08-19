@@ -1,19 +1,15 @@
 import { Elysia } from "elysia";
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { createHash } from "node:crypto";
-import { authenticateLdapWithCircuitBreaker } from "./lib/ldap";
-import { log } from "./lib/log";
-import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
 import { browserSessionUser } from "./routes/accounts";
-import { consumeMfaChallenge, issueMfaChallenge } from "./lib/mfa-challenge";
-import { verifyTotp } from "./lib/totp";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
 const MAX_PORT = 10010;
 const CODE_TTL_MS = 5 * 60 * 1000;
+const OAUTH_STATE_COOKIE = "terraform_oauth_state";
 
 type AuthorizationRequest = {
   clientId: string;
@@ -24,16 +20,21 @@ type AuthorizationRequest = {
 };
 
 /**
- * In-memory authorization code store for OAuth PKCE flow.
- * SINGLE-INSTANCE DEPLOYMENT CONSTRAINT: Authorization codes are held in-memory with a short TTL.
- * Multi-instance deployments require sticky routing (session affinity) or a shared persistence store
- * so /oauth/authorization and /oauth/token requests reach the same node instance.
+ * In-memory stores. SINGLE-INSTANCE DEPLOYMENT CONSTRAINT: authorization codes
+ * and pending authorization requests are held in-memory with a short TTL.
+ * Multi-instance deployments require sticky routing (session affinity) or a
+ * shared persistence store so the authorization, complete, and token requests
+ * reach the same node instance.
  */
 const authorizationCodes = new Map<string, {
   codeChallenge: string;
   expiresAt: number;
   redirectUri: string;
   userId: string;
+}>();
+const pendingAuthorizations = new Map<string, {
+  authorization: AuthorizationRequest;
+  expiresAt: number;
 }>();
 
 function field(input: unknown, name: string): string {
@@ -82,155 +83,6 @@ function parseAuthorizationRequest(input: unknown): AuthorizationRequest | null 
   return request;
 }
 
-function escapeHtml(value: string): string {
-  const charMap: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  };
-  return value.replace(/[&<>"']/g, (character: string): string => charMap[character] ?? character);
-}
-
-type SsoInfo = Readonly<{ saml: boolean; oidc: boolean; ldap: boolean; localAuthEnabled: boolean }>;
-
-/**
- * Read the SSO snapshot for the login page. On failure the page still has to
- * render: fall back to local-only sign-in so the CLI flow stays usable.
- */
-async function ssoInfoOrDefault(): Promise<SsoInfo> {
-  try {
-    const sso = await ssoSettingsSnapshot();
-    return {
-      saml: sso.samlEnabled,
-      oidc: sso.oidcEnabled,
-      ldap: sso.ldapEnabled,
-      localAuthEnabled: sso.localAuthEnabled,
-    };
-  } catch (error: unknown) {
-    log.warn("Unable to read SSO configuration; rendering login with defaults", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { saml: false, oidc: false, ldap: false, localAuthEnabled: true };
-  }
-}
-
-function loginPage(
-  request: Readonly<AuthorizationRequest> | null,
-  error = "",
-  username = "",
-  sso: SsoInfo = { saml: false, oidc: false, ldap: false, localAuthEnabled: true },
-  mfa: Readonly<{ challengeToken: string }> | null = null,
-): string {
-  const hidden = request !== null
-    ? ([
-        ["client_id", request.clientId],
-        ["code_challenge", request.codeChallenge],
-        ["code_challenge_method", "S256"],
-        ["redirect_uri", request.redirectUri],
-        ["response_type", request.responseType],
-        ["state", request.state],
-      ] as const).map(([name, value]): string =>
-        `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`
-      ).join("")
-    : "";
-
-  // MFA step: the primary credentials were accepted but TOTP is required.
-  // Render only the code field; the challenge token rides in a hidden input
-  // so POST /oauth/authorization can resume the same authz request.
-  const mfaForm = mfa !== null
-    ? `<form method="post" action="/oauth/authorization">
-      ${hidden}
-      <input type="hidden" name="mfa_challenge_token" value="${escapeHtml(mfa.challengeToken)}">
-      <p>
-        <label for="totp_code">Authentication code</label>
-        <input id="totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required autofocus>
-      </p>
-      <button type="submit">Verify</button>
-    </form>`
-    : "";
-
-  const ssoButtons = request !== null && (sso.saml || sso.oidc)
-    ? `<p class="sso">${
-        sso.saml ? `<a href="/users/saml/auth?RelayState=api">Sign in with SAML SSO</a>` : ""
-      }${
-        sso.oidc ? `<a href="/users/oidc/auth">Sign in with OpenID Connect</a>` : ""
-      }</p>`
-    : "";
-  // LDAP credentials are accepted by the POST handler even when local
-  // password authentication is disabled, so the form must be offered while
-  // any username/password path exists.
-  const passwordAuthAvailable = sso.localAuthEnabled || sso.ldap;
-  const localBlocked = !passwordAuthAvailable
-    ? `<p id="local-auth-disabled">Local password sign-in is disabled by your administrator. Use single sign-on instead.</p>`
-    : "";
-  const intro = request !== null
-    ? `<p>Sign in to authorize Terraform CLI.</p>${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}`
-    : "";
-  const form = request !== null && mfa === null && passwordAuthAvailable
-    ? `<form method="post" action="/oauth/authorization">
-      ${hidden}
-      <p>
-        <label for="username">Username</label>
-        <input id="username" name="username" value="${escapeHtml(username)}" autocomplete="username" required autofocus>
-      </p>
-      <p>
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required${error !== "" ? ' aria-describedby="login-error"' : ""}>
-      </p>
-      <button type="submit">Sign in</button>
-    </form>`
-    : request === null
-      ? `<p role="alert">Invalid authorization request.</p>`
-      : "";
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Terraform Login</title>
-  <style>body{font-family:system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem}form p{margin:.6rem 0}label{display:block;font-size:.9rem;margin-bottom:.2rem}input{width:100%;padding:.4rem;box-sizing:border-box}.sso a{display:block;margin:.4rem 0;color:#2563eb}#local-auth-disabled{color:#b91c1c}</style>
-</head>
-<body>
-  <main>
-    <h1>Terraform Login</h1>
-    ${intro}
-    ${localBlocked}
-    ${ssoButtons}
-    ${mfaForm}
-    ${form}
-  </main>
-</body>
-</html>`;
-}
-
-function htmlResponse(body: string, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      // The Terraform Login page ships one static inline stylesheet; nothing
-      // user-controlled is ever interpolated into it.
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-      "Content-Type": "text/html; charset=utf-8",
-      "Referrer-Policy": "no-referrer",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
-}
-
-type SetObj = Readonly<{ headers: Readonly<Record<string, string | number>>; status?: number | string }>;
-
-function oauthError(set: SetObj, error: string): { error: string } {
-  const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
-  mutableSet.status = 400;
-  mutableSet.headers["Cache-Control"] = "no-store";
-  mutableSet.headers.Pragma = "no-cache";
-  return { error };
-}
-
 type RequestWithHeaders = Readonly<{ readonly headers: { readonly get: (name: string) => string | null } }>;
 
 function tokenClientId(body: unknown, request: RequestWithHeaders): string {
@@ -261,11 +113,20 @@ type OAuthQueryCtx = Readonly<{
   readonly request?: RequestInfo;
 }>;
 
+/** Read the opaque OAuth handshake state from the HttpOnly cookie. */
+function readOauthStateCookie(request: RequestInfo | undefined): string | undefined {
+  const header = request?.headers.get("cookie");
+  if (header === null || header === undefined) return undefined;
+  for (const part of header.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === OAUTH_STATE_COOKIE && rest.length > 0) return rest.join("=");
+  }
+  return undefined;
+}
+
 /**
- * Redirect the browser (already authenticated via the normal session) straight
- * through the OAuth authorization step, issuing a PKCE code for `userId` and
- * sending Terraform back to its local callback. Skips the login form entirely
- * when a valid browser session is present.
+ * Issue a PKCE authorization code for `userId` and redirect Terraform's local
+ * callback. Reaps expired entries from both in-memory stores.
  */
 function approveForUser(
   authorization: Readonly<AuthorizationRequest>,
@@ -274,6 +135,9 @@ function approveForUser(
   const now = Date.now();
   for (const [code, entry] of authorizationCodes) {
     if (entry.expiresAt <= now) authorizationCodes.delete(code);
+  }
+  for (const [id, entry] of pendingAuthorizations) {
+    if (entry.expiresAt <= now) pendingAuthorizations.delete(id);
   }
 
   const code = crypto.randomUUID();
@@ -296,14 +160,30 @@ function approveForUser(
   });
 }
 
+function oauthError(set: { status?: number | string; headers: Record<string, string | number> }, error: string): { error: string } { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+  set.status = 400;
+  set.headers["Cache-Control"] = "no-store";
+  set.headers.Pragma = "no-cache";
+  return { error };
+}
+
+function plainError(message: string, status = 400): Response {
+  return new Response(message, {
+    status,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
+
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
   .get("/oauth/authorization", async ({ query, request }: OAuthQueryCtx): Promise<Response> => { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
     const authorization = parseAuthorizationRequest(query);
-    if (authorization === null) return htmlResponse(loginPage(null), 400);
+    if (authorization === null) {
+      return plainError("Invalid authorization request.");
+    }
 
     // Already logged into the browser? Skip the login form and approve --
-    // unless the account enforces MFA, in which case it must still complete
-    // the TOTP step through the normal login form.
+    // unless the account enforces MFA, in which case the user must complete
+    // the normal TOTP step first (handled by the SPA login flow).
     const sessionUser = await browserSessionUser(request);
     if (sessionUser !== null) {
       const mfa = await db.query.user2FA.findFirst({
@@ -313,108 +193,62 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       if (!mfaEnforced) return approveForUser(authorization, sessionUser.id);
     }
 
-    const ssoInfo = await ssoInfoOrDefault();
-    return htmlResponse(loginPage(authorization, "", "", ssoInfo), 200);
+    // No usable session: hand off to the SPA login page. Stash the PKCE
+    // request under an opaque state id (set as an HttpOnly cookie so the SPA
+    // cannot tamper with it) and redirect to /login with that id in the URL
+    // so the SPA knows to complete the OAuth handshake after login.
+    const now = Date.now();
+    for (const [id, entry] of pendingAuthorizations) {
+      if (entry.expiresAt <= now) pendingAuthorizations.delete(id);
+    }
+    const stateId = crypto.randomUUID();
+    pendingAuthorizations.set(stateId, { authorization, expiresAt: now + CODE_TTL_MS });
+
+    const cookie = `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CODE_TTL_MS / 1000)}`;
+    const location = `/login?oauth_state=${encodeURIComponent(stateId)}`;
+    return new Response(null, {
+      status: 302,
+      headers: {
+        "Cache-Control": "no-store",
+        "Set-Cookie": cookie,
+        Location: location,
+      },
+    });
   })
-  .post("/oauth/authorization", async ({ body }: { readonly body: unknown }): Promise<Response> => {
-    // MFA resume: primary credentials were accepted on a prior POST and a
-    // TOTP challenge was issued. Verify the code and continue the authz flow.
-    const mfaChallengeToken = field(body, "mfa_challenge_token");
-    if (mfaChallengeToken !== "") {
-      const authorization = parseAuthorizationRequest(body);
-      if (authorization === null) return htmlResponse(loginPage(null), 400);
-
-      const challenge = consumeMfaChallenge(mfaChallengeToken);
-      if (challenge === null) {
-        return htmlResponse(loginPage(authorization, "The authentication code has expired. Please sign in again.", "", await ssoInfoOrDefault()), 401);
-      }
-      const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-      const code = field(body, "totp_code");
-      if (mfa?.enabled !== true || !verifyTotp(mfa.secret, code)) {
-        return htmlResponse(loginPage(authorization, "Invalid authentication code.", "", await ssoInfoOrDefault()), 401);
-      }
-      const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
-      if (user === undefined) return htmlResponse(loginPage(authorization, "Account not found.", "", await ssoInfoOrDefault()), 401);
-      return approveForUser(authorization, user.id);
+  .get("/oauth/authorization/complete", async ({ query, request }: OAuthQueryCtx): Promise<Response> => { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+    const oauthState = field(query, "oauth_state");
+    const cookieState = readOauthStateCookie(request);
+    if (oauthState === "" || cookieState === undefined || oauthState !== cookieState) {
+      return plainError("OAuth authorization state mismatch. Please run 'terraform login' again.");
     }
 
-    const authorization = parseAuthorizationRequest(body);
-    if (authorization === null) return htmlResponse(loginPage(null), 400);
-
-    const sso = await ssoSettingsSnapshot();
-    const ssoInfo: SsoInfo = {
-      saml: sso.samlEnabled,
-      oidc: sso.oidcEnabled,
-      ldap: sso.ldapEnabled,
-      localAuthEnabled: sso.localAuthEnabled,
-    };
-    const username = field(body, "username");
-    const password = field(body, "password");
-    let user: typeof users.$inferSelect | null = null;
-    let ldapUnavailable = false;
-    if (sso.ldapEnabled && username !== "" && password !== "") {
-      const ldap = await ldapSettings();
-      try {
-        const authenticated = await authenticateLdapWithCircuitBreaker(ldap, username, password);
-        ldapUnavailable = authenticated.unavailable;
-        if (authenticated.user !== null) {
-          try {
-            user = (await provisionSsoUser({
-              provider: "ldap",
-              subject: authenticated.user.dn,
-              username: authenticated.user.username,
-              email: authenticated.user.email,
-              emailVerified: true,
-              allowEmailLinking: ldap.allowEmailLinking,
-            })).user;
-          } catch (error: unknown) {
-            if (error instanceof SsoConflictError) {
-              return htmlResponse(loginPage(authorization, "This account cannot be provisioned from the directory.", username, ssoInfo), 401);
-            }
-            throw error;
-          }
-        }
-      } catch (error: unknown) {
-        // A transport failure must degrade to local authentication, never to
-        // the global error handler.
-        ldapUnavailable = true;
-        log.warn("LDAP authentication probe failed; continuing with local authentication", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    const pending = pendingAuthorizations.get(oauthState);
+    if (pending === undefined || pending.expiresAt <= Date.now()) {
+      pendingAuthorizations.delete(oauthState);
+      return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
 
-    if (user === null && sso.localAuthEnabled) {
-      const found = username === ""
-        ? undefined
-        : await db.query.users.findFirst({
-            where: or(eq(users.username, username), eq(users.email, username)),
-          });
-      const passwordValid = await passwordMatches(password, found?.passwordHash);
-      user = found !== undefined && passwordValid ? found : null;
+    const sessionUser = await browserSessionUser(request);
+    if (sessionUser === null) {
+      // The SPA should have established a session before calling this. Send
+      // the user back to login to recover.
+      return new Response(null, {
+        status: 302,
+        headers: { "Cache-Control": "no-store", Location: "/login" },
+      });
     }
 
-    if (user === null) {
-      // Preserve the SSO state so a user who mistypes a local password can
-      // still reach the identity-provider links without restarting.
-      if (ldapUnavailable && !sso.localAuthEnabled) {
-        return htmlResponse(loginPage(authorization, "The LDAP directory is temporarily unavailable. Please try again later.", username, ssoInfo), 503);
-      }
-      const message = sso.localAuthEnabled || sso.ldapEnabled
-        ? "Invalid username or password."
-        : "Local password sign-in is disabled. Use single sign-on.";
-      return htmlResponse(loginPage(authorization, message, username, ssoInfo), 401);
-    }
-
-    // MFA-enabled accounts continue through the normal TOTP flow rather than
-    // being rejected. Issue a challenge and render the code-entry step.
-    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+    // Defensive: an MFA-enforced account must have completed its TOTP step
+    // before the browser session was issued; if not, refuse and re-login.
+    const mfa = await db.query.user2FA.findFirst({
+      where: eq(user2FA.userId, sessionUser.id),
+    });
     if (mfa?.enabled === true) {
-      const challengeToken = issueMfaChallenge(user.id);
-      return htmlResponse(loginPage(authorization, "", username, ssoInfo, { challengeToken }), 200);
+      return plainError("Multi-factor authentication required. Please run 'terraform login' again.");
     }
 
-    return approveForUser(authorization, user.id);
+    pendingAuthorizations.delete(oauthState);
+    return approveForUser(pending.authorization, sessionUser.id);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
     if (
@@ -469,8 +303,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       });
     }
 
-    const mutableSet = set as { headers: Record<string, string | number> };
-    mutableSet.headers["Cache-Control"] = "no-store";
-    mutableSet.headers.Pragma = "no-cache";
+    set.headers["Cache-Control"] = "no-store";
+    set.headers.Pragma = "no-cache";
     return { access_token: accessToken, token_type: "bearer" };
   });

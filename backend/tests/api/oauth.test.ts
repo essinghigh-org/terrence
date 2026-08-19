@@ -29,18 +29,45 @@ async function authorizationParameters(redirectUri = "http://localhost:10000/log
   };
 }
 
-async function authorize(overrides: Record<string, string> = {}) {
-  const body = new URLSearchParams({
-    ...await authorizationParameters(),
-    username,
-    password,
-    ...overrides,
-  });
-  return oauthApp.handle(new Request("http://localhost/oauth/authorization", {
+function parseCookie(response: Response, name: string): string | undefined {
+  const header = response.headers.get("Set-Cookie");
+  if (header === null) return undefined;
+  for (const part of header.split(";")) {
+    const [cookieName, ...rest] = part.trim().split("=");
+    if (cookieName === name && rest.length > 0) return rest.join("=");
+  }
+  return undefined;
+}
+
+/** Drive the full OAuth handshake: GET redirects to /login and stashes state
+ *  in an HttpOnly cookie; a browser session (terrence_refresh) then completes
+ *  it via /oauth/authorization/complete. */
+async function fullHandshake() {
+  const params = await authorizationParameters();
+  const begin = await oauthApp.handle(new Request(
+    `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
+  ));
+  expect(begin.status).toBe(302);
+  const oauthState = parseCookie(begin, "terraform_oauth_state");
+  expect(oauthState).toBeDefined();
+
+  // Establish a browser session the way the SPA login would (no MFA here).
+  const login = await app.handle(new Request("http://localhost/api/v2/users/login", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+    headers: { "Content-Type": "application/vnd.api+json" },
+    body: JSON.stringify({
+      data: { attributes: { username, password, "browser-session": true } },
+    }),
   }));
+  expect(login.status).toBe(200);
+  const refreshCookie = login.headers.get("Set-Cookie") ?? "";
+  const cookies = `terraform_oauth_state=${oauthState}; ${refreshCookie}`;
+
+  const complete = await oauthApp.handle(new Request(
+    `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
+    { headers: { Cookie: cookies } },
+  ));
+  return { begin, complete, oauthState: oauthState! };
 }
 
 describe("Terraform login OAuth", () => {
@@ -70,7 +97,7 @@ describe("Terraform login OAuth", () => {
     });
   });
 
-  it("renders an accessible, escaped login form", async () => {
+  it("redirects unauthenticated browsers to the SPA login with an opaque state", async () => {
     const parameters = await authorizationParameters(
       "http://127.0.0.1:10010/login",
       `state"><script>alert(1)</script>`,
@@ -78,14 +105,18 @@ describe("Terraform login OAuth", () => {
     const response = await oauthApp.handle(new Request(
       `http://localhost/oauth/authorization?${new URLSearchParams(parameters)}`,
     ));
-    const html = await response.text();
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/html");
-    expect(html).toContain('<html lang="en">');
-    expect(html).toContain('<label for="username">Username</label>');
-    expect(html).toContain('<label for="password">Password</label>');
-    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(response.status).toBe(302);
+    const location = response.headers.get("Location") ?? "";
+    expect(location).toContain("/login?oauth_state=");
+    // The state id is opaque (a UUID), so the echoed application state is
+    // never reflected into the response; an XSS payload in `state` cannot
+    // reach the browser through this endpoint.
+    expect(location).not.toContain("<script>");
+    expect(location).not.toContain("%3Cscript%3E");
+    const setCookie = response.headers.get("Set-Cookie") ?? "";
+    expect(setCookie.toLowerCase()).toContain("terraform_oauth_state=");
+    expect(setCookie.toLowerCase()).toContain("httponly");
   });
 
   it("rejects redirects outside the configured loopback range", async () => {
@@ -106,8 +137,8 @@ describe("Terraform login OAuth", () => {
   it("rejects PKCE downgrade attempts (missing code_challenge or method plain)", async () => {
     const baseParams = await authorizationParameters();
 
-    const missingChallengeParams = { ...baseParams };
-    delete (missingChallengeParams as any).code_challenge;
+    const missingChallengeParams = { ...baseParams } as Record<string, string>;
+    delete missingChallengeParams.code_challenge;
     const missingRes = await oauthApp.handle(new Request(
       `http://localhost/oauth/authorization?${new URLSearchParams(missingChallengeParams)}`,
     ));
@@ -120,21 +151,32 @@ describe("Terraform login OAuth", () => {
     expect(plainRes.status).toBe(400);
   });
 
-  it("rejects invalid credentials without redirecting", async () => {
-    const response = await authorize({ password: "wrong-password" });
-    const html = await response.text();
+  it("rejects a mismatched oauth_state at completion", async () => {
+    const params = await authorizationParameters();
+    const begin = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
+    ));
+    const oauthState = parseCookie(begin, "terraform_oauth_state");
+    expect(oauthState).toBeDefined();
 
-    expect(response.status).toBe(401);
-    expect(response.headers.get("location")).toBeNull();
-    expect(html).toContain('role="alert"');
-    expect(html).toContain("Invalid username or password.");
+    // No session cookie at all -> the handshake cannot be verified.
+    const noCookie = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
+    ));
+    expect(noCookie.status).toBe(400);
+
+    // Wrong state value -> hard error.
+    const wrong = await oauthApp.handle(new Request(
+      "http://localhost/oauth/authorization/complete?oauth_state=not-the-right-value",
+    ));
+    expect(wrong.status).toBe(400);
   });
 
-  it("authenticates, verifies S256 PKCE, and issues a single-use user token", async () => {
-    const authorization = await authorize();
-    expect(authorization.status).toBe(302);
+  it("authenticates via the SPA handoff, verifies S256 PKCE, and issues a single-use user token", async () => {
+    const { complete } = await fullHandshake();
+    expect(complete.status).toBe(302);
 
-    const callback = new URL(authorization.headers.get("location")!);
+    const callback = new URL(complete.headers.get("Location")!);
     expect(callback.origin + callback.pathname).toBe("http://localhost:10000/login");
     expect(callback.searchParams.get("state")).toBe("test-state");
     const code = callback.searchParams.get("code")!;
@@ -171,8 +213,8 @@ describe("Terraform login OAuth", () => {
   });
 
   it("consumes a code after a failed PKCE verification", async () => {
-    const authorization = await authorize();
-    const code = new URL(authorization.headers.get("location")!).searchParams.get("code")!;
+    const { complete } = await fullHandshake();
+    const code = new URL(complete.headers.get("Location")!).searchParams.get("code")!;
     const exchange = (codeVerifier: string) => oauthApp.handle(new Request("http://localhost/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

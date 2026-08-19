@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,18 @@ export function Login(): React.JSX.Element {
   const [mfaChallengeToken, setMfaChallengeToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // When this login was triggered by `terraform login`, the backend stashed
+  // the OAuth/PKCE handshake under an opaque state id and redirected here with
+  // `?oauth_state=...`. Instead of entering the SPA, complete the handshake by
+  // returning to the backend, which issues the authorization code to Terraform.
+  const oauthState = searchParams.get("oauth_state");
+
+  const finishOauthHandshake = (): void => {
+    if (oauthState === null || oauthState === "") return;
+    window.location.href = `/oauth/authorization/complete?oauth_state=${encodeURIComponent(oauthState)}`;
+  };
 
   useEffect((): void => {
     fetchApi<{ "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } }>("/ping")
@@ -58,7 +70,8 @@ export function Login(): React.JSX.Element {
       }
       if (!isString(attributes.token)) throw new Error("Missing access token");
       setAuthToken(attributes.token, attributes["expired-at"], true);
-      await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
+      if (oauthState !== null && oauthState !== "") finishOauthHandshake();
+      else await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
     } catch (_error: unknown) {
       setError("Check your username and password, then try again.");
     } finally {
@@ -79,7 +92,8 @@ export function Login(): React.JSX.Element {
       }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
       const attributes = response.data.attributes;
       setAuthToken(attributes.token, attributes["expired-at"], true);
-      await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
+      if (oauthState !== null && oauthState !== "") finishOauthHandshake();
+      else await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
     } catch (_error: unknown) {
       setError("That authentication code was not accepted. Try again.");
     } finally {

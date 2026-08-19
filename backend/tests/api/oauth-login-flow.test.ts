@@ -84,11 +84,43 @@ describe("terraform login.v1 OAuth flow", () => {
     );
   });
 
-  test("unauthenticated browser is shown the login page", async () => {
+  test("unauthenticated browser is redirected to the SPA login page", async () => {
     const res = await app.handle(new Request(`http://localhost${AUTHZ}`));
-    expect(res.status).toBe(200);
-    const body = await res.text();
-    expect(body.toLowerCase()).toContain("login");
+    expect(res.status).toBe(302);
+    const location = res.headers.get("Location") ?? "";
+    expect(location).toContain("/login?oauth_state=");
+    // The handshake request is stashed in an HttpOnly cookie.
+    const setCookie = res.headers.get("Set-Cookie") ?? "";
+    expect(setCookie.toLowerCase()).toContain("terraform_oauth_state=");
+    expect(setCookie.toLowerCase()).toContain("httponly");
+  });
+
+  test("completing the handshake with a session issues the code", async () => {
+    const redirect = await app.handle(new Request(`http://localhost${AUTHZ}`));
+    const location = new URL(redirect.headers.get("Location") ?? "", "http://localhost");
+    const oauthState = location.searchParams.get("oauth_state") ?? "";
+    expect(oauthState).not.toBe("");
+    const cookieHeader = redirect.headers.get("Set-Cookie") ?? "";
+
+    const complete = await app.handle(
+      new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+        headers: { Cookie: cookieHeader },
+      }),
+    );
+    // No session yet -> bounced back to /login.
+    expect(complete.status).toBe(302);
+    expect(complete.headers.get("Location")).toBe("/login");
+
+    const completeWithSession = await app.handle(
+      new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+        headers: { Cookie: `${cookieHeader}; ${Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ")}` },
+      }),
+    );
+    expect(completeWithSession.status).toBe(302);
+    const cb = new URL(completeWithSession.headers.get("Location") ?? "");
+    expect(cb.host).toBe("localhost:10000");
+    expect(cb.pathname).toBe("/login");
+    expect(cb.searchParams.get("code")).not.toBeNull();
   });
 
   test("authenticated browser skips login and is redirected with a code", async () => {
@@ -140,7 +172,7 @@ describe("terraform login.v1 OAuth flow", () => {
     expect(json.access_token).toBeTruthy();
   });
 
-  test("MFA-enabled user with a browser session is NOT auto-approved (gated to login page)", async () => {
+  test("MFA-enabled user with a browser session is NOT auto-approved (redirected to login)", async () => {
     // Enroll + enable MFA for this session's user using the API login token.
     const loginBody = await (
       await app.handle(
@@ -175,17 +207,15 @@ describe("terraform login.v1 OAuth flow", () => {
     );
     expect(verify.status).toBe(200);
 
-    // With a browser session cookie, an MFA-gated account must still land on
-    // the login page (which then runs the normal TOTP step) rather than being
-    // silently auto-approved.
+    // With a browser session cookie, an MFA-gated account must still be sent
+    // through the normal login/MFA flow rather than silently auto-approved.
     const res = await app.handle(
       new Request(`http://localhost${AUTHZ}`, {
         headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
       }),
     );
-    expect(res.status).toBe(200);
-    const body = await res.text();
-    expect(body.toLowerCase()).toContain("login");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toContain("/login?oauth_state=");
   });
 
   afterAll(() => {
