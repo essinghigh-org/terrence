@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { buttonVariants, Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -718,17 +719,29 @@ export function VariableSets(): React.JSX.Element {
                     {variableSet.attributes.description ?? "—"}
                   </TableCell>
                   <TableCell>
-                    {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
-                      ? "Project"
-                      : variableSet.attributes.global
-                        ? "Global"
-                        : "Selected"}
+                    <Badge
+                      variant={
+                        variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
+                          ? "outline"
+                          : variableSet.attributes.global
+                            ? "default"
+                            : "secondary"
+                      }
+                    >
+                      {variableSet.attributes["parent-project-id"] !== undefined && variableSet.attributes["parent-project-id"] !== null
+                        ? "Project"
+                        : variableSet.attributes.global
+                          ? "Global"
+                          : "Selected"}
+                    </Badge>
                   </TableCell>
-                  <TableCell>{variableSet.attributes["var-count"]}</TableCell>
+                  <TableCell><Badge variant="secondary">{variableSet.attributes["var-count"]}</Badge></TableCell>
                   <TableCell>
-                    {variableSet.attributes.global
-                      ? "All"
-                      : variableSet.attributes["workspace-count"]}
+                    <Badge variant={variableSet.attributes.global ? "default" : "outline"}>
+                      {variableSet.attributes.global
+                        ? "All"
+                        : variableSet.attributes["workspace-count"]}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">

@@ -288,3 +288,54 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
     permissions: {},
   });
 });
+
+test("supports permission presets (Read-only, All, Clear) and search filtering", async () => {
+  const { postedBody, fetchMock } = mockApi({
+    projects: [{ id: "prj-1", name: "payments" }, { id: "prj-2", name: "auth" }],
+    workspaces: [{ id: "ws-1", name: "prod-us" }, { id: "ws-2", name: "staging" }],
+  });
+  globalThis.fetch = fetchMock;
+
+  const dialog = await openFineGrainedDialog();
+  await waitFor((): void => {
+    expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
+  });
+  await waitFor((): void => {
+    expect(within(dialog).getByText("payments")).toBeTruthy();
+  });
+
+  // Click Read-only preset button
+  fireEvent.click(within(dialog).getByRole("button", { name: "Select read-only permissions" }));
+  expect(within(dialog).getByText("Read workspace metadata and settings")).toBeTruthy();
+
+  // Filter permissions with search input
+  const permSearch = within(dialog).getByPlaceholderText("Search permissions by action or resource…");
+  fireEvent.input(permSearch, { target: { value: "audit" } });
+  expect(within(dialog).getByText("Read organization audit logs")).toBeTruthy();
+  expect(within(dialog).queryByText("Lock and unlock workspaces")).toBeNull();
+
+  // Clear search
+  fireEvent.input(permSearch, { target: { value: "" } });
+
+  // Clear all permissions
+  fireEvent.click(within(dialog).getByRole("button", { name: "Clear all permissions" }));
+
+  // Quick select all projects
+  fireEvent.click(within(dialog).getByRole("button", { name: "Select all projects" }));
+
+  // Select read-only again before submission
+  fireEvent.click(within(dialog).getByRole("button", { name: "Select read-only permissions" }));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
+  await waitFor((): void => {
+    expect(postedBody()).not.toBeNull();
+  });
+
+  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
+  const scopes = attributes["scopes"] as { projects: string[]; permissions: Record<string, boolean> };
+  expect(scopes.projects).toEqual(["prj-1", "prj-2"]);
+  expect(scopes.permissions["workspaces:read"]).toBe(true);
+  expect(scopes.permissions["workspaces:write"]).toBeUndefined();
+  expect(scopes.permissions["runs:read"]).toBe(true);
+  expect(scopes.permissions["runs:apply"]).toBeUndefined();
+});

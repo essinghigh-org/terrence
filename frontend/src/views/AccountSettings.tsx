@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User, Globe2 } from "lucide-react";
+import { Check, Copy, Globe2, KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User, X } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
@@ -68,6 +68,7 @@ export function AccountSettings(): React.JSX.Element {
 
   // Token Modal / Creation
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
+  const [copiedToken, setCopiedToken] = useState(false);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
 
@@ -771,12 +772,38 @@ export function AccountSettings(): React.JSX.Element {
           />
 
           {createdTokenSecret != null && (
-            <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-1">
-              <p className="font-semibold flex items-center gap-1">
-                <ShieldCheck className="w-4 h-4" />
-                Token created. Copy it now; it won't be shown again.
-              </p>
-              <code className="block bg-primary/10 px-2 py-1 rounded text-xs break-all select-all">
+            <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  Token created. Copy it now; it won't be shown again.
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1 bg-background text-foreground"
+                    onClick={(): void => {
+                      void navigator.clipboard?.writeText(createdTokenSecret);
+                      setCopiedToken(true);
+                      setTimeout((): void => { setCopiedToken(false); }, 2000);
+                    }}
+                  >
+                    {copiedToken ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedToken ? "Copied" : "Copy token"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                    onClick={(): void => { setCreatedTokenSecret(null); }}
+                    aria-label="Dismiss token notification"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+              <code className="block bg-background/80 border border-border/60 px-3 py-2 rounded text-xs font-mono break-all select-all text-foreground">
                 {createdTokenSecret}
               </code>
             </div>

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Checkbox } from "../components/ui/checkbox";
+import { Badge } from "../components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +15,17 @@ import {
 import { toast } from "../components/ui/toast";
 import { isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
+import {
+  Boxes,
+  Building2,
+  Folder,
+  FolderPlus,
+  Layers,
+  Plus,
+  Search,
+  Shield,
+  Tag,
+} from "lucide-react";
 
 /**
  * Permission grants offered in the fine-grained scope picker. Each maps to a
@@ -171,7 +183,6 @@ function emptyGroup(): TagGroupNode {
  * (`isTagFilter` requires a non-empty key). Returns null when nothing is
  * filled in, which the caller maps to `tags: null`.
  */
-/** Serialized tag rules: filters keep `key`/`value`, groups nest rules. */
 type SerializedTagRule =
   | Readonly<{ key: string; value: string }>
   | Readonly<{ combinator: "AND" | "OR"; rules: SerializedTagRule[] }>
@@ -250,14 +261,15 @@ export function TokenScopeDialog({
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [selectedWorkspaces, setSelectedWorkspaces] = useState<Set<string>>(new Set());
+  const [projectSearch, setProjectSearch] = useState("");
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
+  const [permissionSearch, setPermissionSearch] = useState("");
   const [tagTree, setTagTree] = useState<TagGroupNode>(emptyGroup);
   const [granted, setGranted] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Load organizations when the dialog opens. The org resource exposes the
-  // DB id under attributes["external-id"] and its name under attributes.name;
-  // the JSON:API `id` is just the (URL-encoded) name.
+  // Load organizations when the dialog opens.
   useEffect((): void => {
     if (!open) return;
     setError("");
@@ -280,8 +292,7 @@ export function TokenScopeDialog({
     }).catch((): void => { setError("Could not load organizations"); });
   }, [open]);
 
-  // Load projects + workspaces for the selected org. The org name (not id) is
-  // used in the URL path.
+  // Load projects + workspaces for the selected org.
   useEffect((): (() => void) | undefined => {
     if (!open || orgId === "") { setProjects([]); setWorkspaces([]); return; }
     const orgName = orgs.find((o): boolean => o.id === orgId)?.name ?? orgId;
@@ -308,6 +319,7 @@ export function TokenScopeDialog({
       return next;
     });
   };
+
   const toggleWorkspace = (id: string): void => {
     setSelectedWorkspaces((prev): Set<string> => {
       const next = new Set(prev);
@@ -315,6 +327,7 @@ export function TokenScopeDialog({
       return next;
     });
   };
+
   const toggleGrant = (key: string): void => {
     setGranted((prev) => {
       const next = { ...prev };
@@ -323,11 +336,47 @@ export function TokenScopeDialog({
     });
   };
 
+  const grantAll = (): void => {
+    const next: Record<string, boolean> = {};
+    for (const group of PERMISSION_GROUPS) {
+      for (const grant of group.grants) {
+        next[grant.key] = true;
+      }
+    }
+    setGranted(next);
+  };
+
+  const grantReadOnly = (): void => {
+    const next: Record<string, boolean> = {};
+    for (const group of PERMISSION_GROUPS) {
+      for (const grant of group.grants) {
+        if (grant.key.endsWith(":read")) {
+          next[grant.key] = true;
+        }
+      }
+    }
+    setGranted(next);
+  };
+
+  const clearGrants = (): void => {
+    setGranted({});
+  };
+
+  const toggleGroupGrants = (groupGrants: readonly { readonly key: string }[]): void => {
+    const allActive = groupGrants.every((g) => granted[g.key] === true);
+    setGranted((prev) => {
+      const next = { ...prev };
+      for (const grant of groupGrants) {
+        next[grant.key] = !allActive;
+      }
+      return next;
+    });
+  };
+
   // --- Tag rule builder mutations (immutable tree updates) ---
   const updateRule = (path: readonly number[], mutate: (rule: TagRuleNode) => TagRuleNode): void => {
     setTagTree((root): TagGroupNode => {
       if (path.length === 0) {
-        // Path [] addresses the root group itself (e.g. its combinator select).
         const updated = mutate(root);
         return updated.kind === "group" ? updated : root;
       }
@@ -405,6 +454,9 @@ export function TokenScopeDialog({
     setOrgId("");
     setSelectedProjects(new Set());
     setSelectedWorkspaces(new Set());
+    setProjectSearch("");
+    setWorkspaceSearch("");
+    setPermissionSearch("");
     setTagTree(emptyGroup());
     setGranted({});
     setError("");
@@ -431,7 +483,6 @@ export function TokenScopeDialog({
             }
           : undefined),
       };
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),
@@ -450,106 +501,241 @@ export function TokenScopeDialog({
     }
   };
 
+  const filteredProjects = useMemo(() => {
+    const q = projectSearch.trim().toLowerCase();
+    if (q === "") return projects;
+    return projects.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  }, [projects, projectSearch]);
+
+  const filteredWorkspaces = useMemo(() => {
+    const q = workspaceSearch.trim().toLowerCase();
+    if (q === "") return workspaces;
+    return workspaces.filter((w) => w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q));
+  }, [workspaces, workspaceSearch]);
+
+  const filteredPermissionGroups = useMemo(() => {
+    const q = permissionSearch.trim().toLowerCase();
+    if (q === "") return PERMISSION_GROUPS;
+    return PERMISSION_GROUPS.map((group) => {
+      const matchingGrants = group.grants.filter(
+        (g) => g.label.toLowerCase().includes(q) || g.key.toLowerCase().includes(q),
+      );
+      if (matchingGrants.length > 0 || group.label.toLowerCase().includes(q)) {
+        return {
+          ...group,
+          grants: matchingGrants.length > 0 ? matchingGrants : group.grants,
+        };
+      }
+      return null;
+    }).filter((g): g is (typeof PERMISSION_GROUPS)[number] => g !== null);
+  }, [permissionSearch]);
+
+  const totalGrantedCount = useMemo(
+    () => Object.values(granted).filter(Boolean).length,
+    [granted],
+  );
+
   const rootPath: readonly number[] = [];
   const renderRuleRow = (node: TagRuleNode, path: readonly number[]): React.JSX.Element => {
     if (node.kind === "filter") {
       return (
-        <div className="flex items-center gap-2">
-          <Input
-            name={`tag-key-${path.join("-")}`}
-            aria-label="Tag key"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="key (e.g. environment)"
-            value={node.key}
-            onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, e.currentTarget.value, node.value); }}
-            className="h-9"
-          />
-          <Input
-            name={`tag-value-${path.join("-")}`}
-            aria-label="Tag value"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="value (e.g. production)"
-            value={node.value}
-            onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, node.key, e.currentTarget.value); }}
-            className="h-9"
-          />
-          <Button type="button" variant="outline" size="sm" onClick={(): void => { wrapRule(path); }} title="Wrap this condition into a group">group</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} aria-label="Remove condition">✕</Button>
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/80 bg-background/90 p-2 shadow-xs transition-colors hover:border-primary/40 sm:flex-nowrap">
+          <div className="relative min-w-[140px] flex-1">
+            <Input
+              name={`tag-key-${path.join("-")}`}
+              aria-label="Tag key"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Tag key (e.g. env)"
+              value={node.key}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, e.currentTarget.value, node.value); }}
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-bold text-muted-foreground">
+            =
+          </span>
+          <div className="relative min-w-[140px] flex-1">
+            <Input
+              name={`tag-value-${path.join("-")}`}
+              aria-label="Tag value"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Tag value (e.g. prod)"
+              value={node.value}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setFilterValue(path, node.key, e.currentTarget.value); }}
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={(): void => { wrapRule(path); }}
+              title="Wrap this condition into a group"
+              className="h-8 text-xs font-medium"
+            >
+              <Layers className="mr-1 size-3" />
+              group
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={(): void => { removeRule(path); }}
+              aria-label="Remove condition"
+              className="h-8 px-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              title="Remove condition"
+            >
+              ✕
+            </Button>
+          </div>
         </div>
       );
     }
+
     const isRoot = path.length === 0;
     return (
-      <div className="space-y-1.5" data-testid="tag-group">
-        <div className="flex items-center gap-2">
-          {!isRoot && <span aria-hidden="true" className="text-muted-foreground">(</span>}
-          <select
-            aria-label="Combine with"
-            className="h-8 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-            value={node.combinator}
-            onChange={(e): void => {
-              // SAFETY: the select options are the two combinators; the change event carries one of them.
-              setCombinator(path, e.target.value as "AND" | "OR");
-            }}
-          >
-            <option value="AND">AND</option>
-            <option value="OR">OR</option>
-          </select>
-          <span className="text-sm text-muted-foreground">{isRoot ? "of the conditions match" : "conditions match"}</span>
-          <Button type="button" variant="outline" size="sm" onClick={(): void => { addFilter(path); }}>Add condition</Button>
-          <Button type="button" variant="outline" size="sm" onClick={(): void => { addGroup(path); }}>Add group</Button>
-          {!isRoot && <Button type="button" variant="ghost" size="sm" onClick={(): void => { removeRule(path); }} aria-label="Remove group">✕</Button>}
+      <div
+        className={`space-y-2.5 rounded-lg border ${
+          isRoot
+            ? "border-border bg-muted/20 p-3"
+            : "border-primary/30 border-l-4 border-l-primary bg-primary/5 p-2.5"
+        }`}
+        data-testid="tag-group"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
+          <div className="flex items-center gap-2">
+            {!isRoot && <span aria-hidden="true" className="text-sm font-semibold text-primary">(</span>}
+            <select
+              aria-label="Combine with"
+              className="h-7 rounded-md border border-input bg-background px-2 font-mono text-xs font-semibold text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              value={node.combinator}
+              onChange={(e): void => {
+                setCombinator(path, e.target.value as "AND" | "OR");
+              }}
+            >
+              <option value="AND">AND (match all)</option>
+              <option value="OR">OR (match any)</option>
+            </select>
+            <span className="text-xs text-muted-foreground">
+              {isRoot ? "of the conditions match" : "conditions match"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={(): void => { addFilter(path); }}
+              className="h-7 text-xs font-medium"
+            >
+              <Plus className="mr-1 size-3" />
+              Add condition
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={(): void => { addGroup(path); }}
+              className="h-7 text-xs font-medium"
+            >
+              <FolderPlus className="mr-1 size-3" />
+              Add group
+            </Button>
+            {!isRoot && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={(): void => { removeRule(path); }}
+                aria-label="Remove group"
+                className="h-7 px-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                title="Remove group"
+              >
+                ✕
+              </Button>
+            )}
+          </div>
         </div>
-        <div className="space-y-1.5 border-l border-border pl-3">
+
+        <div className="space-y-2">
           {node.rules.map((child, index): React.JSX.Element => (
-            <div key={index} className="space-y-1.5">
+            <div key={index}>
               {renderRuleRow(child, [...path, index])}
             </div>
           ))}
         </div>
-        {!isRoot && <span aria-hidden="true" className="text-muted-foreground">)</span>}
+        {!isRoot && <span aria-hidden="true" className="text-sm font-semibold text-primary">)</span>}
       </div>
     );
   };
 
   return (
     <Dialog open={open} onOpenChange={(next: boolean): void => { if (!next) reset(); onOpenChange(next); }}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto">
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Create API token</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Shield className="size-5 text-primary" />
+            Create API token
+          </DialogTitle>
           <DialogDescription>
-            Fine-grained tokens can be scoped to specific organizations, projects,
-            workspaces, and tag-matching workspaces, with per-action permission grants.
+            Fine-grained tokens restrict access to specific organizations, projects,
+            workspaces, and tag rules, with customizable per-action permission grants.
           </DialogDescription>
         </DialogHeader>
+
         <div className="space-y-5">
+          {/* Token description */}
           <div className="space-y-1.5">
-            <label htmlFor="token-desc" className="text-sm font-medium">Description</label>
-            <Input id="token-desc" name="token-description" autoComplete="off" value={description} onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(e.currentTarget.value); }} placeholder="e.g. CI/CD deploy token" />
+            <label htmlFor="token-desc" className="text-xs font-semibold text-foreground">
+              Token description
+            </label>
+            <Input
+              id="token-desc"
+              name="token-description"
+              autoComplete="off"
+              value={description}
+              onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setDescription(e.currentTarget.value); }}
+              placeholder="e.g. CI/CD deploy token (GitHub Actions)"
+            />
           </div>
 
-          <label className="flex items-center gap-3 text-sm font-medium">
-            <Checkbox checked={fineGrained} onCheckedChange={(v: boolean): void => { setFineGrained(v); }} />
-            <span>
-              Fine-grained
-              <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">
-                Restrict this token to selected resources and permissions. Legacy tokens have full access.
+          {/* Token type switch */}
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-3 shadow-xs hover:border-primary/50 transition-colors">
+            <Checkbox
+              checked={fineGrained}
+              onCheckedChange={(v: boolean): void => { setFineGrained(v); }}
+              className="mt-0.5"
+            />
+            <div>
+              <span className="font-semibold text-foreground text-sm">Fine-grained</span>
+              <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                Restrict this token to specific resources, tag rules, and action permissions. Legacy tokens have unrestricted access to all resources.
               </span>
-            </span>
+            </div>
           </label>
 
           {fineGrained && (
-            <>
+            <div className="space-y-5 rounded-lg border border-border/80 bg-background/50 p-4">
+              {/* Organization */}
               <div className="space-y-1.5">
-                <label htmlFor="token-org" className="text-sm font-medium">Organization</label>
+                <label htmlFor="token-org" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <Building2 className="size-3.5 text-muted-foreground" />
+                  Organization
+                </label>
                 <select
                   id="token-org"
                   name="token-organization"
-                  className="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                   value={orgId}
-                  onChange={(e): void => { setOrgId(e.target.value); setSelectedProjects(new Set()); setSelectedWorkspaces(new Set()); }}
+                  onChange={(e): void => {
+                    setOrgId(e.target.value);
+                    setSelectedProjects(new Set());
+                    setSelectedWorkspaces(new Set());
+                  }}
                 >
                   {orgs.map((org): React.JSX.Element => (
                     <option key={org.id} value={org.id}>{org.name}</option>
@@ -557,80 +743,290 @@ export function TokenScopeDialog({
                 </select>
               </div>
 
-              {/* Projects */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">Projects <span className="text-muted-foreground font-normal">(none selected = all projects)</span></p>
-                {projects.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No projects in this organization.</p>
-                ) : (
-                  <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border p-2">
-                    {projects.map((project): React.JSX.Element => (
-                      <label key={project.id} className="flex items-center gap-2 text-sm">
-                        <Checkbox checked={selectedProjects.has(project.id)} onCheckedChange={(): void => { toggleProject(project.id); }} />
-                        {project.name}
-                      </label>
-                    ))}
+              {/* Projects & Workspaces Grid */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {/* Projects */}
+                <div className="space-y-2 rounded-md border border-border bg-card p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Folder className="size-3.5 text-muted-foreground" />
+                      Projects
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        {selectedProjects.size === 0 ? "All" : `${selectedProjects.size}/${projects.length}`}
+                      </Badge>
+                    </span>
+                    {projects.length > 0 && (
+                      <div className="flex items-center gap-1 text-[11px]">
+                        <button
+                          type="button"
+                          aria-label="Select all projects"
+                          onClick={() => setSelectedProjects(new Set(projects.map((p) => p.id)))}
+                          className="text-primary hover:underline"
+                        >
+                          All
+                        </button>
+                        <span className="text-muted-foreground">·</span>
+                        <button
+                          type="button"
+                          aria-label="Clear selected projects"
+                          onClick={() => setSelectedProjects(new Set())}
+                          className="text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              {/* Workspaces */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">Workspaces <span className="text-muted-foreground font-normal">(none selected = all workspaces in the selected projects)</span></p>
-                {workspaces.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No workspaces in this organization.</p>
-                ) : (
-                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
-                    {workspaces.map((workspace): React.JSX.Element => (
-                      <label key={workspace.id} className="flex items-center gap-2 text-sm">
-                        <Checkbox checked={selectedWorkspaces.has(workspace.id)} onCheckedChange={(): void => { toggleWorkspace(workspace.id); }} />
-                        {workspace.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {projects.length > 5 && (
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2 size-3 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter projects…"
+                        value={projectSearch}
+                        onChange={(e) => setProjectSearch(e.target.value)}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setProjectSearch(e.currentTarget.value)}
+                        className="h-7 pl-7 text-xs"
+                      />
+                    </div>
+                  )}
 
-              {/* Tag rule builder */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">Workspace tag rule <span className="text-muted-foreground font-normal">(optional)</span></p>
-                {renderRuleRow(tagTree, rootPath)}
-                {rootLabel(tagTree) !== null && (
-                  <p className="text-xs text-muted-foreground">
-                    Matches: <span className="font-mono">{rootLabel(tagTree)}</span>
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Workspaces matching this rule are included even if not selected above.
-                  Use AND to require all conditions, OR to match any, and &quot;group&quot; to nest conditions.
-                </p>
-              </div>
-
-              {/* Permission grants */}
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Permissions</p>
-                {PERMISSION_GROUPS.map((group): React.JSX.Element => (
-                  <div key={group.id} className="rounded-md border p-2.5">
-                    <p className="mb-1 text-[13px] font-semibold text-muted-foreground">{group.label}</p>
-                    <div className="space-y-1">
-                      {group.grants.map((grant): React.JSX.Element => (
-                        <label key={grant.key} className="flex items-center gap-2 text-sm">
-                          <Checkbox checked={granted[grant.key] === true} onCheckedChange={(): void => { toggleGrant(grant.key); }} />
-                          {grant.label}
+                  {projects.length === 0 ? (
+                    <p className="py-3 text-center text-xs text-muted-foreground">No projects in this organization.</p>
+                  ) : filteredProjects.length === 0 ? (
+                    <p className="py-3 text-center text-xs text-muted-foreground">No matching projects.</p>
+                  ) : (
+                    <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
+                      {filteredProjects.map((project): React.JSX.Element => (
+                        <label
+                          key={project.id}
+                          className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
+                        >
+                          <Checkbox
+                            checked={selectedProjects.has(project.id)}
+                            onCheckedChange={(): void => { toggleProject(project.id); }}
+                          />
+                          <span className="truncate">{project.name}</span>
                         </label>
                       ))}
                     </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    {selectedProjects.size === 0 ? "No project selected: all projects in org are included." : "Scoped to selected projects."}
+                  </p>
+                </div>
+
+                {/* Workspaces */}
+                <div className="space-y-2 rounded-md border border-border bg-card p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Boxes className="size-3.5 text-muted-foreground" />
+                      Workspaces
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        {selectedWorkspaces.size === 0 ? "All" : `${selectedWorkspaces.size}/${workspaces.length}`}
+                      </Badge>
+                    </span>
+                    {workspaces.length > 0 && (
+                      <div className="flex items-center gap-1 text-[11px]">
+                        <button
+                          type="button"
+                          aria-label="Select all workspaces"
+                          onClick={() => setSelectedWorkspaces(new Set(workspaces.map((w) => w.id)))}
+                          className="text-primary hover:underline"
+                        >
+                          All
+                        </button>
+                        <span className="text-muted-foreground">·</span>
+                        <button
+                          type="button"
+                          aria-label="Clear selected workspaces"
+                          onClick={() => setSelectedWorkspaces(new Set())}
+                          className="text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ))}
+
+                  {workspaces.length > 5 && (
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2 size-3 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter workspaces…"
+                        value={workspaceSearch}
+                        onChange={(e) => setWorkspaceSearch(e.target.value)}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setWorkspaceSearch(e.currentTarget.value)}
+                        className="h-7 pl-7 text-xs"
+                      />
+                    </div>
+                  )}
+
+                  {workspaces.length === 0 ? (
+                    <p className="py-3 text-center text-xs text-muted-foreground">No workspaces in this organization.</p>
+                  ) : filteredWorkspaces.length === 0 ? (
+                    <p className="py-3 text-center text-xs text-muted-foreground">No matching workspaces.</p>
+                  ) : (
+                    <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/50 p-1.5">
+                      {filteredWorkspaces.map((workspace): React.JSX.Element => (
+                        <label
+                          key={workspace.id}
+                          className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted select-none"
+                        >
+                          <Checkbox
+                            checked={selectedWorkspaces.has(workspace.id)}
+                            onCheckedChange={(): void => { toggleWorkspace(workspace.id); }}
+                          />
+                          <span className="truncate">{workspace.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    {selectedWorkspaces.size === 0 ? "No workspace selected: all workspaces in projects are included." : "Scoped to selected workspaces."}
+                  </p>
+                </div>
               </div>
-            </>
+
+              {/* Tag Rule Policy Builder */}
+              <div className="space-y-2 rounded-md border border-border bg-card p-3">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Tag className="size-3.5 text-muted-foreground" />
+                    Workspace tag rule
+                    <span className="font-normal text-muted-foreground">(optional dynamic scoping)</span>
+                  </span>
+                </div>
+
+                {renderRuleRow(tagTree, rootPath)}
+
+                {rootLabel(tagTree) !== null && (
+                  <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs">
+                    <span className="font-semibold text-primary">Matches:</span>
+                    <span className="font-mono font-medium text-foreground">{rootLabel(tagTree)}</span>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-muted-foreground">
+                  Workspaces matching this rule are included even if not selected above. Use AND to require all conditions, OR to match any, and &quot;group&quot; to nest conditions.
+                </p>
+              </div>
+
+              {/* Permission Grants Matrix */}
+              <div className="space-y-2.5 rounded-md border border-border bg-card p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-foreground">Permissions</span>
+                    <Badge variant={totalGrantedCount > 0 ? "default" : "secondary"} className="px-1.5 py-0 text-[10px]">
+                      {totalGrantedCount} granted
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label="Select read-only permissions"
+                      onClick={grantReadOnly}
+                      className="h-6 text-[11px] font-medium"
+                    >
+                      Read-only
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label="Select all permissions"
+                      onClick={grantAll}
+                      className="h-6 text-[11px] font-medium"
+                    >
+                      All
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Clear all permissions"
+                      onClick={clearGrants}
+                      className="h-6 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2 size-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search permissions by action or resource…"
+                    value={permissionSearch}
+                    onChange={(e) => setPermissionSearch(e.target.value)}
+                    onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setPermissionSearch(e.currentTarget.value)}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+
+                <div className="grid max-h-72 grid-cols-1 gap-2.5 overflow-y-auto pr-1 md:grid-cols-2">
+                  {filteredPermissionGroups.map((group): React.JSX.Element => {
+                    const activeInGroup = group.grants.filter((g) => granted[g.key] === true).length;
+                    return (
+                      <div key={group.id} className="rounded-md border border-border/70 bg-background p-2.5 shadow-xs">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground">{group.label}</span>
+                          <div className="flex items-center gap-1">
+                            <Badge variant="outline" className="px-1 py-0 text-[10px] text-muted-foreground font-mono">
+                              {activeInGroup}/{group.grants.length}
+                            </Badge>
+                            <button
+                              type="button"
+                              onClick={() => toggleGroupGrants(group.grants)}
+                              className="text-[10px] text-primary hover:underline ml-1"
+                            >
+                              {activeInGroup === group.grants.length ? "none" : "all"}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          {group.grants.map((grant): React.JSX.Element => (
+                            <label
+                              key={grant.key}
+                              className="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-xs select-none hover:bg-muted"
+                            >
+                              <Checkbox
+                                checked={granted[grant.key] === true}
+                                onCheckedChange={(): void => { toggleGrant(grant.key); }}
+                                className="mt-0.5"
+                              />
+                              <span className="flex-1 leading-4 text-foreground/90">{grant.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           )}
 
           {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
         </div>
+
         <DialogFooter className="mt-4">
-          <Button type="button" variant="outline" disabled={saving} onClick={(): void => { onOpenChange(false); reset(); }}>Cancel</Button>
-          <Button type="button" disabled={saving || (fineGrained && orgId === "")} onClick={async (): Promise<void> => create()}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={saving}
+            onClick={(): void => { onOpenChange(false); reset(); }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={saving || (fineGrained && orgId === "")}
+            onClick={async (): Promise<void> => create()}
+          >
             {saving ? "Creating…" : "Create token"}
           </Button>
         </DialogFooter>

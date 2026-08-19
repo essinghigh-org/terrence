@@ -144,7 +144,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
     setUrl(configuration?.attributes.url ?? "");
     setEmailAddresses(configuration?.attributes["email-addresses"]?.join(", ") ?? "");
     setToken("");
-    setEnabled(configuration?.attributes.enabled ?? false);
+    setEnabled(configuration?.attributes.enabled ?? true);
     setTriggers(new Set(configuration?.attributes.triggers ?? []));
     setExcludedWorkspaceIds(new Set());
     setOriginalExcludedWorkspaceIds(new Set());
