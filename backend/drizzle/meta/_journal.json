@@ -176,6 +176,13 @@
       "when": 1787008368960,
       "tag": "0024_remarkable_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1787172076336,
+      "tag": "0025_powerful_warpath",
+      "breakpoints": true
     }
   ]
 }

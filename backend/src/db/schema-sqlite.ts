@@ -570,6 +570,7 @@ export const refreshSessions = sqliteTable("refresh_sessions", {
   revokedAt: integer("revoked_at"),
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  mfaVerified: integer("mfa_verified", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
   index("refresh_sessions_family_idx").on(table.familyId),
   index("refresh_sessions_user_idx").on(table.userId),

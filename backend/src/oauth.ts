@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { createHash } from "node:crypto";
-import { browserSessionUser } from "./routes/accounts";
+import { browserSessionDetails, browserSessionUser } from "./routes/accounts";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -155,6 +155,7 @@ function approveForUser(
     status: 302,
     headers: {
       "Cache-Control": "no-store",
+      "Set-Cookie": `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
       Location: redirect.toString(),
     },
   });
@@ -228,8 +229,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
 
-    const sessionUser = await browserSessionUser(request);
-    if (sessionUser === null) {
+    const details = await browserSessionDetails(request);
+    if (details === null) {
       // The SPA should have established a session before calling this. Send
       // the user back to login to recover.
       return new Response(null, {
@@ -238,17 +239,15 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       });
     }
 
-    // Defensive: an MFA-enforced account must have completed its TOTP step
-    // before the browser session was issued; if not, refuse and re-login.
     const mfa = await db.query.user2FA.findFirst({
-      where: eq(user2FA.userId, sessionUser.id),
+      where: eq(user2FA.userId, details.user.id),
     });
-    if (mfa?.enabled === true) {
+    if (mfa?.enabled === true && !details.session.mfaVerified) {
       return plainError("Multi-factor authentication required. Please run 'terraform login' again.");
     }
 
     pendingAuthorizations.delete(oauthState);
-    return approveForUser(pending.authorization, sessionUser.id);
+    return approveForUser(pending.authorization, details.user.id);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
     if (

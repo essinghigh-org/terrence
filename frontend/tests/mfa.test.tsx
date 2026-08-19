@@ -93,3 +93,47 @@ test("disables MFA with a current authenticator code", async () => {
   fireEvent.click(view.getByRole("button", { name: "Disable MFA" }));
   expect(await view.findByText("Multi-factor authentication disabled")).toBeTruthy();
 });
+
+test("completes an MFA login challenge with oauth_state and redirects to OAuth completion", async () => {
+  let assignedHref = "";
+  // @ts-expect-error Mocking window.location in test
+  window.location = {
+    ...window.location,
+    set href(val: string) {
+      assignedHref = val;
+    },
+    get href() {
+      return assignedHref;
+    },
+  };
+
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const requestUrl = url(input);
+      if (requestUrl === "/api/v2/ping") return json({ "signup-enabled": false });
+      if (requestUrl === "/api/v2/users/login" && init?.method === "POST") {
+        return json({ data: { attributes: { "mfa-required": true, "mfa-challenge-token": "challenge-oauth-1" } } });
+      }
+      if (requestUrl === "/api/v2/users/login/mfa") {
+        return json({ data: { attributes: { token: "access-oauth-1" } } });
+      }
+      throw new Error(`Unexpected request: ${requestUrl}`);
+    }) as typeof fetch;
+
+    const view = render(
+      <MemoryRouter initialEntries={["/login?oauth_state=state-xyz-123"]}>
+        <Login />
+      </MemoryRouter>,
+    );
+
+    fireEvent.input(view.getByLabelText("Username or email address"), { target: { value: "alice" } });
+    fireEvent.input(view.getByLabelText("Password"), { target: { value: "password" } });
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    expect(await view.findByText("Verify your sign-in")).toBeTruthy();
+    fireEvent.input(view.getByLabelText("Authentication code"), { target: { value: "654321" } });
+    fireEvent.click(view.getByRole("button", { name: "Verify code" }));
+
+    await waitFor((): void => {
+      expect(assignedHref).toBe("/oauth/authorization/complete?oauth_state=state-xyz-123");
+    });
+    expect(getAuthToken()).toBe("access-oauth-1");
+});

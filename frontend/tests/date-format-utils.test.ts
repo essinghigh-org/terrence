@@ -4,6 +4,7 @@ import { formatDate, formatDateTime, formatDateTimeExact } from "../src/lib/util
 import type { JsonObject } from "../src/lib/json";
 
 const savedTZ = process.env.TZ;
+const UTILS_PATH = new URL("../src/lib/utils.ts", import.meta.url).pathname;
 
 afterEach(() => {
   if (savedTZ === undefined) delete process.env.TZ;
@@ -45,7 +46,7 @@ describe("formatDate", () => {
 
   it("renders a bare YYYY-MM-DD calendar string on the same day in a negative-offset zone", () => {
     const script = `
-      const { formatDate } = await import("./frontend/src/lib/utils.ts");
+      const { formatDate } = await import(${JSON.stringify(UTILS_PATH)});
       const out = formatDate("2026-08-07");
       const local = new Date(2026, 7, 7).toLocaleDateString();
       const naive = new Date("2026-08-07").toLocaleDateString();
@@ -60,7 +61,7 @@ describe("formatDate", () => {
 
   it("handles years 00-99 as literal years (no 1900s normalization)", () => {
     const script = `
-      const { formatDate } = await import("./frontend/src/lib/utils.ts");
+      const { formatDate } = await import(${JSON.stringify(UTILS_PATH)});
       const out = formatDate("0026-08-07");
       const d = new Date(0);
       d.setFullYear(26, 7, 7);
@@ -83,7 +84,7 @@ describe("formatDateTime", () => {
 
   it("treats a bare calendar date as local midnight, not UTC-midnight drift", () => {
       const script = `
-        const { formatDateTime } = await import("./frontend/src/lib/utils.ts");
+        const { formatDateTime } = await import(${JSON.stringify(UTILS_PATH)});
         const out = formatDateTime("2026-08-07");
         const local = new Date(2026, 7, 7, 0, 0, 0).toLocaleString(undefined, { hour12: false });
         const naive = new Date("2026-08-07").toLocaleString();
@@ -102,7 +103,7 @@ describe("formatDateTimeExact", () => {
 
   it("is stable across time zones", () => {
     const script = `
-      const { formatDateTimeExact } = await import("./frontend/src/lib/utils.ts");
+      const { formatDateTimeExact } = await import(${JSON.stringify(UTILS_PATH)});
       console.log(JSON.stringify({ out: formatDateTimeExact("2026-08-07T22:14:03.000Z") }));
     `;
     expect(runWithTZ("America/Los_Angeles", script).out).toBe("2026-08-07T22:14:03.000Z");

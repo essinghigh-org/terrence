@@ -136,16 +136,25 @@ export async function revokeBrowserSession(
   });
 }
 
-export async function browserSessionUser(
+export async function browserSessionDetails(
   request: RequestInfo | undefined,
-): Promise<Readonly<typeof users.$inferSelect> | null> {
+): Promise<{ user: Readonly<typeof users.$inferSelect>; session: Readonly<typeof refreshSessions.$inferSelect> } | null> {
   const token = refreshCookie(request);
   if (token === undefined || token === "") return null;
   const current = await db.query.refreshSessions.findFirst({
     where: eq(refreshSessions.tokenHash, tokenHash(token)),
   });
   if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) return null;
-  return await db.query.users.findFirst({ where: eq(users.id, current.userId) }) ?? null;
+  const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
+  if (user === undefined) return null;
+  return { user, session: current };
+}
+
+export async function browserSessionUser(
+  request: RequestInfo | undefined,
+): Promise<Readonly<typeof users.$inferSelect> | null> {
+  const details = await browserSessionDetails(request);
+  return details?.user ?? null;
 }
 
 /**
@@ -218,6 +227,7 @@ export async function issueLoginSession(
   set: SetObj,
   request: RequestInfo | undefined,
   server: unknown,
+  mfaVerified = false,
 ): Promise<unknown> {
   const tokenStr = opaqueToken("user");
   const tokenId = crypto.randomUUID();
@@ -258,6 +268,7 @@ export async function issueLoginSession(
       userAgent,
       expiresAt: refreshExpiresAt,
       createdAt,
+      mfaVerified,
     });
   });
   setRefreshCookie(set, request, refreshToken, refreshExpiresAt);
@@ -572,7 +583,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
 
-    return issueLoginSession(user, browserSession, set, request, server);
+    return issueLoginSession(user, browserSession, set, request, server, true);
   })
   .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
     const presentedToken = refreshCookie(request);
@@ -635,6 +646,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           accessTokenId,
           expiresAt: current.expiresAt,
           createdAt: now,
+          mfaVerified: current.mfaVerified ?? false,
         });
         return true;
       });
@@ -937,7 +949,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       },
     };
   })
-  .post("/api/v2/account/mfa/verify", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
+  .post("/api/v2/account/mfa/verify", async ({ user, body, request, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -954,6 +966,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
     await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
+    const token = refreshCookie(request);
+    if (token !== undefined && token !== "") {
+      await db.update(refreshSessions)
+        .set({ mfaVerified: true })
+        .where(eq(refreshSessions.tokenHash, tokenHash(token)));
+    }
     return { data: { type: "mfa", attributes: { enabled: true } } };
   })
   .delete("/api/v2/account/mfa", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {

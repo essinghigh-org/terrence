@@ -89,7 +89,7 @@ test("repairs the explainer table when a legacy journal skips the repair migrati
     raw.run("DELETE FROM __drizzle_migrations");
     raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
       "legacy-last-migration",
-      1787055000000,
+      2000000000000,
     ]);
     raw.close();
 
@@ -156,7 +156,7 @@ test("repairs the scheduled_at column when a legacy journal skips the column mig
       raw.run("DELETE FROM __drizzle_migrations");
       raw.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [
         "fabricated-legacy-row",
-        1787064000000,
+        2000000000000,
       ]);
     } finally {
       raw.close();
@@ -183,7 +183,7 @@ test("repairs the scheduled_at column when a legacy journal skips the column mig
       hasScheduledAt: true,
       // The guard must not touch the journal: the fabricated row stays the
       // newest so future journaled migrations keep skipping on this database.
-      journal: [{ created_at: 1787064000000 }],
+      journal: [{ created_at: 2000000000000 }],
     });
   } finally {
     await rm(testDir, { recursive: true, force: true });

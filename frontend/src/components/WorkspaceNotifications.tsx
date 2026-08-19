@@ -86,9 +86,9 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
   const mode = props.mode ?? "notifications";
   const projectId = "projectId" in props ? props.projectId ?? null : null;
   const projectWorkspaces = "projectWorkspaces" in props ? props.projectWorkspaces ?? [] : [];
-  const scopeEndpoint = projectId === null
+  const scopeEndpoint = "workspaceId" in props
     ? `/workspaces/${props.workspaceId}/notification-configurations`
-    : `/projects/${projectId}/notification-configurations`;
+    : `/projects/${props.projectId}/notification-configurations`;
   const isWebhookMode = mode === "webhooks";
   const [configurations, setConfigurations] = useState<NotificationConfiguration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,10 +121,10 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
       .then((response): void => {
         if (!active) return;
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (response as { data?: NotificationConfiguration[] }).data;
+        const data = response.data;
         setConfigurations(Array.isArray(data) ? data : []);
       })
-      .catch((error): void => {
+      .catch((error: unknown): void => {
         if (active) setPageError(messageFrom(error, "Failed to load notification configurations"));
       })
       .finally((): void => {
@@ -145,7 +145,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
     setEmailAddresses(configuration?.attributes["email-addresses"]?.join(", ") ?? "");
     setToken("");
     setEnabled(configuration?.attributes.enabled ?? true);
-    setTriggers(new Set(configuration?.attributes.triggers ?? []));
+    setTriggers(new Set(configuration?.attributes.triggers ?? (isWebhookMode ? ["run:completed", "run:errored"] : [])));
     setExcludedWorkspaceIds(new Set());
     setOriginalExcludedWorkspaceIds(new Set());
     if (projectId !== null && configuration !== undefined) {
@@ -202,7 +202,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
     setEditorError("");
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      const response = await fetchApi<{ data: NotificationConfiguration }>(
         editing == null
           ? scopeEndpoint
           : `/notification-configurations/${editing.id}`,
@@ -216,7 +216,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
             },
           }),
         },
-      ) as { data: NotificationConfiguration };
+      );
       const saved = response.data;
       if (projectId !== null) {
         const added = [...excludedWorkspaceIds].filter((id): boolean => !originalExcludedWorkspaceIds.has(id));

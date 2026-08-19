@@ -6,7 +6,20 @@ import type { JsonObject } from "../src/lib/json";
 configure({ defaultHidden: true });
 
 const jsdom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
-const win = jsdom.window;
+let customLocation: unknown;
+const win = new Proxy(jsdom.window, {
+  get(target, prop, receiver) {
+    if (prop === "location" && customLocation !== undefined) return customLocation;
+    return Reflect.get(target, prop, receiver);
+  },
+  set(target, prop, value, receiver) {
+    if (prop === "location") {
+      customLocation = value;
+      return true;
+    }
+    return Reflect.set(target, prop, value, receiver);
+  },
+});
 
 type MutableGlobal = JsonObject;
 
@@ -17,7 +30,7 @@ type MutableGlobal = JsonObject;
 // SAFETY: the test stubs the global with a mock before exercising the component.
 (globalThis as MutableGlobal)["navigator"] = { userAgent: "node.js" };
 
-Object.defineProperty(win, "confirm", {
+Object.defineProperty(jsdom.window, "confirm", {
   value: (): boolean => true,
   writable: true,
   configurable: true,
@@ -151,6 +164,7 @@ class DummyResizeObserver {
 (globalThis as MutableGlobal)["MutationObserver"] = win.MutationObserver ?? DummyMutationObserver;
 // SAFETY: jsdom may lack ResizeObserver at runtime; the dummy keeps tests
 // that observe elements from crashing when the browser would provide one.
+(globalThis as MutableGlobal)["ResizeObserver"] = (win as Window & JsonObject)["ResizeObserver"] ?? DummyResizeObserver;
 Object.defineProperty(win, "ResizeObserver", {
   value: (win as Window & JsonObject)["ResizeObserver"] ?? DummyResizeObserver,
   writable: true,
@@ -195,5 +209,6 @@ if (win.document.body !== null && win.document.body !== undefined) {
 
 afterEach((): void => {
   cleanup();
+  customLocation = undefined;
   if (localStorage !== undefined) localStorage.clear();
 });

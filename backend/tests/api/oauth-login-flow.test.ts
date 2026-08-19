@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
+import { db } from "../../src/db";
+import { user2FA } from "../../src/db/schema";
 import { generateTotpCode } from "../../src/lib/totp";
 
 type CookieJar = Record<string, string>;
@@ -216,6 +219,115 @@ describe("terraform login.v1 OAuth flow", () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toContain("/login?oauth_state=");
+  });
+
+  test("MFA-enabled user completes MFA login and receives OAuth authorization code", async () => {
+    // 1. Initiate OAuth authorization
+    const authRes = await app.handle(new Request(`http://localhost${AUTHZ}`));
+    expect(authRes.status).toBe(302);
+    const location = new URL(authRes.headers.get("Location") ?? "", "http://localhost");
+    const oauthState = location.searchParams.get("oauth_state") ?? "";
+    expect(oauthState).not.toBe("");
+    const oauthCookies = parseCookies(authRes);
+
+    // 2. Submit primary credentials
+    const loginRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username, password: "Sup3rS3cret!pass", "browser-session": true } },
+        }),
+      }),
+    );
+    expect(loginRes.status).toBe(200);
+    const loginJson = (await loginRes.json()) as {
+      data: { attributes: { "mfa-required"?: boolean; "mfa-challenge-token"?: string } };
+    };
+    expect(loginJson.data.attributes["mfa-required"]).toBe(true);
+    const challengeToken = loginJson.data.attributes["mfa-challenge-token"];
+    expect(challengeToken).toBeDefined();
+
+    // 3. Obtain the TOTP secret and generate code
+    const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
+    expect(mfaRow).toBeDefined();
+    const totpCode = generateTotpCode(mfaRow!.secret);
+
+    // 4. Submit MFA challenge
+    const mfaRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login/mfa", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              "challenge-token": challengeToken,
+              code: totpCode,
+              "browser-session": true,
+            },
+          },
+        }),
+      }),
+    );
+    expect(mfaRes.status).toBe(200);
+    const sessionCookies = parseCookies(mfaRes);
+
+    // 5. Complete OAuth authorization with both oauth_state cookie and session cookie
+    const completeRes = await app.handle(
+      new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+        headers: {
+          Cookie: `${cookieHeader(oauthCookies, ["terraform_oauth_state"])}; ${cookieHeader(sessionCookies, ["terrence_refresh"])}`,
+        },
+      }),
+    );
+    expect(completeRes.status).toBe(302);
+    const callback = new URL(completeRes.headers.get("Location") ?? "");
+    expect(callback.host).toBe("localhost:10000");
+    expect(callback.pathname).toBe("/login");
+    expect(callback.searchParams.get("state")).toBe("st-12345");
+    const code = callback.searchParams.get("code");
+    expect(code).not.toBeNull();
+
+    // 6. Exchange code for token
+    const tokenRes = await app.handle(
+      new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: code!,
+          code_verifier: CODE_VERIFIER,
+          redirect_uri: "http://localhost:10000/login",
+          client_id: "terraform-cli",
+        }).toString(),
+      }),
+    );
+    expect(tokenRes.status).toBe(200);
+    const tokenData = (await tokenRes.json()) as { access_token?: string; token_type?: string };
+    expect(tokenData.token_type?.toLowerCase()).toBe("bearer");
+    expect(tokenData.access_token).toBeTruthy();
+  });
+
+  test("MFA-enabled user cannot complete OAuth authorization with an unverified MFA session", async () => {
+    // 1. Initiate OAuth authorization
+    const authRes = await app.handle(new Request(`http://localhost${AUTHZ}`));
+    expect(authRes.status).toBe(302);
+    const location = new URL(authRes.headers.get("Location") ?? "", "http://localhost");
+    const oauthState = location.searchParams.get("oauth_state") ?? "";
+    expect(oauthState).not.toBe("");
+    const oauthCookies = parseCookies(authRes);
+
+    // 2. Attempt to complete with the old session (which has mfaVerified: false)
+    const completeRes = await app.handle(
+      new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+        headers: {
+          Cookie: `${cookieHeader(oauthCookies, ["terraform_oauth_state"])}; ${cookieHeader(jar, ["terrence_refresh"])}`,
+        },
+      }),
+    );
+    expect(completeRes.status).toBe(400);
+    const text = await completeRes.text();
+    expect(text).toBe("Multi-factor authentication required. Please run 'terraform login' again.");
   });
 
   afterAll(() => {
