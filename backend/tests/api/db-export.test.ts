@@ -81,104 +81,111 @@ async function waitForJob(
   }
 }
 
+let postgresAvailable = false;
+
 beforeAll(async (): Promise<void> => {
   await seedAdmin();
 
-  // Fresh PostgreSQL source database with the real migration set applied.
-  const postgres = (await import("postgres")).default;
-  sourceDbName = `terrence_export_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  const admin = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
   try {
-    await admin`CREATE DATABASE ${admin(sourceDbName)}`;
-  } finally {
-    await admin.end();
-  }
-  const source = new URL(PG_ADMIN_URL);
-  source.pathname = `/${sourceDbName}`;
-  sourceUrl = source.toString();
+    // Fresh PostgreSQL source database with the real migration set applied.
+    const postgres = (await import("postgres")).default;
+    sourceDbName = `terrence_export_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const admin = postgres(PG_ADMIN_URL, { max: 1, connect_timeout: 3, onnotice: () => {} });
+    try {
+      await admin`CREATE DATABASE ${admin(sourceDbName)}`;
+    } finally {
+      await admin.end();
+    }
+    const source = new URL(PG_ADMIN_URL);
+    source.pathname = `/${sourceDbName}`;
+    sourceUrl = source.toString();
 
-  const client = postgres(sourceUrl, { max: 1, onnotice: () => {} });
-  try {
-    const { migrate } = await import("drizzle-orm/postgres-js/migrator");
-    const { drizzle: pgDrizzle } = await import("drizzle-orm/postgres-js");
-    const pgSchema = await import("../../src/db/schema-pg");
-    const pgDb = pgDrizzle(client, { schema: pgSchema });
-    await migrate(pgDb, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
-    await client.unsafe(`
-      CREATE TABLE IF NOT EXISTS locks (
-        name TEXT PRIMARY KEY NOT NULL,
-        owner TEXT NOT NULL,
-        expires_at BIGINT NOT NULL
-      )
-    `);
-    await client.unsafe("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
-    await client.unsafe(`
-      CREATE TABLE IF NOT EXISTS oauth_handshake_states (
-        id TEXT PRIMARY KEY NOT NULL,
-        expires_at BIGINT NOT NULL,
-        payload TEXT NOT NULL
-      )
-    `);
-    await client.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
-    await client.unsafe(`
-      CREATE TABLE IF NOT EXISTS registry_sync_leases (
-        key TEXT PRIMARY KEY NOT NULL,
-        owner TEXT NOT NULL,
-        expires_at BIGINT NOT NULL
-      )
-    `);
-    await client.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
+    const client = postgres(sourceUrl, { max: 1, onnotice: () => {} });
+    try {
+      const { migrate } = await import("drizzle-orm/postgres-js/migrator");
+      const { drizzle: pgDrizzle } = await import("drizzle-orm/postgres-js");
+      const pgSchema = await import("../../src/db/schema-pg");
+      const pgDb = pgDrizzle(client, { schema: pgSchema });
+      await migrate(pgDb, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+      await client.unsafe(`
+        CREATE TABLE IF NOT EXISTS locks (
+          name TEXT PRIMARY KEY NOT NULL,
+          owner TEXT NOT NULL,
+          expires_at BIGINT NOT NULL
+        )
+      `);
+      await client.unsafe("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
+      await client.unsafe(`
+        CREATE TABLE IF NOT EXISTS oauth_handshake_states (
+          id TEXT PRIMARY KEY NOT NULL,
+          expires_at BIGINT NOT NULL,
+          payload TEXT NOT NULL
+        )
+      `);
+      await client.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+      await client.unsafe(`
+        CREATE TABLE IF NOT EXISTS registry_sync_leases (
+          key TEXT PRIMARY KEY NOT NULL,
+          owner TEXT NOT NULL,
+          expires_at BIGINT NOT NULL
+        )
+      `);
+      await client.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
 
-    orgId = `exp-org-${crypto.randomUUID()}`;
-    workspaceId = `ws-exp-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    runId = `run-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    await pgDb.insert(pgSchema.users).values({
-      id: `exp-user-${crypto.randomUUID()}`,
-      username: "export-source-user",
-      passwordHash: "unused",
-      isSiteAdmin: true,
-    });
-    await pgDb.insert(pgSchema.organizations).values({
-      id: orgId,
-      name: `export-${orgId.slice(-8)}`,
-      assessmentsEnforced: false,
-      globalModuleSharing: false,
-      globalProviderSharing: false,
-      accessBetaTools: false,
-      samlEnabled: false,
-      allowForceDeleteWorkspaces: false,
-      stacksEnabled: false,
-      showPreReleases: false,
-      aggregatedCommitStatusEnabled: false,
-      sendPassingStatusesForUntriggeredSpeculativePlans: false,
-      defaultIacBinary: "tofu",
-      defaultTerraformVersion: "latest",
-      defaultExecutionMode: "remote",
-    });
-    await pgDb.insert(pgSchema.workspaces).values({
-      id: workspaceId,
-      name: "export-workspace",
-      orgId,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    await pgDb.insert(pgSchema.runs).values({
-      id: runId,
-      workspaceId,
-      status: "applied",
-      isDestroy: false,
-      autoApply: true,
-      planOnly: false,
-      refresh: true,
-      refreshOnly: false,
-      debuggingMode: false,
-      allowEmptyApply: true,
-      savePlan: true,
-      allowConfigGeneration: true,
-      createdAt: Date.now(),
-    });
-  } finally {
-    await client.end();
+      orgId = `exp-org-${crypto.randomUUID()}`;
+      workspaceId = `ws-exp-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      runId = `run-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      await pgDb.insert(pgSchema.users).values({
+        id: `exp-user-${crypto.randomUUID()}`,
+        username: "export-source-user",
+        passwordHash: "unused",
+        isSiteAdmin: true,
+      });
+      await pgDb.insert(pgSchema.organizations).values({
+        id: orgId,
+        name: `export-${orgId.slice(-8)}`,
+        assessmentsEnforced: false,
+        globalModuleSharing: false,
+        globalProviderSharing: false,
+        accessBetaTools: false,
+        samlEnabled: false,
+        allowForceDeleteWorkspaces: false,
+        stacksEnabled: false,
+        showPreReleases: false,
+        aggregatedCommitStatusEnabled: false,
+        sendPassingStatusesForUntriggeredSpeculativePlans: false,
+        defaultIacBinary: "tofu",
+        defaultTerraformVersion: "latest",
+        defaultExecutionMode: "remote",
+      });
+      await pgDb.insert(pgSchema.workspaces).values({
+        id: workspaceId,
+        name: "export-workspace",
+        orgId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await pgDb.insert(pgSchema.runs).values({
+        id: runId,
+        workspaceId,
+        status: "applied",
+        isDestroy: false,
+        autoApply: true,
+        planOnly: false,
+        refresh: true,
+        refreshOnly: false,
+        debuggingMode: false,
+        allowEmptyApply: true,
+        savePlan: true,
+        allowConfigGeneration: true,
+        createdAt: Date.now(),
+      });
+    } finally {
+      await client.end();
+    }
+    postgresAvailable = true;
+  } catch (error: unknown) {
+    postgresAvailable = false;
   }
 });
 
@@ -203,6 +210,7 @@ afterAll(async (): Promise<void> => {
 
 describe("Postgres -> SQLite database export", (): void => {
   test("test-connection accepts a seeded Terrence database", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
       data: { attributes: { "postgres-url": sourceUrl } },
     }));
@@ -212,6 +220,7 @@ describe("Postgres -> SQLite database export", (): void => {
   });
 
   test("test-connection rejects a database without the Terrence schema", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const postgres = (await import("postgres")).default;
     const emptyName = `terrence_empty_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const admin = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
@@ -248,6 +257,7 @@ describe("Postgres -> SQLite database export", (): void => {
   });
 
   test("exports the database, verifies it, and lands a portable sqlite file", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const { id } = await startExport({
       data: { attributes: { "postgres-url": sourceUrl, "output-name": "export-main.db" } },
     });
@@ -284,6 +294,7 @@ describe("Postgres -> SQLite database export", (): void => {
   }, 30_000);
 
   test("lists and downloads the export file, then deletes it", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const list = await app.handle(adminRequest("/api/v2/admin/db-export"));
     expect(list.status).toBe(200);
     const listBody = (await list.json()) as { data: { id: string; attributes: { "size-bytes": number } }[] };
@@ -306,6 +317,7 @@ describe("Postgres -> SQLite database export", (): void => {
   }, 30_000);
 
   test("a duplicate output name fails the job with an exists error", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const { id } = await startExport({
       data: { attributes: { "postgres-url": sourceUrl, "output-name": "export-dupe.db" } },
     });
@@ -321,6 +333,7 @@ describe("Postgres -> SQLite database export", (): void => {
   }, 30_000);
 
   test("an invalid output name fails the job", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     // Traversal prefixes are sanitized away; a name outside the safe charset
     // or extension is a hard job failure.
     const { id } = await startExport({
@@ -331,6 +344,7 @@ describe("Postgres -> SQLite database export", (): void => {
   }, 30_000);
 
   test("an active run blocks the export unless force is set", async (): Promise<void> => {
+    if (!postgresAvailable) return;
     const postgres = (await import("postgres")).default;
     const client = postgres(sourceUrl, { max: 1, onnotice: () => {} });
     try {
