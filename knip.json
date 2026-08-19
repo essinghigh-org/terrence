@@ -2,7 +2,6 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": [],
   "ignoreDependencies": [
-    "oxlint",
     "shadcn"
   ],
   "ignoreExportsUsedInFile": true,
@@ -13,12 +12,25 @@
     ".": {},
     "backend": {
       "entry": [
+        "src/app.ts",
         "bench/**/*.ts",
-        "seed.ts"
+        "seed.ts",
+        "scripts/*.ts",
+        "tests/**/*.ts",
+        "drizzle.config.pg.ts",
+        "src/db/pg-schema.ts",
+        "src/lib/module-test-supervisor.ts"
       ]
     },
     "frontend": {
-      "entry": "src/components/ui/*.tsx"
+      "entry": [
+        "src/App.tsx",
+        "src/components/ui/*.tsx",
+        "tools/oxlint/**/*.ts",
+        "tests/**/*.ts",
+        "tests/**/*.tsx",
+        "bench/**/*.ts"
+      ]
     }
   }
 }

@@ -30,7 +30,6 @@
     "nanoid": "3.3.17"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
     "eslint": "^10.7.0",
     "knip": "^6.29.0",
     "typescript": "~6.0.2",
