@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { createHash } from "node:crypto";
-import { browserSessionDetails, browserSessionUser } from "./routes/accounts";
+import { browserSessionDetails } from "./routes/accounts";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -183,15 +183,16 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     // Already logged into the browser? Skip the login form and approve --
-    // unless the account enforces MFA, in which case the user must complete
-    // the normal TOTP step first (handled by the SPA login flow).
-    const sessionUser = await browserSessionUser(request);
-    if (sessionUser !== null) {
+    // if the account enforces MFA, the session must have satisfied MFA.
+    const details = await browserSessionDetails(request);
+    if (details !== null) {
       const mfa = await db.query.user2FA.findFirst({
-        where: eq(user2FA.userId, sessionUser.id),
+        where: eq(user2FA.userId, details.user.id),
       });
       const mfaEnforced = mfa?.enabled === true;
-      if (!mfaEnforced) return approveForUser(authorization, sessionUser.id);
+      if (!mfaEnforced || details.session.mfaVerified) {
+        return approveForUser(authorization, details.user.id);
+      }
     }
 
     // No usable session: hand off to the SPA login page. Stash the PKCE

@@ -330,6 +330,51 @@ describe("terraform login.v1 OAuth flow", () => {
     expect(text).toBe("Multi-factor authentication required. Please run 'terraform login' again.");
   });
 
+  test("MFA-enabled user with an MFA-verified browser session skips login and is redirected with a code", async () => {
+    // 1. Submit login and MFA to establish an MFA-verified browser session
+    const loginRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { attributes: { username, password: "Sup3rS3cret!pass", "browser-session": true } },
+        }),
+      }),
+    );
+    const challengeToken = ((await loginRes.json()) as { data: { attributes: { "mfa-challenge-token": string } } }).data.attributes["mfa-challenge-token"];
+    const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
+    const totpCode = generateTotpCode(mfaRow!.secret);
+    const mfaRes = await app.handle(
+      new Request("http://localhost/api/v2/users/login/mfa", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              "challenge-token": challengeToken,
+              code: totpCode,
+              "browser-session": true,
+            },
+          },
+        }),
+      }),
+    );
+    const mfaSessionCookies = parseCookies(mfaRes);
+
+    // 2. Hit /oauth/authorization with the MFA-verified session cookie
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHZ}`, {
+        headers: { Cookie: cookieHeader(mfaSessionCookies, ["terrence_refresh"]) },
+      }),
+    );
+    expect(res.status).toBe(302);
+    const callback = new URL(res.headers.get("Location") ?? "");
+    expect(callback.host).toBe("localhost:10000");
+    expect(callback.pathname).toBe("/login");
+    expect(callback.searchParams.get("state")).toBe("st-12345");
+    expect(callback.searchParams.get("code")).not.toBeNull();
+  });
+
   afterAll(() => {
     void userId;
   });
