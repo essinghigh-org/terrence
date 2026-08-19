@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { AccountSettings } from "../src/views/AccountSettings";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../src/lib/theme";
+import { setDisplayTimezone } from "../src/lib/display-timezone";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
@@ -33,6 +34,8 @@ function account(theme = "original-light"): Response {
 afterEach((): void => {
   cleanup();
   applyTheme("original-light");
+  setDisplayTimezone("local");
+  if (localStorage !== undefined) localStorage.removeItem("terrence-display-timezone");
   globalThis.fetch = originalFetch;
 });
 

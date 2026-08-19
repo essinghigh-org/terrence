@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 // kanban 22.15: visual regression snapshots for the settings/admin pages.
-// Baselines live next to this file in visual-regression.test.ts-snapshots/;
+// Baselines live next to this file in visual-regression.pw.ts-snapshots/;
 // regenerate intentionally with: bunx playwright test --update-snapshots
 //
 // Runs against the TEST-only systemd box on :3001 (see playwright.config.ts).

@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testMatch: "**/*.pw.ts",
   timeout: 30000,
   retries: 1,
   use: {

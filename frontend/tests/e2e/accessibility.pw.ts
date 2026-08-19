@@ -14,12 +14,12 @@ import type { Page } from "@playwright/test";
  *   - no element marked aria-hidden contains focusable content
  *
  * Run from the frontend directory:
- *   npx playwright test tests/e2e/accessibility.test.ts
+ *   npx playwright test tests/e2e/accessibility.pw.ts
  */
 /**
  * Test-box admin token. Prefer TERRENCE_E2E_ADMIN_TOKEN from the
  * environment; the fallback mirrors the value already committed in
- * run-detail.test.ts — a local sandbox-only credential for the test
+ * run-detail.pw.ts — a local sandbox-only credential for the test
  * instance on 127.0.0.1:3001, never a production secret.
  */
 const ADMIN_TOKEN = process.env.TERRENCE_E2E_ADMIN_TOKEN ?? "terrence-test-pVhq8jdDKeWxwGCotTEMRNdnwsjpg9RU";
