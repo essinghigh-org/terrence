@@ -143,11 +143,11 @@ describe("run token minting and storage", () => {
     const dir = await mkdtemp(join(tmpdir(), "rt-tfrc-"));
     try {
       const token = `trun_${randomBytes(8).toString("base64url")}`;
-      const path = await writeRunCliConfig(dir, "terraform.essinghigh.dev", token);
+      const path = await writeRunCliConfig(dir, "terraform.example.com", token);
       const mode = (await stat(path)).mode & 0o777;
       expect(mode).toBe(0o600);
       const content = await readFile(path, "utf8");
-      expect(content).toContain(`credentials "terraform.essinghigh.dev"`);
+      expect(content).toContain(`credentials "terraform.example.com"`);
       expect(content).toContain(token);
     } finally {
       await rm(dir, { recursive: true, force: true });

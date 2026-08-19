@@ -3017,7 +3017,7 @@ function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
 const runTokenCache = new Map<string, { token: string; tfrcPath: string; oidc: Partial<Record<"plan" | "apply", Record<string, string>>> }>();
 
 function registryHostname(): string {
-  let hostname = "terraform.essinghigh.dev";
+  let hostname = "localhost";
   const configured = process.env.PUBLIC_URL;
   if (typeof configured === "string" && configured !== "") {
     try {

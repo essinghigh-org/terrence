@@ -27,7 +27,7 @@ await suite("security-headers", {
 
 // --- url-safety (webhook + notification path) ---
 const HOSTS = [
-  "example.com", "api.github.com", "terraform.essinghigh.dev", "localhost", "127.0.0.1",
+  "example.com", "api.github.com", "terraform.example.com", "localhost", "127.0.0.1",
   "169.254.169.254", "10.0.0.1", "192.168.1.69", "172.16.4.4", "100.64.0.1",
   "224.0.0.1", "240.0.0.1", "0.0.0.0", "2130706433", "localhost.nip.io",
   "169.254.169.254.nip.io", "0x7f000001.nip.io", "::1", "[::1]",
@@ -39,7 +39,7 @@ await suite("url-safety", {
     for (const host of HOSTS) privateHostReason(host);
   },
   "validateExternalUrlResolved (public stub resolver)": async () => {
-    for (const url of ["https://example.com/hook", "https://api.github.com/repos/x", "https://terraform.essinghigh.dev/api"]) {
+    for (const url of ["https://example.com/hook", "https://api.github.com/repos/x", "https://terraform.example.com/api"]) {
       await validateExternalUrlResolved(url, false, async (): Promise<string[]> => ["93.184.216.34"]);
     }
   },
