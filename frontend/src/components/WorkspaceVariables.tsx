@@ -311,7 +311,8 @@ export function WorkspaceVariables({
 
   return (
     <>
-      <Card className="max-w-5xl">
+      <div className="flex flex-col gap-6">
+        <Card className="max-w-5xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             Workspace variables
@@ -526,6 +527,7 @@ export function WorkspaceVariables({
           })}
         </CardContent>
       </Card>
+      </div>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent>
