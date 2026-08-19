@@ -1068,6 +1068,14 @@ export const registryProviders = pgTable("registry_providers", {
     uniqueIndex("registry_providers_ns_type_idx").on(table.namespace, table.type),
   ]);
 
+export const registrySyncLeases = pgTable("registry_sync_leases", {
+    key: text("key").notNull().primaryKey(),
+    owner: text("owner").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+}, (table) => [
+    index("registry_sync_leases_expires_idx").on(table.expiresAt),
+  ]);
+
 export const remoteStateConsumers = pgTable("remote_state_consumers", {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

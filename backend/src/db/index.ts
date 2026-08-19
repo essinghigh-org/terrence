@@ -256,6 +256,19 @@ if (!isPostgres) {
   `);
   client.run("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
 
+  // Registry module sync lease (cross-replica mutex for module ingestion).
+  // Created idempotently at boot like oauth_handshake_states: a generated
+  // migration would be newer than the migration-test's fabricated journal row
+  // and re-apply (colliding) on a sparse journal.
+  client.run(`
+    CREATE TABLE IF NOT EXISTS registry_sync_leases (
+      key TEXT PRIMARY KEY NOT NULL,
+      owner TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+  client.run("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
+
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
   // predate the schema definitions, so create them idempotently at boot.
@@ -666,6 +679,15 @@ export function applyPgMigrations(): Promise<void> {
       )
     `);
     await pg.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+    // Registry module sync lease (see sqlite boot path).
+    await pg.unsafe(`
+      CREATE TABLE IF NOT EXISTS registry_sync_leases (
+        key TEXT PRIMARY KEY NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `);
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
   })();
   return pgMigrationsPromise;
 }

@@ -101,6 +101,7 @@ export const registryPartnerships = pg[dbNameOf(sqliteSchema.registryPartnership
 export const registryProviderPlatforms = pg[dbNameOf(sqliteSchema.registryProviderPlatforms)];
 export const registryProviderVersions = pg[dbNameOf(sqliteSchema.registryProviderVersions)];
 export const registryProviders = pg[dbNameOf(sqliteSchema.registryProviders)];
+export const registrySyncLeases = pg[dbNameOf(sqliteSchema.registrySyncLeases)];
 export const remoteStateConsumers = pg[dbNameOf(sqliteSchema.remoteStateConsumers)];
 export const reservedTagKeys = pg[dbNameOf(sqliteSchema.reservedTagKeys)];
 export const runComments = pg[dbNameOf(sqliteSchema.runComments)];

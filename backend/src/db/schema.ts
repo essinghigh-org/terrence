@@ -349,6 +349,10 @@ export const registryProviders: typeof sqliteSchema.registryProviders = pgTables
   ? sqliteSchema.registryProviders
   : (pgTables[dbNameOf(sqliteSchema.registryProviders)] as unknown as typeof sqliteSchema.registryProviders);
 
+export const registrySyncLeases: typeof sqliteSchema.registrySyncLeases = pgTables === null
+  ? sqliteSchema.registrySyncLeases
+  : (pgTables[dbNameOf(sqliteSchema.registrySyncLeases)] as unknown as typeof sqliteSchema.registrySyncLeases);
+
 export const remoteStateConsumers: typeof sqliteSchema.remoteStateConsumers = pgTables === null
   ? sqliteSchema.remoteStateConsumers
   : (pgTables[dbNameOf(sqliteSchema.remoteStateConsumers)] as unknown as typeof sqliteSchema.remoteStateConsumers);

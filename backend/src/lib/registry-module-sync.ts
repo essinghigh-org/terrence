@@ -14,6 +14,10 @@ import { decryptSecret } from "./secrets";
 import { getGitHubAppAccessToken } from "./webhooks";
 import { ingestModuleArchive, MAX_MODULE_ARCHIVE_BYTES } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
+import {
+  currentModuleVersions,
+  RegistrySyncLease,
+} from "./registry-sync-lease";
 
 const API_TIMEOUT_MS = 15_000;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -192,6 +196,7 @@ const syncInFlight = new Map<string, Promise<SyncResult>>();
 async function synchronizeRegistryModuleOnce(
   mod: RegistryModule,
   branchVersion?: string,
+  shouldContinue: () => boolean = (): boolean => true,
 ): Promise<SyncResult> {
   const attemptedAt = Date.now();
   await db.update(registryModules).set({ lastSyncAttemptAt: attemptedAt, updatedAt: attemptedAt }).where(eq(registryModules.id, mod.id));
@@ -207,6 +212,10 @@ async function synchronizeRegistryModuleOnce(
     const pending = candidates.filter((candidate): boolean => !existingVersions.has(candidate.version));
     const prepared: (typeof registryModuleVersions.$inferInsert)[] = [];
     for (const candidate of pending) {
+      // Abort as soon as the cross-replica lease is lost: another replica
+      // took over this module mid-sync, so keep writing would work on a lock
+      // this instance no longer owns.
+      if (!shouldContinue()) throw new Error("Registry module sync lease lost; another replica took over ingestion");
       const id = `modver-${crypto.randomUUID()}`;
       const archivePath = join(MODULE_STORAGE_DIR, `${id}.tar.gz`);
       const metadata = await withDownloadedArchive(mod, credentials, candidate.sha, async (downloaded): Promise<RegistryModuleMetadata> =>
@@ -261,12 +270,30 @@ export async function synchronizeRegistryModule(
   branchVersion?: string,
 ): Promise<SyncResult> {
   const key = `${mod.id}:${branchVersion ?? "tags"}`;
+  // In-process coalescing is preserved: concurrent callers in this replica
+  // share one in-flight Promise, so the lease is claimed at most once per
+  // process per key and the caller gets the real SyncResult.
   const existing = syncInFlight.get(key);
   if (existing !== undefined) return existing;
-  // ponytail: this coalesces one app process; use a database lease if registry
-  // webhook ingestion must run concurrently across multiple replicas.
-  const operation = synchronizeRegistryModuleOnce(mod, branchVersion)
-    .finally((): void => { syncInFlight.delete(key); });
+  const operation = (async (): Promise<SyncResult> => {
+    // Cross-replica mutex: only the replica that claims the lease runs the
+    // sync. A non-owner returns the module's current versions without
+    // double-running the (possibly in-flight) ingestion on another replica.
+    const lease = await RegistrySyncLease.acquire(key);
+    if (lease === null) return { imported: 0, versions: await currentModuleVersions(mod.id) };
+    try {
+      // The lease renews itself on an interval; shouldContinue aborts the
+      // download loop as soon as the lease is lost (renewal failed or another
+      // replica reclaimed it), so ingestion never finishes writing under a
+      // lock this instance no longer owns.
+      return await synchronizeRegistryModuleOnce(mod, branchVersion, (): boolean => lease.isAlive());
+    } finally {
+      // release() clears the renewal interval and removes the lease. Errors
+      // are logged inside release() so a failed deletion cannot mask the
+      // synchronization result.
+      await lease.release();
+    }
+  })().finally((): void => { syncInFlight.delete(key); });
   syncInFlight.set(key, operation);
   return operation;
 }

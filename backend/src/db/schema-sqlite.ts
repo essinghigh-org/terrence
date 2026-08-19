@@ -909,6 +909,21 @@ export const oauthHandshakeStates = sqliteTable("oauth_handshake_states", {
   index("oauth_handshake_states_expires_idx").on(table.expiresAt),
 ]);
 
+// Registry module sync lease. Previously an in-process Map (syncInFlight)
+// coalesced duplicate syncs within one process, but under multi-instance
+// deployment two replicas could both ingest the same module webhook. This
+// table provides a cross-replica mutex: the replica that claims the lease for
+// a module key runs the sync; others return the module's current versions
+// without double-running. `expiresAt` bounds the lease so a crashed replica
+// cannot block ingestion forever; a periodic sweep drops expired leases.
+export const registrySyncLeases = sqliteTable("registry_sync_leases", {
+  key: text("key").primaryKey(),
+  owner: text("owner").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("registry_sync_leases_expires_idx").on(table.expiresAt),
+]);
+
 export const policySets = sqliteTable("policy_sets", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
