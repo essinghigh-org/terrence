@@ -225,6 +225,12 @@ describe("Terraform cloud protocol contract", () => {
     );
     expect(speculativePlan.attributes["log-read-url"].endsWith(`/${speculativeRun.id}`)).toBe(false);
     expect((await request(speculativePlan.attributes["log-read-url"])).status).toBe(200);
+    // Protocol-level regression: the freshly created speculative run must appear
+    // in the workspace run history (no implicit plan-only exclusion).
+    const historyResponse = await request(`/api/v2/workspaces/${workspaceId}/runs`, { headers: authHeaders });
+    expect(historyResponse.status).toBe(200);
+    const historyIds = (await historyResponse.json()).data.map((run: any) => run.id);
+    expect(historyIds).toContain(speculativeRun.id);
     expect((await request(
       `/api/v2/runs/${speculativeRun.id}`,
       { method: "DELETE", headers: authHeaders },

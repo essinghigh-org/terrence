@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, type ComponentType, type JSX, type ReactNode } from "react";
 import { isFunction } from "./lib/type-guards";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams, useLocation } from "react-router-dom";
 import { Login } from "./views/Login";
 import { Register } from "./views/Register";
 import { Spinner } from "./components/ui/spinner";
@@ -105,6 +105,27 @@ export function RegistrySettingsRedirect({ tab }: Readonly<{ tab: "modules" | "p
   return <Navigate to={tab === "providers" ? "../../registry?tab=providers" : "../../registry"} relative="path" replace />;
 }
 
+// The Terraform CLI/TFE remote backend hard-codes the legacy URL shape
+// `/app/<org>/<workspace>/(runs|runs/:runId|variables)` (no `/workspaces/`
+// segment) when it prints "To view this run in a browser". Terrence's canonical
+// path keeps the segment, so the legacy shape is accepted as a compatibility
+// alias and redirected (with history replacement) to the canonical path.
+// The canonical URL must remain visible afterwards, so we never render a view
+// directly under the legacy shape.
+function LegacyWorkspaceRedirect({ destination }: Readonly<{ destination: "runs" | "variables" | "run" }>): JSX.Element {
+  const { orgName = "", workspaceName = "", runId = "" } = useParams();
+  const location = useLocation();
+
+  const base = `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`;
+  const path = destination === "run"
+    ? `${base}/runs/${encodeURIComponent(runId)}`
+    : destination === "runs"
+      ? `${base}/runs`
+      : `${base}/variables`;
+
+  return <Navigate replace to={`${path}${location.search}${location.hash}`} />;
+}
+
 function RouteFallback(): JSX.Element {
   return (
     <div className="flex justify-center py-24">
@@ -172,6 +193,168 @@ function AuthSessionManager(): null {
   return null;
 }
 
+function AppRoutes(): JSX.Element {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/" element={<Navigate to="/app" replace />} />
+      <Route path="/app" element={<ProtectedRoute><EventProvider><DocsIndexProvider><Layout /></DocsIndexProvider></EventProvider></ProtectedRoute>}>
+        <Route index element={<Dashboard />} />
+        <Route path="admin" element={<AdminDashboard section="security" />} />
+        <Route path="admin/users" element={<AdminDashboard section="users" />} />
+        <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
+        <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
+        <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
+        <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
+        <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
+        <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
+        <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+        <Route path="admin/smtp" element={<AdminSmtpSettings />} />
+        <Route path="admin/scim" element={<AdminScimSettings />} />
+        <Route path="admin/operations" element={<AdminOperationsSettings />} />
+        <Route path="admin/database" element={<AdminDatabaseMigration />} />
+        <Route path="account" element={<AccountSettings />} />
+        <Route path="docs" element={<Docs />} />
+        <Route path="docs/:slug" element={<Docs />} />
+        <Route path=":orgName" element={<Workspaces />} />
+        <Route path=":orgName/workspaces" element={<Workspaces />} />
+        <Route path=":orgName/registry" element={<Registry />} />
+        <Route path=":orgName/explorer" element={<Explorer />} />
+        <Route path=":orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
+        <Route path=":orgName/registry/providers/:namespace/:name" element={<RegistryProviderDetail />} />
+        <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
+        <Route path=":orgName/calendar" element={<ChangeCalendar />} />
+        <Route path=":orgName/change-requests" element={<ChangeRequests />} />
+        <Route path=":orgName/change-requests/:changeRequestId" element={<ChangeRequestDetail />} />
+        <Route path=":orgName/projects" element={<Projects />} />
+        <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
+        <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
+        <Route path=":orgName/projects/:projectId/settings" element={<ProjectDetail section="settings" />} />
+        <Route path=":orgName/projects/:projectId/settings/variable-sets" element={<ProjectDetail section="variable-sets" />} />
+        <Route path=":orgName/projects/:projectId/settings/notifications" element={<ProjectDetail section="notifications" />} />
+        <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
+        <Route path=":orgName/settings/agents" element={<AgentPools />} />
+        <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
+        <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
+        <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
+        <Route path=":orgName/settings/registry-providers" element={<RegistrySettingsRedirect tab="providers" />} />
+        <Route path=":orgName/settings/registry-modules" element={<RegistrySettingsRedirect tab="modules" />} />
+        <Route path=":orgName/settings/token-ttl" element={<TokenTTLPolicies />} />
+        <Route path=":orgName/settings/stacks-workspaces" element={<StackSettings />} />
+        <Route path=":orgName/settings/agent-pool-scoping" element={<AgentPoolScoping />} />
+        <Route path=":orgName/settings/hyok" element={<HyokConfigurations />} />
+        <Route path=":orgName/settings/audit-trail-tokens" element={<AuditTrailTokens />} />
+        <Route path=":orgName/settings/policy-sets/tags" element={<PolicySetsTags />} />
+        <Route path=":orgName/settings/module-sharing" element={<ModuleSharing />} />
+        <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
+        <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
+        <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />
+        <Route path=":orgName/settings/policy-sets/:policySetId/parameters" element={<PolicySetDetail section="parameters" />} />
+        <Route path=":orgName/settings/policy-sets/:policySetId/vcs" element={<PolicySetDetail section="vcs" />} />
+        <Route path=":orgName/variable-sets" element={<VariableSets />} />
+        <Route path=":orgName/settings" element={<OrganizationSettings />} />
+
+        <Route
+          path=":orgName/workspaces/:workspaceName"
+          element={<WorkspaceDetail section="overview" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/runs"
+          element={<WorkspaceDetail section="runs" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/states"
+          element={<WorkspaceDetail section="states" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/variables"
+          element={<WorkspaceDetail section="variables" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings"
+          element={<WorkspaceDetail section="settings" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/general"
+          element={<WorkspaceDetail section="settings" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/lock"
+          element={<WorkspaceDetail section="locking" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/notifications"
+          element={<WorkspaceDetail section="notifications" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/webhooks"
+          element={<WorkspaceDetail section="webhooks" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/policies"
+          element={<WorkspaceDetail section="policy-sets" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/tasks"
+          element={<WorkspaceDetail section="run-tasks" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/run-triggers"
+          element={<WorkspaceDetail section="run-triggers" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/configuration-versions"
+          element={<WorkspaceDetail section="configuration-versions" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/ssh"
+          element={<WorkspaceDetail section="ssh-key" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/version-control"
+          element={<WorkspaceDetail section="vcs" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/team-access"
+          element={<WorkspaceDetail section="team-access" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/health"
+          element={<WorkspaceDetail section="health" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/retention"
+          element={<WorkspaceDetail section="retention" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/settings/delete"
+          element={<WorkspaceDetail section="destruction" />}
+        />
+        <Route
+          path=":orgName/workspaces/:workspaceName/runs/:runId"
+          element={<WorkspaceDetail section="run-detail" />}
+        />
+        {/* Terraform CLI / TFE remote-backend legacy URL aliases (no /workspaces/ segment).
+            Redirect to canonical paths; canonical routes above take precedence. */}
+        <Route
+          path=":orgName/:workspaceName/runs/:runId"
+          element={<LegacyWorkspaceRedirect destination="run" />}
+        />
+        <Route
+          path=":orgName/:workspaceName/runs"
+          element={<LegacyWorkspaceRedirect destination="runs" />}
+        />
+        <Route
+          path=":orgName/:workspaceName/variables"
+          element={<LegacyWorkspaceRedirect destination="variables" />}
+        />
+      </Route>
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+}
+
 function App(): JSX.Element {
   useDisplayTimezone();
 
@@ -181,155 +364,14 @@ function App(): JSX.Element {
         <BrowserRouter>
           <AuthSessionManager />
           <Suspense fallback={<RouteFallback />}>
-            <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            <Route path="/" element={<Navigate to="/app" replace />} />
-            <Route path="/app" element={<ProtectedRoute><EventProvider><DocsIndexProvider><Layout /></DocsIndexProvider></EventProvider></ProtectedRoute>}>
-              <Route index element={<Dashboard />} />
-              <Route path="admin" element={<AdminDashboard section="security" />} />
-              <Route path="admin/users" element={<AdminDashboard section="users" />} />
-              <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
-              <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
-              <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
-              <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
-              <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
-              <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
-              <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
-              <Route path="admin/smtp" element={<AdminSmtpSettings />} />
-              <Route path="admin/scim" element={<AdminScimSettings />} />
-              <Route path="admin/operations" element={<AdminOperationsSettings />} />
-              <Route path="admin/database" element={<AdminDatabaseMigration />} />
-              <Route path="account" element={<AccountSettings />} />
-              <Route path="docs" element={<Docs />} />
-              <Route path="docs/:slug" element={<Docs />} />
-              <Route path=":orgName" element={<Workspaces />} />
-              <Route path=":orgName/workspaces" element={<Workspaces />} />
-              <Route path=":orgName/registry" element={<Registry />} />
-              <Route path=":orgName/explorer" element={<Explorer />} />
-              <Route path=":orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
-              <Route path=":orgName/registry/providers/:namespace/:name" element={<RegistryProviderDetail />} />
-              <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
-              <Route path=":orgName/calendar" element={<ChangeCalendar />} />
-              <Route path=":orgName/change-requests" element={<ChangeRequests />} />
-              <Route path=":orgName/change-requests/:changeRequestId" element={<ChangeRequestDetail />} />
-              <Route path=":orgName/projects" element={<Projects />} />
-              <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
-              <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
-              <Route path=":orgName/projects/:projectId/settings" element={<ProjectDetail section="settings" />} />
-              <Route path=":orgName/projects/:projectId/settings/variable-sets" element={<ProjectDetail section="variable-sets" />} />
-              <Route path=":orgName/projects/:projectId/settings/notifications" element={<ProjectDetail section="notifications" />} />
-              <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
-              <Route path=":orgName/settings/agents" element={<AgentPools />} />
-              <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
-              <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
-              <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
-              <Route path=":orgName/settings/registry-providers" element={<RegistrySettingsRedirect tab="providers" />} />
-              <Route path=":orgName/settings/registry-modules" element={<RegistrySettingsRedirect tab="modules" />} />
-              <Route path=":orgName/settings/token-ttl" element={<TokenTTLPolicies />} />
-              <Route path=":orgName/settings/stacks-workspaces" element={<StackSettings />} />
-              <Route path=":orgName/settings/agent-pool-scoping" element={<AgentPoolScoping />} />
-              <Route path=":orgName/settings/hyok" element={<HyokConfigurations />} />
-              <Route path=":orgName/settings/audit-trail-tokens" element={<AuditTrailTokens />} />
-              <Route path=":orgName/settings/policy-sets/tags" element={<PolicySetsTags />} />
-              <Route path=":orgName/settings/module-sharing" element={<ModuleSharing />} />
-              <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
-              <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
-              <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />
-              <Route path=":orgName/settings/policy-sets/:policySetId/parameters" element={<PolicySetDetail section="parameters" />} />
-              <Route path=":orgName/settings/policy-sets/:policySetId/vcs" element={<PolicySetDetail section="vcs" />} />
-              <Route path=":orgName/variable-sets" element={<VariableSets />} />
-              <Route path=":orgName/settings" element={<OrganizationSettings />} />
-
-              <Route
-                path=":orgName/workspaces/:workspaceName"
-                element={<WorkspaceDetail section="overview" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/runs"
-                element={<WorkspaceDetail section="runs" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/states"
-                element={<WorkspaceDetail section="states" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/variables"
-                element={<WorkspaceDetail section="variables" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings"
-                element={<WorkspaceDetail section="settings" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/general"
-                element={<WorkspaceDetail section="settings" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/lock"
-                element={<WorkspaceDetail section="locking" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/notifications"
-                element={<WorkspaceDetail section="notifications" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/webhooks"
-                element={<WorkspaceDetail section="webhooks" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/policies"
-                element={<WorkspaceDetail section="policy-sets" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/tasks"
-                element={<WorkspaceDetail section="run-tasks" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/run-triggers"
-                element={<WorkspaceDetail section="run-triggers" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/configuration-versions"
-                element={<WorkspaceDetail section="configuration-versions" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/ssh"
-                element={<WorkspaceDetail section="ssh-key" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/version-control"
-                element={<WorkspaceDetail section="vcs" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/team-access"
-                element={<WorkspaceDetail section="team-access" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/health"
-                element={<WorkspaceDetail section="health" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/retention"
-                element={<WorkspaceDetail section="retention" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/settings/delete"
-                element={<WorkspaceDetail section="destruction" />}
-              />
-              <Route
-                path=":orgName/workspaces/:workspaceName/runs/:runId"
-                element={<WorkspaceDetail section="run-detail" />}
-              />
-            </Route>
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+            <AppRoutes />
+            <Toaster />
           </Suspense>
-          <Toaster />
         </BrowserRouter>
       </RunSandboxGate>
     </ErrorBoundary>
   );
 }
 
+export { AppRoutes };
 export default App;

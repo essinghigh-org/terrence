@@ -25,6 +25,7 @@ describe("workspace run history and state metadata", () => {
     destroy: `run-destroy-${suffix}`,
     applied: `run-applied-${suffix}`,
     old: `run-old-${suffix}`,
+    speculative: `run-speculative-${suffix}`,
   };
   const stateId = `state-${suffix}`;
   const now = Date.now();
@@ -131,6 +132,15 @@ describe("workspace run history and state metadata", () => {
         isDestroy: false,
         createdAt: now,
       },
+      {
+        id: runIds.speculative,
+        workspaceId,
+        status: "planned_and_finished",
+        message: "speculative CLI plan",
+        operation: "plan_and_apply",
+        planOnly: true,
+        createdAt: now,
+      },
     ]);
     await db.insert(stateVersions).values({
       id: stateId,
@@ -152,8 +162,8 @@ describe("workspace run history and state metadata", () => {
       [{ "filter[source]": "tfe-ui" }, []],
       [{ "filter[status_group]": "non_final" }, [runIds.planned, runIds.destroy]],
       [{ "filter[status_group]": "discardable" }, [runIds.planned]],
-      [{ "filter[timeframe]": String(currentYear) }, [runIds.planned, runIds.destroy, runIds.applied]],
-      [{ "filter[timeframe]": "year" }, [runIds.planned, runIds.destroy, runIds.applied]],
+      [{ "filter[timeframe]": String(currentYear) }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
+      [{ "filter[timeframe]": "year" }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
       [{ "search[basic]": "search-needle" }, [runIds.planned]],
     ];
 
@@ -171,14 +181,27 @@ describe("workspace run history and state metadata", () => {
       "page[size]": "1",
     });
     const page = await filteredPage.json();
-    expect(page.data.map((run: any) => run.id)).toEqual([runIds.old]);
+    expect(page.data.map((run: any) => run.id)).toEqual([runIds.applied]);
     expect(page.meta.pagination).toMatchObject({
       "current-page": 2,
       "page-size": 1,
-      "total-pages": 2,
-      "total-count": 2,
+      "total-pages": 3,
+      "total-count": 3,
     });
     expect(page.links.self).toContain("filter%5Bstatus_group%5D=final");
+  });
+
+  it("includes speculative/plan-only runs in the default workspace run history", async () => {
+    const response = await runHistory({});
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const ids = body.data.map((run: any) => run.id);
+    expect(ids).toContain(runIds.speculative);
+    expect(body.meta.pagination["total-count"]).toBe(ids.length);
+    // The speculative run must also be reachable via the explicit operation filter.
+    const opResponse = await runHistory({ "filter[operation]": "plan_and_apply" });
+    expect(opResponse.status).toBe(200);
+    expect((await opResponse.json()).data.map((run: any) => run.id)).toContain(runIds.speculative);
   });
 
   it("returns derived state metadata and authenticated paginated outputs", async () => {

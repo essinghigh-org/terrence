@@ -1349,11 +1349,10 @@ export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: s
   const operations = csv("filter[operation]");
   if (operations !== undefined && operations.length > 0) {
     conditions.push(inArray(runs.operation, operations));
-  } else {
-    // the reference format's default workspace history omits speculative/plan-only runs; the
-    // explicit operation filter remains available when callers need them.
-    conditions.push(eq(runs.planOnly, false));
   }
+  // No operation filter means "all runs", including speculative/plan-only runs.
+  // TFE shows speculative plans in the workspace run list, so we surface them by
+  // default. Callers that want to exclude them pass an explicit operation filter.
 
   const sources = csv("filter[source]");
   if (sources !== undefined && sources.length > 0) {
