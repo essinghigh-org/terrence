@@ -9,15 +9,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { inArray, eq } from "drizzle-orm";
+import { inArray, eq, count } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, runs, users, workspaces } from "../../src/db/schema";
-import { isMaintenanceActive } from "../../src/lib/maintenance";
+import { isMaintenanceActive, exitMaintenance } from "../../src/lib/maintenance";
 import { readBootConfigFile } from "../../src/lib/boot-config";
 import { storageDir } from "../../src/db/driver";
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
+process.env.MIGRATION_SKIP_DRAIN = "true";
 
 const PG_ADMIN_URL = process.env.PG_TEST_ADMIN_URL ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
@@ -72,6 +73,9 @@ async function waitForTerminalPhase(timeoutMs = 90_000): Promise<{ phase: string
 }
 
 beforeAll(async (): Promise<void> => {
+  const { rmSync } = await import("node:fs");
+  rmSync(join(storageDir, "migration-wizard.json"), { force: true });
+  rmSync(join(storageDir, "terrence.json"), { force: true });
   await seedAdmin();
   // Seed the source (sqlite) database with a small dataset.
   orgId = `mig-org-${crypto.randomUUID()}`;
@@ -133,6 +137,11 @@ beforeAll(async (): Promise<void> => {
 });
 
 afterAll(async (): Promise<void> => {
+  const { rmSync } = await import("node:fs");
+  exitMaintenance();
+  rmSync(join(storageDir, "migration-wizard.json"), { force: true });
+  rmSync(join(storageDir, "terrence.json"), { force: true });
+  rmSync(join(storageDir, "maintenance.json"), { force: true });
   await db.delete(runs).where(eq(runs.id, runId));
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
   await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -172,17 +181,17 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
     const bad = await app.handle(adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
       data: { attributes: { url: "not a url" } },
     }));
-    // testConnection reports ok:false rather than throwing; the route passes
-    // the result through with 200.
     expect(bad.status).toBe(200);
-    const badBody = (await bad.json()) as { data: { ok: boolean } };
-    expect(badBody.data.ok).toBe(false);
+    const body = (await bad.json()) as { data: { ok: boolean; error: string } };
+    expect(body.data.ok).toBe(false);
+    expect(body.data.error).toContain("postgres");
+
     const ok = await app.handle(adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
       data: { attributes: { url: targetUrl } },
     }));
     expect(ok.status).toBe(200);
-    const body = (await ok.json()) as { data: { ok: boolean } };
-    expect(body.data.ok).toBe(true);
+    const okBody = (await ok.json()) as { data: { ok: boolean } };
+    expect(okBody.data.ok).toBe(true);
   });
 
   test("checks target compatibility on an empty database", async (): Promise<void> => {
@@ -217,23 +226,32 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
       if (phase === "ready_to_switch" || phase === "switched" || phase === "failed" || phase === "aborted") break;
       await Bun.sleep(50);
     }
-    if (maintenanceObserved) expect(isMaintenanceActive()).toBe(true);
+    expect(maintenanceObserved).toBe(true);
 
     const terminal = await waitForTerminalPhase();
-    expect(terminal.phase).toBe("ready_to_switch");
     expect(terminal.error).toBeNull();
+    expect(terminal.phase).toBe("ready_to_switch");
     expect(isMaintenanceActive()).toBe(false);
+
+    const [sourceOrgs, sourceWorkspaces, sourceRuns] = await Promise.all([
+      db.select({ val: count() }).from(organizations),
+      db.select({ val: count() }).from(workspaces),
+      db.select({ val: count() }).from(runs),
+    ]);
+    const expectedOrgs = sourceOrgs[0]?.val ?? 1;
+    const expectedWorkspaces = sourceWorkspaces[0]?.val ?? 1;
+    const expectedRuns = sourceRuns[0]?.val ?? 1;
 
     // The target now holds the migrated rows.
     const { SQL } = await import("bun");
     const target = new SQL(targetUrl);
     try {
       const orgs = await target`SELECT COUNT(*)::int AS n FROM organizations`;
-      expect(orgs[0]?.n).toBe(1);
+      expect(orgs[0]?.n).toBe(expectedOrgs);
       const workspaces = await target`SELECT COUNT(*)::int AS n FROM workspaces`;
-      expect(workspaces[0]?.n).toBe(1);
+      expect(workspaces[0]?.n).toBe(expectedWorkspaces);
       const runs = await target`SELECT COUNT(*)::int AS n FROM runs`;
-      expect(runs[0]?.n).toBe(1);
+      expect(runs[0]?.n).toBe(expectedRuns);
       const copied = await target`SELECT id, status FROM runs WHERE id = ${runId}`;
       expect(copied[0]?.status).toBe("applied");
     } finally {
@@ -250,9 +268,9 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
     };
     expect(manifest.source).toBe("sqlite");
     expect(manifest.destination).toBe("postgres");
-    expect(manifest.tables.organizations).toBe(1);
-    expect(manifest.tables.workspaces).toBe(1);
-    expect(manifest.tables.runs).toBe(1);
+    expect(manifest.tables.organizations).toBe(expectedOrgs);
+    expect(manifest.tables.workspaces).toBe(expectedWorkspaces);
+    expect(manifest.tables.runs).toBe(expectedRuns);
 
     // Switch writes the boot config. The wizard refuses while DATABASE_URL
     // is set (it would override the boot config at startup), so the switch
@@ -264,7 +282,7 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
     expect(config.database?.driver).toBe("postgres");
     expect(config.database?.url).toBe(targetUrl);
     expect(isMaintenanceActive()).toBe(false);
-  });
+  }, 90_000);
 
   test("cannot start a second migration after switching", async (): Promise<void> => {
     const second = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {

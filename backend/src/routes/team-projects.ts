@@ -134,9 +134,9 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
     }
 
     const access = typeof attributes.access === "string" ? attributes.access : "";
-    if (!ACCESS_LEVELS.has(access) || (access !== "custom" && (attributes["project-access"] !== undefined || attributes["workspace-access"] !== undefined))) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level or custom permission map" }] }; }
+    if (!ACCESS_LEVELS.has(access)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level" }] }; }
     const customAccess = access === "custom" ? normalizedCustomAccess(attributes["project-access"], attributes["workspace-access"]) : undefined;
-    if (access === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level or custom permission map" }] }; }
+    if (access === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid custom permission map" }] }; }
 
     // The (team_id, project_id) pair is unique. A second POST for the same
     // pair would hit the constraint and surface as a 500 through the global
@@ -195,11 +195,11 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
 
     const updates: Record<string, unknown> = {};
     const nextAccess = typeof attributes.access === "string" ? attributes.access : tp.access;
-    if (!ACCESS_LEVELS.has(nextAccess) || (nextAccess !== "custom" && (attributes["project-access"] !== undefined || attributes["workspace-access"] !== undefined))) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level or custom permission map" }] }; }
+    if (!ACCESS_LEVELS.has(nextAccess)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level" }] }; }
     const nextProjectAccess = attributes["project-access"] !== undefined ? attributes["project-access"] : (tp.access === "custom" ? tp.projectAccess : undefined);
     const nextWorkspaceAccess = attributes["workspace-access"] !== undefined ? attributes["workspace-access"] : (tp.access === "custom" ? tp.workspaceAccess : undefined);
     const customAccess = nextAccess === "custom" ? normalizedCustomAccess(nextProjectAccess, nextWorkspaceAccess) : undefined;
-    if (nextAccess === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level or custom permission map" }] }; }
+    if (nextAccess === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid custom permission map" }] }; }
     updates.access = nextAccess;
     updates.projectAccess = customAccess?.projectAccess ?? null;
     updates.workspaceAccess = customAccess?.workspaceAccess ?? null;

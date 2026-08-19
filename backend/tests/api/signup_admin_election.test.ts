@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -12,10 +12,31 @@ import { bootstrapInitialAdmin } from "../../src/lib/bootstrap";
 // inserted a site admin on PostgreSQL.
 describe("initial site-admin election", () => {
   const previousAdminPassword = process.env.ADMIN_PASSWORD;
+  const previousSignup = process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+  let savedUsers: (typeof users.$inferSelect)[] = [];
+
+  beforeAll(async () => {
+    process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = "true";
+    savedUsers = await db.query.users.findMany();
+    if (savedUsers.length > 0) {
+      await db.delete(users);
+    }
+  });
 
   afterAll(async () => {
     if (previousAdminPassword === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = previousAdminPassword;
+    if (previousSignup === undefined) delete process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+    else process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = previousSignup;
+
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, "default") });
+    if (org !== undefined) {
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, org.id));
+      await db.delete(organizations).where(eq(organizations.id, org.id));
+    }
+    if (savedUsers.length > 0) {
+      await db.insert(users).values(savedUsers);
+    }
   });
 
   test("bootstrap creates the initial site admin on an empty instance", async () => {

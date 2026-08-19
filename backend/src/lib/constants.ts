@@ -16,7 +16,7 @@ export type ProviderMode = (typeof PROVIDER_MODES)[number];
 export const COMPATIBILITY_VERSION =
   process.env.TERRENCE_COMPATIBILITY_VERSION?.trim() ||
   process.env.TERRENCE_TFE_COMPATIBILITY_VERSION?.trim() ||
-  "2.0.0";
+  "2.5.0";
 
 // The TFP-API-Version response header carries the Terraform provider API
 // version that clients compare as a dotted numeric (e.g. "2.0"), whereas
@@ -24,7 +24,7 @@ export const COMPATIBILITY_VERSION =
 // The compatibility version above often holds a release-style value via env,
 // which would make TFP-API-Version unparseable and break version negotiation.
 // Keep the API version in its own constant, overridable independently.
-export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.0.0";
+export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.5.0";
 
 export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];
@@ -47,10 +47,19 @@ export const ASSESSMENT_NOTIFICATION_TRIGGERS = [
 ] as const;
 export type AssessmentNotificationTrigger = (typeof ASSESSMENT_NOTIFICATION_TRIGGERS)[number];
 
+export const CHANGE_REQUEST_NOTIFICATION_TRIGGERS = [
+  "change_request:created",
+  "change_request:rejected",
+  "change_request:applied",
+  "change_request:canceled",
+  "team:change_request",
+] as const;
+export type ChangeRequestNotificationTrigger = (typeof CHANGE_REQUEST_NOTIFICATION_TRIGGERS)[number];
+
 export const NOTIFICATION_TRIGGERS = [
   ...RUN_NOTIFICATION_TRIGGERS,
   ...ASSESSMENT_NOTIFICATION_TRIGGERS,
-  "team:change_request",
+  ...CHANGE_REQUEST_NOTIFICATION_TRIGGERS,
 ] as const;
 
 export function isExecutionMode(value: unknown): value is ExecutionMode {

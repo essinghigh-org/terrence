@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, beforeAll, afterAll, mock } from "bun:test";
+import { describe, expect, it, beforeAll, afterAll } from "bun:test";
+import { inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens } from "../../src/db/schema";
+import { saveVersionCacheFile } from "../../src/lib/version-cache";
 
-const originalFetch = globalThis.fetch;
 const originalCacheFile = process.env.TERRENCE_VERSION_CACHE_FILE;
 
 describe("admin provider surface (kanban 11.18)", () => {
@@ -15,6 +16,7 @@ describe("admin provider surface (kanban 11.18)", () => {
   const adminId = `surface-admin-${suffix}`;
   const userId = `surface-user-${suffix}`;
   const adminToken = `surface-admin-token-${suffix}`;
+  const cacheFile = join(tmpdir(), `surface-cache-${suffix}.json`);
 
   const request = (token: string, method = "GET"): Promise<Response> =>
     app.handle(new Request("http://terrence.test/api/v2/admin/provider-surface", {
@@ -25,10 +27,9 @@ describe("admin provider surface (kanban 11.18)", () => {
 
   beforeAll(async () => {
     // The freshness lookup is cached on disk; point it at a temp file and
-    // stub the GitHub call so the response is deterministic in tests.
-    process.env.TERRENCE_VERSION_CACHE_FILE = join(tmpdir(), `surface-cache-${suffix}.json`);
-    globalThis.fetch = mock(async (): Promise<Response> =>
-      new Response(JSON.stringify({ tag_name: "v0.80.0" }), { status: 200 })) as unknown as typeof fetch;
+    // seed the cache so the response is deterministic in tests without network.
+    process.env.TERRENCE_VERSION_CACHE_FILE = cacheFile;
+    saveVersionCacheFile(cacheFile, "tfe-provider", { versions: ["0.80.0"], fetchedAt: Date.now() });
 
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
@@ -41,12 +42,11 @@ describe("admin provider surface (kanban 11.18)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens);
-    await db.delete(users);
-    globalThis.fetch = originalFetch;
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, userId]));
+    await db.delete(users).where(inArray(users.id, [adminId, userId]));
     if (originalCacheFile === undefined) delete process.env.TERRENCE_VERSION_CACHE_FILE;
     else process.env.TERRENCE_VERSION_CACHE_FILE = originalCacheFile;
-    rmSync(join(tmpdir(), `surface-cache-${suffix}.json`), { force: true });
+    rmSync(cacheFile, { force: true });
   });
 
   it("serves the provider surface catalog to site admins", async () => {

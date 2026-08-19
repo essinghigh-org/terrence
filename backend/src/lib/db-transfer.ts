@@ -377,6 +377,46 @@ export class SqliteTransferTarget implements TransferTarget {
       const drizzleDb = drizzle(client, { schema });
       // src/lib → ../../drizzle (the sqlite migration set shared with the app).
       migrate(drizzleDb, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
+      client.run(`
+        CREATE TABLE IF NOT EXISTS run_explanations (
+          id TEXT PRIMARY KEY NOT NULL,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          model TEXT NOT NULL,
+          content TEXT NOT NULL,
+          thinking TEXT,
+          input_hash TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      client.run(`
+        CREATE INDEX IF NOT EXISTS run_explanations_run_kind_idx
+          ON run_explanations (run_id, kind)
+      `);
+      client.run(`
+        CREATE TABLE IF NOT EXISTS oauth_handshake_states (
+          id TEXT PRIMARY KEY NOT NULL,
+          expires_at INTEGER NOT NULL,
+          payload TEXT NOT NULL
+        )
+      `);
+      client.run("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+      client.run(`
+        CREATE TABLE IF NOT EXISTS registry_sync_leases (
+          key TEXT PRIMARY KEY NOT NULL,
+          owner TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      client.run("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
+      client.run(`
+        CREATE TABLE IF NOT EXISTS locks (
+          name TEXT PRIMARY KEY NOT NULL,
+          owner TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      client.run("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
     }
     return new SqliteTransferTarget(client, path);
   }

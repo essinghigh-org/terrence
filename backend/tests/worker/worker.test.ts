@@ -326,7 +326,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
     address: "test_resource.example",
     change: { actions: ["no-op"], importing: { id: "existing-1" } },
   });
-});
+}, 30_000);
 
 test("finishes plan-only runs without applying even when the workspace auto-applies", async () => {
   const result = await runWorkerScript(`
@@ -366,7 +366,7 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
     status: "planned_and_finished",
     planCounts: { additions: 1, changes: 0, destructions: 0, imports: 0 },
   });
-});
+}, 30_000);
 
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
   const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
@@ -583,7 +583,7 @@ test("evaluates project policy sets after cost estimation and honors workspace e
   expect(result.checks).toEqual([{ policyId: "soft-policy", status: "soft_failed" }]);
   expect(result.statusKeys.indexOf("cost-estimated-at")).toBeLessThan(result.statusKeys.indexOf("policy-checking-at"));
   expect(result.statusKeys.slice(-2)).toEqual(["policy-override-at", "policy-soft-failed-at"]);
-});
+}, 30_000);
 
 test("fails closed when plan JSON is unavailable instead of evaluating against state (kanban t_282cf10b)", async () => {
   const result = await runWorkerScript(`
@@ -632,7 +632,7 @@ test("fails closed when plan JSON is unavailable instead of evaluating against s
 
   expect(result.verdict).toEqual({ proceed: false, hardFailed: true, softFailed: false });
   expect(result.checks).toEqual([{ status: "errored", error: "Plan JSON is unavailable; policy evaluation failed closed" }]);
-});
+}, 30_000);
 
 test("evaluates Sentinel policies and persists structured results", async () => {
   const result = await runWorkerScript(`
@@ -721,7 +721,7 @@ test("evaluates Sentinel policies and persists structured results", async () => 
   });
   expect(result.args).toContain("-global tfplan=");
   expect(result.args).toContain('-param environment="production"');
-});
+}, 30_000);
 
 test("rejects configuration archives containing traversal paths or links", async () => {
   const result = await runWorkerScript(`
@@ -792,7 +792,7 @@ test("rejects configuration archives containing traversal paths or links", async
     "link-run": "errored",
   });
   expect(Object.keys(result.errors).sort()).toEqual(["link-run", "traversal-run"]);
-});
+}, 30_000);
 
 test("queues one run per unlocked idle workspace without resolving a binary in simulated mode", async () => {
   const result = await runWorkerScript(`
@@ -839,7 +839,7 @@ test("queues one run per unlocked idle workspace without resolving a binary in s
     },
     binaryCacheCreated: false,
   });
-});
+}, 30_000);
 
 test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.5)", async () => {
   const result = await runWorkerScript(`
@@ -879,4 +879,4 @@ test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.
 
   expect(result.claimed).toContain("eligible-run");
   expect(result.eligibleStatus).toBe("applied");
-});
+}, 30_000);

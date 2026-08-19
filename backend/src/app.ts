@@ -16,18 +16,23 @@ import { API_BODY_LIMIT_BYTES, BodyTooLargeError, isUploadPath, readTextWithLimi
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
 const FRONTEND_404 = join(FRONTEND_DIR, "404.html");
+const FRONTEND_PUBLIC_404 = join(import.meta.dir, "../../frontend/public/404.html");
 const serveFrontend = (): ReturnType<typeof Bun.file> => Bun.file(FRONTEND_INDEX);
 
 // Branded server-level error page (built from frontend/public/404.html).
 // Loaded once at startup; unknown paths get a real 404 with this page instead
-// of a silent 200 empty body. Falls back to plain text when dist is missing.
+// of a silent 200 empty body. Falls back to public/404.html or plain text when dist is missing.
 // NOTE: this must stay synchronous — a top-level await here leaves `app` in
 // TDZ for importers in the module graph (broke every test importing app).
 let frontend404Html: string | null = null;
 try {
   frontend404Html = readFileSync(FRONTEND_404, "utf8");
 } catch {
-  frontend404Html = null;
+  try {
+    frontend404Html = readFileSync(FRONTEND_PUBLIC_404, "utf8");
+  } catch {
+    frontend404Html = null;
+  }
 }
 
 // Import route plugins

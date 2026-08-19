@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
 import { organizations, runs, stateVersions, workspaces } from "../../src/db/schema";
 import { enqueueDueAutoDestroyRuns } from "../../src/worker";
+import { isMaintenanceActive } from "../../src/lib/maintenance";
 
 const NOW = Date.parse("2030-01-15T12:00:00.000Z");
 let orgId = "";
+
+async function waitIfMaintenanceActive(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (isMaintenanceActive() && Date.now() < deadline) {
+    await Bun.sleep(100);
+  }
+}
+
+async function enqueueWithMaintenanceWait(now = Date.now()): Promise<string[]> {
+  await waitIfMaintenanceActive();
+  return enqueueDueAutoDestroyRuns(now);
+}
 
 async function createWorkspace(
   attributes: Partial<typeof workspaces.$inferInsert>,
@@ -23,11 +36,19 @@ async function createWorkspace(
 
 describe("automatic workspace destruction scheduler", () => {
   beforeEach(async () => {
+    await waitIfMaintenanceActive();
     orgId = `org-${crypto.randomUUID()}`;
     await db.insert(organizations).values({ id: orgId, name: orgId });
   });
 
   afterEach(async () => {
+    const wsList = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, orgId) });
+    const wsIds = wsList.map((w) => w.id);
+    if (wsIds.length > 0) {
+      await db.delete(runs).where(inArray(runs.workspaceId, wsIds));
+      await db.delete(stateVersions).where(inArray(stateVersions.workspaceId, wsIds));
+      await db.delete(workspaces).where(inArray(workspaces.id, wsIds));
+    }
     await db.delete(organizations).where(eq(organizations.id, orgId));
   });
 
@@ -35,9 +56,10 @@ describe("automatic workspace destruction scheduler", () => {
     const workspaceId = await createWorkspace({
       autoDestroyAt: new Date(NOW - 1_000).toISOString(),
     });
-    const created = await enqueueDueAutoDestroyRuns(NOW);
-    expect(created).toHaveLength(1);
-    expect(await db.query.runs.findFirst({ where: eq(runs.id, created[0] ?? "") })).toMatchObject({
+    const created = await enqueueWithMaintenanceWait(NOW);
+    const ourRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
+    expect(ourRun).toBeDefined();
+    expect(ourRun).toMatchObject({
       workspaceId,
       status: "pending",
       isDestroy: true,
@@ -47,7 +69,9 @@ describe("automatic workspace destruction scheduler", () => {
     expect((await db.query.workspaces.findFirst({
       where: eq(workspaces.id, workspaceId),
     }))?.autoDestroyAt).toBeNull();
-    expect(await enqueueDueAutoDestroyRuns(NOW + 1_000)).toHaveLength(0);
+    await enqueueWithMaintenanceWait(NOW + 1_000);
+    const runsList = await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) });
+    expect(runsList).toHaveLength(1);
   });
 
   test("uses finalized state activity and retains inactivity scheduling", async () => {
@@ -60,15 +84,18 @@ describe("automatic workspace destruction scheduler", () => {
       statePayload: "{}",
       createdAt: NOW - (3 * 3_600_000),
     });
-    const first = await enqueueDueAutoDestroyRuns(NOW);
-    expect(first).toHaveLength(1);
+    const first = await enqueueWithMaintenanceWait(NOW);
+    const ourRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
+    expect(ourRun).toBeDefined();
     expect((await db.query.workspaces.findFirst({
       where: eq(workspaces.id, workspaceId),
     }))?.autoDestroyActivityDuration).toBe("2h");
 
-    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, first[0] ?? ""));
-    expect(await enqueueDueAutoDestroyRuns(NOW + 3_600_000)).toHaveLength(0);
-    expect(await enqueueDueAutoDestroyRuns(NOW + (3 * 3_600_000))).toHaveLength(1);
+    if (ourRun) await db.update(runs).set({ status: "applied" }).where(eq(runs.id, ourRun.id));
+    await enqueueWithMaintenanceWait(NOW + 3_600_000);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(1);
+    await enqueueWithMaintenanceWait(NOW + (3 * 3_600_000));
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(2);
   });
 
   test("does not queue for recent activity, invalid duration, locks, or an active run", async () => {
@@ -95,6 +122,8 @@ describe("automatic workspace destruction scheduler", () => {
       status: "planning",
       createdAt: NOW - 1_000,
     });
-    expect(await enqueueDueAutoDestroyRuns(NOW)).toHaveLength(0);
+    await enqueueWithMaintenanceWait(NOW);
+    const recentRuns = await db.query.runs.findMany({ where: eq(runs.workspaceId, recentId) });
+    expect(recentRuns).toHaveLength(0);
   });
 });

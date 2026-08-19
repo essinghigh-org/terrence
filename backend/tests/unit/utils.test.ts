@@ -105,8 +105,8 @@ describe("workspaceRelationshipIds", () => {
     expect(result).toEqual(["ws-1"]);
   });
 
-  it("returns undefined for empty data", () => {
-    expect(workspaceRelationshipIds({ data: [] })).toBeUndefined();
+  it("returns empty array for empty data", () => {
+    expect(workspaceRelationshipIds({ data: [] })).toEqual([]);
   });
 
   it("returns undefined for missing data key", () => {

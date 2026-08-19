@@ -128,6 +128,7 @@ async function startBackend(workDir: string): Promise<Backend> {
       DATABASE_URL: `file:${join(dbDir, "test.db")}`,
       STORAGE_DIR: dbDir,
       TERRENCE_JWT_SECRET: "provider-e2e-secret",
+      ADMIN_PASSWORD: "pe2e-admin-password-123",
       TERRENCE_RUN_SANDBOX: "false",
       TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
       SIMULATED_RUNS: "false",
@@ -213,18 +214,34 @@ async function fetchWithRateLimitRetry(input: string, init: RequestInit): Promis
 }
 
 async function signupAndToken(port: number): Promise<{ token: string; userId: string; username: string }> {
-  const username = `pe2e-${Date.now().toString(36)}`;
-  const password = "pe2e-password-123";
-  await api(port, "POST", "/api/v2/users", {
-    data: { type: "users", attributes: { username, password } },
-  });
+  const username = "admin";
+  const password = "pe2e-admin-password-123";
+  const newPassword = "pe2e-admin-password-456";
   const login = await api(port, "POST", "/api/v2/users/login", {
     data: { attributes: { username, password } },
   });
   expect(login.status).toBe(200);
-  const token = login.json.data.attributes.token as string;
+  const tempToken = login.json.data.attributes.token as string;
+
+  const pwRes = await api(port, "PATCH", "/api/v2/account/password", {
+    data: {
+      attributes: {
+        "current-password": password,
+        password: newPassword,
+        "password-confirmation": newPassword,
+      },
+    },
+  }, tempToken);
+  expect(pwRes.status).toBe(200);
+
+  const finalLogin = await api(port, "POST", "/api/v2/users/login", {
+    data: { attributes: { username, password: newPassword } },
+  });
+  expect(finalLogin.status).toBe(200);
+  const token = finalLogin.json.data.attributes.token as string;
   expect(typeof token).toBe("string");
   expect(token).not.toBe("");
+
   const details = await api(port, "GET", "/api/v2/account/details", undefined, token);
   expect(details.status).toBe(200);
   const userId = details.json.data.id as string;

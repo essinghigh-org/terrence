@@ -586,9 +586,12 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
     }
 
-    // Official packages contain only the binary itself; reject anything else
-    // (kanban 6.7) so an archive smuggling extra files is never unpacked.
-    const unexpected = unexpectedZipMembers(zipEntries, tool);
+    // Official packages contain the binary and standard release documentation;
+    // reject anything unexpected (kanban 6.7) so an archive smuggling extra files is never unpacked.
+    const ALLOWED_EXTRAS = new Set(["LICENSE", "LICENSE.txt", "README.md", "CHANGELOG.md"]);
+    const unexpected = unexpectedZipMembers(zipEntries, tool).filter(
+      (entry): boolean => !ALLOWED_EXTRAS.has(entry.replaceAll("\\", "/").replace(/^\.\//, "")),
+    );
     if (unexpected.length > 0) {
       await rm(targetDir, { recursive: true, force: true });
       throw new Error(`Archive contains unexpected members (${unexpected.join(", ")}); refusing to extract`);

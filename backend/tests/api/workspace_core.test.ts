@@ -314,4 +314,4 @@ test("workspace core routes persist settings and execute from the configured sub
   } finally {
     await rm(testDir, { recursive: true, force: true });
   }
-});
+}, 30_000);

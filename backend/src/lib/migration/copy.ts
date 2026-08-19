@@ -109,13 +109,13 @@ export async function copyTable(
     try {
       rows = (rowid === null
         ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`).all(batchSize, total)
-        : source.query(`SELECT * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
+        : source.query(`SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
         ReadonlyArray<Readonly<Record<string, unknown>>>;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       const sql = rowid === null
         ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
-        : `SELECT * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
+        : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
       throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
     }
     if (rows.length === 0) break;
@@ -137,7 +137,7 @@ export async function copyTable(
     total += rows.length;
     if (rowid !== null) {
       const lastRow = rows[rows.length - 1] as Readonly<Record<string, unknown>>;
-      const last = lastRow[rowid];
+      const last = lastRow._terrence_rowid;
       if (typeof last !== "number") break; // no usable keyset cursor; stop rather than loop forever
       cursor = last;
     }

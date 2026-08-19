@@ -82,7 +82,10 @@ function jsonApiAttributes(
   const data = (body as Record<string, unknown>).data;
   if (data === null || typeof data !== "object" || Array.isArray(data)) return { error: "data must be an object" };
   const record = data as Record<string, unknown>;
-  if (record.type !== type && record.type !== "") return { error: `data.type must be ${type}` };
+  const allowedTypes = new Set([type, `${type}s`, type.replace(/s$/, ""), ""]);
+  if (typeof record.type === "string" && !allowedTypes.has(record.type)) {
+    return { error: `data.type must be ${type}` };
+  }
   const attributes = record.attributes;
   if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) {
     return { error: "data.attributes must be an object" };
@@ -392,11 +395,8 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     const teamId = params.external_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-    if (team === undefined) return apiError(set, 404, "Not Found");
-    const deleted = await db.delete(teamScimGroupMappings)
-      .where(eq(teamScimGroupMappings.teamId, team.id))
-      .returning({ teamId: teamScimGroupMappings.teamId });
-    if (deleted.length === 0) return apiError(set, 409, "Conflict", "Team does not have a SCIM group mapping");
+    await db.delete(teamScimGroupMappings)
+      .where(eq(teamScimGroupMappings.teamId, team.id));
     (set as { status: number }).status = 204;
     return;
   });

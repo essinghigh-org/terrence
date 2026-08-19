@@ -37,14 +37,18 @@ describe("System administration API contract", () => {
     }));
   };
 
+  const systemTokenIds: string[] = [];
+
   // Mint one fresh system token per system-token request so consecutive calls
   // never trip the 1 req/sec/token limit.
   async function tokenFor(path: string): Promise<string> {
     const systemToken = `tfe-system-${path}-${crypto.randomUUID()}`;
     const { hashSystemApiToken } = await import("../../src/lib/system-api");
     const { systemApiTokens } = await import("../../src/db/schema");
+    const tokenId = `system-api-token-${crypto.randomUUID()}`;
+    systemTokenIds.push(tokenId);
     await db.insert(systemApiTokens).values({
-      id: `system-api-token-${crypto.randomUUID()}`,
+      id: tokenId,
       tokenHash: hashSystemApiToken(systemToken),
       description: `system admin contract test ${path}`,
       expiresAt: Date.now() + 7_200_000,
@@ -78,6 +82,11 @@ describe("System administration API contract", () => {
       const storage = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
       await unlink(join(storage, "support-bundles", `${bundleId}.json`)).catch((): undefined => undefined);
       await unlink(join(storage, "support-bundles", `${bundleId}.tar.gz`)).catch((): undefined => undefined);
+    }
+    const { systemApiTokens } = await import("../../src/db/schema");
+    const { inArray } = await import("drizzle-orm");
+    if (systemTokenIds.length > 0) {
+      await db.delete(systemApiTokens).where(inArray(systemApiTokens.id, systemTokenIds));
     }
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(organizations).where(eq(organizations.id, organizationId));

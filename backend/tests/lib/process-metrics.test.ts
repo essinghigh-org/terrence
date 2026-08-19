@@ -47,9 +47,10 @@ describe("request counters", () => {
 
   test("never lets in-flight drop below zero", () => {
     const before = processSnapshot().requests;
-    requestFinished(404);
-    requestFinished(404);
-    expect(processSnapshot().requests.inFlight - before.inFlight).toBe(0);
+    for (let i = 0; i < before.inFlight + 5; i++) {
+      requestFinished(404);
+    }
+    expect(processSnapshot().requests.inFlight).toBeGreaterThanOrEqual(0);
   });
 });
 

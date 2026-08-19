@@ -162,6 +162,8 @@ async function teamScim(teamId: string, enabled: boolean): Promise<TeamScim | un
 }
 
 async function scimLinked(teamId: string): Promise<boolean> {
+  const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
+  if (settings?.enabled !== true) return false;
   return (await db.query.teamScimGroupMappings.findFirst({
     where: eq(teamScimGroupMappings.teamId, teamId),
     columns: { teamId: true },
@@ -354,7 +356,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const updates: Partial<typeof teams.$inferInsert> = {};
     const linked = await scimLinked(teamId);
-    if (linked && attributes.name !== undefined) {
+    if (linked && typeof attributes.name === "string" && attributes.name !== team.name) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SCIM-linked teams cannot be renamed" }] };
     }
@@ -421,7 +423,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const userItems = payload.data;
     if (Array.isArray(userItems)) {
@@ -454,7 +456,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const userItems = payload.data;
     if (Array.isArray(userItems)) {
@@ -469,7 +471,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     if (Array.isArray(items)) {
@@ -499,7 +501,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (await scimLinked(teamId)) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     if (Array.isArray(items)) {

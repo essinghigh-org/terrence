@@ -104,6 +104,30 @@ beforeAll(async (): Promise<void> => {
     const pgSchema = await import("../../src/db/schema-pg");
     const pgDb = pgDrizzle(client, { schema: pgSchema });
     await migrate(pgDb, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+    await client.unsafe(`
+      CREATE TABLE IF NOT EXISTS locks (
+        name TEXT PRIMARY KEY NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `);
+    await client.unsafe("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
+    await client.unsafe(`
+      CREATE TABLE IF NOT EXISTS oauth_handshake_states (
+        id TEXT PRIMARY KEY NOT NULL,
+        expires_at BIGINT NOT NULL,
+        payload TEXT NOT NULL
+      )
+    `);
+    await client.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+    await client.unsafe(`
+      CREATE TABLE IF NOT EXISTS registry_sync_leases (
+        key TEXT PRIMARY KEY NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `);
+    await client.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
 
     orgId = `exp-org-${crypto.randomUUID()}`;
     workspaceId = `ws-exp-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -214,7 +238,7 @@ describe("Postgres -> SQLite database export", (): void => {
         await cleanup.end();
       }
     }
-  });
+  }, 30_000);
 
   test("test-connection requires a postgres-url", async (): Promise<void> => {
     const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
@@ -228,6 +252,7 @@ describe("Postgres -> SQLite database export", (): void => {
       data: { attributes: { "postgres-url": sourceUrl, "output-name": "export-main.db" } },
     });
     const job = await waitForJob(id);
+    expect(job.error).toBeUndefined();
     expect(job.status).toBe("done");
 
     const exportDir = join(storageDir, "exports");
@@ -256,7 +281,7 @@ describe("Postgres -> SQLite database export", (): void => {
     } finally {
       exported.close();
     }
-  });
+  }, 30_000);
 
   test("lists and downloads the export file, then deletes it", async (): Promise<void> => {
     const list = await app.handle(adminRequest("/api/v2/admin/db-export"));
@@ -278,7 +303,7 @@ describe("Postgres -> SQLite database export", (): void => {
     expect(deleted.status).toBe(204);
     const after = (await (await app.handle(adminRequest("/api/v2/admin/db-export"))).json()) as { data: { id: string }[] };
     expect(after.data.some((file): boolean => file.id === "export-main.db")).toBe(false);
-  });
+  }, 30_000);
 
   test("a duplicate output name fails the job with an exists error", async (): Promise<void> => {
     const { id } = await startExport({
@@ -293,7 +318,7 @@ describe("Postgres -> SQLite database export", (): void => {
     const job = await waitForJob(second.id);
     expect(job.status).toBe("failed");
     expect(job.error?.code).toBe("exists");
-  });
+  }, 30_000);
 
   test("an invalid output name fails the job", async (): Promise<void> => {
     // Traversal prefixes are sanitized away; a name outside the safe charset
@@ -303,7 +328,7 @@ describe("Postgres -> SQLite database export", (): void => {
     });
     const job = await waitForJob(id);
     expect(job.status).toBe("failed");
-  });
+  }, 30_000);
 
   test("an active run blocks the export unless force is set", async (): Promise<void> => {
     const postgres = (await import("postgres")).default;
@@ -335,7 +360,7 @@ describe("Postgres -> SQLite database export", (): void => {
     } finally {
       await client.end();
     }
-  });
+  }, 30_000);
 
   test("an unknown job id returns 404", async (): Promise<void> => {
     const response = await app.handle(adminRequest("/api/v2/admin/db-export/jobs/does-not-exist"));

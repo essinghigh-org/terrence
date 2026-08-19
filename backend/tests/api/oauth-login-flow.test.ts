@@ -67,7 +67,7 @@ describe("terraform login.v1 OAuth flow", () => {
 
   beforeAll(async () => {
     ({ jar, userId, username } = await bootstrapSession());
-  });
+  }, 30_000);
 
   test("discovery document advertises login.v1", async () => {
     const res = await app.handle(

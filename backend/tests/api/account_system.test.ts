@@ -10,12 +10,13 @@ describe("account and system compatibility", () => {
   const organizationName = `account-org-${crypto.randomUUID()}`;
   const password = "old-password";
   const systemToken = `tfe-system-${crypto.randomUUID()}`;
+  const systemTokenId = `system-api-token-${crypto.randomUUID()}`;
   let userId = "";
   let token = "";
 
   beforeAll(async () => {
     await db.insert(systemApiTokens).values({
-      id: `system-api-token-${crypto.randomUUID()}`,
+      id: systemTokenId,
       tokenHash: hashSystemApiToken(systemToken),
       description: "account system compatibility test",
       expiresAt: Date.now() + 7_200_000,
@@ -159,5 +160,15 @@ describe("account and system compatibility", () => {
       body: JSON.stringify({ data: { attributes: { username, password: nextPassword } } }),
     }));
     expect(login.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    await db.delete(systemApiTokens).where(eq(systemApiTokens.id, systemTokenId));
+    if (userId) {
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, userId));
+      await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
+      await db.delete(users).where(eq(users.id, userId));
+    }
+    await db.delete(organizations).where(eq(organizations.name, organizationName));
   });
 });

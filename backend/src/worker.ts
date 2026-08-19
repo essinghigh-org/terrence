@@ -1322,6 +1322,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     if (resolved !== null && hasTfFiles) {
+      await db.update(runs).set({ terraformVersion: resolved.version }).where(eq(runs.id, runId));
       const binary = resolved.binaryPath;
       await writeLog(runId, "plan", `[terrence] Using ${resolved.tool} v${resolved.version} at ${binary}`);
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);

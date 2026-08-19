@@ -17,17 +17,7 @@ describe("the reference format API v2 - Extended APIs", () => {
   let stateId = "";
 
   beforeAll(async () => {
-    // Clear state
-    await db.delete(logs);
-    await db.delete(runs);
-    await db.delete(configurationVersions);
-    await db.delete(stateVersions);
-    await db.delete(workspaceVariables);
-    await db.delete(workspaceTags);
-    await db.delete(workspaces);
-    await db.delete(organizationMemberships);
-    await db.delete(apiTokens);
-    await db.delete(organizations);
+    // Clear test user
     await db.delete(users).where(eq(users.username, "ext-admin"));
 
     // Register & Login user
@@ -82,7 +72,7 @@ describe("the reference format API v2 - Extended APIs", () => {
     );
     const wsData = await wsRes.json();
     workspaceId = wsData.data.id;
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (cvId) {
@@ -215,7 +205,7 @@ describe("the reference format API v2 - Extended APIs", () => {
       })
     );
     expect((await cvGet.json()).data.attributes.status).toBe("uploaded");
-  });
+  }, 30_000);
 
   it("should list workspace runs and fetch logs", async () => {
     const runRes = await app.handle(

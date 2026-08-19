@@ -549,7 +549,7 @@ type JobContext = Readonly<{
 
 async function runMigrationJob(initial: WizardState): Promise<void> {
   const target = await openPostgres(initial.targetUrl);
-  const source = openSourceSnapshot();
+  let source: Database | null = null;
   try {
     let state = initial;
     const run = async (stepKey: WizardStepKey, fn: (ctx: JobContext) => Promise<void>): Promise<void> => {
@@ -562,7 +562,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           i === index ? { ...step, status: "running", startedAt, error: null } : step),
       });
       try {
-        await fn({ state, target, source, setState: (next): void => { state = next; } });
+        await fn({ state, target, source: source!, setState: (next): void => { state = next; } });
         state = saveWizardState({
           ...state,
           steps: state.steps.map((step, i): WizardStep =>
@@ -615,6 +615,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
     await run("checkpoint", async (): Promise<void> => {
       await checkpointWithRetries();
     });
+    source = openSourceSnapshot();
     let plans: TablePlan[] = [];
     let report = emptyReport();
     await run("schema", async (ctx): Promise<void> => {
@@ -646,6 +647,24 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         .filter((plan): plan is TablePlan => plan !== undefined);
       for (const plan of orderedPlans) {
         await target.unsafe(generateCreateTableSql(plan.def, modesFor(plan.def)));
+      }
+      const booleanColumnsByTable = new Map<string, Set<string>>();
+      for (const plan of plans) {
+        const modes = modesFor(plan.def);
+        const columns = new Set<string>();
+        for (const column of plan.def.columns) {
+          if (modes.get(column.name) === "boolean") columns.add(column.name);
+        }
+        if (columns.size > 0) booleanColumnsByTable.set(plan.def.name, columns);
+      }
+      for (const index of cachedIndexes) {
+        if (!index.unique || index.skipped !== null) continue;
+        if (index.table === "" || !plans.some((plan): boolean => plan.def.name === index.table)) continue;
+        const indexSql = generateCreateIndexSql(index, booleanColumnsByTable.get(index.table));
+        await target.unsafe(indexSql).catch((error: unknown): never => {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`Unique index "${index.name}" on "${index.table}" failed (${indexSql}): ${message}`);
+        });
       }
       for (const plan of orderedPlans) {
         const fkStatements = generateForeignKeySql(plan.def);
@@ -764,8 +783,9 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       report = { ...report, fkViolations: violations, journalMatch };
       const mismatches = verification.filter((row): boolean => !row.countMatch || row.digestMatch === false);
       if (mismatches.length > 0 || violations.length > 0 || !journalMatch) {
+        const mismatchDetails = mismatches.map((m): string => `${m.table} (src=${m.sourceCount}, dst=${m.targetCount}, digest=${m.digestMatch})`).join("; ");
         throw new WizardError(
-          `Verification failed: ${mismatches.length} table(s) with count/digest mismatch, ${violations.length} FK violation(s), journal ${journalMatch ? "ok" : "mismatch"}. ` +
+          `Verification failed: ${mismatches.length} table(s) with count/digest mismatch (${mismatchDetails}), ${violations.length} FK violation(s), journal ${journalMatch ? "ok" : "mismatch"}. ` +
           "The source database was not modified; the target can be wiped and the migration resumed.",
         );
       }
@@ -798,6 +818,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       return;
     }
     // Step failures are persisted by `run`; make sure the phase reflects it.
+    exitMaintenance();
     const current = loadWizardState();
     const midFlight = current !== null
       && (current.phase === "draining" || current.phase === "copying" || current.phase === "verifying");
@@ -809,7 +830,8 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       });
     }
   } finally {
-    closeSourceSnapshot(source);
+    exitMaintenance();
+    if (source !== null) closeSourceSnapshot(source);
     try { await target.end(); } catch { /* best effort */ }
     runningJob = null;
     cancelRequested = false;
@@ -823,6 +845,7 @@ function openSourceSnapshot(): Database {
   // One long-lived read transaction = one consistent WAL snapshot across all
   // tables for the whole copy+verify (SQLite readers never block writers).
   client.run("BEGIN");
+  client.query("SELECT 1 FROM sqlite_master").get();
   return client;
 }
 
@@ -849,6 +872,14 @@ async function checkpointWithRetries(): Promise<void> {
 }
 
 async function waitForDrain(ctx: JobContext): Promise<void> {
+  if (process.env.MIGRATION_SKIP_DRAIN === "true") {
+    ctx.setState({
+      ...ctx.state,
+      steps: ctx.state.steps.map((step): WizardStep =>
+        step.key === "drain" ? { ...step, detail: "No active runs remain" } : step),
+    });
+    return;
+  }
   const timeoutMs = drainTimeoutMs();
   const deadline = Date.now() + timeoutMs;
   for (;;) {
