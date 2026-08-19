@@ -460,6 +460,14 @@ export const hyokCustomerKeyVersions = pgTable("hyok_customer_key_versions", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.hyokCustomerKeyVersions.createdAt.defaultFn!()),
 });
 
+export const locks = pgTable("locks", {
+    name: text("name").notNull().primaryKey(),
+    owner: text("owner").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+}, (table) => [
+    index("locks_expires_idx").on(table.expiresAt),
+  ]);
+
 export const logs = pgTable("logs", {
     id: text("id").notNull().primaryKey(),
     runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),

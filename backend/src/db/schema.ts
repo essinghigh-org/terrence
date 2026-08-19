@@ -157,6 +157,10 @@ export const hyokCustomerKeyVersions: typeof sqliteSchema.hyokCustomerKeyVersion
   ? sqliteSchema.hyokCustomerKeyVersions
   : (pgTables[dbNameOf(sqliteSchema.hyokCustomerKeyVersions)] as unknown as typeof sqliteSchema.hyokCustomerKeyVersions);
 
+export const locks: typeof sqliteSchema.locks = pgTables === null
+  ? sqliteSchema.locks
+  : (pgTables[dbNameOf(sqliteSchema.locks)] as unknown as typeof sqliteSchema.locks);
+
 export const logs: typeof sqliteSchema.logs = pgTables === null
   ? sqliteSchema.logs
   : (pgTables[dbNameOf(sqliteSchema.logs)] as unknown as typeof sqliteSchema.logs);

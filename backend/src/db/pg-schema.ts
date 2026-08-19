@@ -53,6 +53,7 @@ export const githubAppInstallations = pg[dbNameOf(sqliteSchema.githubAppInstalla
 export const githubWebhookDeliveries = pg[dbNameOf(sqliteSchema.githubWebhookDeliveries)];
 export const hyokConfigurations = pg[dbNameOf(sqliteSchema.hyokConfigurations)];
 export const hyokCustomerKeyVersions = pg[dbNameOf(sqliteSchema.hyokCustomerKeyVersions)];
+export const locks = pg[dbNameOf(sqliteSchema.locks)];
 export const logs = pg[dbNameOf(sqliteSchema.logs)];
 export const moduleTestConfigurationVersions = pg[dbNameOf(sqliteSchema.moduleTestConfigurationVersions)];
 export const moduleTestConfigurations = pg[dbNameOf(sqliteSchema.moduleTestConfigurations)];

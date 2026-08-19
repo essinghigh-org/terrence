@@ -924,6 +924,21 @@ export const registrySyncLeases = sqliteTable("registry_sync_leases", {
   index("registry_sync_leases_expires_idx").on(table.expiresAt),
 ]);
 
+// Generic cross-replica mutex for operations that must not run concurrently
+// across instances (e.g. auth-settings read-modify-write in admin/helpers.ts).
+// A caller claims the named lock (INSERT ... ON CONFLICT DO UPDATE where the
+// prior lease has expired), polls until it owns it, runs the operation, then
+// releases. expiresAt bounds the lock so a crashed holder cannot block the
+// name forever; stale locks are reclaimed by the claim's expiry guard. The
+// table is created idempotently at boot (src/db/index.ts) for both backends.
+export const locks = sqliteTable("locks", {
+  name: text("name").primaryKey(),
+  owner: text("owner").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("locks_expires_idx").on(table.expiresAt),
+]);
+
 export const policySets = sqliteTable("policy_sets", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

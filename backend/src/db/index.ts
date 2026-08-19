@@ -269,6 +269,19 @@ if (!isPostgres) {
   `);
   client.run("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
 
+  // Generic cross-replica mutex (see src/lib/db-lock.ts). Idempotent boot DDL
+  // like the other multi-instance tables: a generated migration would be newer
+  // than the migration-test's fabricated journal row and re-apply (collide) on a
+  // sparse journal.
+  client.run(`
+    CREATE TABLE IF NOT EXISTS locks (
+      name TEXT PRIMARY KEY NOT NULL,
+      owner TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+  client.run("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
+
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
   // predate the schema definitions, so create them idempotently at boot.
@@ -688,6 +701,15 @@ export function applyPgMigrations(): Promise<void> {
       )
     `);
     await pg.unsafe("CREATE INDEX IF NOT EXISTS registry_sync_leases_expires_idx ON registry_sync_leases (expires_at)");
+    // Generic cross-replica mutex (see sqlite boot path).
+    await pg.unsafe(`
+      CREATE TABLE IF NOT EXISTS locks (
+        name TEXT PRIMARY KEY NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `);
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
   })();
   return pgMigrationsPromise;
 }
