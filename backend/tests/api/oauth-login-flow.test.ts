@@ -1,0 +1,194 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { app } from "../../src/app";
+import { generateTotpCode } from "../../src/lib/totp";
+
+type CookieJar = Record<string, string>;
+
+function parseCookies(res: Response): CookieJar {
+  const jar: CookieJar = {};
+  const setCookie = res.headers.get("Set-Cookie");
+  if (setCookie) {
+    for (const part of setCookie.split(";")) {
+      const [name, ...rest] = part.trim().split("=");
+      if (name !== undefined && rest.length) jar[name] = rest.join("=");
+    }
+  }
+  return jar;
+}
+
+function cookieHeader(jar: CookieJar, names: string[]): string {
+  return names.map((n) => `${n}=${jar[n] ?? ""}`).join("; ");
+}
+
+async function bootstrapSession(): Promise<{ jar: CookieJar; userId: string; username: string }> {
+  const username = `tfuser-${crypto.randomUUID().slice(0, 8)}`;
+  const password = "Sup3rS3cret!pass";
+  const register = await app.handle(
+    new Request("http://localhost/api/v2/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: {
+          type: "users",
+          attributes: { username, password, email: "tfuser@example.test" },
+        },
+      }),
+    }),
+  );
+  expect(register.status).toBe(201);
+  const userId = (await register.json()).data.id as string;
+
+  const login = await app.handle(
+    new Request("http://localhost/api/v2/users/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { attributes: { username, password, "browser-session": true } },
+      }),
+    }),
+  );
+  expect(login.status).toBe(200);
+  return { jar: parseCookies(login), userId, username };
+}
+
+// A valid PKCE S256 pair: verifier (54 chars) -> challenge (43 chars, base64url(sha256)).
+const CODE_VERIFIER = "1yQ_5r6WfSi0vYjM2iB8YJn3k4v5x6z7w8a9b0c1d2e3f4g5h6i7j8";
+const CODE_CHALLENGE = "Dp9vmwEa1tgqNwqxEUYnh-u6ZyVojZJx8h9f6xhE18A";
+
+const AUTHZ =
+  "/oauth/authorization?response_type=code&client_id=terraform-cli" +
+  `&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256` +
+  "&redirect_uri=http://localhost:10000/login&state=st-12345";
+
+describe("terraform login.v1 OAuth flow", () => {
+  let jar: CookieJar;
+  let userId: string;
+  let username: string;
+
+  beforeAll(async () => {
+    ({ jar, userId, username } = await bootstrapSession());
+  });
+
+  test("discovery document advertises login.v1", async () => {
+    const res = await app.handle(
+      new Request("http://localhost/.well-known/terraform.json"),
+    );
+    expect(res.status).toBe(200);
+    const doc = (await res.json()) as { "login.v1"?: Record<string, unknown> };
+    expect(doc["login.v1"]).toBeDefined();
+    expect((doc["login.v1"]!).authz).toBe(
+      "/oauth/authorization",
+    );
+    expect((doc["login.v1"]!).token).toBe(
+      "/oauth/token",
+    );
+  });
+
+  test("unauthenticated browser is shown the login page", async () => {
+    const res = await app.handle(new Request(`http://localhost${AUTHZ}`));
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body.toLowerCase()).toContain("login");
+  });
+
+  test("authenticated browser skips login and is redirected with a code", async () => {
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHZ}`, {
+        headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
+      }),
+    );
+    expect(res.status).toBe(302);
+    const location = res.headers.get("Location") ?? "";
+    const url = new URL(location);
+    expect(url.host).toBe("localhost:10000");
+    expect(url.pathname).toBe("/login");
+    expect(url.searchParams.get("state")).toBe("st-12345");
+    expect(url.searchParams.get("code")).not.toBeNull();
+    expect(url.searchParams.get("code")!.length).toBeGreaterThan(0);
+  });
+
+  test("token endpoint exchanges the authorization code for a Terraform token", async () => {
+    // Obtain a fresh code via the authenticated redirect.
+    const redirect = await app.handle(
+      new Request(`http://localhost${AUTHZ}`, {
+        headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
+      }),
+    );
+    const code = new URL(redirect.headers.get("Location")!).searchParams.get(
+      "code",
+    )!;
+
+    const tokenRes = await app.handle(
+      new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          code_verifier: CODE_VERIFIER,
+          redirect_uri: "http://localhost:10000/login",
+          client_id: "terraform-cli",
+        }).toString(),
+      }),
+    );
+    expect(tokenRes.status).toBe(200);
+    const json = (await tokenRes.json()) as {
+      access_token?: string;
+      token_type?: string;
+    };
+    expect(json.token_type?.toLowerCase()).toBe("bearer");
+    expect(json.access_token).toBeTruthy();
+  });
+
+  test("MFA-enabled user with a browser session is NOT auto-approved (gated to login page)", async () => {
+    // Enroll + enable MFA for this session's user using the API login token.
+    const loginBody = await (
+      await app.handle(
+        new Request("http://localhost/api/v2/users/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/vnd.api+json" },
+          body: JSON.stringify({
+            data: { attributes: { username, password: "Sup3rS3cret!pass" } },
+          }),
+        }),
+      )
+    ).json();
+    const apiToken = loginBody.data.attributes.token as string;
+    const enroll = await app.handle(
+      new Request("http://localhost/api/v2/account/mfa/enroll", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}` },
+      }),
+    );
+    expect(enroll.status).toBe(200);
+    const secret = (await enroll.json()).data.attributes.secret as string;
+    const code = generateTotpCode(secret);
+    const verify = await app.handle(
+      new Request("http://localhost/api/v2/account/mfa/verify", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { code } } }),
+      }),
+    );
+    expect(verify.status).toBe(200);
+
+    // With a browser session cookie, an MFA-gated account must still land on
+    // the login page (which then runs the normal TOTP step) rather than being
+    // silently auto-approved.
+    const res = await app.handle(
+      new Request(`http://localhost${AUTHZ}`, {
+        headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body.toLowerCase()).toContain("login");
+  });
+
+  afterAll(() => {
+    void userId;
+  });
+});

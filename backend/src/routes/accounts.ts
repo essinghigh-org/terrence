@@ -10,6 +10,7 @@ import { log } from "../lib/log";
 import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
@@ -18,14 +19,9 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy"
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
-const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
 let refreshRotationQueue = Promise.resolve();
-
-// In-memory MFA login challenges: token -> { userId, expiresAt }.
-// Single-process deployment; challenges expire after 5 minutes.
-const mfaChallenges = new Map<string, { userId: string; expiresAt: number }>();
 
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = refreshRotationQueue;
@@ -109,13 +105,13 @@ function setRefreshCookie(
   const maxAge = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
   const secure = secureRequest(request) ? "; Secure" : "";
   (set.headers as Record<string, string | number>)["Set-Cookie"] =
-    `${REFRESH_COOKIE}=${token}; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
+    `${REFRESH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
 }
 
 function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void {
   const secure = secureRequest(request) ? "; Secure" : "";
   (set.headers as Record<string, string | number>)["Set-Cookie"] =
-    `${REFRESH_COOKIE}=; Path=/api/v2/users; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+    `${REFRESH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
 /**
@@ -523,12 +519,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // POST /users/login/mfa with a valid TOTP code.
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa !== undefined && mfa.enabled === true) {
-      const challengeToken = opaqueToken("mfa");
-      const expiresAt = Date.now() + MFA_CHALLENGE_TTL_MS;
-      mfaChallenges.set(challengeToken, { userId: user.id, expiresAt });
-      setTimeout((): void => {
-        if (mfaChallenges.get(challengeToken)?.expiresAt === expiresAt) mfaChallenges.delete(challengeToken);
-      }, MFA_CHALLENGE_TTL_MS);
+      const challengeToken = issueMfaChallenge(user.id);
       return {
         data: {
           type: "users",
@@ -563,9 +554,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
     }
 
-    const challenge = mfaChallenges.get(challengeToken);
-    if (challenge === undefined || challenge.expiresAt < Date.now()) {
-      mfaChallenges.delete(challengeToken);
+    const challenge = consumeMfaChallenge(challengeToken);
+    if (challenge === null) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };
     }
@@ -582,7 +572,6 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
 
-    mfaChallenges.delete(challengeToken);
     return issueLoginSession(user, browserSession, set, request, server);
   })
   .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {

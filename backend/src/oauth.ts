@@ -6,6 +6,9 @@ import { createHash } from "node:crypto";
 import { authenticateLdapWithCircuitBreaker } from "./lib/ldap";
 import { log } from "./lib/log";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "./lib/sso";
+import { browserSessionUser } from "./routes/accounts";
+import { consumeMfaChallenge, issueMfaChallenge } from "./lib/mfa-challenge";
+import { verifyTotp } from "./lib/totp";
 
 const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
@@ -118,6 +121,7 @@ function loginPage(
   error = "",
   username = "",
   sso: SsoInfo = { saml: false, oidc: false, ldap: false, localAuthEnabled: true },
+  mfa: Readonly<{ challengeToken: string }> | null = null,
 ): string {
   const hidden = request !== null
     ? ([
@@ -130,6 +134,21 @@ function loginPage(
       ] as const).map(([name, value]): string =>
         `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`
       ).join("")
+    : "";
+
+  // MFA step: the primary credentials were accepted but TOTP is required.
+  // Render only the code field; the challenge token rides in a hidden input
+  // so POST /oauth/authorization can resume the same authz request.
+  const mfaForm = mfa !== null
+    ? `<form method="post" action="/oauth/authorization">
+      ${hidden}
+      <input type="hidden" name="mfa_challenge_token" value="${escapeHtml(mfa.challengeToken)}">
+      <p>
+        <label for="totp_code">Authentication code</label>
+        <input id="totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required autofocus>
+      </p>
+      <button type="submit">Verify</button>
+    </form>`
     : "";
 
   const ssoButtons = request !== null && (sso.saml || sso.oidc)
@@ -149,7 +168,7 @@ function loginPage(
   const intro = request !== null
     ? `<p>Sign in to authorize Terraform CLI.</p>${error !== "" ? `<p id="login-error" role="alert">${escapeHtml(error)}</p>` : ""}`
     : "";
-  const form = request !== null && passwordAuthAvailable
+  const form = request !== null && mfa === null && passwordAuthAvailable
     ? `<form method="post" action="/oauth/authorization">
       ${hidden}
       <p>
@@ -180,6 +199,7 @@ function loginPage(
     ${intro}
     ${localBlocked}
     ${ssoButtons}
+    ${mfaForm}
     ${form}
   </main>
 </body>
@@ -234,21 +254,90 @@ async function s256(value: string): Promise<string> {
   return Buffer.from(digest).toString("base64url");
 }
 
-type QueryCtx = { readonly query: Readonly<Record<string, unknown>> };
-type BodyCtx = { readonly body: unknown };
-type TokenCtx = {
-  readonly body: unknown;
-  readonly request: RequestWithHeaders;
-  readonly set: SetObj;
-};
+type RequestInfo = Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
+
+type OAuthQueryCtx = Readonly<{
+  readonly query: Record<string, unknown>;
+  readonly request?: RequestInfo;
+}>;
+
+/**
+ * Redirect the browser (already authenticated via the normal session) straight
+ * through the OAuth authorization step, issuing a PKCE code for `userId` and
+ * sending Terraform back to its local callback. Skips the login form entirely
+ * when a valid browser session is present.
+ */
+function approveForUser(
+  authorization: Readonly<AuthorizationRequest>,
+  userId: string,
+): Response {
+  const now = Date.now();
+  for (const [code, entry] of authorizationCodes) {
+    if (entry.expiresAt <= now) authorizationCodes.delete(code);
+  }
+
+  const code = crypto.randomUUID();
+  authorizationCodes.set(code, {
+    codeChallenge: authorization.codeChallenge,
+    expiresAt: now + CODE_TTL_MS,
+    redirectUri: authorization.redirectUri,
+    userId,
+  });
+
+  const redirect = new URL(authorization.redirectUri);
+  redirect.searchParams.set("code", code);
+  redirect.searchParams.set("state", authorization.state);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Cache-Control": "no-store",
+      Location: redirect.toString(),
+    },
+  });
+}
 
 export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
-  .get("/oauth/authorization", async ({ query }: QueryCtx): Promise<Response> => {
-    const request = parseAuthorizationRequest(query);
+  .get("/oauth/authorization", async ({ query, request }: OAuthQueryCtx): Promise<Response> => { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
+    const authorization = parseAuthorizationRequest(query);
+    if (authorization === null) return htmlResponse(loginPage(null), 400);
+
+    // Already logged into the browser? Skip the login form and approve --
+    // unless the account enforces MFA, in which case it must still complete
+    // the TOTP step through the normal login form.
+    const sessionUser = await browserSessionUser(request);
+    if (sessionUser !== null) {
+      const mfa = await db.query.user2FA.findFirst({
+        where: eq(user2FA.userId, sessionUser.id),
+      });
+      const mfaEnforced = mfa?.enabled === true;
+      if (!mfaEnforced) return approveForUser(authorization, sessionUser.id);
+    }
+
     const ssoInfo = await ssoInfoOrDefault();
-    return htmlResponse(loginPage(request, "", "", ssoInfo), request !== null ? 200 : 400);
+    return htmlResponse(loginPage(authorization, "", "", ssoInfo), 200);
   })
-  .post("/oauth/authorization", async ({ body }: BodyCtx): Promise<Response> => {
+  .post("/oauth/authorization", async ({ body }: { readonly body: unknown }): Promise<Response> => {
+    // MFA resume: primary credentials were accepted on a prior POST and a
+    // TOTP challenge was issued. Verify the code and continue the authz flow.
+    const mfaChallengeToken = field(body, "mfa_challenge_token");
+    if (mfaChallengeToken !== "") {
+      const authorization = parseAuthorizationRequest(body);
+      if (authorization === null) return htmlResponse(loginPage(null), 400);
+
+      const challenge = consumeMfaChallenge(mfaChallengeToken);
+      if (challenge === null) {
+        return htmlResponse(loginPage(authorization, "The authentication code has expired. Please sign in again.", "", await ssoInfoOrDefault()), 401);
+      }
+      const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
+      const code = field(body, "totp_code");
+      if (mfa?.enabled !== true || !verifyTotp(mfa.secret, code)) {
+        return htmlResponse(loginPage(authorization, "Invalid authentication code.", "", await ssoInfoOrDefault()), 401);
+      }
+      const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
+      if (user === undefined) return htmlResponse(loginPage(authorization, "Account not found.", "", await ssoInfoOrDefault()), 401);
+      return approveForUser(authorization, user.id);
+    }
+
     const authorization = parseAuthorizationRequest(body);
     if (authorization === null) return htmlResponse(loginPage(null), 400);
 
@@ -317,36 +406,17 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return htmlResponse(loginPage(authorization, message, username, ssoInfo), 401);
     }
 
+    // MFA-enabled accounts continue through the normal TOTP flow rather than
+    // being rejected. Issue a challenge and render the code-entry step.
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa?.enabled === true) {
-      return htmlResponse(loginPage(authorization, "MFA-enabled accounts must sign in through the browser login flow.", username, ssoInfo), 401);
+      const challengeToken = issueMfaChallenge(user.id);
+      return htmlResponse(loginPage(authorization, "", username, ssoInfo, { challengeToken }), 200);
     }
 
-    const now = Date.now();
-    for (const [code, entry] of authorizationCodes) {
-      if (entry.expiresAt <= now) authorizationCodes.delete(code);
-    }
-
-    const code = crypto.randomUUID();
-    authorizationCodes.set(code, {
-      codeChallenge: authorization.codeChallenge,
-      expiresAt: now + CODE_TTL_MS,
-      redirectUri: authorization.redirectUri,
-      userId: user.id,
-    });
-
-    const redirect = new URL(authorization.redirectUri);
-    redirect.searchParams.set("code", code);
-    redirect.searchParams.set("state", authorization.state);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        "Cache-Control": "no-store",
-        Location: redirect.toString(),
-      },
-    });
+    return approveForUser(authorization, user.id);
   })
-  .post("/oauth/token", async ({ body, request, set }: TokenCtx): Promise<Record<string, string>> => {
+  .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
     if (
       field(body, "grant_type") !== "authorization_code"
       || tokenClientId(body, request) !== CLIENT_ID

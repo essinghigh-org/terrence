@@ -101,7 +101,7 @@ describe("browser refresh sessions", () => {
     const loginCookieHeader = loginResponse.headers.get("set-cookie") ?? "";
     expect(loginCookieHeader).toContain("HttpOnly");
     expect(loginCookieHeader).toContain("SameSite=Lax");
-    expect(loginCookieHeader).toContain("Path=/api/v2/users");
+    expect(loginCookieHeader).toContain("Path=/");
     const firstCookie = cookie(loginResponse);
     const firstRefreshToken = rawCookieToken(firstCookie);
     const loginDocument = await loginResponse.json() as {
