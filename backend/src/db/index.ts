@@ -251,6 +251,10 @@ if (!isPostgres) {
   client.run("CREATE INDEX IF NOT EXISTS runs_status_created_idx ON runs (status, created_at)");
   client.run("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
   client.run("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
+  // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
+  // every poll; keep it off a full table scan as agent volume grows. Idempotent
+  // so a sparse/legacy journal that re-applies this boot path cannot duplicate it.
+  client.run("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
 
   // Column convergence guard (mirrors the run_explanations guard above):
   // databases whose migration journal never applied the scheduled_at column
@@ -634,6 +638,9 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
+    // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
+    // every poll; keep it off a full table scan as agent volume grows.
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
   })();
   return pgMigrationsPromise;
 }
