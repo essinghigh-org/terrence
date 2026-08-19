@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { writeFile, mkdir, rm, symlink } from "fs/promises";
+import { writeFile, mkdir, rm, symlink, mkdtemp } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -34,7 +34,7 @@ describe("landlock run sandbox", () => {
       return;
     }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-1");
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const proc = sandbox.spawn([hostTofu, "version"], { cwd: workDir, env: {} });
@@ -58,8 +58,9 @@ describe("landlock run sandbox", () => {
       return;
     }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-2");
-    const secretDir = join(process.cwd(), "..", "storage");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
+    const secretDir = join(testBase, "storage");
     const secretPath = join(secretDir, "sandbox-test-secret.txt");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(secretDir, { recursive: true });
@@ -78,7 +79,7 @@ describe("landlock run sandbox", () => {
         { mode: 0o755 },
       );
       const proc = sandbox.spawn(["/bin/sh", probeScript], { cwd: workDir, env: {} });
-      const [exitCode, stdout] = await Promise.all([
+      const [exitCode, stdout, stderr] = await Promise.all([
         proc.exited,
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
@@ -86,17 +87,16 @@ describe("landlock run sandbox", () => {
       expect(exitCode).toBe(0);
       expect(stdout.trim()).toBe("BLOCKED");
     } finally {
-      await rm(workDir, { recursive: true, force: true });
-      await rm(secretPath, { recursive: true, force: true });
-      await rm(secretPath + ".written", { recursive: true, force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("denies access to .encryption-key in the storage directory", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const workDir = join(tmpdir(), "terrence", "runs", "ll-test-enckey");
-    const storageDir = join(process.cwd(), "..", "storage");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
+    const storageDir = join(testBase, "storage");
     const keyFile = join(storageDir, ".encryption-key");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(storageDir, { recursive: true });
@@ -109,17 +109,16 @@ describe("landlock run sandbox", () => {
       expect(exitCode).toBe(0);
       expect(stdout.trim()).toBe("KEY_DENIED");
     } finally {
-      await rm(workDir, { recursive: true, force: true });
-      await rm(keyFile, { force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("denies access to another run's work directory", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-victim");
-    const attackerDir = join(runsBase, "ll-test-attacker");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "victim");
+    const attackerDir = join(testBase, "attacker");
     const targetFile = join(workDir, "terraform.tfstate");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     await mkdir(join(attackerDir, "tmp"), { recursive: true });
@@ -132,17 +131,16 @@ describe("landlock run sandbox", () => {
       expect(exitCode).toBe(0);
       expect(stdout.trim()).toBe("OTHER_RUN_DENIED");
     } finally {
-      await rm(workDir, { recursive: true, force: true });
-      await rm(attackerDir, { recursive: true, force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("denies access via symlink from workdir into storage", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-symlink");
-    const storageDir = join(process.cwd(), "..", "storage");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
+    const storageDir = join(testBase, "storage");
     const secretFile = join(storageDir, "symlink-secret.txt");
     const linkPath = join(workDir, "evil-link");
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -157,17 +155,15 @@ describe("landlock run sandbox", () => {
       expect(exitCode).toBe(0);
       expect(stdout.trim()).toBe("SYMLINK_DENIED");
     } finally {
-      await rm(linkPath, { force: true });
-      await rm(workDir, { recursive: true, force: true });
-      await rm(secretFile, { force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("denies reading /proc/<pid>/environ of another process", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-proc");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const ppid = process.pid;
@@ -178,15 +174,15 @@ describe("landlock run sandbox", () => {
       expect(exitCode).toBe(0);
       expect(stdout.trim()).toBe("PROC_DENIED");
     } finally {
-      await rm(workDir, { recursive: true, force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("checks network connectivity under Landlock (documented: Landlock does not restrict network)", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-net");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
@@ -200,15 +196,15 @@ describe("landlock run sandbox", () => {
       // We accept either result but at least we exercise the path.
       expect(["NET_DENIED", "NET_UNCHECKED_NC_MISSING"]).toContain(result);
     } finally {
-      await rm(workDir, { recursive: true, force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 
   it("denies signals to processes outside the sandbox on Landlock ABI 6+", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    const workDir = join(runsBase, "ll-test-signal");
+    const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    const workDir = join(testBase, "work");
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const targetPid = process.pid;
@@ -221,7 +217,7 @@ describe("landlock run sandbox", () => {
       if (abi >= 6) expect(result).toBe("SIGNAL_DENIED");
       else expect(["SIGNAL_OK", "SIGNAL_DENIED"]).toContain(result);
     } finally {
-      await rm(workDir, { recursive: true, force: true });
+      await rm(testBase, { recursive: true, force: true });
     }
   });
 

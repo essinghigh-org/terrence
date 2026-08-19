@@ -6,14 +6,26 @@ Terrence follows a rolling-release model on `master`. The latest tagged release 
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities **privately** through GitHub Security Advisories:
+Please report suspected security vulnerabilities privately rather than via public issues or discussions.
 
-1. Open the repository's **Security → Advisories** tab.
-2. Click **Report a vulnerability**.
-3. Provide a description, the affected version, and reproduction steps.
+You can report vulnerabilities through either of the following channels:
 
-Do not open a public issue for a security vulnerability. We acknowledge receipt within a few business days and coordinate a fix and disclosure timeline with you.
+- **GitHub Security Advisories (Recommended):** Submit a private report at [GitHub Advisory Submission](https://github.com/essinghigh-org/terrence/security/advisories/new).
+- **Email:** Contact the security team directly at [security@essinghigh.org](mailto:security@essinghigh.org).
+
+When reporting a vulnerability, please include:
+- A description of the issue and its potential security impact
+- Steps to reproduce or proof-of-concept code
+- Affected components or versions
+
+## Disclosure Process & Timeline
+
+We follow coordinated vulnerability disclosure practices:
+1. **Response:** We acknowledge receipt of any vulnerability report within 3 days.
+2. **Assessment & Confirmation:** We investigate and validate the report within 30 days.
+3. **Remediation & Coordinated Disclosure:** We aim to release a patch and publish a security advisory within 90 days of confirmation, coordinating the disclosure date with the reporter.
 
 ## Scope
 
-This policy covers the Terrence server, the frontend, and the `terrance-agent` client. Supply-chain issues in third-party dependencies should be reported upstream to the respective maintainers, or to us when they affect how Terrence consumes them.
+This policy covers the Terrence server, the frontend, and the `terrance-agent` client. Supply-chain vulnerabilities in third-party dependencies should be reported upstream to the respective maintainers, or to us when they affect how Terrence consumes them.
+

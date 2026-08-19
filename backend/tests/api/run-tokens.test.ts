@@ -7,7 +7,7 @@
 // It is revoked on terminal state and expires after 24h regardless.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, stat, rm } from "node:fs/promises";
+import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -144,11 +144,16 @@ describe("run token minting and storage", () => {
     try {
       const token = `trun_${randomBytes(8).toString("base64url")}`;
       const path = await writeRunCliConfig(dir, "terraform.example.com", token);
-      const mode = (await stat(path)).mode & 0o777;
-      expect(mode).toBe(0o600);
-      const content = await readFile(path, "utf8");
-      expect(content).toContain(`credentials "terraform.example.com"`);
-      expect(content).toContain(token);
+      const handle = await open(path, "r");
+      try {
+        const mode = (await handle.stat()).mode & 0o777;
+        expect(mode).toBe(0o600);
+        const content = await handle.readFile("utf8");
+        expect(content).toContain(`credentials "terraform.example.com"`);
+        expect(content).toContain(token);
+      } finally {
+        await handle.close();
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

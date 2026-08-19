@@ -1,6 +1,7 @@
 {
   "name": "terrence",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows", 
   "scripts": {
     "dev:backend": "cd backend && bun run --watch index.ts",
