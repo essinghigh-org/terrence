@@ -15,6 +15,7 @@ import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
 import { AttributeDiff } from "./PlanOutput";
+import { OperationFilterDropdown, type Operation } from "./OperationFilterDropdown";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -51,12 +52,11 @@ type PlanJson = {
   format_version?: string;
 };
 
-type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
-
 // Reads are data-source refreshes, not real changes: they never execute
 // during an apply, so they are excluded from the apply resource list and
 // from the operation filter entirely.
 const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove"];
+const DEFAULT_APPLY_OPS: ReadonlySet<Operation> = new Set(APPLY_OPERATION_OPTIONS);
 
 type ExecutionState =
   | "pending"
@@ -449,7 +449,11 @@ export function ApplyOutput({
 
   const query = search.trim().toLocaleLowerCase();
   const filteredResources = changedResources.filter((resource): boolean => {
-    if (!selectedOps.has(operationForResource(resource))) return false;
+    const primaryOp = operationForResource(resource);
+    const matchesOp = selectedOps.has(primaryOp)
+      || (resource.previous_address !== undefined && selectedOps.has("move"))
+      || (resource.change.importing !== undefined && selectedOps.has("import"));
+    if (!matchesOp) return false;
     if (query === "") return true;
     return [
       resource.address,
@@ -498,35 +502,13 @@ export function ApplyOutput({
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
-          <div
-            role="group"
-            aria-label="Filter by operation"
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-muted-foreground"
-          >
-            {APPLY_OPERATION_OPTIONS.map((op): React.JSX.Element => {
-// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
-              const count = op === "import" ? importCount : op === "move" ? moveCount : opCounts[op as keyof typeof opCounts];
-              const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
-              return (
-                <label key={op} className="flex cursor-pointer items-center gap-1.5 select-none hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    className="size-3.5 accent-primary"
-                    checked={selectedOps.has(op)}
-                    onChange={(event): void => {
-                      const next = new Set(selectedOps);
-                      if (event.currentTarget.checked) next.add(op);
-                      else next.delete(op);
-                      setSelectedOps(next);
-                    }}
-                  />
-                  <span>
-                    {label} ({count})
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+          <OperationFilterDropdown
+            options={APPLY_OPERATION_OPTIONS}
+            defaultOps={DEFAULT_APPLY_OPS}
+            selectedOps={selectedOps}
+            onChange={setSelectedOps}
+            opCounts={opCounts}
+          />
         </div>
         <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}

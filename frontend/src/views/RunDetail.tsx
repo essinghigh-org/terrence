@@ -1348,9 +1348,12 @@ export function RunDetail({
     && !terminatedBeforeApply;
 
   // Explain why Apply is disabled (kanban 15.10), mirroring the gate at top:
-  // fresh && is-confirmable && can-apply, plus policy/lock/task states.
   const applyDisabledReasons: string[] = [];
-  const applyGated = showApply && !canApply && applyStatus !== "finished";
+  const applyGated = showApply
+    && !canApply
+    && applyStatus === "pending"
+    && !applyStarted
+    && !TERMINAL_STATUSES.has(status);
   if (applyGated) {
     if (["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning"].includes(status)) {
       applyDisabledReasons.push("Plan, policy checks, and pre-apply tasks are still running. Apply becomes available once they finish.");
@@ -1682,16 +1685,16 @@ export function RunDetail({
               </div>
             </summary>
 
+            {planWarnings.length > 0 && (
+              <DiagnosticsBanner severity="warning" diagnostics={planWarnings} collapsible />
+            )}
+
             <PlanOutput
               runId={runId}
               status={status}
               planStatus={planStatus}
               onSummaryChange={handlePlanSummaryChange}
             />
-
-            {planWarnings.length > 0 && (
-              <DiagnosticsBanner severity="warning" diagnostics={planWarnings} />
-            )}
 
             <details
               className="group border-t border-border"
@@ -1936,7 +1939,7 @@ export function RunDetail({
             )}
 
             {applyWarnings.length > 0 && (
-              <DiagnosticsBanner severity="warning" diagnostics={applyWarnings} />
+              <DiagnosticsBanner severity="warning" diagnostics={applyWarnings} collapsible />
             )}
 
             {["errored", "unreachable"].includes(applyStatus) && (

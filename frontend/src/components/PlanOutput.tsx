@@ -10,6 +10,7 @@ import {
 import { ApiError, fetchApi } from "../lib/api";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { Spinner } from "./ui/spinner";
+import { OperationFilterDropdown } from "./OperationFilterDropdown";
 import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -940,7 +941,11 @@ function resourceMatches(
   selectedOps: ReadonlySet<Operation>,
   query: string,
 ): boolean {
-  if (!selectedOps.has(operationForResource(resource))) return false;
+  const primaryOp = operationForResource(resource);
+  const matchesOp = selectedOps.has(primaryOp)
+    || (resource.previous_address !== undefined && selectedOps.has("move"))
+    || (resource.change.importing !== undefined && selectedOps.has("import"));
+  if (!matchesOp) return false;
   if (query === "") return true;
   return [
     resource.address,
@@ -1279,36 +1284,14 @@ export function PlanOutput({
               onInput={(event): void => { setSearch(event.currentTarget.value); }}
             />
           </label>
-          <div
-            role="group"
-            aria-label="Filter by operation"
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-muted-foreground"
-          >
-            {OPERATION_OPTIONS.map((op): React.JSX.Element => {
-// SAFETY: the operation union covers exactly the map keys; unmatched values are handled by the surrounding fallback.
-              const count = op === "import" ? importCount : op === "move" ? moveCount : opCounts[op as keyof typeof opCounts];
-              const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
-              return (
-                <label key={op} className="flex cursor-pointer items-center gap-1.5 select-none hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    className="size-3.5 accent-primary"
-                    checked={selectedOps.has(op)}
-                    onChange={(event): void => {
-                      const next = new Set(selectedOps);
-                      if (event.currentTarget.checked) next.add(op);
-                      else next.delete(op);
-                      setSelectedOps(next);
-                    }}
-                  />
-                  <span>
-                    {label} ({count})
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-          </div>
+          <OperationFilterDropdown
+            options={OPERATION_OPTIONS}
+            defaultOps={DEFAULT_SELECTED_OPS}
+            selectedOps={selectedOps}
+            onChange={setSelectedOps}
+            opCounts={opCounts}
+          />
+        </div>
         <span aria-live="polite" className="text-xs text-muted-foreground">
           Showing {filteredResources.length} of {changedResources.length}
           {driftResources.length > 0 && ` · ${filteredDrift.length} of ${driftResources.length} drift`}
