@@ -12,6 +12,7 @@ import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { syncedTrustedClientIp } from "../lib/client-ip";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 
 // HTTPS source of truth for cookie flags (todo 134): when PUBLIC_URL is
 // configured it overrides per-request protocol/header detection.
@@ -379,12 +380,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     const configuredToken = process.env.IACT_TOKEN;
-    // the reference format's installer passes the token as a query parameter, so the query
-    // form stays for compatibility (kanban 5.3). Accept a header alternative
-    // so fresh deployments can keep the secret out of proxy logs, browser
-    // history, and traces entirely. Operators that never use the installer
-    // flow can disable the query form outright with IACT_QUERY_TOKEN_DISABLED.
-    const queryEnabled = process.env.IACT_QUERY_TOKEN_DISABLED !== "1" && process.env.IACT_QUERY_TOKEN_DISABLED !== "true";
+    // the reference format's installer passes the token as a query parameter.
+    // Query-token compatibility is OPT-IN (todo 142: the default is the
+    // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
+    // reference installer behavior. The header alternative keeps the secret
+    // out of proxy logs, browser history, and traces entirely.
+    const queryEnabled = process.env.IACT_QUERY_TOKEN_ENABLED === "1" || process.env.IACT_QUERY_TOKEN_ENABLED === "true";
     const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
     const headerToken = request === undefined ? null
       : request.headers.get("x-iact-token")
@@ -424,7 +425,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const organizationId = `org-${crypto.randomUUID()}`;
     const configuredOrganizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
-    const token = `user-${crypto.randomUUID()}`;
+    const token = generateAuthenticationToken("user");
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
       const t = tx as typeof db;
@@ -459,7 +460,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       });
       await t.insert(apiTokens).values({
         id: crypto.randomUUID(),
-        token: createHash("sha256").update(token).digest("hex"),
+        token: hashAuthenticationToken(token),
         userId,
         description: "Initial administrator token",
         createdAt: Date.now(),
