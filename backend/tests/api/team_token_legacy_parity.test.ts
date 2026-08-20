@@ -25,10 +25,12 @@ describe("team token legacy/plural separation (TFE parity)", () => {
   const suffix = crypto.randomUUID();
   const ownerAId = `user-${suffix}`;
   const ownerBId = `owner-b-${suffix}`;
+  const ownerCId = `owner-c-${suffix}`;
   const orgId = `org-${suffix}`;
   const orgName = `tokpar-org-${suffix}`;
   const authA = `user-token-${suffix}`;
   const authB = `owner-b-token-${suffix}`;
+  const authC = `owner-c-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, token = authA) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -49,15 +51,18 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     await db.insert(users).values([
       { id: ownerAId, username: ownerAId, passwordHash: "unused" },
       { id: ownerBId, username: ownerBId, passwordHash: "unused" },
+      { id: ownerCId, username: ownerCId, passwordHash: "unused" },
     ]);
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId: ownerAId, orgId, role: "owner" },
       { id: crypto.randomUUID(), userId: ownerBId, orgId, role: "owner" },
+      { id: crypto.randomUUID(), userId: ownerCId, orgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([
       { id: crypto.randomUUID(), token: authA, userId: ownerAId },
       { id: crypto.randomUUID(), token: authB, userId: ownerBId },
+      { id: crypto.randomUUID(), token: authC, userId: ownerCId },
     ]);
     const teamRes = await request(`/api/v2/organizations/${orgName}/teams`, "POST", {
       data: { attributes: { name: "tokpar-team" } },
@@ -88,6 +93,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, ownerAId));
     await db.delete(users).where(eq(users.username, ownerBId));
+    await db.delete(users).where(eq(users.username, ownerCId));
   });
 
   const countTeamTokens = async (legacy: boolean): Promise<number> =>
@@ -181,5 +187,35 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     // Singular GET 404s once no legacy token exists; modern list unaffected.
     const getMissing = await request(`/api/v2/teams/${teamId}/authentication-token`);
     expect(getMissing.status).toBe(404);
+  });
+
+  it("generic /authentication-tokens/:id supports team tokens (todo 45/46)", async () => {
+    // Owner B can look up a modern team token by id via the generic route.
+    const getRes = await request(`/api/v2/authentication-tokens/${modernIds[1]}`, "GET", undefined, authB);
+    expect(getRes.status).toBe(200);
+    const gotBody = (await getRes.json()) as { data: { id: string; attributes: Record<string, unknown> } };
+    expect(gotBody.data.id).toBe(modernIds[1] as string);
+    expect(String(gotBody.data.attributes.token ?? "")).toBe("");
+
+    // The legacy credential is NOT manageable via the generic route.
+    // (Owner C: A and B have exhausted their 5-per-60s sensitive-limiter
+    // windows on the earlier POSTs in this file.)
+    const rotateRes = await request(`/api/v2/teams/${teamId}/authentication-token`, "POST", undefined, authC);
+    expect(rotateRes.status).toBe(201);
+    const legacyId = ((await rotateRes.json()) as { data: { id: string } }).data.id;
+    // Generic GET may read the legacy credential's metadata (no secret is
+    // exposed), but generic DELETE must not remove it: the legacy credential
+    // is only manageable via the singular endpoint.
+    const legacyGet = await request(`/api/v2/authentication-tokens/${legacyId}`, "GET", undefined, authB);
+    expect(legacyGet.status).toBe(200);
+    const legacyDel = await request(`/api/v2/authentication-tokens/${legacyId}`, "DELETE", undefined, authB);
+    expect(legacyDel.status).toBe(404);
+    expect(await countTeamTokens(true)).toBe(1);
+
+    // Generic delete removes a modern token (owner B has manage-teams).
+    const delRes = await request(`/api/v2/authentication-tokens/${modernIds[1]}`, "DELETE", undefined, authB);
+    expect(delRes.status).toBe(204);
+    expect(await countTeamTokens(false)).toBe(2);
+    expect(await countTeamTokens(true)).toBe(1);
   });
 });

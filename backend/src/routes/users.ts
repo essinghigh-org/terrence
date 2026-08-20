@@ -414,6 +414,14 @@ export const userRoutes = new Elysia({ name: "users" })
     if (token !== undefined && user?.id === token.userId) {
       return { data: tokenResource(token) };
     }
+    // Team tokens: generic lookup requires manage-teams on the token's org
+    // (todo 45).
+    if (token !== undefined && token.teamId !== null) {
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
+        return { data: tokenResource(token) };
+      }
+    }
     const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
     const pool = agentToken === undefined
       ? undefined
@@ -448,6 +456,17 @@ export const userRoutes = new Elysia({ name: "users" })
       await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
       (set as { status: number }).status = 204;
       return {};
+    }
+    // Team tokens: generic delete requires manage-teams on the token's org;
+    // the legacy credential can only be removed via the singular endpoint
+    // (todo 46).
+    if (token !== undefined && token.teamId !== null && token.legacy === false) {
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
+        await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+        (set as { status: number }).status = 204;
+        return {};
+      }
     }
     const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
     const pool = agentToken === undefined
