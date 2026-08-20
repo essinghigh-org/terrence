@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
+import { Suspense } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
 import { AppRoutes } from "../src/App";
@@ -19,7 +20,9 @@ function CurrentLocation(): React.JSX.Element {
 function renderRoutes(initialEntry: string) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <AppRoutes />
+      <Suspense fallback={null}>
+        <AppRoutes />
+      </Suspense>
       <CurrentLocation />
     </MemoryRouter>,
   );

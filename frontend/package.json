@@ -29,6 +29,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@oxlint/plugins": "1.78.0",
     "@playwright/test": "^1.62.1",
     "@testing-library/dom": "^10.4.1",
