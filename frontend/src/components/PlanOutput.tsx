@@ -751,11 +751,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
 
   return (
     <details
-      className="group border-b border-border last:border-b-0"
+      className="group/resource border-b border-border last:border-b-0"
       onToggle={(event): void => { setExpanded(event.currentTarget.open); }}
     >
       <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
+        <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90" aria-hidden="true" />
         <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
           {"icon" in config ? (
             <config.icon className="size-3.5" aria-hidden="true" />
