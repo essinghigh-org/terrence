@@ -55,6 +55,7 @@ const IMAGE_KIND_TO_MIME: Readonly<Record<string, string>> = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  svg: "image/svg+xml",
 };
 
 export type AvatarMeta = Readonly<{
@@ -483,6 +484,8 @@ function requestPinned(target: {
 // ---------------------------------------------------------------------------
 function sniffImageKind(bytes: Uint8Array): string | null {
   const b = Buffer.from(bytes);
+  const head = b.slice(0, 512).toString("utf8").trimStart();
+  if (head.startsWith("<svg") || head.startsWith("<?xml")) return "svg";
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "png";
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
   if (b.length >= 6 && b.slice(0, 6).toString("latin1") === "GIF87a") return "gif";

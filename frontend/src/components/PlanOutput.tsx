@@ -728,12 +728,6 @@ export function AttributeDiff({
   );
 }
 
-function providerLabel(providerName: string | undefined): string {
-  if (providerName === undefined || providerName === "") return "provider unknown";
-  const label = providerName.split("/").pop();
-  return label === undefined || label === "" ? "provider unknown" : label;
-}
-
 const actionReasonLabels = {
   replace_because_cannot_update: "Replacement required by provider",
   replace_because_tainted: "Resource is tainted",
@@ -803,27 +797,29 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <code className="truncate font-mono text-xs font-semibold text-foreground">{resource.address}</code>
+            <ProviderIcon providerName={resource.provider_name} size={18} />
+            <code
+              className="truncate font-mono text-xs font-semibold text-foreground"
+              title={resource.provider_name ?? undefined}
+            >
+              {resource.address}
+            </code>
             <button
               type="button"
               aria-label={`Copy ${resource.address} address`}
               title={copied ? "Copied address!" : "Copy resource address"}
-              className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="size-6 shrink-0 rounded p-1 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
               onClick={handleCopy}
             >
               {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
             </button>
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
-            <span>Type: <code className="font-mono">{resource.type}</code></span>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4 text-muted-foreground/80">
+            <span className="inline-flex items-center gap-1"><span className="text-muted-foreground/60">Type</span> <code className="font-mono text-foreground/70">{resource.type}</code></span>
             {resource.module_address !== undefined && (
-              <span>Module: <code className="font-mono">{resource.module_address}</code></span>
+              <span className="inline-flex items-center gap-1"><span className="text-muted-foreground/60">Module</span> <code className="font-mono text-foreground/70">{resource.module_address}</code></span>
             )}
-            <span title={resource.provider_name} className="inline-flex items-center gap-1.5">
-              <ProviderIcon providerName={resource.provider_name} size={14} />
-              Provider: <code className="font-mono">{providerLabel(resource.provider_name)}</code>
-            </span>
-            {resource.mode === "data" && <span>Data source</span>}
+            {resource.mode === "data" && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">Data</span>}
             {resource.deposed !== undefined && (
               <span>Deposed key: <code className="font-mono">{resource.deposed}</code></span>
             )}
@@ -874,7 +870,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
                 <code className="break-all font-mono font-semibold text-foreground">{label}</code>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
                   {action.provider_name !== undefined && (
-                    <span className="inline-flex items-center gap-1.5"><ProviderIcon providerName={action.provider_name} size={14} />Provider: <code className="font-mono">{providerLabel(action.provider_name)}</code></span>
+                    <span className="inline-flex items-center gap-1.5"><ProviderIcon providerName={action.provider_name} size={14} /><code className="font-mono text-foreground/70">{(action.provider_name.split("/").pop() ?? action.provider_name)}</code></span>
                   )}
                   {trigger?.action_trigger_event !== undefined && (
                     <span>{trigger.action_trigger_event.replace(/_/g, " ")}</span>

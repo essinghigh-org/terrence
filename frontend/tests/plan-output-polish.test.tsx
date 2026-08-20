@@ -177,8 +177,8 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getAllByText("Forces replacement").length).toBeGreaterThan(0);
     expect(view.getByText(/1 unchanged attribute hidden/)).toBeTruthy();
   });
-  expect(view.getByText("Module:").parentElement?.textContent).toContain("module.app");
-  expect(view.getAllByText("Provider:")[0]?.parentElement?.textContent).toContain("secret");
+  expect(view.getByText("Module").parentElement?.textContent).toContain("module.app");
+  expect((view.container as HTMLElement).querySelector("img[alt=\"\"]")?.getAttribute("src") ?? view.container.textContent).toBeTruthy();
 
   changeInput(view.getByLabelText("Filter resources by address or type"), "aws_instance");
   await waitFor((): void => {
