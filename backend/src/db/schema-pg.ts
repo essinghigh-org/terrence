@@ -173,6 +173,9 @@ export const apiTokens = pgTable("api_tokens", {
     description: text("description"),
     scopes: text("scopes"),
     tokenType: text("token_type").notNull().default(""),
+    // Team-token discriminator (TFE parity): singular legacy endpoints must
+    // only see the team's single legacy credential (see sqlite schema note).
+    legacy: boolean("legacy").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiTokens.createdAt.defaultFn!()),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
     expiresAt: bigint("expires_at", { mode: "number" }),

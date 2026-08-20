@@ -305,6 +305,26 @@ if (!isPostgres) {
   // so a sparse/legacy journal that re-applies this boot path cannot duplicate it.
   client.run("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
 
+  // Team-token legacy discriminator (mirrors the runs.scheduled_at guard
+  // above): the singular /teams/:id/authentication-token endpoints must only
+  // see the team's single legacy credential, never the modern plural
+  // authentication-tokens set. Databases whose migration journal never
+  // applied the column are repaired at boot. Idempotent.
+  {
+    const apiTokenColumns = (client.query("PRAGMA table_info(api_tokens)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (!apiTokenColumns.includes("legacy")) {
+      try {
+        client.run("ALTER TABLE api_tokens ADD COLUMN legacy integer NOT NULL DEFAULT 0");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(api_tokens)").all() as ReadonlyArray<{ readonly name: string }>;
+        if (!updatedColumns.some((column): boolean => column.name === "legacy")) {
+          throw error;
+        }
+      }
+    }
+  }
+
   // Column convergence guard (mirrors the run_explanations guard above):
   // databases whose migration journal never applied the scheduled_at column
   // (journal timestamp islands, pre-squash journals, or restored backups)
@@ -690,6 +710,9 @@ export function applyPgMigrations(): Promise<void> {
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
     // every poll; keep it off a full table scan as agent volume grows.
     await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+    // Team-token legacy discriminator (see sqlite boot path): the singular
+    // legacy team-token endpoints must only see the team's legacy credential.
+    await pg.unsafe("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS legacy boolean NOT NULL DEFAULT false");
     // OAuth handshake state (see sqlite boot path): persisted so any replica
     // can read/consume it. Idempotent so a re-applied boot path is safe.
     await pg.unsafe(`

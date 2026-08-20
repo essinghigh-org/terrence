@@ -527,6 +527,10 @@ export const apiTokens = sqliteTable("api_tokens", {
   description: text("description"),
   scopes: text("scopes"), // JSON-encoded fine-grained scope definition (null = legacy full-permission token)
   tokenType: text("token_type").notNull().default(""), // org token slot: "" | "audit-trails" | "organization"
+  // Team-token discriminator (TFE parity): the singular legacy
+  // /teams/:id/authentication-token endpoints must only see the team's single
+  // legacy credential, never the modern plural authentication-tokens set.
+  legacy: integer("legacy", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   lastUsedAt: integer("last_used_at"),
   expiresAt: integer("expires_at"),

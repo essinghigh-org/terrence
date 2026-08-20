@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
-import { eq, and, count, inArray, asc, or } from "drizzle-orm";
+import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
@@ -518,6 +518,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   // --- Team Auth Tokens ---
+  // TFE parity: the singular legacy endpoints manage ONLY the team's single
+  // legacy credential; the plural authentication-tokens endpoints manage
+  // modern tokens. Neither may clobber the other (regression-tested).
   .post("/api/v2/teams/:team_id/authentication-token", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
@@ -525,8 +528,12 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const rawToken = `team-tok-${crypto.randomUUID()}`;
     const id = `tok-${crypto.randomUUID()}`;
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-    await db.delete(apiTokens).where(eq(apiTokens.teamId, teamId));
-    await db.insert(apiTokens).values({ id, token: tokenHash, teamId, orgId: team.orgId, description: `Team token for ${team.name}`, scopes: null, createdAt: Date.now() });
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      // Replace only the legacy token; modern plural tokens must survive.
+      await t.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)));
+      await t.insert(apiTokens).values({ id, token: tokenHash, teamId, orgId: team.orgId, description: `Team token for ${team.name}`, scopes: null, legacy: true, createdAt: Date.now() });
+    });
     (set as { status: number }).status = 201;
     return { data: { id, type: "authentication-tokens", attributes: { token: rawToken, "created-at": new Date().toISOString() } } };
   })
@@ -534,7 +541,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tok = await db.query.apiTokens.findFirst({ where: eq(apiTokens.teamId, teamId) });
+    const tok = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)) });
     if (tok === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: tok.id, type: "authentication-tokens", attributes: { "created-at": new Date(tok.createdAt).toISOString() } } };
   })
@@ -542,7 +549,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(apiTokens).where(eq(apiTokens.teamId, teamId));
+    await db.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)));
     (set as { status: number }).status = 204;
     return {};
   })
@@ -555,12 +562,40 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const description = typeof attrs.description === "string" ? attrs.description : `Team token for ${team.name}`;
+    // TFE parity: modern team tokens require an explicit description and
+    // default to a two-year expiration when none is supplied.
+    const description = typeof attrs.description === "string" ? attrs.description.trim() : "";
+    if (description === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Description is required for team tokens" }] };
+    }
     const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs.expiredAt ?? attrs.expiresAt;
     const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
-    const expiresAt = expiredAtStr !== "" ? new Date(expiredAtStr).getTime() : null;
+    let expiresAt: number | null;
+    if (expiredAtStr === "") {
+      const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+      expiresAt = Date.now() + TWO_YEARS_MS;
+    } else {
+      const parsed = new Date(expiredAtStr);
+      const parsedMs = parsed.getTime();
+      if (Number.isNaN(parsedMs)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 date" }] };
+      }
+      if (parsedMs <= Date.now()) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be in the future" }] };
+      }
+      expiresAt = parsedMs;
+    }
+    // TFE parity: descriptions must be unique among a team's modern tokens.
+    const duplicate = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false), eq(apiTokens.description, description)), columns: { id: true } });
+    if (duplicate !== undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "A team token with this description already exists" }] };
+    }
     const tokenHash = createHash("sha256").update(secret).digest("hex");
-    await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt });
+    await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt, legacy: false });
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   })
@@ -568,15 +603,21 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tokenList = await db.query.apiTokens.findMany({ where: eq(apiTokens.teamId, teamId) });
-    return { data: tokenList.map((t): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null } })) };
+    // Modern tokens only: the legacy credential is exposed via the singular
+    // endpoint. Deterministic newest-first order (TFE parity).
+    const tokenList = await db.query.apiTokens.findMany({
+      where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false)),
+      orderBy: [desc(apiTokens.createdAt), desc(apiTokens.id)],
+    });
+    return { data: tokenList.map((t): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null, "expired-at": t.expiresAt !== null ? new Date(t.expiresAt).toISOString() : null } })) };
   })
   .delete("/api/v2/teams/:team_id/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const teamId = params.team_id ?? "";
     const tokenId = params.token_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(apiTokens).where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId)));
+    // Removing a modern token must never disturb the legacy credential.
+    await db.delete(apiTokens).where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false)));
     (set as { status: number }).status = 204;
     return {};
   })
