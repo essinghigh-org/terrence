@@ -392,7 +392,38 @@ export type ExplainStreamEvent = Readonly<
   | { name: "content-reset"; data: Readonly<{ text: string }> }
   | { name: "done"; data: Readonly<{ model: string; "reasoning-effort": ReasoningEffort | null; "generated-at": string; cached?: boolean }> }
   | { name: "error"; data: Readonly<{ message: string }> }
+  | { name: "progress"; data: Readonly<{ status: string; "job-id": string; runId: string; kind: ExplainKind; "created-at": string; "updated-at": string }> }
 >;
+
+/** GET the cached (or job-status) explanation envelope for a run. */
+export async function fetchExplanation(runId: string, kind: ExplainKind): Promise<{ explanation: string; model: string; reasoningEffort: ReasoningEffort | null; generatedAt: string; cached: boolean; status?: string | undefined; jobId?: string | undefined } | null> {
+  let resp: unknown;
+  try {
+    resp = await fetchApi(`/runs/${encodeURIComponent(runId)}/explain?kind=${encodeURIComponent(kind)}`);
+  } catch (caught: unknown) {
+    if (caught instanceof ApiError && caught.status === 404) return null;
+    throw caught;
+  }
+  const data = (resp as { data?: { attributes?: Record<string, unknown> } } | null)?.data?.attributes;
+  if (data === undefined || data === null || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d["explanation"] === "string" && d["explanation"] !== "") {
+    return { explanation: d["explanation"] as string, model: typeof d["model"] === "string" ? d["model"] as string : "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] as string : new Date().toISOString(), cached: d["cached"] === true };
+  }
+  if (typeof d["status"] === "string") {
+    return { explanation: "", model: "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["updated-at"] === "string" ? d["updated-at"] as string : "", cached: false, status: d["status"] as string, jobId: typeof d["job-id"] === "string" ? d["job-id"] as string : undefined };
+  }
+  return null;
+}
+
+/** Enqueue a durable explanation job (non-streaming). Returns the job envelope. */
+export async function enqueueExplanation(runId: string, kind: ExplainKind): Promise<{ status: string; jobId?: string | undefined }> {
+  const resp = (await fetchApi(`/runs/${encodeURIComponent(runId)}/explain`, { method: "POST", body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind } } }) })) as { data?: { attributes?: Record<string, unknown> } };
+  const attrs = resp?.data?.attributes as Record<string, unknown> | undefined;
+  if (attrs !== undefined && typeof attrs["status"] === "string") return { status: attrs["status"] as string, jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] as string : undefined };
+  if (attrs !== undefined && typeof attrs["explanation"] === "string") return { status: "succeeded" };
+  return { status: "queued" };
+}
 
 /**
  * Stream a run explanation from the AI explainer. Always asks for
@@ -581,6 +612,15 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
     case "error": {
       const message = isString(object["message"]) && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
       return { name: "error", data: { message } };
+    }
+    case "progress": {
+      const status = isString(object["status"]) ? object["status"] : "";
+      const jobId = isString(object["job-id"]) ? object["job-id"] : "";
+      const runId = isString(object["runId"]) ? object["runId"] : "";
+      const kind: ExplainKind = object["kind"] === "apply" ? "apply" : "plan";
+      const createdAt = isString(object["created-at"]) ? object["created-at"] : "";
+      const updatedAt = isString(object["updated-at"]) ? object["updated-at"] : "";
+      return { name: "progress", data: { status, "job-id": jobId, runId, kind, "created-at": createdAt, "updated-at": updatedAt } };
     }
     default:
       return null;

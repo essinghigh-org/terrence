@@ -72,6 +72,7 @@ import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMembe
 import { startDurableJobWorker } from "./lib/durable-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
+import { runPlanExplanationJob } from "./lib/plan-explainer-worker";
 import { purgeExpiredForwardedRequests } from "./lib/agent-forwarding";
 import { runExplorerCatalogJob, runExplorerInventoryJob, scheduleExplorerInventory } from "./lib/explorer-inventory";
 import { revokeWorkloadIdentityTokens, workspaceIdentityEnvironment } from "./lib/workload-identity";
@@ -3244,6 +3245,7 @@ export function startWorkerQueue(): void {
     "stack-deployment": runStackDeploymentJob,
     "explorer-inventory": runExplorerInventoryJob,
     "explorer-catalog": runExplorerCatalogJob,
+    "plan-explanation": runPlanExplanationJob,
   });
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {

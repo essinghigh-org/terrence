@@ -3,7 +3,7 @@ import { db } from "../db";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
 
-export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog";
+export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
 export type DurableJobContext = Readonly<{
   heartbeat: () => Promise<boolean>;

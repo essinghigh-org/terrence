@@ -1045,6 +1045,35 @@ export function RunDetail({
     }
   }
 
+  // Durable: non-stream POST enqueues a background job (tab-close safe).
+  // The GET polls that job until the cached explanation appears. Abort-aware
+  // so cancel/unmount stops polling and prevents setState after abort.
+  async function pollExplanationUntilReady(kind: ExplainKind, signal: AbortSignal, timeoutMs = 180_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (signal.aborted) return false;
+      const { fetchExplanation } = await import("../lib/api");
+      const row = await fetchExplanation(runId, kind).catch((): null => null);
+      if (signal.aborted) return false;
+      if (row !== null && row.explanation !== "") {
+        setExplanation(row.explanation);
+        setExplainerModel(row.model);
+        setExplainerReasoningEffort(row.reasoningEffort);
+        return true;
+      }
+      if (row !== null && row.status === "failed") {
+        setExplainError("Plan explainer failed. Check the endpoint, model, and API key, then try again.");
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await new Promise<void>((resolve) => {
+        const t = window.setTimeout(resolve, 1500);
+        signal.addEventListener("abort", () => { window.clearTimeout(t); resolve(); }, { once: true });
+      });
+      if (signal.aborted) return false;
+    }
+  }
+
   // kanban 21.2: plain-language explanation of the stored plan JSON or a
   // failed apply log via the configured OpenAI-compatible endpoint. Read-only;
   // never mutates the run. Streaming path: the backend relays upstream deltas
@@ -1067,6 +1096,7 @@ export function RunDetail({
     explainerAbortRef.current?.abort();
     const controller = new AbortController();
     explainerAbortRef.current = controller;
+    let sawProgress = false;
     try {
       await streamExplain(
         runId,
@@ -1077,26 +1107,48 @@ export function RunDetail({
           if (event.name === "meta") {
             setExplainerModel(event.data.model);
             setExplainerReasoningEffort(event.data["reasoning-effort"]);
+          } else if (event.name === "progress") {
+            sawProgress = true;
           } else if (event.name === "thinking") {
             setExplainerThinking((current): string => `${current}${event.data.text}`);
           } else if (event.name === "content") {
             setExplanation((current): string => `${current}${event.data.text}`);
           } else if (event.name === "content-reset") {
-            // Replace the accumulated text: the provider streamed thinking
-            // inline inside content deltas, so the cleaned text supersedes
-            // everything already appended.
             setExplanation(event.data.text);
           }
         },
         controller.signal,
       );
+      // Durable job enqueued: poll GET until the cached explanation lands.
+      if (sawProgress && explainerAbortRef.current === controller) {
+        const ready = await pollExplanationUntilReady(kind, controller.signal);
+        if (!ready && explainerAbortRef.current === controller && !controller.signal.aborted) {
+          const { enqueueExplanation } = await import("../lib/api");
+          await enqueueExplanation(runId, kind).catch((): null => null);
+          await pollExplanationUntilReady(kind, controller.signal);
+        }
+      }
     } catch (caught: unknown) {
       if (controller.signal.aborted) {
-        // Intentional cancel: keep whatever was already generated on screen,
-        // the stream helpfully never persisted a partial generation.
         return;
       }
-      setExplainError(caught instanceof Error ? caught.message : String(caught));
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      const isProgressStream = sawProgress || /without a done event/i.test(msg);
+      if (isProgressStream && !controller.signal.aborted) {
+        const ready = await pollExplanationUntilReady(kind, controller.signal).catch((): boolean => false);
+        if (ready) return;
+      }
+      // 202/queued path: enqueue durably and poll; closing the tab no longer aborts the LLM call.
+      if (caught instanceof ApiError && (caught.status === 202 || /queued|job/i.test(caught.message))) {
+        try {
+          if (controller.signal.aborted) return;
+          const { enqueueExplanation } = await import("../lib/api");
+          await enqueueExplanation(runId, kind).catch((): null => null);
+          const ready = await pollExplanationUntilReady(kind, controller.signal);
+          if (ready) return;
+        } catch {}
+      }
+      setExplainError(msg);
     } finally {
       if (explainerAbortRef.current === controller) {
         explainerAbortRef.current = null;

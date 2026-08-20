@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { eq, and, gte, lte, inArray, asc, sql, type SQL } from "drizzle-orm";
 import { db } from "../db";
-import { runs, workspaces, changeRequests } from "../db/schema";
+import { durableJobs, runs, workspaces, changeRequests } from "../db/schema";
 import {
   checkOrgPermission,
   findAuthorizedRun,
@@ -22,7 +22,6 @@ import {
   parseCompletionBody,
   saveExplanation,
   splitInlineThinking,
-  type CompletionParts,
   type ExplainKind,
   type ReasoningEffort,
   type ExplainSource,
@@ -30,6 +29,7 @@ import {
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { enqueueDurableJob } from "../lib/durable-jobs";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -295,6 +295,18 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       if (cached !== undefined) {
         return explanationResource(runId, kind, cached.content, cached.model, reasoningEffort, new Date(cached.createdAt).toISOString(), true);
       }
+      const dedupeKey = `${runId}:${kind}`;
+      const job = await db.query.durableJobs.findFirst({
+        where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
+      });
+      if (job !== undefined && (job.status === "queued" || job.status === "running")) {
+        return explainJobResource(runId, kind, job, reasoningEffort);
+      }
+      if (job !== undefined && job.status === "failed") {
+        const err = explainError(502, "Bad Gateway", job.lastError ?? "Plan explainer failed");
+        (set as { status: number }).status = err.status;
+        return err.body;
+      }
       const resolvedSettings = await resolvePlanExplainerSettings(settings);
       if (resolvedSettings === null) return notFound(set);
       const source = await buildExplainSource(runId, kind);
@@ -337,8 +349,30 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         (set as { status: number }).status = err.status;
         return err.body;
       }
+      const dedupeKey = `${runId}:${kind}`;
+      if (streamRequested && !refresh) {
+        const pendingJob = await db.query.durableJobs.findFirst({
+          where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
+        });
+        if (pendingJob !== undefined && (pendingJob.status === "queued" || pendingJob.status === "running")) {
+          return sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request);
+        }
+      }
       if (streamRequested) return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh);
-      return explainJsonResponse(set, resolvedSettings, source, runId, kind, model, reasoningEffort);
+      // Background the non-streaming generation: enqueue a durable job and
+      // return 202 so a tab close does not abort the LLM call. Concurrent
+      // requests for the same (run, kind) dedupe to the same job.
+      const job = await enqueueDurableJob("plan-explanation", { runId, kind }, { dedupeKey });
+      if (job.status === "succeeded") {
+        // Rare: a terminal job was recycled in the same call; fall through
+        // to serve the cached explanation if present.
+        const cachedAfter = await findExplanation(runId, kind);
+        if (cachedAfter !== undefined) {
+          return explanationResource(runId, kind, cachedAfter.content, cachedAfter.model, reasoningEffort, new Date(cachedAfter.createdAt).toISOString(), true);
+        }
+      }
+      (set as { status: number }).status = 202;
+      return explainJobResource(runId, kind, job, reasoningEffort);
     });
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
@@ -386,43 +420,27 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     };
   }
 
-  async function explainJsonResponse(
-    set: SetObj,
-    settings: Readonly<Record<string, unknown>>,
-    source: ExplainSource,
+  function explainJobResource(
     runId: string,
     kind: ExplainKind,
-    model: string,
+    job: Readonly<{ id: string; status: string; createdAt: number; updatedAt: number; lastError?: string | null }>,
     reasoningEffort: ReasoningEffort | null,
-  ): Promise<unknown> {
-    let parts: CompletionParts;
-    try {
-      parts = await fetchUpstream(settings, source.prompt, false, undefined, async (upstream) => {
-        if (!upstream.ok) throw new Error(`Plan explainer endpoint returned ${upstream.status}`);
-        let parsed: unknown;
-        try {
-          parsed = await upstream.json();
-        } catch (error: unknown) {
-          log.warn(`Plan explainer returned unparseable body for run ${runId}: ${String(error)}`);
-          throw new Error("Plan explainer returned an unparseable response");
-        }
-        const completion = parseCompletionBody(parsed);
-        if (completion.content === "") throw new Error("Plan explainer returned no explanation");
-        return completion;
-      });
-    } catch (error: unknown) {
-      const err = explainError(502, "Bad Gateway", error instanceof Error ? error.message : String(error));
-      (set as { status: number }).status = err.status;
-      return err.body;
-    }
-    try {
-      await saveExplanation(runId, kind, model, parts.content);
-    } catch (error: unknown) {
-      // A failed write must not hide a successful generation; the next
-      // request simply regenerates.
-      log.warn(`Failed to persist plan explanation for run ${runId}: ${String(error)}`);
-    }
-    return explanationResource(runId, kind, parts.content, model, reasoningEffort, new Date().toISOString(), false);
+  ): Readonly<{ data: Readonly<{ id: string; type: string; attributes: Record<string, unknown> }> }> {
+    return {
+      data: {
+        id: runId,
+        type: "plan-explanations",
+        attributes: {
+          kind,
+          status: job.status,
+          "reasoning-effort": reasoningEffort,
+          "job-id": job.id,
+          "created-at": new Date(job.createdAt).toISOString(),
+          "updated-at": new Date(job.updatedAt).toISOString(),
+          ...(job.lastError !== null && job.lastError !== undefined && job.lastError !== "" ? { error: job.lastError } : {}),
+        },
+      },
+    };
   }
 
   /** Replay a cached generation through the SSE envelope (no upstream call). */
@@ -556,6 +574,45 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             send(controller, "error", { message: error instanceof Error ? error.message : String(error) });
           }
         }
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
+  }
+
+  /** When a stream is requested while a durable job is enqueued/running, return
+   * progress as SSE so the dialog can poll via the same parser. A GET is used
+   * as the polling tick. */
+  function sseJobProgressResponse(
+    runId: string,
+    kind: ExplainKind,
+    job: Readonly<{ id: string; status: string; createdAt: number; updatedAt: number }>,
+    model: string,
+    reasoningEffort: ReasoningEffort | null,
+    request: Request,
+  ): Response {
+    const encoder = new TextEncoder();
+    const send = (controller: ReadableStreamDefaultController<Uint8Array>, name: string, data: unknown): void => {
+      controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+    };
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller: ReadableStreamDefaultController<Uint8Array>) {
+        send(controller, "meta", { kind, model, "reasoning-effort": reasoningEffort, "job-id": job.id, status: job.status });
+        send(controller, "progress", {
+          status: job.status,
+          "job-id": job.id,
+          runId,
+          kind,
+          "created-at": new Date(job.createdAt).toISOString(),
+          "updated-at": new Date(job.updatedAt).toISOString(),
+        });
         controller.close();
       },
     });
