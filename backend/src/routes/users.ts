@@ -12,9 +12,9 @@ import {
 import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
-import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
 import { publish } from "../lib/event-bus";
@@ -383,10 +383,10 @@ export const userRoutes = new Elysia({ name: "users" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
       }
     }
-    const rawToken = `user-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("user");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId,
       orgId: null,
       description,
@@ -524,10 +524,10 @@ export const userRoutes = new Elysia({ name: "users" })
         return { errors: [{ status: "403", title: "Forbidden" }] };
       }
     }
-    const rawToken = `${orgId !== undefined ? "org" : "user"}-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken(orgId !== undefined ? "org" : "user");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId: orgId !== undefined ? null : user.id,
       orgId: orgId ?? null,
       description,
@@ -617,10 +617,10 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
     }
     const expiresAt = policyResolution.expiresAt;
-    const rawToken = `org-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("org");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId: null,
       orgId: org.id,
       description: null,

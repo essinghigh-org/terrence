@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
 import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
@@ -529,9 +529,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const rawToken = `team-tok-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("team-tok");
     const id = `tok-${crypto.randomUUID()}`;
-    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const tokenHash = hashAuthenticationToken(rawToken);
     // The org TTL policy governs the legacy team token too (todo 72-74):
     // a zero-TTL policy forbids rotation, otherwise no expiry is imposed
     // (legacy tokens predate the two-year default).
@@ -569,7 +569,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const secret = `team-${crypto.randomUUID().replace(/-/g, "")}`;
+    const secret = generateAuthenticationToken("team");
     const tokenId = `tok-${crypto.randomUUID()}`;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
@@ -616,7 +616,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "A team token with this description already exists" }] };
     }
-    const tokenHash = createHash("sha256").update(secret).digest("hex");
+    const tokenHash = hashAuthenticationToken(secret);
     await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt, legacy: false });
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
