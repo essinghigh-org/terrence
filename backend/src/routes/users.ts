@@ -15,6 +15,7 @@ import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzl
 import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
+import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
 import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
@@ -41,6 +42,17 @@ function organizationTokenWhere(orgId: string, tokenType: string) {
     isNull(apiTokens.teamId),
   );
 }
+
+// TFE org-token slots addressable via the singular endpoints' ?token= query
+// (todo 52/53): arbitrary query strings must not mint new token namespaces.
+// "organization" is accepted as a TFE-style alias of the "" slot.
+const ORG_TOKEN_TYPES = ["", "organization", "audit-trails"] as const;
+
+function validateOrgTokenType(value: string): (typeof ORG_TOKEN_TYPES)[number] | null {
+  return (ORG_TOKEN_TYPES as readonly string[]).includes(value) ? value as (typeof ORG_TOKEN_TYPES)[number] : null;
+}
+
+const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
@@ -343,11 +355,23 @@ export const userRoutes = new Elysia({ name: "users" })
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const description = typeof attributes.description === "string" ? attributes.description : "API token";
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (description === "" || Number.isNaN(expiresAt)) {
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (description === "" || Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
+    // Organization TTL policy governs user tokens (todo 72-74): the effective
+    // expiry is capped by the policy; max-ttl-ms = 0 forbids minting.
+    const policyResolution = await resolveTokenExpiryUnderPolicy(null, "user", requestedExpiry);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
@@ -460,7 +484,25 @@ export const userRoutes = new Elysia({ name: "users" })
     const orgData = typeof orgRel.data === "object" && orgRel.data !== null ? (orgRel.data as Record<string, unknown>) : {};
     const description = typeof attributes.description === "string" ? attributes.description : "API token";
     const orgId = typeof orgData.id === "string" ? orgData.id : undefined;
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (Number.isNaN(requestedExpiry)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 timestamp" }] };
+    }
+    // Organization TTL policy governs org-scoped tokens minted here (todo
+    // 72-74); user-scoped ones have no governing org policy.
+    const policyResolution = orgId !== undefined
+      ? await resolveTokenExpiryUnderPolicy(orgId, "", requestedExpiry)
+      : { kind: "ok" as const, expiresAt: requestedExpiry };
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
@@ -526,7 +568,11 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     // the cloud platform passes ?token=audit-trails to address the audit-trails token slot
     // distinctly from the organization token (which sends no query param).
-    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const tokenType = validateOrgTokenType(new URL(request.url).searchParams.get("token") ?? "");
+    if (tokenType === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
+    }
     const token = await db.query.apiTokens.findFirst({
       where: organizationTokenWhere(org.id, tokenType),
     });
@@ -543,15 +589,34 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    // Unknown token values must not mint arbitrary token namespaces (todo 52/53).
+    const tokenType = validateOrgTokenType(new URL(request.url).searchParams.get("token") ?? "");
+    if (tokenType === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
+    }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (Number.isNaN(expiresAt)) {
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
+    // TFE parity: org tokens default to a two-year expiry; the org TTL policy
+    // caps (or forbids) the result (todo 49-51, 72-74).
+    const requestedOrDefault = requestedExpiry ?? Date.now() + TWO_YEARS_MS;
+    // The "organization" query alias resolves to the "" storage slot.
+    const policyResolution = await resolveTokenExpiryUnderPolicy(org.id, tokenType === "organization" ? "" : tokenType, requestedOrDefault);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     const rawToken = `org-${crypto.randomUUID()}`;
     const createdToken = {
       id: crypto.randomUUID(),

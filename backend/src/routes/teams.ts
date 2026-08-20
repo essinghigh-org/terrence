@@ -3,6 +3,10 @@ import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
 import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
+
+const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+
 import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
@@ -528,6 +532,14 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const rawToken = `team-tok-${crypto.randomUUID()}`;
     const id = `tok-${crypto.randomUUID()}`;
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    // The org TTL policy governs the legacy team token too (todo 72-74):
+    // a zero-TTL policy forbids rotation, otherwise no expiry is imposed
+    // (legacy tokens predate the two-year default).
+    const legacyPolicy = await resolveTokenExpiryUnderPolicy(team.orgId, "team-legacy", null);
+    if (legacyPolicy.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: legacyPolicy.detail }] };
+    }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       // Replace only the legacy token; modern plural tokens must survive.
@@ -563,7 +575,8 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     // TFE parity: modern team tokens require an explicit description and
-    // default to a two-year expiration when none is supplied.
+    // default to a two-year expiration when none is supplied. The org TTL
+    // policy caps or forbids the result (todo 72-74).
     const description = typeof attrs.description === "string" ? attrs.description.trim() : "";
     if (description === "") {
       (set as { status: number }).status = 422;
@@ -571,10 +584,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     }
     const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs.expiredAt ?? attrs.expiresAt;
     const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
-    let expiresAt: number | null;
+    let requestedExpiry: number;
     if (expiredAtStr === "") {
-      const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
-      expiresAt = Date.now() + TWO_YEARS_MS;
+      requestedExpiry = Date.now() + TWO_YEARS_MS;
     } else {
       const parsed = new Date(expiredAtStr);
       const parsedMs = parsed.getTime();
@@ -586,8 +598,18 @@ export const teamRoutes = new Elysia({ name: "teams" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be in the future" }] };
       }
-      expiresAt = parsedMs;
+      requestedExpiry = parsedMs;
     }
+    const policyResolution = await resolveTokenExpiryUnderPolicy(team.orgId, "team", requestedExpiry);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     // TFE parity: descriptions must be unique among a team's modern tokens.
     const duplicate = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false), eq(apiTokens.description, description)), columns: { id: true } });
     if (duplicate !== undefined) {

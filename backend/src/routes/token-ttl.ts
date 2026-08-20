@@ -3,6 +3,7 @@ import { db } from "../db";
 import { orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
+import { isTtlPolicyTokenType } from "../lib/token-ttl-policy";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -69,10 +70,12 @@ export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
       const tokenType = typeof o["token-type"] === "string" ? o["token-type"].trim() : "";
       const maxTtlMs = o["max-ttl-ms"];
       // The empty string is the org-token slot (see schema.ts apiTokens.tokenType).
-      // Only an *absent or non-string* token-type is malformed here.
-      if (typeof o["token-type"] !== "string" || tokenType.length > 100 || typeof maxTtlMs !== "number" || !Number.isFinite(maxTtlMs) || maxTtlMs < 0) {
+      // Only an *absent or non-string* token-type is malformed here. Token
+      // types are whitelisted (todo 76): a policy can only govern token kinds
+      // the mint path actually enforces.
+      if (typeof o["token-type"] !== "string" || tokenType.length > 100 || !isTtlPolicyTokenType(tokenType) || typeof maxTtlMs !== "number" || !Number.isFinite(maxTtlMs) || maxTtlMs < 0) {
         (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a token-type string (empty = org token slot) and a non-negative max-ttl-ms number" }] };
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a whitelisted token-type string ((empty) | user | team | team-legacy | organization | audit-trails; empty = org token slot) and a non-negative max-ttl-ms number" }] };
       }
       cleaned.push({ id: `ttl-${crypto.randomUUID()}`, orgId: org.id, tokenType, maxTtlMs, createdAt: now, updatedAt: now });
     }
