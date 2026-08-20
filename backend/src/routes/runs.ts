@@ -457,7 +457,7 @@ export async function createRun(
   const logToken = crypto.randomUUID();
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;
   const nowIso = new Date(createdAt).toISOString();
-  const finalMsg = message !== "" ? message : "Triggered via UI";
+  const finalMsg = message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI");
   const origin = originForConfiguration(configurationVersion);
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
