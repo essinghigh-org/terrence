@@ -11,6 +11,13 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
+import { syncedTrustedClientIp } from "../lib/client-ip";
+
+// HTTPS source of truth for cookie flags (todo 134): when PUBLIC_URL is
+// configured it overrides per-request protocol/header detection.
+const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUBLIC_URL !== ""
+  ? new URL(process.env.PUBLIC_URL)
+  : null;
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
@@ -99,8 +106,18 @@ function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
 }
 
 function secureRequest(request: RequestInfo | undefined): boolean {
-  const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return forwarded === "https" || (request !== undefined && new URL(request.url).protocol === "https:");
+  // X-Forwarded-Proto is only trusted when the admin opted in to trusting
+  // forwarded headers via trusted-client-ip-headers (todo 133): an untrusted
+  // client must not be able to force the Secure flag decision either way.
+  // The configured PUBLIC_URL (todo 134) is the HTTPS source of truth for
+  // deployments that terminate TLS at a proxy without header trust.
+  if (PUBLIC_URL !== null) return PUBLIC_URL.protocol === "https:";
+  const forwardedTrusted = syncedTrustedClientIp(request) !== null;
+  if (forwardedTrusted) {
+    const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    return forwarded === "https";
+  }
+  return request !== undefined && new URL(request.url).protocol === "https:";
 }
 
 function setRefreshCookie(

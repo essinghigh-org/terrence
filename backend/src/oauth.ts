@@ -206,7 +206,13 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     const stateId = crypto.randomUUID();
     pendingAuthorizations.set(stateId, { authorization, expiresAt: now + CODE_TTL_MS });
 
-    const cookie = `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CODE_TTL_MS / 1000)}`;
+    // Secure flag under HTTPS (todo 135): the state cookie is a bearer
+    // capability for the OAuth handshake and must not cross plaintext HTTP.
+    const forwardedProto = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    const secure = forwardedProto === "https"
+      || (request !== undefined && new URL(request.url).protocol === "https:")
+      || process.env.PUBLIC_URL?.startsWith("https://") === true;
+    const cookie = `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CODE_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
     const location = `/login?oauth_state=${encodeURIComponent(stateId)}`;
     return new Response(null, {
       status: 302,
