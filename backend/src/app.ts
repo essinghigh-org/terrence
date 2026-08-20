@@ -90,6 +90,7 @@ import { organizationRoleRoutes } from "./routes/organization-roles";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
+import { providerIconRoutes } from "./routes/provider-icons";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
@@ -771,6 +772,7 @@ export const app = new Elysia()
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)
+  .use(providerIconRoutes)
   .use(policyEvaluationRoutes)
   .use(docsRoutes);
 

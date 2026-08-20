@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
+import { ProviderIcon } from "./ProviderIcon";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { Spinner } from "./ui/spinner";
 import { OperationFilterDropdown } from "./OperationFilterDropdown";
@@ -818,7 +819,8 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
             {resource.module_address !== undefined && (
               <span>Module: <code className="font-mono">{resource.module_address}</code></span>
             )}
-            <span title={resource.provider_name}>
+            <span title={resource.provider_name} className="inline-flex items-center gap-1.5">
+              <ProviderIcon providerName={resource.provider_name} size={14} />
               Provider: <code className="font-mono">{providerLabel(resource.provider_name)}</code>
             </span>
             {resource.mode === "data" && <span>Data source</span>}
@@ -872,7 +874,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
                 <code className="break-all font-mono font-semibold text-foreground">{label}</code>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
                   {action.provider_name !== undefined && (
-                    <span>Provider: <code className="font-mono">{providerLabel(action.provider_name)}</code></span>
+                    <span className="inline-flex items-center gap-1.5"><ProviderIcon providerName={action.provider_name} size={14} />Provider: <code className="font-mono">{providerLabel(action.provider_name)}</code></span>
                   )}
                   {trigger?.action_trigger_event !== undefined && (
                     <span>{trigger.action_trigger_event.replace(/_/g, " ")}</span>
