@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowRight,
-  Check,
+    Check,
   ChevronRight,
   Copy,
   Trash2,
@@ -726,25 +725,6 @@ export function AttributeDiff({
       </div>
     </div>
   );
-}
-
-const actionReasonLabels = {
-  replace_because_cannot_update: "Replacement required by provider",
-  replace_because_tainted: "Resource is tainted",
-  replace_by_request: "Replacement requested",
-  replace_by_triggers: "Replacement triggered by dependency",
-  delete_because_no_resource_config: "No matching resource configuration",
-  delete_because_no_module: "Containing module was removed",
-  delete_because_wrong_repetition: "Resource key no longer matches its configuration",
-  delete_because_count_index: "Resource index is outside the configured count",
-  delete_because_each_key: "Resource key is absent from for_each",
-  read_because_config_unknown: "Configuration is known after apply",
-  read_because_dependency_pending: "Dependency has pending changes",
-};
-
-function actionReasonLabel(reason: string): string {
-  // SAFETY: unknown action reasons fall through to the underscore-replaced label below.
-  return actionReasonLabels[reason as keyof typeof actionReasonLabels] ?? reason.replace(/_/g, " ");
 }
 
 function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): React.JSX.Element {

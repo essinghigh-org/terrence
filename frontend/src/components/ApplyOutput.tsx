@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
 import { useEffect, useState } from "react";
 import {
-  ArrowRight,
-  Trash2,
+    Trash2,
   Check,
   CheckCircle2,
   ChevronRight,
