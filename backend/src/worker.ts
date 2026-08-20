@@ -133,6 +133,18 @@ if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
     + "See https://docs.kernel.org/userspace-api/landlock.html",
   );
 }
+// Prominent warning whenever unsandboxed execution is explicitly enabled
+// (todo 89): the opt-out is insecure by definition, so it must be impossible
+// to miss in the logs.
+if (!RUN_SANDBOX_REQUIRED) {
+  log.warn(
+    "!!! RUN SANDBOX DISABLED (TERRENCE_RUN_SANDBOX=false) — IaC runs execute "
+    + "WITHOUT filesystem isolation. Provider plugins and local-exec provisioners "
+    + "run with this process's service identity and can read STORAGE_DIR, the "
+    + "database, and encryption keys. This mode is only intended for hosts whose "
+    + "kernel cannot provide Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK).",
+  );
+}
 
 /**
  * Guard used by run/apply/assessment entry points: if the sandbox is required

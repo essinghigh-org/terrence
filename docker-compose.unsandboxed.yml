@@ -1,0 +1,16 @@
+# Unsandboxed execution override (todo 88).
+#
+# Apply ON TOP of docker-compose.yml when the host kernel cannot provide
+# Landlock (CONFIG_SECURITY_LANDLOCK, Linux >= 5.13):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d
+#
+# Running IaC without isolation lets provider code execute with the backend
+# service identity. This override exists so the stock deployment keeps the
+# application's secure default (sandbox required, fail-closed).
+services:
+  terrence:
+    environment:
+      # Explicit sandbox opt-out. The application logs a prominent warning at
+      # startup whenever unsandboxed execution is enabled.
+      - TERRENCE_RUN_SANDBOX=false

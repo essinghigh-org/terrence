@@ -17,12 +17,12 @@ services:
       - PORT=3000
       - SYSTEM_API_PORT=8443
       - STORAGE_DIR=/app/backend/storage
-      # The run sandbox is FAIL-CLOSED by default (TERRENCE_RUN_SANDBOX unset
-      # now means "sandbox required"). Only disable it when the host kernel
-      # cannot provide Landlock (CONFIG_SECURITY_LANDLOCK, Linux >= 5.13) —
-      # running IaC without isolation lets provider code execute with the
-      # backend service identity, so this opt-out must be explicit.
-      - TERRENCE_RUN_SANDBOX=false
+      # The run sandbox is FAIL-CLOSED by default: TERRENCE_RUN_SANDBOX unset
+      # means "sandbox required" (Landlock, Linux >= 5.13). Hosts that cannot
+      # provide Landlock must opt out explicitly via the documented override:
+      #   docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d
+      # Running IaC without isolation lets provider code execute with the
+      # backend service identity.
       - NODE_ENV=production
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
     # Sane resource limits for a self-hosted instance. Terraform plans and
