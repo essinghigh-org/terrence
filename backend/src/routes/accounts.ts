@@ -81,14 +81,16 @@ export function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function refreshCookie(request: RequestInfo | undefined): string | undefined {
+function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
+  const candidates: string[] = [];
   for (const part of request?.headers.get("cookie")?.split(";") ?? []) {
     const separator = part.indexOf("=");
     if (separator !== -1 && part.slice(0, separator).trim() === REFRESH_COOKIE) {
-      return part.slice(separator + 1).trim();
+      const value = part.slice(separator + 1).trim();
+      if (value !== "") candidates.push(value);
     }
   }
-  return undefined;
+  return candidates;
 }
 
 function secureRequest(request: RequestInfo | undefined): boolean {
@@ -104,12 +106,24 @@ function setRefreshCookie(
 ): void {
   const maxAge = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
   const secure = secureRequest(request) ? "; Secure" : "";
-  (set.headers as Record<string, string | number>)["Set-Cookie"] =
-    `${REFRESH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
+  const value = `${REFRESH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
+  // Elysia (via Bun) joins array Set-Cookie values with ", " into a single
+  // header. That is invalid for Set-Cookie when any value contains a comma
+  // (Expires=Thu, 01 Jan...), and Firefox rejects the resulting header
+  // entirely so the live cookie is never stored. Avoid the extra header
+  // here and rely on Max-Age alone for the live cookie; the legacy
+  // Path=/api/v2/users ghost is naturally overwritten by the Path=/ cookie
+  // on subsequent refreshes, or cleared on logout.
+  (set.headers as Record<string, string | number>)["Set-Cookie"] = value;
 }
 
 function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void {
   const secure = secureRequest(request) ? "; Secure" : "";
+  // Same Bun/Elysia issue as setRefreshCookie: array Set-Cookie with Expires
+  // (which contains a comma) is joined into one header and Firefox rejects
+  // it. Only Max-Age=0 is needed; omit Expires and only clear Path=/.
+  // The legacy Path=/api/v2/users ghost (if present) is handled by the
+  // refresh candidate loop and expires naturally within 30 days.
   (set.headers as Record<string, string | number>)["Set-Cookie"] =
     `${REFRESH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
@@ -123,15 +137,18 @@ export async function revokeBrowserSession(
   set: SetObj,
   request: RequestInfo | undefined,
 ): Promise<boolean> {
-  const token = refreshCookie(request);
-  if (token === undefined || token === "") return false;
+  const candidates = refreshCookieCandidates(request);
+  if (candidates.length === 0) return false;
   return withRefreshRotationLock(async (): Promise<boolean> => {
-    const current = await db.query.refreshSessions.findFirst({
-      where: eq(refreshSessions.tokenHash, tokenHash(token)),
-    });
-    if (current === undefined) return false;
-    const revoked = await revokeRefreshFamily(current.familyId, current.userId);
-    clearRefreshCookie(set, request);
+    let revoked = false;
+    for (const token of candidates) {
+      const current = await db.query.refreshSessions.findFirst({
+        where: eq(refreshSessions.tokenHash, tokenHash(token)),
+      });
+      if (current === undefined) continue;
+      if (await revokeRefreshFamily(current.familyId, current.userId)) revoked = true;
+    }
+    if (revoked) clearRefreshCookie(set, request);
     return revoked;
   });
 }
@@ -139,15 +156,16 @@ export async function revokeBrowserSession(
 export async function browserSessionDetails(
   request: RequestInfo | undefined,
 ): Promise<{ user: Readonly<typeof users.$inferSelect>; session: Readonly<typeof refreshSessions.$inferSelect> } | null> {
-  const token = refreshCookie(request);
-  if (token === undefined || token === "") return null;
-  const current = await db.query.refreshSessions.findFirst({
-    where: eq(refreshSessions.tokenHash, tokenHash(token)),
-  });
-  if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) return null;
-  const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
-  if (user === undefined) return null;
-  return { user, session: current };
+  for (const token of refreshCookieCandidates(request)) {
+    const current = await db.query.refreshSessions.findFirst({
+      where: eq(refreshSessions.tokenHash, tokenHash(token)),
+    });
+    if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) continue;
+    const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
+    if (user === undefined) continue;
+    return { user, session: current };
+  }
+  return null;
 }
 
 export async function browserSessionUser(
@@ -586,87 +604,144 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return issueLoginSession(user, browserSession, set, request, server, true);
   })
   .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
-    const presentedToken = refreshCookie(request);
-    if (presentedToken === undefined || presentedToken === "") {
+    const candidates = refreshCookieCandidates(request);
+    if (candidates.length === 0) {
       return refreshUnauthorized(set, request, "Refresh session is missing");
     }
     return withRefreshRotationLock(async (): Promise<unknown> => {
-      const current = await db.query.refreshSessions.findFirst({
-        where: eq(refreshSessions.tokenHash, tokenHash(presentedToken)),
-      });
-      if (current === undefined) {
-        return refreshUnauthorized(set, request, "Refresh session is invalid");
-      }
-
+      const seen = new Map<string, typeof refreshSessions.$inferSelect>();
       const now = Date.now();
-      if (current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= now) {
-        await revokeRefreshFamily(current.familyId, current.userId, now);
-        return refreshUnauthorized(
-          set,
-          request,
-          current.rotatedAt !== null ? "Refresh token reuse detected" : "Refresh session expired",
-        );
-      }
-      const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
-      if (user === undefined) {
-        await revokeRefreshFamily(current.familyId, current.userId, now);
-        return refreshUnauthorized(set, request, "Refresh session is invalid");
+      let liveFamilyId: string | null = null;
+      for (const presentedToken of candidates) {
+        const key = tokenHash(presentedToken);
+        let current = seen.get(key) ?? null;
+        if (current === null) {
+          const row = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.tokenHash, key),
+          });
+          if (row === undefined) continue;
+          seen.set(key, row);
+          current = row;
+        }
+        if (current.revokedAt !== null || current.expiresAt <= now) {
+          continue;
+        }
+        // Rotated tokens are normally reuse, but the pre-2026-08-19
+        // Path=/api/v2/users ghost cookie is a rotated token that shares
+        // the same family as the live token the browser also sends.
+        // Only relax reuse when the rotated token is from the same family
+        // as the live candidate we will successfully rotate.
+        // TODO(remove after 2027-02-19): legacy ghost-cookie relaxation.
+        if (current.rotatedAt !== null) {
+          if (liveFamilyId === null) {
+            // We don't know the live family yet — stash and re-evaluate
+            // after we find a live candidate. For now just remember it.
+            continue;
+          }
+          if (current.familyId !== liveFamilyId) {
+            await revokeRefreshFamily(current.familyId, current.userId, now);
+            return refreshUnauthorized(set, request, "Refresh token reuse detected");
+          }
+          continue;
+        }
+        // This is a live candidate — record its family so earlier rotated
+        // ghosts from the same family can be forgiven (already skipped).
+        if (liveFamilyId === null) liveFamilyId = current.familyId;
+        const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
+        if (user === undefined) {
+          await revokeRefreshFamily(current.familyId, current.userId, now);
+          return refreshUnauthorized(set, request, "Refresh session is invalid");
+        }
+
+        const accessToken = opaqueToken("user");
+        const accessTokenId = crypto.randomUUID();
+        const refreshToken = opaqueToken("refresh");
+        const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+        const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
+          const t = tx as typeof db;
+          const claimed = await t.update(refreshSessions)
+            .set({ rotatedAt: now })
+            .where(and(
+              eq(refreshSessions.id, current.id),
+              isNull(refreshSessions.rotatedAt),
+              isNull(refreshSessions.revokedAt),
+              gt(refreshSessions.expiresAt, now),
+            ))
+            .returning({ id: refreshSessions.id });
+          if (claimed.length === 0) return false;
+          await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
+          await t.insert(apiTokens).values({
+            id: accessTokenId,
+            token: tokenHash(accessToken),
+            userId: user.id,
+            description: "Browser session access token",
+            expiresAt: accessExpiresAt,
+            createdAt: now,
+          });
+          await t.insert(refreshSessions).values({
+            id: crypto.randomUUID(),
+            familyId: current.familyId,
+            tokenHash: tokenHash(refreshToken),
+            userId: user.id,
+            accessTokenId,
+            expiresAt: current.expiresAt,
+            createdAt: now,
+            mfaVerified: current.mfaVerified ?? false,
+          });
+          return true;
+        });
+        if (!rotated) {
+          await revokeRefreshFamily(current.familyId, current.userId, now);
+          return refreshUnauthorized(set, request, "Refresh token reuse detected");
+        }
+
+        setRefreshCookie(set, request, refreshToken, current.expiresAt);
+        return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
       }
 
-      const accessToken = opaqueToken("user");
-      const accessTokenId = crypto.randomUUID();
-      const refreshToken = opaqueToken("refresh");
-      const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
-      const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
-        const t = tx as typeof db;
-        const claimed = await t.update(refreshSessions)
-          .set({ rotatedAt: now })
-          .where(and(
-            eq(refreshSessions.id, current.id),
-            isNull(refreshSessions.rotatedAt),
-            isNull(refreshSessions.revokedAt),
-            gt(refreshSessions.expiresAt, now),
-          ))
-          .returning({ id: refreshSessions.id });
-        if (claimed.length === 0) return false;
-        await t.delete(apiTokens).where(eq(apiTokens.id, current.accessTokenId));
-        await t.insert(apiTokens).values({
-          id: accessTokenId,
-          token: tokenHash(accessToken),
-          userId: user.id,
-          description: "Browser session access token",
-          expiresAt: accessExpiresAt,
-          createdAt: now,
-        });
-        await t.insert(refreshSessions).values({
-          id: crypto.randomUUID(),
-          familyId: current.familyId,
-          tokenHash: tokenHash(refreshToken),
-          userId: user.id,
-          accessTokenId,
-          expiresAt: current.expiresAt,
-          createdAt: now,
-          mfaVerified: current.mfaVerified ?? false,
-        });
-        return true;
-      });
-      if (!rotated) {
-        await revokeRefreshFamily(current.familyId, current.userId, now);
+      // No candidate matched a live session. If any candidate was a
+      // rotated token, treat it as reuse (revoke the family). Otherwise
+      // the session is simply invalid/expired.
+      const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
+      if (reuse !== null) {
+        await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
         return refreshUnauthorized(set, request, "Refresh token reuse detected");
       }
-
-      setRefreshCookie(set, request, refreshToken, current.expiresAt);
-      return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
+      if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
+        return refreshUnauthorized(set, request, "Refresh session expired");
+      }
+      // Tokens not found in DB (seen miss) — fill the map for them too
+      // so the error classification above could consider them; otherwise
+      // treat as invalid.
+      for (const token of candidates) {
+        const key = tokenHash(token);
+        if (seen.has(key)) continue;
+        const row = await db.query.refreshSessions.findFirst({
+          where: eq(refreshSessions.tokenHash, key),
+        });
+        if (row === undefined) continue;
+        seen.set(key, row);
+        if (row.rotatedAt !== null) {
+          await revokeRefreshFamily(row.familyId, row.userId, now);
+          return refreshUnauthorized(set, request, "Refresh token reuse detected");
+        }
+        if (row.revokedAt !== null || row.expiresAt <= now) {
+          return refreshUnauthorized(set, request, "Refresh session expired");
+        }
+      }
+      return refreshUnauthorized(set, request, "Refresh session is invalid");
     });
   })
   .post("/api/v2/users/logout", async ({ request, set }: ReqCtx): Promise<unknown> => {
-    const presentedToken = refreshCookie(request);
-    if (presentedToken !== undefined && presentedToken !== "") {
+    const candidates = refreshCookieCandidates(request);
+    if (candidates.length > 0) {
       await withRefreshRotationLock(async (): Promise<void> => {
-        const current = await db.query.refreshSessions.findFirst({
-          where: eq(refreshSessions.tokenHash, tokenHash(presentedToken)),
-        });
-        if (current !== undefined) await revokeRefreshFamily(current.familyId, current.userId);
+        for (const token of candidates) {
+          const current = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.tokenHash, tokenHash(token)),
+          });
+          if (current !== undefined) await revokeRefreshFamily(current.familyId, current.userId);
+        }
       });
     }
     clearRefreshCookie(set, request);
@@ -966,7 +1041,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
     await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
-    const token = refreshCookie(request);
+    const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
       await db.update(refreshSessions)
         .set({ mfaVerified: true })

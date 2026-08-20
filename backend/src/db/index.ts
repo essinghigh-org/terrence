@@ -218,7 +218,15 @@ if (!isPostgres) {
   // inherited default from an operator's deliberate choice and silently
   // reverted it at the next restart. Only the NULL-only team_projects
   // backfill remains — it fills a missing value and never overwrites one.
-  client.run("UPDATE team_projects SET organization_id = (SELECT org_id FROM projects WHERE projects.id = team_projects.project_id) WHERE organization_id IS NULL");
+  {
+    const teamProjectsColumns = (client.query("PRAGMA table_info(team_projects)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (teamProjectsColumns.includes("organization_id")) {
+      client.run("UPDATE team_projects SET organization_id = (SELECT org_id FROM projects WHERE projects.id = team_projects.project_id) WHERE organization_id IS NULL");
+    } else {
+      console.warn("[terrence] team_projects.organization_id column is missing — skipped NULL-only organization_id backfill");
+    }
+  }
 
   // Drizzle orders migrations by journal timestamps. Databases created before
   // the migration squash can have a later legacy timestamp, which makes the
