@@ -349,6 +349,24 @@ if (!isPostgres) {
   }
   client.run("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
 
+  // TOTP seed at-rest encryption column (todo 110-112, mirrors the
+  // api_tokens.legacy guard above). Idempotent boot repair for databases
+  // whose migration journal never applied the column.
+  {
+    const user2faColumns = (client.query("PRAGMA table_info(user_2fa)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (!user2faColumns.includes("secret_encrypted")) {
+      try {
+        client.run("ALTER TABLE user_2fa ADD COLUMN secret_encrypted text");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(user_2fa)").all() as ReadonlyArray<{ readonly name: string }>;
+        if (!updatedColumns.some((column): boolean => column.name === "secret_encrypted")) {
+          throw error;
+        }
+      }
+    }
+  }
+
   // Configuration-version upload-claim lease column (todo 278, mirrors the
   // runs.scheduled_at guard above): atomically claims a pending CV before
   // accepting an archive PUT so simultaneous signed PUTs cannot race.
@@ -727,6 +745,8 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
     // Configuration-version upload-claim lease (todo 278, see sqlite boot path).
     await pg.unsafe("ALTER TABLE configuration_versions ADD COLUMN IF NOT EXISTS upload_claim_expires_at bigint");
+    // TOTP seed at-rest encryption (todo 110-112, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

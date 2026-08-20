@@ -1793,6 +1793,10 @@ export const oauthDeviceCodes = sqliteTable("oauth_device_codes", {
 export const user2FA = sqliteTable("user_2fa", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   secret: text("secret").notNull(),
+  // TOTP seeds are encrypted at rest (todo 110-112) with the AES-256-GCM
+  // secret layer ("enc:v1:..." prefix). NULL = plaintext seed written before
+  // encryption shipped; migrated transparently on first successful verify.
+  secretEncrypted: text("secret_encrypted"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

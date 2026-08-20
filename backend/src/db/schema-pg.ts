@@ -1525,6 +1525,8 @@ export const testVariables = pgTable("test_variables", {
 export const user2FA = pgTable("user_2fa", {
     userId: text("user_id").notNull().primaryKey().references(() => users.id, { onDelete: "cascade" }),
     secret: text("secret").notNull(),
+    // TOTP seed at-rest encryption (todo 110-112, see sqlite schema note).
+    secretEncrypted: text("secret_encrypted"),
     enabled: boolean("enabled").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.user2FA.createdAt.defaultFn!()),
 });

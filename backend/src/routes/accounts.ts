@@ -10,6 +10,7 @@ import { log } from "../lib/log";
 import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
@@ -590,7 +591,17 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-    if (mfa === undefined || mfa.enabled !== true || !verifyTotp(mfa.secret, code)) {
+    if (mfa === undefined || mfa.enabled !== true) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    const loginSeed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
+    const loginSeedPlain = loginSeed === null
+      ? null
+      : isEncryptedSecret(loginSeed)
+        ? await decryptSecret(loginSeed)
+        : loginSeed;
+    if (loginSeedPlain === null || !verifyTotp(loginSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
@@ -1012,10 +1023,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const secret = generateTotpSecret();
     const account = user.email ?? user.username;
     const otpauth = otpauthUrl(secret, account);
-    // Store as pending (enabled=false); verify flips it on after a valid code.
-    await db.insert(user2FA).values({ userId: user.id, secret, enabled: false }).onConflictDoUpdate({
+    // Store the seed ENCRYPTED at rest (todo 110): pending (enabled=false);
+    // verify flips it on after a valid code. The plaintext column keeps "" so
+    // the NOT NULL constraint holds; readers prefer secretEncrypted.
+    const secretEncrypted = await encryptSecret(secret);
+    await db.insert(user2FA).values({ userId: user.id, secret: "", secretEncrypted, enabled: false }).onConflictDoUpdate({
       target: user2FA.userId,
-      set: { secret, enabled: false },
+      set: { secret: "", secretEncrypted, enabled: false },
     });
     return {
       data: {
@@ -1036,9 +1050,25 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
     }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa === undefined || !verifyTotp(mfa.secret, code)) {
+    if (mfa === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    // Resolve the seed: prefer the encrypted column; fall back to the legacy
+    // plaintext column for rows written before encryption shipped (todo 111).
+    const seed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
+    const seedPlain = seed === null ? null : isEncryptedSecret(seed) ? await decryptSecret(seed) : seed;
+    if (seedPlain === null || !verifyTotp(seedPlain, code)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    // Transparent migration: a plaintext seed is re-encrypted after its first
+    // successful use (todo 111/112 — the enc:v1 prefix check prevents
+    // double-encrypting an already-encrypted value).
+    if (mfa.secretEncrypted === null && mfa.secret !== "") {
+      await db.update(user2FA)
+        .set({ secret: "", secretEncrypted: await encryptSecret(mfa.secret) })
+        .where(eq(user2FA.userId, user.id));
     }
     await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
     const token = refreshCookieCandidates(request)[0];
@@ -1061,11 +1091,21 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
     }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa === undefined || mfa.enabled !== true) {
+    if (mfa === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
     }
-    if (!verifyTotp(mfa.secret, code)) {
+    if (mfa.enabled !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
+    }
+    const disableSeed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
+    const disableSeedPlain = disableSeed === null
+      ? null
+      : isEncryptedSecret(disableSeed)
+        ? await decryptSecret(disableSeed)
+        : disableSeed;
+    if (disableSeedPlain === null || !verifyTotp(disableSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
