@@ -10,6 +10,10 @@ export const EXECUTION_MODES = ["remote", "local", "agent"] as const;
 export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 
 export const PROVIDER_MODES = ["tofu", "terraform"] as const;
+
+// Token description limits (todo 61/62): bounded at every mint path so
+// arbitrary upstream strings cannot bloat api_tokens rows.
+export const TOKEN_DESCRIPTION_MAX_LENGTH = 255;
 export type ProviderMode = (typeof PROVIDER_MODES)[number];
 
 /** One deliberate compatibility target for every reference-format discovery header. */

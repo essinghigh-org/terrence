@@ -15,6 +15,7 @@ import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzl
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
 import { publish } from "../lib/event-bus";
@@ -354,11 +355,11 @@ export const userRoutes = new Elysia({ name: "users" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const description = typeof attributes.description === "string" ? attributes.description : "API token";
+    const description = typeof attributes.description === "string" ? attributes.description.trim() : "API token";
     const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (description === "" || Number.isNaN(requestedExpiry)) {
+    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH || Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `description is required and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
     }
     // Organization TTL policy governs user tokens (todo 72-74): the effective
     // expiry is capped by the policy; max-ttl-ms = 0 forbids minting.

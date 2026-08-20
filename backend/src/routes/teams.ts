@@ -3,6 +3,7 @@ import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
 import { eq, and, count, inArray, asc, desc, or } from "drizzle-orm";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
@@ -578,9 +579,9 @@ export const teamRoutes = new Elysia({ name: "teams" })
     // default to a two-year expiration when none is supplied. The org TTL
     // policy caps or forbids the result (todo 72-74).
     const description = typeof attrs.description === "string" ? attrs.description.trim() : "";
-    if (description === "") {
+    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Description is required for team tokens" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
     }
     const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs.expiredAt ?? attrs.expiresAt;
     const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
