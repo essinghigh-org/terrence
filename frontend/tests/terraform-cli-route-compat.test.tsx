@@ -92,11 +92,18 @@ test("canonical URLs are unaffected by the legacy aliases", async () => {
   });
 });
 
-test("existing static org route wins over the legacy compatibility route", async () => {
-  // /app/acme/projects resolves to the Projects view, not the legacy
-  // /app/:org/:workspace/... redirect space.
-  const view = renderRoutes("/app/acme/projects");
+test("static-segment ranking protects canonical route from legacy alias collision", async () => {
+  // /app/acme/projects/runs collides with BOTH route patterns:
+  //   :orgName/projects/:projectId       (canonical — static "projects" segment)
+  //   :orgName/:workspaceName/runs        (legacy CLI alias — dynamic :workspaceName)
+  // React Router ranks the static "projects" segment above the dynamic
+  // :workspaceName, so the canonical project route wins and no <Navigate>
+  // redirect fires. If the legacy alias had won, the location would have
+  // been rewritten to /app/acme/workspaces/projects/runs.
+  const view = renderRoutes("/app/acme/projects/runs");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/projects");
+    expect(view.getByLabelText("Current location").textContent).toBe(
+      "/app/acme/projects/runs",
+    );
   });
 });
