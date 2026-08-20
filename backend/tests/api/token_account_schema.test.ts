@@ -132,6 +132,10 @@ describe("account, token, and variable schema contracts", () => {
   });
 
   it("rejects expired tokens and tracks successful token use in milliseconds", async () => {
+    // Previous tests in this suite already hit auth with the same token; the
+    // 60s lastUsedAt throttle would suppress the DB write and make the
+    // timestamp stale. Clear it so this measurement is deterministic.
+    await db.update(apiTokens).set({ lastUsedAt: null }).where(eq(apiTokens.id, authTokenId));
     const before = Date.now() - 100;
     const valid = await request("/api/v2/account/details");
     expect(valid.status).toBe(200);
