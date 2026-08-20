@@ -14,6 +14,7 @@ import {
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
+import { ProviderIcon } from "./ProviderIcon";
 import { AttributeDiff } from "./PlanOutput";
 import { OperationFilterDropdown, type Operation } from "./OperationFilterDropdown";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
@@ -317,11 +318,11 @@ function ApplyResourceRow({
       aria-label={`Apply details for ${resource.address}`}
     >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
-          <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
+          <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sm font-bold leading-none ${config.className} bg-muted`}>
             {"icon" in config ? (
-              <config.icon className="size-3" aria-hidden="true" />
+              <config.icon className="size-3.5" aria-hidden="true" />
             ) : (
               <span aria-hidden="true">{config.symbol}</span>
             )}
@@ -329,12 +330,13 @@ function ApplyResourceRow({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <code className="truncate font-mono text-xs font-semibold text-foreground">{resource.address}</code>
+              <ProviderIcon providerName={resource.provider_name} size={22} />
+              <code className="truncate font-mono text-xs font-semibold text-foreground" title={resource.provider_name ?? undefined}>{resource.address}</code>
               <button
                 type="button"
                 aria-label={`Copy ${resource.address} address`}
                 title={copied ? "Copied address!" : "Copy resource address"}
-                className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                className="size-6 shrink-0 rounded p-1 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
                 onClick={handleCopy}
               >
                 {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
@@ -342,7 +344,6 @@ function ApplyResourceRow({
             </div>
 
             <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
-              <span>Type: <code className="font-mono">{resource.type}</code></span>
               {resource.previous_address !== undefined && (
                 <span className="flex items-center gap-1">
                   Moved from <code className="font-mono">{resource.previous_address}</code>

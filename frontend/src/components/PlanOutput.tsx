@@ -774,15 +774,16 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
       className="group border-b border-border last:border-b-0"
       onToggle={(event): void => { setExpanded(event.currentTarget.open); }}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
-        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 ${config.className}`}>
+        <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sm font-bold leading-none ${config.className} bg-muted`}>
           {"icon" in config ? (
-            <config.icon className="size-3" aria-hidden="true" />
+            <config.icon className="size-3.5" aria-hidden="true" />
           ) : (
             <span aria-hidden="true">{config.symbol}</span>
           )}
         </span>
+        <ProviderIcon providerName={resource.provider_name} size={22} />
         {resource.change.importing !== undefined && operationForResource(resource) !== "import" && (
           <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold leading-5 capitalize text-foreground">
             <span aria-hidden="true">&</span>
@@ -797,7 +798,6 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <ProviderIcon providerName={resource.provider_name} size={18} />
             <code
               className="truncate font-mono text-xs font-semibold text-foreground"
               title={resource.provider_name ?? undefined}
@@ -814,12 +814,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
             </button>
           </div>
+          {(resource.deposed !== undefined
+            || resource.previous_address !== undefined
+            || resource.change.importing !== undefined
+            || (resource.action_reason !== undefined && resource.action_reason !== "")) && (
           <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4 text-muted-foreground/80">
-            <span className="inline-flex items-center gap-1"><span className="text-muted-foreground/60">Type</span> <code className="font-mono text-foreground/70">{resource.type}</code></span>
-            {resource.module_address !== undefined && (
-              <span className="inline-flex items-center gap-1"><span className="text-muted-foreground/60">Module</span> <code className="font-mono text-foreground/70">{resource.module_address}</code></span>
-            )}
-            {resource.mode === "data" && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">Data</span>}
             {resource.deposed !== undefined && (
               <span>Deposed key: <code className="font-mono">{resource.deposed}</code></span>
             )}
@@ -843,6 +842,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               <span>Reason: {actionReasonLabel(resource.action_reason)}</span>
             )}
           </div>
+          )}
         </div>
       </summary>
       {expanded && <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={fallbackName} />}
