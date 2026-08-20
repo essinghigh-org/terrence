@@ -20,6 +20,10 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy"
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
+// Two-tab concurrency grace (todo 125-127): a presented refresh token that
+// was rotated within this window is treated as a legitimate concurrent tab,
+// not replay. Replay detection (family revocation) applies outside it.
+const REFRESH_GRACE_MS = 30_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
 let refreshRotationQueue = Promise.resolve();
@@ -637,6 +641,41 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         if (current.revokedAt !== null || current.expiresAt <= now) {
           continue;
         }
+        // Two-tab concurrency grace (todo 125-127): this request serialized
+        // behind the winning tab (in-process rotation lock) and is presenting
+        // a token the winner just rotated. Within the grace window that is
+        // the legitimate second tab, not replay: re-issue an access token
+        // against the successor session WITHOUT rotating again. Outside the
+        // window the normal reuse handling below applies.
+        if (
+          current.rotatedAt !== null
+          && current.rotatedAtMs !== null
+          && current.successorHash !== null
+          && now - current.rotatedAtMs <= REFRESH_GRACE_MS
+        ) {
+          const successor = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.tokenHash, current.successorHash),
+          });
+          const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+            ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+            : undefined;
+          if (successor !== undefined && successorUser !== undefined) {
+            const graceAccess = opaqueToken("user");
+            const graceAccessId = crypto.randomUUID();
+            const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+            await db.insert(apiTokens).values({
+              id: graceAccessId,
+              token: tokenHash(graceAccess),
+              userId: successorUser.id,
+              description: "Browser session access token",
+              expiresAt: graceExpiresAt,
+              createdAt: now,
+            });
+            // The browser already holds the successor refresh cookie from the
+            // winning response; only the access-token document is re-issued.
+            return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+          }
+        }
         // Rotated tokens are normally reuse, but the pre-2026-08-19
         // Path=/api/v2/users ghost cookie is a rotated token that shares
         // the same family as the live token the browser also sends.
@@ -668,10 +707,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const accessTokenId = crypto.randomUUID();
         const refreshToken = opaqueToken("refresh");
         const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+        // Two-tab concurrency grace (todo 125-127): the rotation records the
+        // successor hash so an immediately-duplicated refresh presenting the
+        // same old token resolves to the successor instead of revoking the
+        // family. Only rotations within REFRESH_GRACE_MS are forgiven.
         const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
           const t = tx as typeof db;
           const claimed = await t.update(refreshSessions)
-            .set({ rotatedAt: now })
+            .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
             .where(and(
               eq(refreshSessions.id, current.id),
               isNull(refreshSessions.rotatedAt),
@@ -702,6 +745,43 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           return true;
         });
         if (!rotated) {
+          // The claim failed: the token was already rotated (two-tab race or
+          // replay) or revoked/expired. The in-process rotation lock means a
+          // concurrent same-process tab serialized behind us and re-read the
+          // row; a genuine cross-process replay arrives later than the grace
+          // window. Inside the window, treat the duplicate as the legitimate
+          // second tab: hand back the successor session's access token
+          // WITHOUT rotating again (todo 125-126). Outside the window this
+          // stays a family-revocation reuse event (todo 127).
+          if (
+            current.rotatedAtMs !== null
+            && current.successorHash !== null
+            && now - current.rotatedAtMs <= REFRESH_GRACE_MS
+          ) {
+            const successor = await db.query.refreshSessions.findFirst({
+              where: eq(refreshSessions.tokenHash, current.successorHash),
+            });
+            const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+              ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+              : undefined;
+            if (successor !== undefined && successorUser !== undefined) {
+              const graceAccess = opaqueToken("user");
+              const graceAccessId = crypto.randomUUID();
+              const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+              await db.insert(apiTokens).values({
+                id: graceAccessId,
+                token: tokenHash(graceAccess),
+                userId: successorUser.id,
+                description: "Browser session access token",
+                expiresAt: graceExpiresAt,
+                createdAt: now,
+              });
+              // Keep the successor's refresh cookie value as-is: the browser
+              // already holds it from the first response. Only the access
+              // token document is re-issued here.
+              return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+            }
+          }
           await revokeRefreshFamily(current.familyId, current.userId, now);
           return refreshUnauthorized(set, request, "Refresh token reuse detected");
         }

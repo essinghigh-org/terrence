@@ -580,6 +580,13 @@ export const refreshSessions = sqliteTable("refresh_sessions", {
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   mfaVerified: integer("mfa_verified", { mode: "boolean" }).notNull().default(false),
+  // Successor link (todo 126): the refresh token this row was rotated INTO.
+  // A presented token whose successor is still within the concurrency grace
+  // window is a legitimate two-tab race, not reuse — the successor is handed
+  // back instead of revoking the family. Replay outside the grace window
+  // stays a family-revocation event (todo 127).
+  successorHash: text("successor_hash"),
+  rotatedAtMs: integer("rotated_at_ms"),
 }, (table) => [
   index("refresh_sessions_family_idx").on(table.familyId),
   index("refresh_sessions_user_idx").on(table.userId),

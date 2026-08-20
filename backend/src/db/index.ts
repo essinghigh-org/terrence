@@ -367,6 +367,24 @@ if (!isPostgres) {
     }
   }
 
+  // Refresh-session two-tab concurrency grace columns (todo 125-127, same
+  // guard pattern). Idempotent boot repair.
+  {
+    const refreshColumns = (client.query("PRAGMA table_info(refresh_sessions)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    for (const column of ["successor_hash", "rotated_at_ms"] as const) {
+      if (refreshColumns.includes(column)) continue;
+      try {
+        client.run(`ALTER TABLE refresh_sessions ADD COLUMN ${column}${column === "successor_hash" ? " text" : " integer"}`);
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(refresh_sessions)").all() as ReadonlyArray<{ readonly name: string }>;
+        if (!updatedColumns.some((c): boolean => c.name === column)) {
+          throw error;
+        }
+      }
+    }
+  }
+
   // Configuration-version upload-claim lease column (todo 278, mirrors the
   // runs.scheduled_at guard above): atomically claims a pending CV before
   // accepting an archive PUT so simultaneous signed PUTs cannot race.
@@ -747,6 +765,9 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe("ALTER TABLE configuration_versions ADD COLUMN IF NOT EXISTS upload_claim_expires_at bigint");
     // TOTP seed at-rest encryption (todo 110-112, see sqlite boot path).
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
+    // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
+    await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

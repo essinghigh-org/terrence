@@ -963,6 +963,9 @@ export const refreshSessions = pgTable("refresh_sessions", {
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.refreshSessions.createdAt.defaultFn!()),
     mfaVerified: boolean("mfa_verified").notNull().default(false),
+    // Two-tab concurrency grace (todo 125-127, see sqlite schema note).
+    successorHash: text("successor_hash"),
+    rotatedAtMs: bigint("rotated_at_ms", { mode: "number" }),
 }, (table) => [
     index("refresh_sessions_family_idx").on(table.familyId),
     index("refresh_sessions_user_idx").on(table.userId),
